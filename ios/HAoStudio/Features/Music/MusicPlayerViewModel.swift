@@ -550,13 +550,20 @@ final class MusicPlayerViewModel: ObservableObject {
         }
         let target = coordinator.targetQuality
         resolver.resolveFirstPlayable(for: song.toPlaybackItem(), targetQuality: target) { [weak self] url in
-            DispatchQueue.main.async {
+            // Read the resolved tier HERE (this closure is plain
+            // @escaping): `resolver` is a bare SourceResolver
+            // existential, not Sendable, so the main-queue hop
+            // below must not capture it — Xcode 26 then resolves
+            // that hop to the DispatchWorkItem overload and the
+            // build fails. `song` / `target` are Sendable values
+            // and stay captured.
+            let actualQuality = (resolver as? TierReportingResolver)?.lastResolvedTier ?? target
+            DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 guard let url = url else {
                     self.showToast("下载失败：找不到可播放的地址")
                     return
                 }
-                let actualQuality = (resolver as? TierReportingResolver)?.lastResolvedTier ?? target
                 let ext = url.pathExtension.isEmpty ? "mp3" : url.pathExtension
                 let request = DownloadRequest(
                     key: song.identityKey,

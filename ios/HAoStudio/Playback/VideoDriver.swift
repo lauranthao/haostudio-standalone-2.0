@@ -532,7 +532,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             }
             self.openTimeoutWork = timeoutWork
             DispatchQueue.main.asyncAfter(deadline: .now() + self.openTimeoutInterval, execute: timeoutWork)
-            let engines = PlayerKernel.candidatesFor(url: url, dvDowngradeToHdr: dvP8Downgrade)
+            let engines = PlayerKernel.candidatesFor(url: url, dvDowngradeToHdr: self.dvP8Downgrade)
             let ladder = VideoRecoveryLadder(engines: engines, urls: [url], attempt: { [weak self] engine, attemptURL, attemptCompletion in
                 guard let self = self else {
                     attemptCompletion(false)

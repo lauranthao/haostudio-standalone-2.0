@@ -50,7 +50,7 @@ struct EmbyConfigView: View {
             Section {
                 statusRow
                 Button("测试连接") {
-                    viewModel.testConnection {
+                    viewModel.testConnection { _ in
                     }
                 }
                 .font(.system(size: 15))
