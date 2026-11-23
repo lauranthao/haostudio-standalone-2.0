@@ -48,8 +48,8 @@
   并告警原文 `Emby 凭证未导出，需重新登录`；导入绝不写 Keychain，无凭证时
   报告 `embyCredentialsMissing = true`；LX 脚本密钥同样 Keychain-only。
   导出 zip 超 4 GiB 时拒绝写入（无 ZIP64），不是静默出坏包。
-- **更新检查**：主源 shop `version.json`，失败重试一次后 fallback Gitee raw
-  （URL 与 Flutter main 的 consts.dart 一字未改，只是主次反过来）；
+- **更新检查**：主源 shop `version.json`，失败重试一次后 fallback GitHub raw
+  （本仓库根目录的 version.json，不再用 Gitee）；
   总限 15s（deadline，到时取消在途 task）；比较 version + build（同版高
   build 也提示）；跳过按 version+build（存 `skippedVersion`，Flutter 原键）；
   自动检查 20h 节流，戳（`lastUpdateCheckAt`，Flutter 原键）只在成功拉到

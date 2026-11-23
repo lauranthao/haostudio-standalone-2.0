@@ -2,9 +2,9 @@
 //
 // Swift port of the Flutter update_service.dart (main, 1.1.6+31),
 // with the source order reversed per plan section 7.1: the shop
-// server is the primary manifest source and Gitee raw is the
-// fallback (Flutter does it the other way round). Everything else
-// follows Flutter: one retry of the primary on transient failures,
+// server is the primary manifest source and GitHub raw is the
+// fallback (Flutter does it the other way round, with Gitee).
+// Everything else follows Flutter: one retry of the primary on transient failures,
 // then the fallback once; version + build comparison; skip recorded
 // per version+build; automatic checks throttled to 20 hours with the
 // stamp written only after a manifest was fetched successfully.
@@ -154,8 +154,8 @@ final class UpdateTaskSlot {
 final class DefaultUpdateChecker: UpdateChecker {
     /// Primary manifest: the shop server.
     static let primaryManifestURLString = "https://chen-hao-shop-production.up.railway.app/version.json"
-    /// Fallback manifest: Gitee raw, hosted in mainland China.
-    static let fallbackManifestURLString = "https://gitee.com/chenhao030610/chen-hao-shop/raw/master/version.json"
+    /// Fallback manifest: GitHub raw (this repo's version.json).
+    static let fallbackManifestURLString = "https://raw.githubusercontent.com/lauranthao/haostudio-standalone-2.0/main/version.json"
 
     /// Total wall-clock cap for one check: primary + retry + fallback
     /// together must finish inside this. Not per request.

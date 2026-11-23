@@ -48,7 +48,7 @@ Codemagic，workflow `ios-unsigned`（branch main），产物 `ios/HAoStudio.ipa
 ## 在线更新
 
 App 先读商店的 `https://chen-hao-shop-production.up.railway.app/version.json`
-检查更新，失败时读 Gitee 兜底
-`https://gitee.com/chenhao030610/chen-hao-shop/raw/master/version.json`，
+检查更新，失败时读 GitHub 兜底
+`https://raw.githubusercontent.com/lauranthao/haostudio-standalone-2.0/main/version.json`，
 提示后由用户在 Safari 下载 IPA、经 LCSign / TrollStore 安装
 （侧载应用无法静默安装）。
