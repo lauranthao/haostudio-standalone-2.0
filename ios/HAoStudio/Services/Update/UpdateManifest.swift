@@ -1,6 +1,6 @@
 // HAo Studio 2.0 — update manifest (S6).
 //
-// The version.json shape the shop server and Gitee raw both serve
+// The version.json shape the shop server and GitHub raw both serve
 // (see the Flutter main version.json: version, build, minOs, size,
 // ipaUrl, changelog). The changelog is a trilingual map in the real
 // files; a plain string is accepted too, for hand-written manifests.
