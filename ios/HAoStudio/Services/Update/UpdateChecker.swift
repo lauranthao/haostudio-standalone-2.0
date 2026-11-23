@@ -503,7 +503,17 @@ final class DefaultUpdateChecker: UpdateChecker {
                 })
                 return
             }
-            self.attemptFallback(deadline: deadline, primaryError: failure, finish: finish)
+            if allowRetry {
+                // Non-transient primary failure: no retry, straight
+                // to the fallback.
+                self.attemptFallback(deadline: deadline, primaryError: failure, finish: finish)
+            } else {
+                // The retry already ran and failed: report it. The
+                // caller (the retry handler above) runs the fallback
+                // exactly once — calling it here too would fetch the
+                // fallback twice and hang when the script is spent.
+                finish(nil, failure)
+            }
         }
     }
 

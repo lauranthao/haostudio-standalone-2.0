@@ -238,15 +238,16 @@ final class HuyaDanmaku: LiveDanmakuTransportBase {
                 let color = messageNotice.bulletFormat.fontColor
                 // "xxx(来自 XX 上头条)" 是醒目留言在弹幕区的播报。消息板
                 // WUP 尚未更新时该播报先到，靠它触发一次后台重拉把这条
-                // SC 补上——与 2001314 通知共用同一条刷新管线。
-                if HuyaDanmaku.isHeadlineSuperChat(messageNotice.content) {
-                    scheduleSuperChatRefresh(generation: _generation)
-                }
+                // SC 补上——与 2001314 通知共用同一条刷新管线。播报本身
+                // 先发出，补拉的 SC 跟在后面。
                 onMessage?(DanmakuMessage(
                     userName: messageNotice.userInfo.nickName,
                     text: messageNotice.content,
                     colorArgb: color <= 0 ? 0xFFFFFFFF : (0xFF000000 | (UInt32(color) & 0xFFFFFF))
                 ))
+                if HuyaDanmaku.isHeadlineSuperChat(messageNotice.content) {
+                    scheduleSuperChatRefresh(generation: _generation)
+                }
             } catch {
                 // Best-effort: a bad chat frame must not kill the room.
             }

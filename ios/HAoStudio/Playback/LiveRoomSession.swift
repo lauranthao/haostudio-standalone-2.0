@@ -68,7 +68,10 @@ final class LiveStallWatchdog {
             if position > 0 {
                 progressSeen = true
             }
-            warned = false
+            // The clock restarts, but the warn does not: one warn
+            // per stall episode, and a movement is not a new
+            // episode — otherwise a stalled stream would warn again
+            // 4 s after every position jump.
             return .none
         }
         guard isPlaying, let since = lastProgressAt else {

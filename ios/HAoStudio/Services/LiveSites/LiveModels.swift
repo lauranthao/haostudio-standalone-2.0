@@ -279,9 +279,10 @@ struct LivePlayUrlResolution {
 
     /// All playable urls of the applied quality, deduplicated, in
     /// line order. Falls back to the top-level lines when the
-    /// quality object is absent.
+    /// quality object is absent, or when it carries no lines.
     var appliedUrls: [String] {
-        let urls = (quality?.lines ?? lines).flatMap { $0.urls }
+        let qualityLines = quality?.lines ?? []
+        let urls = (qualityLines.isEmpty ? lines : qualityLines).flatMap { $0.urls }
         var seen = Set<String>()
         var result: [String] = []
         for url in urls where seen.insert(url).inserted {

@@ -126,7 +126,7 @@ final class DouyinSiteTests: XCTestCase {
 
         func testParseRenderData() throws {
         let html = """
-        <html><script>window.RENDER_DATA = {\\"state\\":{\\"appStore\\":{\\"roomInfo\\":{\\"room\\":{\\"id\\":123456,\\"title\\":\\"测试\\",\\"status\\":2}}}}]\\n</script></html>
+        <html><script>window.RENDER_DATA = {\\"state\\":{\\"appStore\\":{\\"roomInfo\\":{\\"room\\":{\\"id\\":123456,\\"title\\":\\"测试\\",\\"status\\":2}}}}}]\\n</script></html>
         """
         let state = try DouyinLiveSite.parseRenderData(html)
         let appStore = LiveJSON.asMap(state["appStore"])

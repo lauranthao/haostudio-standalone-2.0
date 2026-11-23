@@ -108,9 +108,9 @@ final class DouyuDanmaku: LiveDanmakuTransportBase {
                 text: LiveJSON.asString(map["txt"]),
                 colorArgb: DouyuDanmaku.douyuColorArgb(color),
                 // Pure Live's suspected-automated rule (sites/douyu.dart):
-                // a chatmsg with no `dms` field and `if` != '1'. The
+                // a chatmsg with no `dms` field and `ifs` != '1'. The
                 // Douyu-bot filter hides tagged messages when enabled.
-                suspectedAutomated: map["dms"] == nil && LiveJSON.asString(map["if"]) != "1"
+                suspectedAutomated: map["dms"] == nil && LiveJSON.asString(map["ifs"]) != "1"
             )
         } else if type == "comm_chatmsg" {
             // `comm_chatmsg` / `voice_trlt` (super chat) carry a nested

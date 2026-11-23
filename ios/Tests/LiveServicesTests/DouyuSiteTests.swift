@@ -41,7 +41,7 @@ final class DouyuSiteTests: XCTestCase {
     func testIsLiveRoomPayloadRules() {
         XCTAssertTrue(DouyuLiveSite.isLiveRoomPayload(liveRoomInfo))
         var replay = liveRoomInfo
-        replay["room_name"] = "测试直播"
+        replay["room_name"] = "【回放】测试直播"
         XCTAssertFalse(DouyuLiveSite.isLiveRoomPayload(replay))
         var loop = liveRoomInfo
         loop["videoLoop"] = 1

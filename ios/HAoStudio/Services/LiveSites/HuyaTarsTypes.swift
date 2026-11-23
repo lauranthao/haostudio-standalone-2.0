@@ -364,7 +364,10 @@ struct HYSender: TarsStruct {
 
     mutating func read(from input: TarsInputStream) throws {
         uid = try input.readInt(tag: 0)
-        lMid = try input.readInt(tag: 0)
+        // The Dart port reads lMid from tag 0 as well (same value
+        // as uid). A forward-only TARS stream cannot re-read tag 0,
+        // so mirror it here instead of reading the tag twice.
+        lMid = uid
         nickName = try input.readString(tag: 2)
         gender = try input.readInt(tag: 3)
     }
