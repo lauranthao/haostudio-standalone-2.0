@@ -2,10 +2,18 @@
 //
 // VOD rules (chen 2026-11-16, coordinator rule 3):
 // - Tap play goes DIRECTLY landscape fullscreen; the page locks
-//   landscape on appear and restores portrait on dismiss.
+//   landscape on appear and restores portrait on dismiss. A [ ]
+//   button in the bottom controls toggles landscape / portrait
+//   by hand (Bilibili standard, live parity): only the button
+//   changes orientation — turning the phone never does.
 // - NO quality selector on VOD — one play URL per episode, no
 //   quality tiers, so a fake quality button must never appear.
 // - Long-press 2x speed is VOD ONLY (live is real-time).
+// - Brightness / volume live ONLY in this player (sun button in
+//   the top bar): brightness writes the screen only from an
+//   explicit user drag, and leaving the player never restores or
+//   overrides the brightness the user set; volume is the system
+//   MPVolumeView slider (public API).
 // - The progress bar exists from the start of playback; drag
 //   changes local state only, seek fires once on release, and a
 //   failed seek rolls the bar back to the real position (P0-05).
@@ -30,6 +38,7 @@
 // (A-leg VodSettingsSheet) are wired in this file.
 
 import SwiftUI
+import MediaPlayer
 import UIKit
 
 /// What the video player UI needs from the A-leg player core.
@@ -441,10 +450,61 @@ final class VideoPlayerViewModel: ObservableObject {
 
     /// Long-press 2x (VOD only). Only the engine can change speed;
     /// without one the gesture does nothing and shows no badge.
+    /// Releasing restores the speed the user picked in settings,
+    /// not a hardcoded 1.0 (a 1.5x user must not drop to 1.0
+    /// because they long-pressed once).
     func setDoubleSpeed(_ on: Bool) {
         guard let engine = engine else { return }
         isDoubleSpeed = on
-        engine.setSpeed(on ? 2.0 : 1.0)
+        engine.setSpeed(on ? 2.0 : settings.playbackSpeed)
+    }
+
+    // MARK: - Brightness (player-only, never restored on exit)
+
+    /// Brightness level (0...1) the brightness sheet shows while
+    /// dragging. Written to the screen only from an explicit user
+    /// drag (see setBrightness); entering / leaving the player
+    /// never writes it.
+    @Published private(set) var brightnessLevel: Double = 0.5
+
+    /// System brightness as it was when the player was entered.
+    /// Recorded, never written back: leaving the player does not
+    /// restore or override the brightness the user set (iron law —
+    /// the app never changes system brightness by itself).
+    private var entryBrightness: Double?
+
+    /// Whether brightness writes are armed (only while the player
+    /// is open).
+    private var brightnessArmed = false
+
+    /// Call when the player appears: remember the system
+    /// brightness as it is NOW and arm brightness writes. Nothing
+    /// is written to the screen here.
+    func notePlayerEntry() {
+        entryBrightness = Double(UIScreen.main.brightness)
+        brightnessLevel = entryBrightness ?? 0.5
+        brightnessArmed = true
+    }
+
+    /// Apply a brightness level from an explicit user drag. Only
+    /// while the player is active: outside the entry/exit window
+    /// the state still updates (so the UI never lies about the
+    /// drag) but the screen is not touched. On exit the level is
+    /// deliberately left as the user set it — never restored.
+    func setBrightness(_ level: Double) {
+        let clamped = min(1, max(0, level))
+        brightnessLevel = clamped
+        guard brightnessArmed else {
+            return
+        }
+        UIScreen.main.brightness = CGFloat(clamped)
+    }
+
+    /// Disarm brightness writes when the player closes. No screen
+    /// write happens here.
+    func disarmBrightness() {
+        brightnessArmed = false
+        entryBrightness = nil
     }
 
     /// Close the player: save the position and stop playback.
@@ -625,6 +685,11 @@ struct VideoPlayerView: View {
     @State private var controlsVisible = true
     @State private var showingEpisodes = false
     @State private var showingSettings = false
+    @State private var showingBrightnessVolume = false
+    /// Landscape state. Only the [ ] button changes it — turning
+    /// the phone never does (live parity: LiveRoomView
+    /// isFullscreen). Starts true: tap-play enters landscape.
+    @State private var isLandscape = true
 
     var body: some View {
         ZStack {
@@ -727,10 +792,28 @@ struct VideoPlayerView: View {
         }
         .onAppear {
             VideoOrientation.lockLandscape()
+            isLandscape = true
+            videoPlayer.notePlayerEntry()
             videoPlayer.attachEngine(coordinator.vodDriver as? VideoPlayerEngine)
         }
         .onDisappear {
+            videoPlayer.disarmBrightness()
             VideoOrientation.unlockPortrait()
+        }
+        .onChange(of: isLandscape) { _, landscape in
+            if landscape {
+                VideoOrientation.lockLandscape()
+            } else {
+                VideoOrientation.unlockPortrait()
+            }
+        }
+        .sheet(isPresented: $showingBrightnessVolume) {
+            VodBrightnessVolumeSheet(
+                brightness: Binding(
+                    get: { videoPlayer.brightnessLevel },
+                    set: { videoPlayer.setBrightness($0) }
+                )
+            )
         }
         .sheet(isPresented: $showingEpisodes) {
             VideoPlayerEpisodeSheet()
@@ -820,6 +903,14 @@ struct VideoPlayerView: View {
                     .lineLimit(1)
             }
             Spacer()
+            Button(action: { showingBrightnessVolume = true }) {
+                Image(systemName: "sun.max")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(Color.black.opacity(0.45), in: Circle())
+            }
+            .buttonStyle(.plain)
             Button(action: { showingSettings = true }) {
                 Image(systemName: "gearshape")
                     .font(.system(size: 17, weight: .semibold))
@@ -871,6 +962,15 @@ struct VideoPlayerView: View {
                 }
                 Button(action: { videoPlayer.togglePlayPause() }) {
                     Image(systemName: videoPlayer.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                Button(action: { isLandscape.toggle() }) {
+                    Image(systemName: isLandscape
+                          ? "arrow.down.right.and.arrow.up.left"
+                          : "arrow.up.left.and.arrow.down.right")
                         .font(.system(size: 22, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
@@ -1112,5 +1212,85 @@ enum VideoOrientation {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
         let preferences = UIWindowScene.GeometryPreferences.iOS(interfaceOrientations: orientation)
         scene.requestGeometryUpdate(preferences) { _ in }
+    }
+}
+
+/// Brightness / volume sheet (VOD player only — the live room's
+/// LiveBrightnessVolumeSheet, same shape). Brightness is a
+/// user-driven slider: it reads the system value when the player
+/// opens and writes it only while the user drags; leaving the
+/// player never restores or overrides it. Volume is the system
+/// MPVolumeView slider (public API) — the sheet never invents a
+/// volume value.
+struct VodBrightnessVolumeSheet: View {
+    @Binding var brightness: Double
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.haoTheme) private var theme
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "sun.max")
+                            .foregroundStyle(theme.textSecondary)
+                        Text("亮度")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(theme.textPrimary)
+                        Spacer()
+                        Text("\(Int(brightness * 100))%")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(theme.textSecondary)
+                    }
+                    Slider(value: $brightness, in: 0...1)
+                        .tint(theme.accent)
+                    Text("只在视频播放器里调节；退出播放器不恢复、不覆盖系统亮度。")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.textMuted)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "speaker.wave.2")
+                            .foregroundStyle(theme.textSecondary)
+                        Text("音量")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(theme.textPrimary)
+                        Spacer()
+                    }
+                    VodVolumeSliderView()
+                        .frame(height: 30)
+                    Text("系统音量；只在视频播放器里调节。")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.textMuted)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 16)
+            .background(theme.scaffoldBackground)
+            .navigationTitle("亮度与音量")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+/// The system volume slider (MPVolumeView, public API). It
+/// reflects the device volume and changes it when dragged —
+/// there is no app-side volume value to keep in sync.
+private struct VodVolumeSliderView: UIViewRepresentable {
+    func makeUIView(context: Context) -> MPVolumeView {
+        let volumeView = MPVolumeView()
+        volumeView.showsRouteButton = false
+        volumeView.showsVolumeSlider = true
+        return volumeView
+    }
+
+    func updateUIView(_ uiView: MPVolumeView, context: Context) {
     }
 }
