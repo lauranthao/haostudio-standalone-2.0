@@ -189,7 +189,6 @@
 		000000000000000000000179 /* EmbyImageLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000017A /* EmbyImageLoader.swift */; };
 		00000000000000000000017B /* EmbyPosterImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000017C /* EmbyPosterImage.swift */; };
 		00000000000000000000017D /* MyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000017E /* MyView.swift */; };
-		00000000000000000000017F /* ProfileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000180 /* ProfileStore.swift */; };
 		000000000000000000000181 /* SettingsGroupsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000182 /* SettingsGroupsView.swift */; };
 		000000000000000000000183 /* SettingsLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000184 /* SettingsLogic.swift */; };
 		000000000000000000000185 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000186 /* SettingsStore.swift */; };
@@ -395,7 +394,6 @@
 		00000000000000000000017A /* EmbyImageLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbyImageLoader.swift; sourceTree = "<group>"; };
 		00000000000000000000017C /* EmbyPosterImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbyPosterImage.swift; sourceTree = "<group>"; };
 		00000000000000000000017E /* MyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyView.swift; sourceTree = "<group>"; };
-		000000000000000000000180 /* ProfileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileStore.swift; sourceTree = "<group>"; };
 		000000000000000000000182 /* SettingsGroupsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsGroupsView.swift; sourceTree = "<group>"; };
 		000000000000000000000184 /* SettingsLogic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsLogic.swift; sourceTree = "<group>"; };
 		000000000000000000000186 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
@@ -633,7 +631,6 @@
 				00000000000000000000017A /* EmbyImageLoader.swift */,
 				00000000000000000000017C /* EmbyPosterImage.swift */,
 				00000000000000000000017E /* MyView.swift */,
-				000000000000000000000180 /* ProfileStore.swift */,
 				000000000000000000000182 /* SettingsGroupsView.swift */,
 				000000000000000000000184 /* SettingsLogic.swift */,
 				000000000000000000000186 /* SettingsStore.swift */,
@@ -973,7 +970,6 @@
 				000000000000000000000179 /* EmbyImageLoader.swift in Sources */,
 				00000000000000000000017B /* EmbyPosterImage.swift in Sources */,
 				00000000000000000000017D /* MyView.swift in Sources */,
-				00000000000000000000017F /* ProfileStore.swift in Sources */,
 				000000000000000000000181 /* SettingsGroupsView.swift in Sources */,
 				000000000000000000000183 /* SettingsLogic.swift in Sources */,
 				000000000000000000000185 /* SettingsStore.swift in Sources */,

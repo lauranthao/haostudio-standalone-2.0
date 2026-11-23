@@ -95,26 +95,6 @@ final class CacheManagerTests: XCTestCase {
         XCTAssertTrue(WallpaperStore.list(documentsURL: docs).isEmpty)
     }
 
-    func testAvatarSaveDownsamplesAndRoundTrips() {
-        let large = SettingsTestImages.largeImage()
-        let data = large.jpegData(compressionQuality: 1.0) ?? Data()
-        XCTAssertFalse(data.isEmpty)
-        XCTAssertTrue(ProfileStore.saveAvatar(data: data, documentsURL: docs))
-        let url = ProfileStore.avatarURL(documentsURL: docs)
-        XCTAssertNotNil(url)
-        let saved = url.flatMap { try? Data(contentsOf: $0) }.flatMap { UIImage(data: $0) }
-        XCTAssertNotNil(saved)
-        XCTAssertLessThanOrEqual(max(saved!.size.width, saved!.size.height), 512)
-        // Downsampled to at most 512 px on the long edge; the
-        // file exists and is a valid image.
-        let savedBytes = (try? Data(contentsOf: url!).count) ?? 0
-        XCTAssertGreaterThan(savedBytes, 0)
-        ProfileStore.deleteAvatar(documentsURL: docs)
-        XCTAssertNil(ProfileStore.avatarURL(documentsURL: docs))
-    }
-
-    func testAvatarSaveRejectsNonImage() {
-        XCTAssertFalse(ProfileStore.saveAvatar(data: Data("nope".utf8), documentsURL: docs))
-        XCTAssertNil(ProfileStore.avatarURL(documentsURL: docs))
-    }
+    // （chen 2026-11-24: 个人资料/会员已删，ProfileStore 整文件删除；
+    // 测头像存取的两个用例随之删除。）
 }

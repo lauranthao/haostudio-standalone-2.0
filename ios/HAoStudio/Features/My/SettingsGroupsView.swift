@@ -42,6 +42,13 @@ struct SettingsGroupsView: View {
     /// notice so both drive the same picker / sheet / alert).
     @ObservedObject private var backupFlow = BackupUpdateFlow.shared
 
+    /// Last engine that really played (VideoEngineReporter). Read
+    /// through an @ObservedObject — not `VideoEngineReporter.shared`
+    /// inline — so the "上次实际" row refreshes when a playback
+    /// starts while this page is open (same silent-read class as
+    /// the section-expand bug, chen 2026-11-24).
+    @ObservedObject private var engineReporter = VideoEngineReporter.shared
+
     /// Danmaku settings edited by the reused S4 sheet; persisted
     /// when the sheet page disappears.
     @State private var danmakuSettings = LiveDanmakuSettings.load()
@@ -492,7 +499,7 @@ struct SettingsGroupsView: View {
                 .font(.system(size: 15))
                 .foregroundStyle(theme.textPrimary)
             Spacer()
-            Text(VideoEngineReporter.shared.lastUsed?.displayName ?? "—")
+            Text(engineReporter.lastUsed?.displayName ?? "—")
                 .font(.system(size: 15))
                 .foregroundStyle(theme.textSecondary)
         }
@@ -632,6 +639,12 @@ struct SettingsGroupsView: View {
                 }
                 NavigationLink {
                     EmbyConfigView()
+                        .onDisappear {
+                            // The Emby page saves through its own
+                            // view-model instance; refresh this
+                            // row's subtitle when coming back.
+                            embyViewModel.reload()
+                        }
                 } label: {
                     HStack {
                         Text("Emby 连接")
@@ -938,6 +951,7 @@ struct WallpaperManagementView: View {
         if deleted.contains(settings.wallpaperCurrent) {
             settings.wallpaperCurrent = ""
         }
+        settings.reloadWallpapers()
         reload()
     }
 
@@ -955,6 +969,7 @@ struct WallpaperManagementView: View {
                 DispatchQueue.main.async {
                     if let imported = imported {
                         settings.wallpaperCurrent = imported
+                        settings.reloadWallpapers()
                         reload()
                     } else {
                         showingImportFailedAlert = true

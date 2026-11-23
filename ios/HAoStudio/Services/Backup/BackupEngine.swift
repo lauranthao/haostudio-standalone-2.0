@@ -67,9 +67,10 @@
 // (docs/storage-mapping.md + the stores themselves, not invented):
 // - S1's 136 keys + 4 key families (via MigrationStore.mappings,
 //   prefix rules, and the ignored play-URL-cache prefix).
-// - S5's new keys: `hao_glass_intensity`, `hao_profile_nickname`,
+// - S5's new keys: `hao_glass_intensity`,
 //   `hao_video_player_key`, `hao_video_last_engine`, and the
 //   `settingsSectionExpanded_<id>` family.
+//   （`hao_profile_nickname` removed chen 2026-11-24: 个人资料/会员已删。）
 // - Every `Documents/*.json` collection file (playlists, favs,
 //   recent, history, downloads index, sources, LX state, Emby
 //   config without its key, …), except the transient
@@ -225,7 +226,6 @@ enum BackupEngineCore {
             }
         }
         out["hao_glass_intensity"] = .double
-        out["hao_profile_nickname"] = .string
         out["hao_video_player_key"] = .string
         out["hao_video_last_engine"] = .string
         return out

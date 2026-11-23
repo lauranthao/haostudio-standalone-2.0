@@ -14,6 +14,7 @@
 // Documents directory; nothing touches the real defaults, the
 // real Documents dir, or the real Keychain.
 
+import Combine
 import Foundation
 import XCTest
 
@@ -85,7 +86,6 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertNil(settings.wallpaperBackgroundURL)
         XCTAssertFalse(settings.bgColorEnabled)
         XCTAssertEqual(settings.bgColorHex, "")
-        XCTAssertEqual(settings.nickname, "")
         XCTAssertEqual(settings.glassIntensity, 1.0)
         XCTAssertNil(settings.tabAccentHex)
         XCTAssertNil(settings.accentOverrideHex)
@@ -109,10 +109,25 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertFalse(reloaded.hapticsEnabled)
     }
 
-    func testNicknamePersists() {
-        settings.nickname = "阿皓"
-        XCTAssertEqual(defaults.string(forKey: "hao_profile_nickname"), "阿皓")
-        XCTAssertEqual(ProfileStore.loadNickname(defaults: defaults), "阿皓")
+    /// chen 2026-11-24: 个人资料/会员已删——旧昵称值由 init 清掉，
+    /// 不留孤儿 key。写一个旧值再建 store，旧值必须被清除。
+    func testLegacyNicknameValueIsCleanedUpOnInit() {
+        defaults.set("旧昵称", forKey: "hao_profile_nickname")
+        let fresh = SettingsStore(defaults: defaults, themeStore: themeStore, documentsURL: docs)
+        _ = fresh
+        XCTAssertNil(defaults.object(forKey: "hao_profile_nickname"))
+    }
+
+    /// chen 2026-11-24 报：设置分组点标题收不起来。根因是
+    /// setSectionExpanded 只写 UserDefaults、不发变更通知，
+    /// SwiftUI 不重算 body。点标题必须发 objectWillChange。
+    func testSectionExpandedNotifiesObservers() {
+        var notified = false
+        let cancellable = settings.objectWillChange.sink { _ in notified = true }
+        settings.setSectionExpanded(false, for: "engine")
+        XCTAssertTrue(notified, "setSectionExpanded must publish so the section collapses")
+        XCTAssertFalse(settings.sectionExpanded("engine"))
+        _ = cancellable
     }
 
     func testSectionExpandedPersistsPerSection() {
