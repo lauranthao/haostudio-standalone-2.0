@@ -45,7 +45,8 @@ struct HAoStudioApp: App {
         _ = MigrationStore.runIfNeeded()
         let themeStore = ThemeStore()
         _themeStore = StateObject(wrappedValue: themeStore)
-        _settingsStore = StateObject(wrappedValue: SettingsStore(themeStore: themeStore))
+        let settingsStore = SettingsStore(themeStore: themeStore)
+        _settingsStore = StateObject(wrappedValue: settingsStore)
         // S6: wire the backup engine + update checker behind the
         // shared flow (B leg). The flow's rows are live once these
         // two lines run.
