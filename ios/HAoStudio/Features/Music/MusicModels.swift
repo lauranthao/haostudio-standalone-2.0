@@ -536,7 +536,7 @@ func probeLocalAudioFile(_ url: URL) -> LocalAudioProbe? {
     let format = file.fileFormat
     // Four-char format IDs (Core Audio OSTypes, written out so no
     // AudioToolbox import is needed): 'flac' / 'alac' / 'lpcm'.
-    let formatID = format.formatID
+    let formatID = format.streamDescription.pointee.mFormatID
     let isLossless = formatID == 0x666C_6163 || formatID == 0x616C_6163 || formatID == 0x6C70_636D
     let sampleRate = format.sampleRate > 0 ? format.sampleRate : nil
     let bits = format.streamDescription.pointee.mBitsPerChannel

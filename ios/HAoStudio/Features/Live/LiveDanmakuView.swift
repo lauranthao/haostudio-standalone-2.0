@@ -352,7 +352,7 @@ struct LiveDanmakuOverlayView: View {
             ZStack(alignment: .topLeading) {
                 ForEach(flying) { item in
                     LiveFlyingRow(
-                        message: item.text,
+                        message: item.message,
                         settings: settings,
                         containerWidth: geometry.size.width
                     )

@@ -134,7 +134,7 @@ final class EmbyConfigViewModel: ObservableObject {
                 }
                 var resolved = config
                 resolved.serverName = result.serverName
-                resolved.version = result.version
+                resolved.serverVersion = result.version
                 if !result.workingBaseUrl.isEmpty {
                     resolved.baseUrl = result.workingBaseUrl
                 }

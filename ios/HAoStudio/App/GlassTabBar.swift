@@ -83,7 +83,7 @@ private struct SystemTabBar: UIViewRepresentable {
     var onReselect: (HaoTab) -> Void
     let theme: HaoThemePalette
     let colorScheme: ColorScheme
-    let tabAccent: Color? = nil
+    var tabAccent: Color? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator()

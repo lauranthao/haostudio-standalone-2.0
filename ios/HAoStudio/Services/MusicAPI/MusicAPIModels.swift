@@ -5,7 +5,7 @@
 
 import Foundation
 
-struct AlbumSummary: Equatable {
+struct AlbumSummary: Equatable, Identifiable {
     let id: String
     let name: String
     let cover: String

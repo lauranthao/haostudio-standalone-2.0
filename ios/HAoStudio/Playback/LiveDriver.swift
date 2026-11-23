@@ -416,7 +416,7 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                 guard self.pendingItem?.id == item.id else {
                     return
                 }
-                guard let resolution = resolution, let url = resolution.urls.first else {
+                guard let resolution = resolution, let url = resolution.appliedUrls.compactMap({ URL(string: $0) }).first else {
                     self.isLoading = false
                     self.pendingItem = nil
                     self.onRoomFailed?(item, .noPlayableURL)
@@ -610,7 +610,7 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     /// same line instead of line 0.
     private func refreshURLs(completion: @escaping ([URL]?) -> Void) {
         if let held = session.recovery?.takeHeld() {
-            completion(session.matchedFirst(urls: held.urls))
+            completion(session.matchedFirst(urls: held.appliedUrls.compactMap({ URL(string: $0) })))
             return
         }
         session.recovery?.fetchFresh(completion: { [weak self] resolution in
@@ -618,7 +618,7 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                 completion(nil)
                 return
             }
-            guard let resolution = resolution, !resolution.urls.isEmpty else {
+            guard let resolution = resolution, !resolution.appliedUrls.isEmpty else {
                 completion(nil)
                 return
             }
@@ -1026,7 +1026,7 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                     guard self.currentRoom?.id == item.id else {
                         return
                     }
-                    if let resolution = resolution, let url = self.session.recovery?.currentUrl, !resolution.urls.isEmpty {
+                    if let resolution = resolution, let url = self.session.recovery?.currentUrl, !resolution.appliedUrls.isEmpty {
                         self.stallFailed = false
                         self.attemptOpen(item: item, url: url, tried: [url], freshRounds: 2)
                         return
