@@ -305,9 +305,16 @@ final class TarsInputStream {
     /// Scan forward to `tag`. Returns true when the next field IS
     /// that tag (its head is left unread); false when the field is
     /// absent (the stream stops at the struct end or a later tag).
+    /// Running out of data is "absent", not an error: optional
+    /// fields past the last written tag must read as their default.
     func skipToTag(_ tag: Int) throws -> Bool {
         while true {
-            let head = try peekHead()
+            let head: (type: TarsStructType, tag: Int, length: Int)
+            do {
+                head = try peekHead()
+            } catch TarsError.truncated {
+                return false
+            }
             if tag <= head.tag || head.type == .structEnd {
                 return tag == head.tag
             }

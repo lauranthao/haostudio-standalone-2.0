@@ -281,7 +281,7 @@ extension HuyaLiveSite {
                         continue
                     }
                     let name = LiveJSON.asString(item["sDisplayName"])
-                    if name.contains("HDR") {
+                    if name.contains("HDR") || name.contains("4K") {
                         continue
                     }
                     bitRates.append(HuyaBitRate(

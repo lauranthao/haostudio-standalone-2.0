@@ -454,7 +454,8 @@ final class DouyuLiveSite: LiveSiteResolver {
             }
         }
         let current = LiveJSON.asString(data["rtmp_cdn"]).trimmingCharacters(in:.whitespaces)
-        if !current.isEmpty && !result.contains(current) {
+        if !current.isEmpty {
+            result.removeAll { $0 == current }
             result.insert(current, at: 0)
         }
         if result.isEmpty {

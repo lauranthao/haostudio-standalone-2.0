@@ -532,6 +532,13 @@ extension DouyinLiveSite {
 
     static func firstImageUrl(_ candidates: [Any?]) -> String {
         for value in candidates {
+            if let list = value as? [Any] {
+                let nested = firstImageUrl(list.map { $0 as Any? })
+                if !nested.isEmpty {
+                    return nested
+                }
+                continue
+            }
             if let image = LiveJSON.asMap(value), let urlList = image["url_list"] as? [Any] {
                 let url = firstText(urlList)
                 if !url.isEmpty {

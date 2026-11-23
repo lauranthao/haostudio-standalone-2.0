@@ -26,8 +26,10 @@ final class KuaishouDanmakuTests: XCTestCase {
     }
 
     func testParseFeedPayloadUnwrapsDoubleEncodedJson() throws {
+        // JSONSerialization cannot encode a top-level String (it
+        // throws an uncatchable NSException); JSONEncoder can.
         let doubleEncoded = String(
-            data: try JSONSerialization.data(withJSONObject: feedJSON, options: []),
+            data: try JSONEncoder().encode(feedJSON),
             encoding: .utf8
         ) ?? ""
         let batch = try KuaishouDanmaku.parseFeedPayload(doubleEncoded)
