@@ -112,3 +112,82 @@ workflows:
           ls -lh HAoStudio.ipa
     artifacts:
       - ios/HAoStudio.ipa
+  ios-simulator:
+    name: iOS Simulator App (self-test)
+    max_build_duration: 60
+    instance_type: mac_mini_m1
+    environment:
+      xcode: 26.2
+    # No triggering block: manual start only. Used to self-test the
+    # fixed build in a cloud simulator (Appetize) before shipping
+    # the device IPA — chen must not be the tester (2026-11-24).
+    scripts:
+      - name: Preflight checks (S0 gate)
+        script: |
+          python3 ios/preflight_check.py
+      - name: Migration unit tests (S1)
+        script: |
+          cd ios
+          swift test
+      - name: Download libmpv frameworks (MPV player backend)
+        script: |
+          LIBMPV_URL="https://github.com/Predidit/libmpv-darwin-build/releases/download/0.6.8/libmpv-xcframeworks_0.6.8_ios-universal-video-default.tar.gz"
+          LIBMPV_SHA256="d428641cc6c100de8234eae04e229966e46949eb73fcabd526a008a02e9bf968"
+          mkdir -p ios/Vendor/libmpv
+          cd ios/Vendor/libmpv
+          curl -L --fail -o libmpv-ios.tar.gz "$LIBMPV_URL"
+          echo "$LIBMPV_SHA256  libmpv-ios.tar.gz" | shasum -a 256 -c -
+          tar -xzf libmpv-ios.tar.gz --strip-components=1
+          test -d Mpv.xcframework || { echo "libmpv extract failed: Mpv.xcframework missing"; exit 1; }
+          rm libmpv-ios.tar.gz
+          ls
+      - name: Install CocoaPods dependencies
+        script: |
+          cd ios
+          if [ ! -f Podfile ]; then
+            echo "no Podfile in foundation slice; skipping pod install"
+            exit 0
+          fi
+          if ! command -v pod >/dev/null 2>&1; then
+            echo "CocoaPods not found, installing..."
+            sudo gem install cocoapods --no-document
+          fi
+          pod --version
+          pod install
+      - name: Build simulator app
+        script: |
+          cd ios
+          # Same sources as the device build, simulator SDK. IJK is a
+          # static arm64 archive (no platform marker in its objects)
+          # and libmpv ships simulator slices, so this links; if the
+          # link ever fails on a device-only dependency, that is a
+          # real finding, not a reason to drop the workflow.
+          if [ -d HAoStudio.xcworkspace ]; then
+            xcodebuild -workspace HAoStudio.xcworkspace \
+              -scheme HAoStudio \
+              -configuration Release \
+              -sdk iphonesimulator \
+              -derivedDataPath build \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO
+          else
+            xcodebuild -project HAoStudio.xcodeproj \
+              -scheme HAoStudio \
+              -configuration Release \
+              -sdk iphonesimulator \
+              -derivedDataPath build \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO
+          fi
+      - name: Package simulator app
+        script: |
+          cd ios
+          APP_PATH=$(find build/Build/Products/Release-iphonesimulator -maxdepth 1 -name "*.app" | head -1)
+          echo "App: $APP_PATH"
+          rm -f HAoStudio-simulator.app.zip
+          zip -r HAoStudio-simulator.app.zip "$APP_PATH"
+          ls -lh HAoStudio-simulator.app.zip
+    artifacts:
+      - ios/HAoStudio-simulator.app.zip
