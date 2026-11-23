@@ -1,7 +1,7 @@
 # HAo Studio 独立版 2.0 — Codemagic 工作流
 #
-# 仓库：GitHub lauranthao/haostudio-standalone，分支 feature/swift-2.0
-# （2.0 开发线；master 仍是旧 Swift 1.0.3，main 是 Flutter 1.1.6 线，
+# 仓库：GitHub lauranthao/haostudio-standalone-2.0，分支 main
+# （2.0 发布线；旧仓库 haostudio-standalone 的 main 是 Flutter 1.1.6 线，
 # 各用各的 codemagic.yaml，互不干扰）。
 # 2.0 是 Swift 原生重写：没有 web 前端、没有外部元数据服务、没有 Podfile（地基阶段）。
 # 因此旧工作流的两步已删除：
@@ -9,9 +9,9 @@
 #   - 外部元数据 key 注入（该服务已从独立版移除，豆瓣是唯一元数据源）
 # 保留：libmpv 下载、pod install（地基阶段无 Podfile 时跳过，播放器 slice
 #   加回 Podfile 后自动恢复）、构建、打包。
-# 触发：push 到 feature/swift-2.0 即构建（S0 门禁：preflight 先跑，
+# 触发：push 到 main 即构建（S0 门禁：preflight 先跑，
 # 不通过则构建失败）。Swift 应用 id 6afa12e482fb30c0f828e6e3——
-# 待主 agent 在 Codemagic 网页端核对该应用是否仍有效。
+# 已切到新仓库 haostudio-standalone-2.0，分支 main。
 #
 # libmpv 不在仓库里（18 个 xcframework）：构建时下载 Predidit 0.6.8
 # iOS release，解压到 ios/Vendor/libmpv（工程引用的路径）。
@@ -26,7 +26,7 @@ workflows:
       events:
         - push
       branch_patterns:
-        - pattern: 'feature/swift-2.0'
+        - pattern: 'main'
           include: true
           source: true
     scripts:
