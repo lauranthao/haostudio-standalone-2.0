@@ -552,13 +552,18 @@ final class MusicPlayerViewModel: ObservableObject {
         resolver.resolveFirstPlayable(for: song.toPlaybackItem(), targetQuality: target) { [weak self] url in
             // Read the resolved tier HERE (this closure is plain
             // @escaping): `resolver` is a bare SourceResolver
-            // existential, not Sendable, so the main-queue hop
-            // below must not capture it — Xcode 26 then resolves
-            // that hop to the DispatchWorkItem overload and the
-            // build fails. `song` / `target` are Sendable values
-            // and stay captured.
+            // existential, not Sendable, so it must not be captured
+            // by the main-queue hop below.
             let actualQuality = (resolver as? TierReportingResolver)?.lastResolvedTier ?? target
-            DispatchQueue.main.async { [weak self] in
+            // A DispatchWorkItem, not a trailing closure on the main
+            // queue: Xcode 26 marks that closure @Sendable, and
+            // this body captures `song` / `actualQuality` — our own
+            // value types with no Sendable conformance under
+            // SWIFT_VERSION 5.0 — so the compiler resolves the call
+            // to the DispatchWorkItem overload and fails the build.
+            // A work item's block is plain @escaping, so it takes
+            // any capture.
+            let work = DispatchWorkItem { [weak self] in
                 guard let self = self else { return }
                 guard let url = url else {
                     self.showToast("下载失败：找不到可播放的地址")
@@ -595,6 +600,7 @@ final class MusicPlayerViewModel: ObservableObject {
                 })
                 self.showToast("已加入下载")
             }
+            DispatchQueue.main.async(execute: work)
         }
     }
 
