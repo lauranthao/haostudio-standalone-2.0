@@ -180,8 +180,10 @@ final class VodPlaybackSettingsTests: XCTestCase {
             .appendingPathComponent("hao-vod-skip-tests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: docs) }
-        // Key normalises the title ("狂飙 (2023)" -> "狂飙").
-        let stored: [String: Int] = ["狂飙|第01集": 90, "Other|第02集": 400]
+        // Key normalises the title ("狂飙 (2023)" -> "狂飙", "Other"
+        // -> "other"): stored keys are normalised, like the writer
+        // produces.
+        let stored: [String: Int] = ["狂飙|第01集": 90, "other|第02集": 400]
         let url = docs.appendingPathComponent("\(VodSkipIntroDurations.collectionName).json")
         try JSONEncoder().encode(stored).write(to: url, options: [.atomic])
         XCTAssertEqual(VodSkipIntroDurations.customSeconds(title: "狂飙 (2023)", episodeName: "第01集", documentsDirectory: docs), 90)
