@@ -22,6 +22,12 @@ final class VideoSearchViewModel: ObservableObject {
     @Published private(set) var history: [String] = VideoLibraryStore.searchHistory()
 
     private let gateway: VideoDataGateway
+    /// Generation bumped on every submitted query: a completion
+    /// from an older query is stale and must not overwrite the
+    /// newer query's results (CMS search takes up to 15 s; a
+    /// second submit while the first is in flight used to let the
+    /// first answer win when it landed later).
+    private var searchGeneration = 0
 
     init(gateway: VideoDataGateway = VideoServices.makeGateway()) {
         self.gateway = gateway
@@ -36,13 +42,16 @@ final class VideoSearchViewModel: ObservableObject {
         searched = true
         results = []
         embyResults = []
+        searchGeneration += 1
+        let generation = searchGeneration
         gateway.search(keyword: query) { [weak self] items in
-            guard let self = self else { return }
+            guard let self = self, self.searchGeneration == generation else { return }
             self.results = items
             self.isSearching = false
         }
         if gateway.embyConfigured {
             gateway.searchEmby(keyword: query) { [weak self] items in
+                guard let self = self, self.searchGeneration == generation else { return }
                 self?.embyResults = items
             }
         }

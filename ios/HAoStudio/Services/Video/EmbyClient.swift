@@ -598,10 +598,11 @@ final class EmbyClient {
 
     // MARK: Libraries
 
-    /// GET /Users/{userId}/Views — ALL libraries, not just
-    /// movies/tv (the old movies/tvshows-only filter hid
-    /// mixed/music/homevideo libraries from the tab page's
-    /// inventory line).
+    /// GET /Users/{userId}/Views — movies + tvshows libraries
+    /// ONLY (只接电影+电视两个库). Music / photos / homevideo /
+    /// mixed libraries are dropped here: the tab only ever asks
+    /// for Movie / Video / Series items, so any other library
+    /// would surface as a chip that always opens an empty grid.
     func libraries(completion: @escaping (Result<[EmbyLibrary], EmbyError>) -> Void) {
         guard let url = apiUrl("/Users/\(config.userId)/Views") else {
             completion(.failure(.unreachable()))
@@ -614,7 +615,7 @@ final class EmbyClient {
             case .success(let json):
                 let items = VideoJSON.asList(json["Items"])
                     .map { EmbyLibrary.fromJSON($0) }
-                    .filter { !$0.id.isEmpty }
+                    .filter { !$0.id.isEmpty && ($0.isMovieLibrary || $0.isTvLibrary) }
                 completion(.success(items))
             }
         }
@@ -1042,11 +1043,14 @@ final class EmbyClient {
 
     /// Single item → VideoDetail. Movie: 1 line ('直链') + 1
     /// episode ('正片'). Series: one line per season ('第 N 季'),
-    /// episodes sorted by IndexNumber — but only the first season
-    /// with episodes is fetched eagerly (lazy load); the other
-    /// seasons' lines start empty and are filled on demand via
-    /// `seasonEpisodes`. A bare Episode id plays as a
-    /// single-episode direct stream.
+    /// episodes sorted by IndexNumber — EVERY season is fetched
+    /// eagerly, in order. (An earlier version fetched only the
+    /// first season with episodes and left the rest as empty
+    /// lines "to be filled on demand" — but nothing ever called
+    /// the on-demand loader, so seasons 2+ opened an empty grid
+    /// with a dead play button. Eager fetch is the fix; season
+    /// lists are short.)
+    /// A bare Episode id plays as a single-episode direct stream.
     func detail(itemId: String, completion: @escaping (Result<VideoDetail, EmbyError>) -> Void) {
         guard let url = apiQuery("/Users/\(config.userId)/Items/\(itemId)", query: ["Fields": EmbyClient.detailFields]) else {
             completion(.failure(.unreachable()))
@@ -1127,11 +1131,6 @@ final class EmbyClient {
             } else {
                 let name = VideoJSON.asString(season["Name"])
                 lineName = name.isEmpty ? "季" : name
-            }
-            if foundEpisodes {
-                lines.append(PlayLine(name: lineName, episodes: []))
-                step()
-                return
             }
             episodes(seriesId: itemId, seasonId: seasonId) { result in
                 switch result {
