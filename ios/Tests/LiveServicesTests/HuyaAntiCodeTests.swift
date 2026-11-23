@@ -88,8 +88,8 @@ final class HuyaAntiCodeTests: XCTestCase {
     func testBuildFallsBackToViewerUidZero() throws {
         // viewerUid 0 -> fallbackViewerUid is used for seqid/u.
         let signed = try HuyaAntiCode.build(
-            stream: "test-stream", viewerUid: 0, fallbackViewerUid: 1400000012345,
-            antiCode: antiCode, now: now, randomDouble: { 0.5 }
+            stream: "test-stream", viewerUid: 0, antiCode: antiCode,
+            now: now, fallbackViewerUid: 1400000012345, randomDouble: { 0.5 }
         )
         XCTAssertTrue(signed.contains("seqid=3100000012345"))
         XCTAssertTrue(signed.contains("u=1398026549750"))

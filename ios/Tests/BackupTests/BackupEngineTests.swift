@@ -360,7 +360,9 @@ final class BackupEngineTests: XCTestCase {
             .appendingPathComponent("hao-backup-merge-src-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: sourceDocs, withIntermediateDirectories: true)
         let sourceSuite = "com.haostudio.backup.merge.\(UUID().uuidString)"
-        let sourceDefaults = UserDefaults(suiteName: sourceSuite) ?? defaults
+        guard let sourceDefaults = UserDefaults(suiteName: sourceSuite) ?? defaults else {
+            return XCTFail("cannot create source defaults")
+        }
         defer {
             try? FileManager.default.removeItem(at: sourceDocs)
             sourceDefaults.removePersistentDomain(forName: sourceSuite)

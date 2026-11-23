@@ -88,7 +88,7 @@ final class HuyaWupTests: XCTestCase {
         var panel = GameEventMessageBoardPanel()
         panel.vGameEventMessageBoardInfo = [
             panelItem(content: "  ", messageId: 1),
-            panelItem(content: "过期了", countDown: 0, totalSec: 0, messageId: 2),
+            panelItem(content: "过期了", totalSec: 0, countDown: 0, messageId: 2),
             panelItem(content: "有效", cost: 50, messageId: 3)
         ]
         let messages = HuyaWupClient.superChatsFromPanel(panel, now: now)
