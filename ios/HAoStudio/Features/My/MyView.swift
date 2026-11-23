@@ -1,9 +1,10 @@
 // HAo Studio 2.0 — My tab (S5-C leg).
 //
-// Profile + my entries + membership note + old-data notice +
-// settings groups (B leg). All rows are local data; there is no
-// login interface anywhere in this app, and no entry leads to a
-// page that does not exist.
+// My entries + old-data notice + settings groups (B leg). All rows
+// are local data; there is no login interface anywhere in this app,
+// and no entry leads to a page that does not exist.
+// （chen 2026-11-24: 个人资料/会员已删——昵称+头像 section 与只弹
+// alert 的会员死入口整段删除，见下方；ProfileStore.swift 同删。）
 //
 // Entry wiring (counts are synchronous store reads, empty = 0):
 // - 我的歌单 → MyPlaylistsView (new, this file: no playlist-list
@@ -21,9 +22,7 @@
 // MyBackgroundKind) are static funcs in this file so
 // SettingsTests can cover them without I/O or networking.
 
-import PhotosUI
 import SwiftUI
-import UIKit
 
 // MARK: - Entry counts (pure, unit-tested)
 
@@ -130,22 +129,15 @@ enum MyBackgroundColor {
 
 struct MyView: View {
     @Environment(\.haoTheme) private var theme
-    @FocusState private var nicknameFocused: Bool
 
-    @State private var nickname: String = ProfileStore.loadNickname()
-    @State private var avatarImage: UIImage?
-    @State private var avatarPickerItem: PhotosPickerItem?
     @State private var counts = MyEntryCounts()
     @State private var selectedLiveRoom: LiveRoom?
-    @State private var showMembershipAlert = false
     @State private var showMigrationNotice = MigrationStore.migrationNoticeNeeded()
 
     var body: some View {
         NavigationStack {
             List {
-                profileSection
                 entriesSection
-                membershipSection
                 migrationSection
                 settingsSection
             }
@@ -158,110 +150,8 @@ struct MyView: View {
             }
             .onAppear {
                 counts = MyEntryCounts.reload()
-                avatarImage = MyView.loadAvatarImage()
-            }
-            .onChange(of: avatarPickerItem) { _, item in
-                guard let item = item else { return }
-                Task { @MainActor in
-                    if let data = try? await item.loadTransferable(type: Data.self),
-                       let image = UIImage(data: data) {
-                        ProfileStore.saveAvatar(data: data)
-                        avatarImage = image
-                    }
-                    avatarPickerItem = nil
-                }
-            }
-            .onChange(of: nicknameFocused) { _, focused in
-                if !focused {
-                    saveNickname()
-                }
-            }
-            .alert("会员功能不在 2.0 范围内", isPresented: $showMembershipAlert) {
-                Button("知道了", role: .cancel) { }
-            } message: {
-                Text("会员系统不在 2.0 的范围内，后续版本再提供。")
             }
         }
-    }
-
-    // MARK: - Profile
-
-    private var profileSection: some View {
-        Section("个人资料") {
-            HStack(spacing: 16) {
-                PhotosPicker(selection: $avatarPickerItem, matching: .images) {
-                    avatarView
-                }
-                .buttonStyle(.plain)
-                VStack(alignment: .leading, spacing: 4) {
-                    TextField("未设置昵称", text: $nickname)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(theme.textPrimary)
-                        .focused($nicknameFocused)
-                        .onSubmit {
-                            saveNickname()
-                        }
-                    Text("本地账号，不登录")
-                        .font(.system(size: 13))
-                        .foregroundStyle(theme.textSecondary)
-                }
-            }
-            if avatarImage != nil {
-                Button("删除头像", role: .destructive) {
-                    deleteAvatar()
-                }
-                .font(.system(size: 14))
-            }
-        }
-    }
-
-    private var avatarView: some View {
-        Group {
-            if let avatarImage = avatarImage {
-                Image(uiImage: avatarImage)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                Circle()
-                    .fill(theme.surfaceStrong)
-                    .overlay {
-                        Image(systemName: "person.fill")
-                            .font(.system(size: 28))
-                            .foregroundStyle(theme.textSecondary)
-                    }
-            }
-        }
-        .frame(width: 72, height: 72)
-        .clipShape(Circle())
-        .contextMenu {
-            if avatarImage != nil {
-                Button("删除头像", role: .destructive) {
-                    deleteAvatar()
-                }
-            }
-        }
-    }
-
-    private func saveNickname() {
-        let trimmed = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
-        nickname = trimmed
-        ProfileStore.saveNickname(trimmed)
-    }
-
-    private func deleteAvatar() {
-        ProfileStore.deleteAvatar()
-        avatarImage = nil
-    }
-
-    /// The avatar file (A leg contract: Documents/profile/avatar.jpg).
-    /// Read directly so the display never depends on a stale image.
-    private static func loadAvatarImage() -> UIImage? {
-        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
-            return nil
-        }
-        let url = documents.appendingPathComponent("profile/avatar.jpg")
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return UIImage(data: data)
     }
 
     // MARK: - My entries
@@ -314,24 +204,6 @@ struct MyView: View {
             title: room.title, nick: room.streamer, cover: room.cover)
         counts = MyEntryCounts.reload()
         selectedLiveRoom = room
-    }
-
-    // MARK: - Membership
-
-    private var membershipSection: some View {
-        Section("会员") {
-            Button(action: { showMembershipAlert = true }) {
-                HStack {
-                    Text("会员")
-                        .foregroundStyle(theme.textPrimary)
-                    Spacer()
-                    Text("会员系统不在 2.0 范围内")
-                        .font(.system(size: 13))
-                        .foregroundStyle(theme.textSecondary)
-                }
-            }
-            .buttonStyle(.plain)
-        }
     }
 
     // MARK: - Old data notice (moved verbatim from MyPlaceholderView)

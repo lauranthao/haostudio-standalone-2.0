@@ -10,8 +10,10 @@
 // Key rules:
 // - MigrationStore-mapped keys are used verbatim. New keys are only
 //   `hao_glass_intensity` (owned by ThemeStore, forwarded here),
-//   `hao_profile_nickname`, `hao_video_last_engine` (owned by
-//   VideoEngineReporter) and `settingsSectionExpanded_<id>`.
+//   `hao_video_last_engine` (owned by VideoEngineReporter) and
+//   `settingsSectionExpanded_<id>`.
+//   （chen 2026-11-24: 个人资料/会员已删，`hao_profile_nickname` 不再是
+//   新键——见 init 里的旧值清理。）
 // - Theme-owned state lives ONLY in ThemeStore (see its header):
 //   `glassIntensity`, `tabAccentHex` and `accentOverrideHex` are
 //   computed forwards to the ThemeStore this store is built with.
@@ -75,9 +77,10 @@ final class SettingsStore: ObservableObject {
     static let wallpaperCurrentKey = "hao_wallpaper_current"
     static let bgColorEnabledKey = "hao_bgcolor_enabled"
     static let bgColorHexKey = "hao_bgcolor_hex"
-    /// New key (S5-A): the profile nickname. No migration — a fresh
-    /// install starts with an empty nickname.
-    static let nicknameKey = "hao_profile_nickname"
+    /// Legacy key for the deleted profile feature （chen 2026-11-24:
+    /// 个人资料/会员已删）。No code reads it any more; init removes
+    /// any value an old install left behind so no orphan key stays.
+    static let legacyNicknameKey = "hao_profile_nickname"
     static let sectionExpandedKeyPrefix = "settingsSectionExpanded_"
 
     /// Skip-intro modes, copied verbatim from Flutter
@@ -295,13 +298,6 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(bgColorHex, forKey: Self.bgColorHexKey) }
     }
 
-    // MARK: - Profile
-
-    /// Display nickname (new key, no migration). "" = unset.
-    @Published var nickname: String {
-        didSet { defaults.set(nickname, forKey: Self.nicknameKey) }
-    }
-
     // MARK: - Theme-owned state (forwarded to ThemeStore)
 
     /// The ThemeStore this store forwards theme state to. Owned by
@@ -440,7 +436,17 @@ final class SettingsStore: ObservableObject {
         self.bgColorEnabled = SettingsStore.boolValue(defaults, key: Self.bgColorEnabledKey, default: false)
         self.bgColorHex = defaults.string(forKey: Self.bgColorHexKey) ?? ""
 
-        self.nickname = defaults.string(forKey: Self.nicknameKey) ?? ""
+        // chen 2026-11-24: 个人资料/会员已删。清掉旧安装留下的昵称值
+        // 与头像文件（`Documents/profile/avatar.jpg`），不留读不到
+        // 的孤儿 key / 孤儿文件。值不存在时两步都是 no-op。
+        if defaults.object(forKey: Self.legacyNicknameKey) != nil {
+            defaults.removeObject(forKey: Self.legacyNicknameKey)
+        }
+        let legacyAvatar = (documentsURL ?? LocalStore.documentsDirectory())
+            .appendingPathComponent("profile/avatar.jpg")
+        if FileManager.default.fileExists(atPath: legacyAvatar.path) {
+            try? FileManager.default.removeItem(at: legacyAvatar)
+        }
 
         // S6: re-read after a backup import (see reloadFromDefaults).
         backupImportedObserver = NotificationCenter.default.addObserver(
@@ -501,8 +507,6 @@ final class SettingsStore: ObservableObject {
         wallpaperPaths = WallpaperStore.list(documentsURL: documentsURL)
         bgColorEnabled = SettingsStore.boolValue(defaults, key: Self.bgColorEnabledKey, default: false)
         bgColorHex = defaults.string(forKey: Self.bgColorHexKey) ?? ""
-
-        nickname = defaults.string(forKey: Self.nicknameKey) ?? ""
     }
 
     // MARK: - Helpers
@@ -528,6 +532,10 @@ final class SettingsStore: ObservableObject {
     }
 
     func setSectionExpanded(_ expanded: Bool, for id: String) {
+        // chen 2026-11-24 报：设置分组点标题收不起来。根因：这里只写
+        // UserDefaults、不发任何变更通知，SwiftUI 收不到重算信号，
+        // body 里的 `if isExpanded(...)` 永远不变。先发通知再写值。
+        objectWillChange.send()
         defaults.set(expanded, forKey: Self.sectionExpandedKeyPrefix + id)
     }
 

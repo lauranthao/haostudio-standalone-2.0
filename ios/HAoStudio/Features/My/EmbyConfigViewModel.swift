@@ -49,6 +49,16 @@ final class EmbyConfigViewModel: ObservableObject {
     private var resolvedConfig: EmbyServerConfig?
 
     init() {
+        reload()
+    }
+
+    /// Re-read the stored config (server / user / status) from
+    /// EmbyConfigStore. Called on init and when the Settings page
+    /// comes back from the Emby page: the Emby page owns its own
+    /// view-model instance, so without this the "Emby 连接" row
+    /// subtitle would stay stale after a save (chen 2026-11-24:
+    /// same silent-read class as the section-expand bug).
+    func reload() {
         if let stored = EmbyConfigStore.load() {
             baseUrl = stored.baseUrl
             username = stored.username
@@ -60,6 +70,10 @@ final class EmbyConfigViewModel: ObservableObject {
                 status = .unconfigured
             }
         } else {
+            baseUrl = ""
+            username = ""
+            apiKey = ""
+            resolvedConfig = nil
             status = .unconfigured
         }
     }
