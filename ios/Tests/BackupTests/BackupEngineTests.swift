@@ -18,11 +18,12 @@
 // before BackupTests compiles. The tests are written, not run:
 // this VM has no Swift toolchain.
 //
-// Count check: testRoundTripOneHundredItems seeds exactly 100
+// Count check: testRoundTripOneHundredItems seeds exactly 102
 // items (every covered defaults key + 5 collection files) and
 // verifies each one after a wipe + import. If the key catalogue
-// grows, the test fails loudly on the count — update the seed,
-// do not lower the bar.
+// grows, the test fails loudly on the count — update the number,
+// do not lower the bar. (100 at S6; 102 after the settings-wiring
+// work added two covered keys.)
 
 import Foundation
 import XCTest
@@ -256,7 +257,7 @@ final class BackupEngineTests: XCTestCase {
         let seededKeys = seedSampleDefaults(into: defaults)
         let seededCollections = seedCollectionFiles(into: docs)
         let total = seededKeys.count + seededCollections.count
-        XCTAssertEqual(total, 100, "seed catalogue changed: expected 100 items")
+        XCTAssertEqual(total, 102, "seed catalogue changed: expected 102 items")
         guard let zipURL = exportZip(using: engine) else { return }
         wipe(docs: docs, defaults: defaults)
         guard let result = importZip(zipURL, using: engine) else {
@@ -267,7 +268,7 @@ final class BackupEngineTests: XCTestCase {
             XCTFail("import failed: \(error.localizedDescription)")
         case .success(let report):
             XCTAssertFalse(report.rolledBack)
-            XCTAssertEqual(report.importedCount, 100)
+            XCTAssertEqual(report.importedCount, 102)
             XCTAssertTrue(report.skippedKeys.isEmpty)
             XCTAssertFalse(report.embyCredentialsMissing)
         }
@@ -562,10 +563,19 @@ final class BackupEngineTests: XCTestCase {
         defaults.set("v", forKey: "musicQuality")
         guard let zipURL = exportZip(using: engine) else { return }
         wipe(docs: docs, defaults: defaults)
-        let exp = expectation(description: "reload notification")
+        // The import posts `.haoBackupImported` synchronously from
+        // its background work queue, before the import completion
+        // fires — so by the time importZip returns the post has
+        // already happened. Assert with a flag, not an expectation:
+        // waiting on an already-fulfilled expectation is an XCTest
+        // API violation, and the exception it throws skips the
+        // defer that removes the observer, leaking it into the
+        // next test (which then double-fulfills and crashes the
+        // whole test process).
+        var posted = false
         let token = NotificationCenter.default.addObserver(
             forName: .haoBackupImported, object: nil, queue: nil, using: { _ in
-                exp.fulfill()
+                posted = true
             }
         )
         defer { NotificationCenter.default.removeObserver(token) }
@@ -578,7 +588,7 @@ final class BackupEngineTests: XCTestCase {
         case .success(let report):
             XCTAssertFalse(report.rolledBack)
         }
-        waitForExpectations(timeout: 10, handler: nil)
+        XCTAssertTrue(posted, "import must post haoBackupImported")
     }
 
     // MARK: - Payload files ride along (and .part files do not)
@@ -662,11 +672,15 @@ final class BackupEngineTests: XCTestCase {
     func testCompletionsArriveOnMainThread() {
         defaults.set("v", forKey: "musicQuality")
         let exportExp = expectation(description: "export on main")
+        // Created up front: waitForExpectations only waits for
+        // expectations that exist when it is called, so one
+        // created inside the export completion is never waited
+        // on and the test fails with "unwaited expectation".
+        let importExp = expectation(description: "import on main")
         engine.exportBackup(completion: { result in
             XCTAssertTrue(Thread.isMainThread, "export completion must be on the main thread")
             switch result {
             case .success(let zipURL):
-                let importExp = self.expectation(description: "import on main")
                 self.engine.importBackup(from: zipURL, completion: { imported in
                     XCTAssertTrue(Thread.isMainThread, "import completion must be on the main thread")
                     switch imported {
@@ -679,6 +693,7 @@ final class BackupEngineTests: XCTestCase {
                 })
             case .failure(let error):
                 XCTFail("export failed: \(error.localizedDescription)")
+                importExp.fulfill()
             }
             exportExp.fulfill()
         })
