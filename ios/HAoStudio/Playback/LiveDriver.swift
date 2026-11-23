@@ -622,7 +622,7 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                 completion(nil)
                 return
             }
-            completion(self.session.matchedFirst(urls: resolution.urls))
+            completion(self.session.matchedFirst(urls: resolution.appliedUrls.compactMap({ URL(string: $0) })))
         })
         if session.recovery == nil {
             completion(nil)
