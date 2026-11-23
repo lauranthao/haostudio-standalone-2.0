@@ -340,7 +340,7 @@ final class LiveRecovery {
         guard let held = held, !held.appliedUrls.isEmpty else {
             return nil
         }
-        if let invalid = held.invalidAt, !invalid.isAfter(now()) {
+        if let invalid = held.invalidAt, invalid <= now() {
             return nil
         }
         return held

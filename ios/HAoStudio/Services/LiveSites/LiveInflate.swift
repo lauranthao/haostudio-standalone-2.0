@@ -75,7 +75,7 @@ enum LiveInflate {
         let body = data.subdata(in: 2..<(data.count - 4))
         let output = try inflate(body)
         let storedAdler = readBigEndianUInt32(data, at: data.count - 4)
-        if adler32(output) != storedAdler {
+        if adler32([UInt8](output)) != storedAdler {
             throw LiveInflateError.checksumMismatch
         }
         return output
