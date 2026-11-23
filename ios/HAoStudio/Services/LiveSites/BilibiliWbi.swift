@@ -60,7 +60,10 @@ enum BilibiliWbi {
         let query = cleaned.keys.sorted().map { key in
             "\(LiveQuery.percentEncode(key))=\(LiveQuery.percentEncode(cleaned[key] ?? ""))"
         }.joined(separator: "&")
-        var signed = queryParams
+        // The returned params carry the cleaned values too: the
+        // server signs over the stripped values, so sending the
+        // originals would fail verification.
+        var signed = cleaned
         signed["w_rid"] = LiveCrypto.md5Hex(query + mixinKey)
         return signed
     }

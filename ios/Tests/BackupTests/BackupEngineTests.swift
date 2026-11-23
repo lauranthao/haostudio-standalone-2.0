@@ -78,6 +78,7 @@ final class BackupEngineTests: XCTestCase {
     private struct SeededKey {
         let key: String
         let kind: MigrationKeyKind
+        let value: Any
     }
 
     private func sampleValue(for kind: MigrationKeyKind, key: String) -> Any {
@@ -104,13 +105,14 @@ final class BackupEngineTests: XCTestCase {
     private func seedSampleDefaults(into targetDefaults: UserDefaults) -> [SeededKey] {
         var seeded: [SeededKey] = []
         for (key, kind) in BackupEngineCore.userDefaultsKeyKinds() {
-            targetDefaults.set(sampleValue(for: kind, key: key), forKey: key)
-            seeded.append(SeededKey(key: key, kind: kind))
+            let value = sampleValue(for: kind, key: key)
+            targetDefaults.set(value, forKey: key)
+            seeded.append(SeededKey(key: key, kind: kind, value: value))
         }
         targetDefaults.set(true, forKey: "settingsSectionExpanded_appearance")
-        seeded.append(SeededKey(key: "settingsSectionExpanded_appearance", kind: .bool))
+        seeded.append(SeededKey(key: "settingsSectionExpanded_appearance", kind: .bool, value: true))
         targetDefaults.set(false, forKey: "settingsSectionExpanded_music")
-        seeded.append(SeededKey(key: "settingsSectionExpanded_music", kind: .bool))
+        seeded.append(SeededKey(key: "settingsSectionExpanded_music", kind: .bool, value: false))
         seeded.sort(by: { $0.key < $1.key })
         return seeded
     }
@@ -119,26 +121,27 @@ final class BackupEngineTests: XCTestCase {
         _ actual: Any?,
         kind: MigrationKeyKind,
         key: String,
+        expected: Any,
         file: StaticString = #file,
         line: UInt = #line
     ) {
         switch kind {
         case .string:
-            XCTAssertEqual(actual as? String, "sample-" + key, file: file, line: line)
+            XCTAssertEqual(actual as? String, expected as? String, file: file, line: line)
         case .int:
-            XCTAssertEqual((actual as? NSNumber)?.intValue, 7, file: file, line: line)
+            XCTAssertEqual((actual as? NSNumber)?.intValue, (expected as? NSNumber)?.intValue, file: file, line: line)
         case .double:
-            XCTAssertEqual((actual as? NSNumber)?.doubleValue ?? 0, 1.5, accuracy: 0.0001, file: file, line: line)
+            XCTAssertEqual((actual as? NSNumber)?.doubleValue ?? 0, (expected as? NSNumber)?.doubleValue ?? 0, accuracy: 0.0001, file: file, line: line)
         case .bool:
-            XCTAssertEqual((actual as? NSNumber)?.boolValue, true, file: file, line: line)
+            XCTAssertEqual((actual as? NSNumber)?.boolValue, (expected as? NSNumber)?.boolValue, file: file, line: line)
         case .intList:
-            XCTAssertEqual(actual as? [Int], [1, 2, 3], file: file, line: line)
+            XCTAssertEqual(actual as? [Int], expected as? [Int], file: file, line: line)
         case .doubleList:
-            let list = actual as? [Double] ?? []
-            XCTAssertEqual(list.count, 2, file: file, line: line)
-            if list.count == 2 {
-                XCTAssertEqual(list[0], 0.5, accuracy: 0.0001, file: file, line: line)
-                XCTAssertEqual(list[1], -1.0, accuracy: 0.0001, file: file, line: line)
+            let actualList = actual as? [Double] ?? []
+            let expectedList = expected as? [Double] ?? []
+            XCTAssertEqual(actualList.count, expectedList.count, file: file, line: line)
+            for (index, value) in expectedList.enumerated() where index < actualList.count {
+                XCTAssertEqual(actualList[index], value, accuracy: 0.0001, file: file, line: line)
             }
         case .json:
             XCTFail("unexpected json-kind defaults key: \(key)", file: file, line: line)
@@ -273,7 +276,7 @@ final class BackupEngineTests: XCTestCase {
             XCTAssertFalse(report.embyCredentialsMissing)
         }
         for seeded in seededKeys {
-            verifySampleValue(defaults.object(forKey: seeded.key), kind: seeded.kind, key: seeded.key)
+            verifySampleValue(defaults.object(forKey: seeded.key), kind: seeded.kind, key: seeded.key, expected: seeded.value)
         }
         for (name, bytes) in seededCollections {
             guard let actual = readFile(name + ".json", from: docs) else {

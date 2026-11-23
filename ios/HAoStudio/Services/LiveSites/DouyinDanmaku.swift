@@ -804,7 +804,11 @@ final class DouyinDanmaku: LiveDanmakuTransportBase {
         do {
             let chatMessage = try DouyinChatMessage.decode(payload)
             let commonRoomId = chatMessage.common.map { String($0.roomId) } ?? ""
-            if !commonRoomId.isEmpty && commonRoomId != "0" && commonRoomId != args.roomId {
+            // Only filter when a room is configured: an
+            // unconfigured client (empty roomId, e.g. in tests)
+            // has no room to filter against, and dropping
+            // everything would silence all chat.
+            if !commonRoomId.isEmpty && commonRoomId != "0" && !args.roomId.isEmpty && commonRoomId != args.roomId {
                 return
             }
             let text = chatMessage.content

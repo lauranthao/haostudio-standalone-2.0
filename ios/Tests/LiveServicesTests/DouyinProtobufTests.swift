@@ -141,6 +141,10 @@ final class DouyinProtobufTests: XCTestCase {
         danmaku.onMessage = { received.append($0) }
         danmaku.decodeMessage(data)
         XCTAssertEqual(received.count, 1)
+        // Guard the indexing: a decode failure must fail this
+        // test, not crash the whole test runner (which aborts
+        // every suite after this one).
+        guard received.count == 1 else { return }
         XCTAssertEqual(received[0].text, "你好抖音")
         XCTAssertEqual(received[0].userName, "抖音用户")
     }
