@@ -71,7 +71,7 @@ enum DouyuUtils {
     }
 
     static func requestHeaders(roomId: String = "", deviceId: String) -> [String: String] {
-        let referer = roomId.isEmpty? "https://www.douyu.com/": "https://www.douyu.com/\(roomId)"
+        let referer = roomId.isEmpty ? "https://www.douyu.com/" : "https://www.douyu.com/\(roomId)"
         return [
             "accept": "application/json, text/plain, */*",
             "accept-language": "zh-CN,zh;q=0.9,en;q=0.7",
@@ -92,7 +92,7 @@ enum DouyuUtils {
     /// descriptor. Deterministic unit-test seam for the platform
     /// signing path.
     static func buildSignedData(encryptionKey: [String: Any], roomId: String, timestampSeconds: Int, rate: Int = -1, cdn: String = "", deviceId: String = defaultDeviceId) throws -> String {
-        if!isEncryptionKeyUsable(encryptionKey, nowSeconds: timestampSeconds, safetySeconds: 0) {
+        if !isEncryptionKeyUsable(encryptionKey, nowSeconds: timestampSeconds, safetySeconds: 0) {
             throw LiveError.parseFailed("Douyu encryption descriptor is incomplete or expired")
         }
         let key = LiveJSON.asString(encryptionKey["key"])
@@ -100,7 +100,7 @@ enum DouyuUtils {
         guard let encTime = LiveJSON.asIntOrNil(encryptionKey["enc_time"]) else {
             throw LiveError.parseFailed("Douyu encryption descriptor is incomplete or expired")
         }
-        let salt = LiveJSON.asInt(encryptionKey["is_special"]) == 1? "": "\(roomId)\(timestampSeconds)"
+        let salt = LiveJSON.asInt(encryptionKey["is_special"]) == 1 ? "" : "\(roomId)\(timestampSeconds)"
         var secret = randStr
         for _ in 0..<encTime {
             secret = LiveCrypto.md5Hex("\(secret)\(key)")
@@ -138,8 +138,8 @@ final class DouyuLiveSite: LiveSiteResolver {
     private var encryptionKeyCompletions: [(Result<Void, Error>) -> Void] = []
 
     init(fetcher: LiveDataFetcher? = nil, deviceId: String? = nil) {
-        self.fetcher = fetcher?? LiveHTTP.defaultFetcher
-        self.deviceId = deviceId?? DouyuUtils.generateDeviceId()
+        self.fetcher = fetcher ?? LiveHTTP.defaultFetcher
+        self.deviceId = deviceId ?? DouyuUtils.generateDeviceId()
     }
 
     func makeDanmakuTransport() -> LiveDanmakuTransport {
@@ -267,7 +267,7 @@ final class DouyuLiveSite: LiveSiteResolver {
                             if let rate = DouyuLiveSite.confirmedRate(playData["rate"]) {
                                 appliedRate = rate
                             }
-                            let name = cdn.isEmpty? "默认线路": cdn
+                            let name = cdn.isEmpty ? "默认线路" : cdn
                             lines.append(LiveLine(name: name, urls: [url], format: DouyuLiveSite.streamFormat(url)))
                             next()
                         } catch {
@@ -302,7 +302,7 @@ final class DouyuLiveSite: LiveSiteResolver {
                             return
                         }
                         guard let status = status, status == 200, let data = data, let json = LiveJSON.decodeObject(data) else {
-                            self.retryOrFailPlayData(roomId: roomId, rate: rate, cdn: cdn, attempt: attempt, error: LiveError.apiRejected(code: status?? -1, message: "H5 play HTTP \(status.map(String.init)?? "unknown")"), completion: completion)
+                            self.retryOrFailPlayData(roomId: roomId, rate: rate, cdn: cdn, attempt: attempt, error: LiveError.apiRejected(code: status ?? -1, message: "H5 play HTTP \(status.map(String.init) ?? "unknown")"), completion: completion)
                             return
                         }
                         do {
@@ -352,7 +352,7 @@ final class DouyuLiveSite: LiveSiteResolver {
 
     private func refreshEncryptionKey(forceRefresh: Bool, completion: @escaping (Result<Void, Error>) -> Void) {
         let nowSeconds = Int(Date().timeIntervalSince1970)
-        if!forceRefresh, let fetchedAt = encryptionKeyFetchedAtSeconds, encryptionKeyDeviceId == deviceId {
+        if !forceRefresh, let fetchedAt = encryptionKeyFetchedAtSeconds, encryptionKeyDeviceId == deviceId {
             if nowSeconds - fetchedAt < DouyuUtils.maximumCacheAgeSeconds && DouyuUtils.isEncryptionKeyUsable(encryptionKey, nowSeconds: nowSeconds) {
                 completion(.success(()))
                 return
@@ -378,7 +378,7 @@ final class DouyuLiveSite: LiveSiteResolver {
                 self.finishEncryptionKeyRefresh(result:.failure(LiveError.parseFailed("Douyu encryption response is missing data")))
                 return
             }
-            if!DouyuUtils.isEncryptionKeyUsable(rawData, nowSeconds: Int(Date().timeIntervalSince1970)) {
+            if !DouyuUtils.isEncryptionKeyUsable(rawData, nowSeconds: Int(Date().timeIntervalSince1970)) {
                 self.finishEncryptionKeyRefresh(result:.failure(LiveError.parseFailed("Douyu encryption descriptor is incomplete or expired")))
                 return
             }
@@ -403,11 +403,11 @@ final class DouyuLiveSite: LiveSiteResolver {
     /// Builds a room from a betard `room` object.
     static func parseRoomDetail(_ roomInfo: [String: Any], roomId: String) -> LiveRoom {
         let live = isLiveRoomPayload(roomInfo)
-        let bizAll = LiveJSON.asMap(roomInfo["room_biz_all"])?? [:]
+        let bizAll = LiveJSON.asMap(roomInfo["room_biz_all"]) ?? [:]
         let hot = LiveJSON.asInt(bizAll["hot"])
         let resolvedId = LiveJSON.asString(roomInfo["room_id"])
         return LiveRoom(
-            roomId: resolvedId.isEmpty? roomId: resolvedId,
+            roomId: resolvedId.isEmpty ? roomId : resolvedId,
             platform:.douyu,
             title: LiveJSON.asString(roomInfo["room_name"]),
             streamer: LiveJSON.asString(roomInfo["owner_name"]),
@@ -416,7 +416,7 @@ final class DouyuLiveSite: LiveSiteResolver {
             onlineCount: hot,
             isLive: live,
             link: LivePlatform.douyu.roomLink(roomId: roomId),
-            danmakuData: ["roomId": resolvedId.isEmpty? roomId: resolvedId]
+            danmakuData: ["roomId": resolvedId.isEmpty ? roomId : resolvedId]
         )
     }
 
@@ -424,15 +424,15 @@ final class DouyuLiveSite: LiveSiteResolver {
     /// 【回放】.
     static func isLiveRoomPayload(_ roomInfo: [String: Any]) -> Bool {
         LiveJSON.asInt(roomInfo["show_status"]) == 1
-        && LiveJSON.asInt(roomInfo["videoLoop"])!= 1
-        &&!LiveJSON.asString(roomInfo["room_name"]).hasPrefix("【回放】")
+        && LiveJSON.asInt(roomInfo["videoLoop"]) != 1
+        && !LiveJSON.asString(roomInfo["room_name"]).hasPrefix("【回放】")
     }
 
     static func parsePlayResponse(_ response: [String: Any]) throws -> [String: Any] {
-        let errorCode = LiveJSON.asIntOrNil(response["error"])?? LiveJSON.asIntOrNil(response["code"])?? -1
-        if errorCode!= 0 {
+        let errorCode = LiveJSON.asIntOrNil(response["error"]) ?? LiveJSON.asIntOrNil(response["code"]) ?? -1
+        if errorCode != 0 {
             let message = LiveJSON.asString(response["msg"]).trimmingCharacters(in:.whitespaces)
-            throw LiveError.apiRejected(code: errorCode, message: message.isEmpty? "H5 play API error \(errorCode)": "H5 play API error \(errorCode): \(message)")
+            throw LiveError.apiRejected(code: errorCode, message: message.isEmpty ? "H5 play API error \(errorCode)" : "H5 play API error \(errorCode): \(message)")
         }
         guard let rawData = LiveJSON.asMap(response["data"]) else {
             throw LiveError.parseFailed("H5 play response is missing data")
@@ -448,13 +448,13 @@ final class DouyuLiveSite: LiveSiteResolver {
                     continue
                 }
                 let code = LiveJSON.asString(entry["cdn"]).trimmingCharacters(in:.whitespaces)
-                if!code.isEmpty &&!result.contains(code) {
+                if !code.isEmpty && !result.contains(code) {
                     result.append(code)
                 }
             }
         }
         let current = LiveJSON.asString(data["rtmp_cdn"]).trimmingCharacters(in:.whitespaces)
-        if!current.isEmpty &&!result.contains(current) {
+        if !current.isEmpty && !result.contains(current) {
             result.insert(current, at: 0)
         }
         if result.isEmpty {
@@ -479,13 +479,13 @@ final class DouyuLiveSite: LiveSiteResolver {
                     continue
                 }
                 let name = LiveJSON.asString(item["name"]).trimmingCharacters(in:.whitespaces)
-                let lines = cdns.map { LiveLine(name: $0.isEmpty? "默认线路": $0)}
-                qualities.append(LiveQuality(id: String(rate), name: name.isEmpty? "默认": name, sort: rateItems.count - index, lines: lines))
+                let lines = cdns.map { LiveLine(name: $0.isEmpty ? "默认线路" : $0)}
+                qualities.append(LiveQuality(id: String(rate), name: name.isEmpty ? "默认" : name, sort: rateItems.count - index, lines: lines))
             }
         }
         if qualities.isEmpty {
-            let rate = LiveJSON.asIntOrNil(playData["rate"])?? -1
-            let lines = cdns.map { LiveLine(name: $0.isEmpty? "默认线路": $0)}
+            let rate = LiveJSON.asIntOrNil(playData["rate"]) ?? -1
+            let lines = cdns.map { LiveLine(name: $0.isEmpty ? "默认线路" : $0)}
             qualities.append(LiveQuality(id: String(rate), name: "默认", sort: 1, lines: lines))
         }
         return qualities
@@ -541,7 +541,7 @@ final class DouyuLiveSite: LiveSiteResolver {
     /// Declared stream facts for one resolved URL. getH5PlayV1
     /// serves FLV; a signed path without an extension is still FLV.
     static func streamFormat(_ url: String) -> String {
-        let path = URL(string: url)?.path.lowercased()?? ""
+        let path = URL(string: url)?.path.lowercased() ?? ""
         if path.hasSuffix(".m3u8") {
             return "hls"
         }
@@ -552,14 +552,14 @@ final class DouyuLiveSite: LiveSiteResolver {
         guard let url = URL(string: value), let host = url.host,!host.isEmpty else {
             return false
         }
-        return ["http", "https", "rtmp"].contains(url.scheme?? "")
+        return ["http", "https", "rtmp"].contains(url.scheme ?? "")
     }
 
     private static func isDirectMediaUrl(_ value: String) -> Bool {
         guard isPlayableUrl(value) else {
             return false
         }
-        let path = URL(string: value)?.path.lowercased()?? ""
+        let path = URL(string: value)?.path.lowercased() ?? ""
         return path.hasSuffix(".flv") || path.hasSuffix(".m3u8") || path.hasSuffix(".mp4")
     }
 

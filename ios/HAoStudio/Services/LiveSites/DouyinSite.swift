@@ -562,7 +562,7 @@ final class DouyinLiveSite: LiveSiteResolver {
 
     private var cookie = ""
     private var anonymousCookieInFlight = false
-    private var anonymousCookieCompletions: [(String) -> Void] = []
+    private var anonymousCookieCompletions: [([String: String]) -> Void] = []
 
     /// Current web clients use a 19-digit anonymous visitor ID. One
     /// ID per process so switching rooms does not create a new
@@ -732,7 +732,7 @@ final class DouyinLiveSite: LiveSiteResolver {
                     completion(.failure(error))
                     return
                 }
-                guard let status = status, (200..<300).contains(status), let data = data, let json = LiveJSON.decodeObject(data) else {
+                guard let httpStatus = status, (200..<300).contains(httpStatus), let data = data, let json = LiveJSON.decodeObject(data) else {
                     completion(.failure(LiveError.emptyResponse))
                     return
                 }
