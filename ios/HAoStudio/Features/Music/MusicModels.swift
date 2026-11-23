@@ -303,6 +303,14 @@ struct DownloadedSong: Equatable {
         }
     }
 
+    init(song: MusicSong, filePath: String, sizeBytes: Int, downloadedAt: Int, qualityCode: String) {
+        self.song = song
+        self.filePath = filePath
+        self.sizeBytes = sizeBytes
+        self.downloadedAt = downloadedAt
+        self.qualityCode = qualityCode
+    }
+
     init(json: [String: Any]) {
         let songJSON = json["song"] as? [String: Any] ?? [:]
         self.song = MusicSong(json: songJSON)
