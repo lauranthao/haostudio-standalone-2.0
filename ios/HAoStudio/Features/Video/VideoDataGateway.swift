@@ -77,11 +77,13 @@ protocol VideoDataGateway {
     func fetchEmbyGenres(completion: @escaping ([String]) -> Void)
     /// Items in one library, or in one genre across libraries
     /// when `genre` is set (libraryId nil = all libraries).
+    /// Failures surface as EmbyError (not swallowed to .empty):
+    /// a dead server must show an honest error, never "媒体库是空的".
     func fetchEmbyItems(
         libraryId: String?,
         genre: String?,
         page: Int,
-        completion: @escaping (VideoItemPage) -> Void
+        completion: @escaping (Result<VideoItemPage, EmbyError>) -> Void
     )
     /// Emby detail: streams as play lines. Movies get one line
     /// with one "正片" episode; series get one line per season
@@ -309,10 +311,10 @@ final class RealVideoDataGateway: VideoDataGateway {
         libraryId: String?,
         genre: String?,
         page: Int,
-        completion: @escaping (VideoItemPage) -> Void
+        completion: @escaping (Result<VideoItemPage, EmbyError>) -> Void
     ) {
         guard let client = embyClient() else {
-            DispatchQueue.main.async { completion(.empty) }
+            DispatchQueue.main.async { completion(.failure(.unreachable())) }
             return
         }
         let startIndex = page * 50
@@ -320,13 +322,13 @@ final class RealVideoDataGateway: VideoDataGateway {
             client.byGenre(genre, startIndex: startIndex) { result in
                 DispatchQueue.main.async {
                     switch result {
-                    case .failure:
-                        completion(.empty)
+                    case .failure(let error):
+                        completion(.failure(error))
                     case .success(let pageResult):
-                        completion(VideoItemPage(
+                        completion(.success(VideoItemPage(
                             items: pageResult.items,
                             hasMore: startIndex + pageResult.items.count < pageResult.totalCount
-                        ))
+                        )))
                     }
                 }
             }
@@ -337,19 +339,29 @@ final class RealVideoDataGateway: VideoDataGateway {
         // both kinds across all libraries).
         var moviesPage: EmbyItemsPage?
         var seriesPage: EmbyItemsPage?
+        /// A failed side fails the page: one side's items with the
+        /// other's silence is a half-truth the UI would show as a
+        /// complete library.
+        var firstError: EmbyError?
         func finish() {
             guard let movies = moviesPage, let series = seriesPage else { return }
+            if let error = firstError {
+                completion(.failure(error))
+                return
+            }
             let items = movies.items + series.items
             let total = movies.totalCount + series.totalCount
-            completion(VideoItemPage(
+            completion(.success(VideoItemPage(
                 items: items,
                 hasMore: startIndex + items.count < total
-            ))
+            )))
         }
         client.movies(libraryId: libraryId, startIndex: startIndex) { result in
             DispatchQueue.main.async {
                 switch result {
-                case .failure: moviesPage = EmbyItemsPage(items: [], totalCount: 0)
+                case .failure(let error):
+                    moviesPage = EmbyItemsPage(items: [], totalCount: 0)
+                    if firstError == nil { firstError = error }
                 case .success(let pageResult): moviesPage = pageResult
                 }
                 finish()
@@ -358,7 +370,9 @@ final class RealVideoDataGateway: VideoDataGateway {
         client.series(libraryId: libraryId, startIndex: startIndex) { result in
             DispatchQueue.main.async {
                 switch result {
-                case .failure: seriesPage = EmbyItemsPage(items: [], totalCount: 0)
+                case .failure(let error):
+                    seriesPage = EmbyItemsPage(items: [], totalCount: 0)
+                    if firstError == nil { firstError = error }
                 case .success(let pageResult): seriesPage = pageResult
                 }
                 finish()

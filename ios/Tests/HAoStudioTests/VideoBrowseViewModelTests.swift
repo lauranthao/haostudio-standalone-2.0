@@ -42,7 +42,7 @@ private final class FakeBrowseGateway: VideoDataGateway {
         let page: Int
     }
     var embyCalls: [EmbyCall] = []
-    private var pendingEmby: [(VideoItemPage) -> Void] = []
+    private var pendingEmby: [(Result<VideoItemPage, EmbyError>) -> Void] = []
     var pendingEmbyCount: Int { pendingEmby.count }
 
     func fetchHome(completion: @escaping ([VideoHomeRow]) -> Void) { completion([]) }
@@ -59,7 +59,7 @@ private final class FakeBrowseGateway: VideoDataGateway {
         libraryId: String?,
         genre: String?,
         page: Int,
-        completion: @escaping (VideoItemPage) -> Void
+        completion: @escaping (Result<VideoItemPage, EmbyError>) -> Void
     ) {
         embyCalls.append(EmbyCall(libraryId: libraryId, genre: genre, page: page))
         pendingEmby.append(completion)
@@ -95,7 +95,12 @@ private final class FakeBrowseGateway: VideoDataGateway {
 
     func completeEmbyNext(with page: VideoItemPage) {
         guard !pendingEmby.isEmpty else { return }
-        pendingEmby.removeFirst()(page)
+        pendingEmby.removeFirst()(.success(page))
+    }
+
+    func completeEmbyFailure(with error: EmbyError) {
+        guard !pendingEmby.isEmpty else { return }
+        pendingEmby.removeFirst()(.failure(error))
     }
 }
 
@@ -368,5 +373,22 @@ final class VideoBrowseViewModelTests: XCTestCase {
         XCTAssertTrue(gateway.embyCalls.isEmpty)
         XCTAssertTrue(viewModel.items.isEmpty)
         XCTAssertFalse(viewModel.isLoading)
+    }
+
+    func testEmbyItemsFailureSurfacesHonestErrorAndRetries() {
+        let gateway = FakeBrowseGateway()
+        let viewModel = VideoBrowseViewModel(initialType: nil, gateway: gateway)
+
+        viewModel.mode = "emby"
+        gateway.completeEmbyFailure(with: .unreachable())
+        XCTAssertEqual(viewModel.errorMessage, "连不上 Emby 服务器，检查地址和网络")
+        XCTAssertFalse(viewModel.hasMore)
+        XCTAssertTrue(viewModel.items.isEmpty)
+
+        // Retry re-issues the fetch; a success clears the error.
+        viewModel.reload()
+        gateway.completeEmbyNext(with: page([item("e1", title: "E1", sourceId: nil)], hasMore: false))
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertEqual(viewModel.items.map { $0.title }, ["E1"])
     }
 }

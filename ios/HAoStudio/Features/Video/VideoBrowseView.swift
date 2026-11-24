@@ -36,6 +36,10 @@ final class VideoBrowseViewModel: ObservableObject {
     @Published private(set) var items: [VideoItem] = []
     @Published private(set) var isLoading = false
     @Published private(set) var hasMore = true
+    /// Human error text from the last failed Emby load
+    /// (EmbyError.message). Set only on failure — an empty
+    /// library stays an empty state, never an error state.
+    @Published private(set) var errorMessage: String?
 
     /// Changing any of these reloads the grid from page 0 (one
     /// mechanism only: didSet + the ready gate below). The oldValue
@@ -71,6 +75,19 @@ final class VideoBrowseViewModel: ObservableObject {
     }
 
     var isEmbyConfigured: Bool { gateway.embyConfigured }
+
+    /// Quiet footnote above the Emby grid naming the active filter
+    /// (nil = "全部" everywhere, nothing to say). With the sidebar
+    /// closed the active library / genre is otherwise invisible.
+    var activeEmbyFilterText: String? {
+        var parts: [String] = []
+        if let id = selectedLibraryId, let library = libraries.first(where: { $0.id == id }) {
+            parts.append(library.name)
+        }
+        if let genre = selectedGenre { parts.append(genre) }
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: " · ")
+    }
 
     /// Category / library / genre lists. On the category list
     /// landing, the initial type is kept when it is still in the
@@ -108,11 +125,16 @@ final class VideoBrowseViewModel: ObservableObject {
     }
 
     func reload() {
-        guard ready else { return }
+        // The ready gate exists for CMS (the first category list
+        // has not landed yet). Emby mode has no CMS categories to
+        // wait for: a slow or dead CMS left the Emby grid on the
+        // empty state forever. Emby bypasses the gate.
+        guard ready || mode == "emby" else { return }
         generation += 1
         page = 0
         hasMore = true
         items = []
+        errorMessage = nil
         loadMore()
     }
 
@@ -129,13 +151,33 @@ final class VideoBrowseViewModel: ObservableObject {
         let pageToLoad = page
         if mode == "emby" {
             gateway.fetchEmbyItems(libraryId: selectedLibraryId, genre: selectedGenre, page: pageToLoad) { [weak self] result in
-                self?.handlePage(result, requestGeneration: requestGeneration)
+                self?.handleEmbyPage(result, requestGeneration: requestGeneration)
             }
         } else {
             // selectedType is non-nil by the guard above.
             gateway.fetchByType(selectedType ?? "", page: pageToLoad, area: area, year: year, by: sort) { [weak self] result in
                 self?.handlePage(result, requestGeneration: requestGeneration)
             }
+        }
+    }
+
+    /// Emby page handler: on failure set the honest error (a dead
+    /// server used to show "这个分类下没有内容") and stop paging;
+    /// on success the shared handler runs (stale-generation drop
+    /// + empty-page advance included).
+    private func handleEmbyPage(_ result: Result<VideoItemPage, EmbyError>, requestGeneration: Int) {
+        switch result {
+        case .success(let page):
+            handlePage(page, requestGeneration: requestGeneration)
+        case .failure(let error):
+            loadingMore = false
+            isLoading = false
+            guard requestGeneration == generation else {
+                if items.isEmpty { loadMore() }
+                return
+            }
+            errorMessage = error.message
+            hasMore = false
         }
     }
 
@@ -379,6 +421,21 @@ struct VideoBrowseView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 32)
+            } else if viewModel.mode == "emby", let error = viewModel.errorMessage {
+                VStack(spacing: 12) {
+                    MusicEmptyState(
+                        icon: "wifi.exclamationmark",
+                        title: "连不上 Emby",
+                        note: error
+                    )
+                    Button("重试") { viewModel.reload() }
+                        .font(.haoSubheadStrong)
+                        .foregroundStyle(theme.onAccent)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(theme.accent, in: Capsule())
+                }
+                .padding(.horizontal, 16)
             } else if viewModel.items.isEmpty {
                 MusicEmptyState(
                     icon: "film",
@@ -389,6 +446,13 @@ struct VideoBrowseView: View {
                 )
                 .padding(.horizontal, 16)
             } else {
+                if viewModel.mode == "emby", let filter = viewModel.activeEmbyFilterText {
+                    Text(filter)
+                        .font(.haoFootnote)
+                        .foregroundStyle(theme.textMuted)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                }
                 VideoPosterGrid(items: viewModel.items, isEmby: viewModel.mode == "emby") { item in
                     if viewModel.mode == "emby" {
                         onSelectEmby(item)

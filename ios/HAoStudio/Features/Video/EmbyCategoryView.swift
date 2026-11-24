@@ -12,11 +12,18 @@ final class EmbyCategoryViewModel: ObservableObject {
     @Published private(set) var items: [VideoItem] = []
     @Published private(set) var isLoading = false
     @Published private(set) var hasMore = true
+    /// Human error text from the last failed load (EmbyError.message).
+    /// Set only on failure — an empty genre stays an empty state,
+    /// never an error state.
+    @Published private(set) var errorMessage: String?
 
     private let gateway: VideoDataGateway
     private let genre: String
     private var page = 0
     private var loadingMore = false
+    /// True once the first load was issued (E5): returning from
+    /// detail must not refetch page 0 and lose the scroll position.
+    private var hasLoaded = false
     /// Load generation: every reload bumps it. A page that lands
     /// for an older generation is dropped and the current query
     /// re-issued — otherwise a pull-to-refresh during pagination
@@ -35,7 +42,17 @@ final class EmbyCategoryViewModel: ObservableObject {
         page = 0
         hasMore = true
         items = []
+        errorMessage = nil
+        hasLoaded = true
         loadMore()
+    }
+
+    /// Return-from-detail must not refetch page 0 (the grid would
+    /// jump back to the top). The first appear loads; later appears
+    /// keep the grid. Pull-to-refresh still calls reload().
+    func reloadIfNeeded() {
+        guard !hasLoaded else { return }
+        reload()
     }
 
     func loadMore() {
@@ -51,12 +68,21 @@ final class EmbyCategoryViewModel: ObservableObject {
                 if self.items.isEmpty { self.loadMore() }
                 return
             }
-            if result.items.isEmpty {
+            switch result {
+            case .success(let page):
+                if page.items.isEmpty {
+                    self.hasMore = false
+                } else {
+                    self.items.append(contentsOf: page.items)
+                    self.page += 1
+                    self.hasMore = page.hasMore
+                }
+            case .failure(let error):
+                // A dead server used to show "这个分类下没有内容"
+                // (the gateway swallowed the failure to .empty).
+                // Say so.
+                self.errorMessage = error.message
                 self.hasMore = false
-            } else {
-                self.items.append(contentsOf: result.items)
-                self.page += 1
-                self.hasMore = result.hasMore
             }
         }
     }
@@ -83,6 +109,21 @@ struct EmbyCategoryView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 32)
+            } else if let error = viewModel.errorMessage {
+                VStack(spacing: 12) {
+                    MusicEmptyState(
+                        icon: "wifi.exclamationmark",
+                        title: "连不上 Emby",
+                        note: error
+                    )
+                    Button("重试") { viewModel.reload() }
+                        .font(.haoSubheadStrong)
+                        .foregroundStyle(theme.onAccent)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(theme.accent, in: Capsule())
+                }
+                .padding(.horizontal, 16)
             } else if viewModel.items.isEmpty {
                 MusicEmptyState(
                     icon: "film",
@@ -110,6 +151,6 @@ struct EmbyCategoryView: View {
         .navigationTitle(genre)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { viewModel.reload() }
-        .onAppear { viewModel.reload() }
+        .onAppear { viewModel.reloadIfNeeded() }
     }
 }

@@ -172,6 +172,16 @@ final class VideoDetailViewModel: ObservableObject {
     /// Queue the selected episode for download. The result is a
     /// note, never a silent no-op.
     func downloadSelected() {
+        // Emby: video offline download is not built (no downloads
+        // list, no offline playback — a downloaded file would sit
+        // orphaned on disk), and the Emby stream URL carries the
+        // server credential, which the download task index would
+        // persist in cleartext. Say so honestly instead of
+        // enqueueing a download that goes nowhere.
+        if source == .emby {
+            downloadNote = "Emby 影片暂不支持下载"
+            return
+        }
         guard let detail = detail, let line = selectedLine,
               let episode = selectedEpisode else { return }
         gateway.enqueueDownload(detail: detail, episode: episode, line: line) { [weak self] ok in
@@ -314,21 +324,30 @@ struct VideoDetailContentView: View {
                         // A failed detail fetch used to leave this
                         // state with no way back except leaving the
                         // page (load() only runs on appear).
-                        Button(action: { viewModel.load() }) {
-                            Text("重试")
-                                .font(.haoSubheadStrong)
-                                .foregroundStyle(theme.onAccent)
-                                .padding(.horizontal, 24)
-                                .padding(.vertical, 10)
-                                .background(theme.accent, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .frame(maxWidth: .infinity, alignment: .center)
+                        // The retry button lives in the bottom
+                        // safe-area inset (see below), not here: in
+                        // flow it sits below the cover + title +
+                        // play button, and on a short phone — or
+                        // whenever the mini player is showing — it
+                        // lands under the floating mini / tab bar
+                        // until the user discovers the scroll.
                     }
                     Spacer(minLength: 24)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            // Pinned retry for the failed-load state: always above
+            // the floating mini / tab bar (the inset sits inside
+            // the bottom-chrome clearance), so it never needs a
+            // scroll to be found. Hidden while loading and once
+            // lines arrive.
+            if viewModel.lines.isEmpty && !viewModel.isLoading {
+                retryButton
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
             }
         }
         .haoBottomChromePadding()
@@ -339,13 +358,34 @@ struct VideoDetailContentView: View {
             withAnimation(HaoLayout.settleSpring) { coverRevealed = true }
         }
     }
+    /// Retry the detail fetch. A failed detail fetch used to leave
+    /// the page with no way back except leaving it (load() only
+    /// runs on appear).
+    private var retryButton: some View {
+        Button(action: { viewModel.load() }) {
+            Text("重试")
+                .font(.haoSubheadStrong)
+                .foregroundStyle(theme.onAccent)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+                .background(theme.accent, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
 
     // MARK: - Cover (Infuse style, no play button on it)
 
     private var coverHeader: some View {
         ZStack(alignment: .bottomLeading) {
             Group {
-                if let url = viewModel.item.coverURL {
+                // Emby covers need the server token in the request
+                // header (EmbyPosterImage); plain AsyncImage sends
+                // none, so every Emby cover 401'd into the
+                // placeholder tile.
+                if viewModel.source == .emby {
+                    EmbyPosterImage(urlString: viewModel.item.coverURL?.absoluteString ?? "", cornerRadius: 0)
+                } else if let url = viewModel.item.coverURL {
                     AsyncImage(url: url) { phase in
                         switch phase {
                         case .success(let image):
@@ -542,7 +582,9 @@ struct VideoDetailContentView: View {
 
     private var linePicker: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("线路")
+            // Emby lines are seasons, not sources: "选季" says
+            // what the row does; "线路" is CMS vocabulary.
+            Text(viewModel.source == .emby ? "选季" : "线路")
                 .font(.haoSectionTitle)
                 .foregroundStyle(theme.textPrimary)
             ScrollView(.horizontal, showsIndicators: false) {

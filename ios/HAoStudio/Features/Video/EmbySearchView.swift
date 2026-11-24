@@ -116,6 +116,7 @@ struct EmbySearchView: View {
             TextField("搜索 Emby 影片、剧集", text: $query)
                 .font(.haoSubhead)
                 .foregroundStyle(theme.textPrimary)
+                .submitLabel(.search)
                 .textInputAutocapitalization(.never)
                 .disableAutocorrection(true)
                 .onSubmit { viewModel.search(query) }
@@ -150,7 +151,9 @@ struct EmbySearchView: View {
                 Spacer()
                 // VidHub-style count ("共 N 部"): the number comes
                 // from the results themselves, never invented.
-                Text("共 \(items.count) 部")
+                // The first page is capped at 50: "共 50 部" would
+                // claim the whole library. Say "前 50 部" at the cap.
+                Text(items.count == 50 ? "前 50 部" : "共 \(items.count) 部")
                     .font(.haoFootnote)
                     .foregroundStyle(theme.textMuted)
             }
