@@ -780,11 +780,29 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     /// the dead URL. Opens the fresh first URL when it differs
     /// from the failed one; anything else finishes failed.
     private func openFresh(item: PlaybackItem, failedURL: URL, freshRounds: Int, finish: @escaping (Result<Void, MusicPlayerError>) -> Void) {
+        // #2: capture the generation + attempt token at entry.
+        // refreshURLs is an async network re-parse; between ladder
+        // exhaustion and the fresh answer arriving, the user can
+        // stop()/release() (bumps both) or switch rooms (attemptOpen
+        // bumps the token, a new open bumps the generation). The
+        // completion must re-check all three before opening —
+        // recoverFromStall's own fetchFresh does exactly this, and
+        // openFresh was the one unguarded async open in the
+        // codebase. On a stale answer, return WITHOUT calling
+        // finish: firing a failure into the dead request could
+        // clear the new room's loading state (the B36 item 5 hole
+        // release()'s comment describes).
+        let gen = generation
+        let token = openAttemptToken
         refreshURLs { [weak self] fresh in
             guard let self = self else {
                 return
             }
             self.ensureMain {
+                guard gen == self.generation, token == self.openAttemptToken,
+                      self.pendingItem?.id == item.id else {
+                    return
+                }
                 guard let fresh = fresh, let first = fresh.first, first != failedURL else {
                     finish(.failure(.loadFailed))
                     return
