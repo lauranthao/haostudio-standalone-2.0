@@ -26,28 +26,45 @@ struct LiveRoomCard: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1)
-                HStack(spacing: 4) {
-                    Text(room.streamer.isEmpty ? room.platform.displayName : room.streamer)
-                        .font(.system(size: 12))
-                        .foregroundStyle(theme.textSecondary)
-                        .lineLimit(1)
-                    Spacer()
-                    if !liveWatchingText(room.onlineCount).isEmpty {
-                        Text(liveWatchingText(room.onlineCount))
-                            .font(.system(size: 12))
-                            .foregroundStyle(theme.textMuted)
-                            .lineLimit(1)
-                    }
-                }
+                // Anchor and watching on SEPARATE lines (fix
+                // 2026-11-24): build 33 squeezed both into one
+                // HStack, so a long anchor name squeezed the
+                // count and the two read as overlapping. One
+                // line each can only truncate, never overlap.
+                Text(room.streamer.isEmpty ? room.platform.displayName : room.streamer)
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.textSecondary)
+                    .lineLimit(1)
+                // Always rendered, blank when the count is 0:
+                // every card keeps the same three text lines, so
+                // all cards in a grid row stay the same height.
+                Text(watchingLine)
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.textMuted)
+                    .lineLimit(1)
             }
+            // Bound the label to the grid cell: the VStack must
+            // never report wider than the cell, or the card
+            // draws past the cell (and past the screen edge on
+            // the right column). Truncation above handles long
+            // text inside that bound.
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.plain)
+    }
+
+    /// Watching line: "12.3万 人在看" (same wording as the list
+    /// row), blank when the platform gave no count.
+    private var watchingLine: String {
+        let text = liveWatchingText(room.onlineCount)
+        guard !text.isEmpty else { return " " }
+        return "\(text) 人在看"
     }
 
     private var coverView: some View {
         ZStack(alignment: .topLeading) {
             coverImage
-                .aspectRatio(16.0 / 10.0, contentMode: .fill)
+                .aspectRatio(CGFloat(LiveGridLayout.coverAspectRatio), contentMode: .fill)
                 .frame(maxWidth: .infinity)
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -195,4 +212,29 @@ func liveRelativeTimeText(date: Date, now: Date = Date()) -> String {
     let formatter = DateFormatter()
     formatter.dateFormat = "yyyy-MM-dd"
     return formatter.string(from: date)
+}
+
+// MARK: - Shared grid definition (fix 2026-11-24)
+
+/// The SwiftUI half of LiveGridLayout (AppCore, Double math):
+/// the two flexible columns, row spacing and page margin every
+/// live room grid uses — tab recommend, search results, home
+/// hot-live. One definition, so the three grids cannot drift
+/// apart again. `flexible(minimum: 0)` means a column never
+/// demands more than its share of the container width; the card
+/// itself is width-bounded and truncates, so nothing can draw
+/// past the cell — or past the screen edge on the right column.
+extension LiveGridLayout {
+    static var gridColumns: [GridItem] {
+        Array(
+            repeating: GridItem(.flexible(minimum: 0), spacing: CGFloat(interItemSpacing)),
+            count: columns
+        )
+    }
+
+    /// Row spacing between grid rows, in points.
+    static var gridRowSpacing: CGFloat { CGFloat(rowSpacing) }
+
+    /// Horizontal page margin the grids sit inside, in points.
+    static var gridEdgePadding: CGFloat { CGFloat(edgePadding) }
 }

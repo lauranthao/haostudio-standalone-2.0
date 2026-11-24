@@ -43,7 +43,10 @@ final class LiveSearchViewModel: ObservableObject {
         gateway.searchRooms(query: trimmed, platform: platformId) { [weak self] rooms in
             guard let self = self else { return }
             self.isSearching = false
-            self.results = rooms
+            // Same dedupe as the tab grid: a repeated room in
+            // one page must never reach the ForEach (fix
+            // 2026-11-24).
+            self.results = deduplicatedLiveRooms(rooms)
         }
     }
 
@@ -202,16 +205,18 @@ struct LiveSearchView: View {
                     .padding(.horizontal, 24)
                 } else {
                     LazyVGrid(
-                        columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 2),
-                        spacing: 14
+                        columns: LiveGridLayout.gridColumns,
+                        spacing: LiveGridLayout.gridRowSpacing
                     ) {
-                        ForEach(viewModel.results, id: \.roomId) { room in
+                        // Identity is the room itself (platform +
+                        // room id), same as the tab grid.
+                        ForEach(viewModel.results, id: \.self) { room in
                             LiveRoomCard(room: room) {
                                 onSelect(room, viewModel.results)
                             }
                         }
                     }
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, LiveGridLayout.gridEdgePadding)
                 }
             }
         }

@@ -166,22 +166,17 @@ struct HomeView: View {
                 )
                 .padding(.horizontal, 24)
             } else {
-                LazyVGrid(columns: hotLiveColumns, spacing: 14) {
+                LazyVGrid(columns: LiveGridLayout.gridColumns, spacing: LiveGridLayout.gridRowSpacing) {
                     ForEach(viewModel.hotLive, id: \.id) { item in
                         LiveRoomCard(room: liveRoom(from: item)) {
                             openRoom(liveRoom(from: item), playlist: hotLiveRooms)
                         }
                     }
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, LiveGridLayout.gridEdgePadding)
             }
         }
     }
-
-    private let hotLiveColumns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
-    ]
 
     private var hotLiveRooms: [LiveRoom] {
         viewModel.hotLive.map { liveRoom(from: $0) }

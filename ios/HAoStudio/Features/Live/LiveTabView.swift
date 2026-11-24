@@ -97,7 +97,11 @@ final class LiveTabViewModel: ObservableObject {
             if result.rooms.isEmpty && self.rooms.isEmpty {
                 self.loadFailed = true
             } else {
-                self.rooms = result.rooms
+                // Dedupe by platform + room id before the grid
+                // sees the list: a recommend page can repeat a
+                // room, and duplicate ForEach identities misplace
+                // cells (fix 2026-11-24).
+                self.rooms = deduplicatedLiveRooms(result.rooms)
                 self.hasMore = result.hasMore
                 self.page = 0
             }
@@ -121,9 +125,11 @@ final class LiveTabViewModel: ObservableObject {
             // A platform that repeats a page (or a page that only
             // overlaps the rooms already shown) appends nothing:
             // report it as a failed load-more, never duplicate
-            // cards — ForEach(id: roomId) must never see a repeat.
+            // cards — ForEach identity is the room itself
+            // (platform + room id) and must never see a repeat.
             let known = Set(self.rooms.map { $0.platform.rawValue + "|" + $0.roomId })
-            let fresh = result.rooms.filter { !known.contains($0.platform.rawValue + "|" + $0.roomId) }
+            let fresh = deduplicatedLiveRooms(result.rooms)
+                .filter { !known.contains($0.platform.rawValue + "|" + $0.roomId) }
             if fresh.isEmpty {
                 self.loadMoreFailed = true
                 return
@@ -421,16 +427,19 @@ struct LiveTabView: View {
                 }
             } else {
                 LazyVGrid(
-                    columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 2),
-                    spacing: 14
+                    columns: LiveGridLayout.gridColumns,
+                    spacing: LiveGridLayout.gridRowSpacing
                 ) {
-                    ForEach(viewModel.rooms, id: \.roomId) { room in
+                    // Identity is the room itself: LiveRoom's
+                    // Hashable is platform + room id (roomId
+                    // alone is NOT unique — fix 2026-11-24).
+                    ForEach(viewModel.rooms, id: \.self) { room in
                         LiveRoomCard(room: room) {
                             openRoom(room, playlist: viewModel.rooms)
                         }
                     }
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, LiveGridLayout.gridEdgePadding)
                 if viewModel.loadingMore {
                     ProgressView()
                         .frame(maxWidth: .infinity)
