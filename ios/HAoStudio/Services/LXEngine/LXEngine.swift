@@ -15,7 +15,8 @@
 //   `showConfigView`), `LxLog` (console, last 100 lines).
 // - Dart -> JS calls go through `__haoLxDispatch('request',
 //   payloadJson)` (defined by the prelude) and poll
-//   `__haoLxDispatchResult(id)` every 10 ms; HTTP results come back
+//   `__haoLxDispatchResult(id)` with backoff (10/50/100 ms);
+//   HTTP results come back
 //   via `__haoLxDeliver(id, errText, respJson)`.
 // - `inited` is the only capability record: the script's source map
 //   (platform -> actions + qualities). A script that never sends
@@ -800,9 +801,12 @@ final class LXEngine {
     }
 
     /// The dispatch core: evaluate `__haoLxDispatch`, then poll
-    /// `__haoLxDispatchResult` every 10 ms until done, cancelled or
-    /// past the deadline. All JS work happens on the runtime queue;
-    /// completion on the main queue.
+    /// `__haoLxDispatchResult` until done, cancelled or past the
+    /// deadline. The poll interval backs off with elapsed time —
+    /// 10 ms for the first 100 ms (first playable URL latency
+    /// unchanged), then 50 ms up to 1 s, then 100 ms — so a long
+    /// wait costs ~99 evaluations instead of ~800. All JS work
+    /// happens on the runtime queue; completion on the main queue.
     private func dispatch(
         runtime: LXRuntime,
         payload: [String: Any],
@@ -829,8 +833,10 @@ final class LXEngine {
                 self.completeOnMain(.failure(LXError.dispatchFailed(idValue?.toString() ?? "nil")), completion: completion)
                 return
             }
-            let deadline = Date().addingTimeInterval(timeout)
+            let startedAt = Date()
+            let deadline = startedAt.addingTimeInterval(timeout)
             self.pollDispatch(runtime: runtime, id: id, deadline: deadline,
+                              startedAt: startedAt,
                               cancelToken: cancelToken, completion: completion)
         }
     }
@@ -839,10 +845,20 @@ final class LXEngine {
         runtime: LXRuntime,
         id: Int,
         deadline: Date,
+        startedAt: Date,
         cancelToken: LXCancelToken?,
         completion: @escaping (Result<Any, Error>) -> Void
     ) {
-        runtime.queue.asyncAfter(deadline: .now() + .milliseconds(10)) {
+        // Backoff: 10 ms while elapsed < 100 ms, 50 ms while < 1 s,
+        // 100 ms after that. The first 100 ms keep the old 10 ms
+        // density, so a fast first playable URL returns exactly as
+        // before; only long waits get sparser.
+        let elapsed = Date().timeIntervalSince(startedAt)
+        let delayMs: Int
+        if elapsed < 0.1 { delayMs = 10 }
+        else if elapsed < 1.0 { delayMs = 50 }
+        else { delayMs = 100 }
+        runtime.queue.asyncAfter(deadline: .now() + .milliseconds(delayMs)) {
             // Identity guard: never evaluate on a released JSContext.
             guard !runtime.disposed,
                   self.runtime(for: runtime.scriptId) === runtime
@@ -854,6 +870,7 @@ final class LXEngine {
             // once; a late result is never read.
             if cancelToken?.isCancelled == true {
                 runtime.currentTask?.cancel()
+                self.discardDispatch(runtime: runtime, id: id)
                 self.completeOnMain(.failure(LXError.cancelled), completion: completion)
                 return
             }
@@ -872,12 +889,25 @@ final class LXEngine {
                 return
             }
             if Date() > deadline {
+                self.discardDispatch(runtime: runtime, id: id)
                 self.completeOnMain(.failure(LXError.timedOut("request")), completion: completion)
                 return
             }
             self.pollDispatch(runtime: runtime, id: id, deadline: deadline,
+                              startedAt: startedAt,
                               cancelToken: cancelToken, completion: completion)
         }
+    }
+
+    /// D-8: drop a dispatch result entry when the poll exits early
+    /// (cancel/timeout). `__haoLxDispatchResult` only deletes entries
+    /// it reads as done, so a bare cleanup read cannot remove a still
+    /// pending entry that settles later — delete unconditionally.
+    /// Only called while the runtime is alive (inside pollDispatch's
+    /// identity guard); on the disposed path the whole JSContext —
+    /// map included — is torn down, so there is nothing to leak.
+    private func discardDispatch(runtime: LXRuntime, id: Int) {
+        runtime.evaluate("__haoLxDispatchDiscard(\(id))")
     }
 
     private func completeOnMain(
