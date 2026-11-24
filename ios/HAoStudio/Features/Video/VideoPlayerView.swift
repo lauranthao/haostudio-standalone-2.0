@@ -487,6 +487,11 @@ final class VideoPlayerViewModel: ObservableObject {
         episodeIndex = index
         didAutoAdvance = false
         position = 0
+        // Same stale-duration reset as open(): the driver only
+        // publishes the new duration when the new stream opens, so
+        // until then the bar, the remaining time and the seek clamp
+        // would all read the old episode's duration.
+        duration = 0
         skipIntroPill = nil
         skipCreditsPill = false
         // Build 37 (P1): same rule as open() — a switch re-opens
@@ -527,6 +532,10 @@ final class VideoPlayerViewModel: ObservableObject {
         didAutoAdvance = false
         if targetEpisode != previousEpisode {
             position = 0
+            // Same stale-duration reset as selectEpisode: a
+            // different episode starts at an unknown duration (0),
+            // not the previous episode's.
+            duration = 0
             skipIntroPill = nil
             skipCreditsPill = false
         }
