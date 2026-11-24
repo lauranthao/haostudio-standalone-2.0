@@ -283,6 +283,61 @@ final class EmbyClient {
         return result
     }
 
+    /// External subtitle URL (build 36, item 14, G-G): the
+    /// standard Emby endpoint
+    /// `GET /Videos/{ItemId}/{MediaSourceId}/Subtitles/{Index}`.
+    /// Same auth-in-URL discipline as `streamUrl` — this is the
+    /// only other place the key enters a URL. Never log it.
+    func subtitleUrl(itemId: String, mediaSourceId: String, index: Int) -> String {
+        guard let url = apiUrl("/Videos/\(itemId)/\(mediaSourceId)/Subtitles/\(index)") else { return "" }
+        return "\(url.absoluteString)?api_key=\(EmbyClient.queryValue(config.authToken))"
+    }
+
+    /// HLS transcode master playlist (build 36, item 14, G-H):
+    /// the server transcodes video+audio to H.264/AAC on the fly.
+    /// Last resort only — the driver tries it after the direct
+    /// URL fails on every engine, so it never triggers for
+    /// playable files. Cost is server CPU, only on files no
+    /// bundled kernel can play (VVC, a missing audio decoder).
+    func transcodedHlsUrl(itemId: String) -> String {
+        guard let url = apiUrl("/Videos/\(itemId)/master.m3u8") else { return "" }
+        return "\(url.absoluteString)?static=true&api_key=\(EmbyClient.queryValue(config.authToken))"
+    }
+
+    /// Build a subtitle URL from one of our own stream URLs
+    /// (pure — the driver has the stream URL but no client).
+    /// Returns nil when the URL is not an Emby direct stream.
+    static func subtitleUrl(fromStreamUrl streamUrl: String, mediaSourceId: String, index: Int) -> URL? {
+        guard episodeIdFromStreamUrl(streamUrl) != nil,
+              let stream = URL(string: streamUrl),
+              let components = URLComponents(url: stream, resolvingAgainstBaseURL: false) else { return nil }
+        let token = components.queryItems?.first(where: { $0.name == "api_key" })?.value ?? ""
+        guard !token.isEmpty, !mediaSourceId.isEmpty else { return nil }
+        var path = stream.path
+        if path.hasSuffix("/stream") { path = String(path.dropLast("/stream".count)) }
+        // `path` is now `…/Videos/{itemId}` (with any `/emby`
+        // prefix kept) — append only the subtitle tail.
+        let base = "\(stream.scheme ?? "http")://\(stream.host ?? "")\(stream.port.map { ":\($0)" } ?? "")\(path)"
+        return URL(string: "\(base)/\(mediaSourceId)/Subtitles/\(index)?api_key=\(queryValue(token))")
+    }
+
+    /// Build the transcode HLS URL from one of our own stream
+    /// URLs (pure — the driver has the stream URL but no client).
+    /// Returns nil when the URL is not an Emby direct stream.
+    static func transcodedHlsUrl(fromStreamUrl streamUrl: String) -> URL? {
+        guard episodeIdFromStreamUrl(streamUrl) != nil,
+              let stream = URL(string: streamUrl),
+              let components = URLComponents(url: stream, resolvingAgainstBaseURL: false) else { return nil }
+        let token = components.queryItems?.first(where: { $0.name == "api_key" })?.value ?? ""
+        guard !token.isEmpty else { return nil }
+        var path = stream.path
+        if path.hasSuffix("/stream") { path = String(path.dropLast("/stream".count)) }
+        // `path` is now `…/Videos/{itemId}` (with any `/emby`
+        // prefix kept) — append only the playlist tail.
+        let base = "\(stream.scheme ?? "http")://\(stream.host ?? "")\(stream.port.map { ":\($0)" } ?? "")\(path)"
+        return URL(string: "\(base)/master.m3u8?static=true&api_key=\(queryValue(token))")
+    }
+
     /// Percent-encode one query value: unreserved characters only
     /// (ALPHA / DIGIT / `-` / `.` / `_` / `~`); everything else —
     /// including `&`, `=`, `+`, space — is escaped.

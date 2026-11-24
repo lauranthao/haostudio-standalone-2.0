@@ -15,8 +15,11 @@
 // bookkeeping.
 //
 // Rules carried from the music player (same numbers, same shape):
-// - Open timeout 10 s (P0-04): a timeout is a stream error, the
-//   load is dropped and the driver falls to the next candidate.
+// - Open timeout, per attempt (build 36, item 14, G-J; was 10 s
+//   for the whole ladder, P0-04): each ladder attempt gets its
+//   own 10 s budget, the whole open is capped at 25 s. A timeout
+//   is a stream error, the load is dropped and the driver falls
+//   to the next candidate.
 // - Seek uses completion + read-back verification; a failed seek
 //   reports false and the driver republishes the real position so
 //   the UI rolls the progress bar back (never a lie).
@@ -129,6 +132,25 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     /// new open request clears it. Never set by stop(): the
     /// failure callbacks below run after stop() and set it there.
     @Published private(set) var lastOpenFailed: Bool = false
+    /// The specific reason the most recent open failed (build 36,
+    /// item 14, G-K) — the failure card shows `lastFailure?`.
+    /// displayLine instead of a generic "加载失败". Nil while
+    /// nothing has failed (or while a new open is in flight).
+    @Published private(set) var lastFailure: VideoPlaybackFailure?
+    /// Audio / subtitle tracks of the running backend (build 36,
+    /// item 14, G-F): published when the backend reports its
+    /// track list; the settings sheet pickers read these. Empty
+    /// until the backend publishes (IJK never publishes — it has
+    /// no track API — so the rows stay hidden there).
+    @Published private(set) var audioTracks: [VodTrackInfo] = []
+    @Published private(set) var subtitleTracks: [VodTrackInfo] = []
+    /// Selected track, as a position in the published list (-1 =
+    /// default/auto for audio, -1 = no explicit pick for
+    /// subtitles — the backend's auto-select is left alone until
+    /// the user picks). The view model pushes the stored picks
+    /// here; the driver re-applies them at every open.
+    private(set) var currentAudioTrackIndex: Int = -1
+    private(set) var currentSubtitleTrackIndex: Int = -1
 
     // Driver wiring, set by the coordinator (callbacks) and by
     // HAoStudioApp (resolver, C leg).
@@ -151,6 +173,12 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     var playURLResolver: VideoPlayURLResolver?
 
     static let openTimeout: TimeInterval = 10
+    /// Overall open cap factor (build 36, item 14, G-J): the
+    /// whole open (ladder + re-resolution) may take at most 2.5x
+    /// the per-attempt budget — 25 s in production. A healthy
+    /// first engine still opens in ~1 s; the cap only binds when
+    /// engines hang.
+    static let openTotalTimeoutFactor: Double = 2.5
     static let seekTolerance: TimeInterval = 2.0
 
     /// Test seam: open timeout seconds. Production is 10; tests set
@@ -247,6 +275,32 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     private var fpsSampler = VideoFpsSampler()
     private var lastFps: Double = 0
     private var lastDroppedFrames: Int = 0
+    /// (Build 36, item 14, G-E) Mid-play fallback state: whether
+    /// the next-engine retry was already used for this episode,
+    /// whether the running backend ever prepared (only a prepared
+    /// backend's failure is a mid-play failure — open-time
+    /// failures belong to the ladder), and which engines already
+    /// failed (never retried for this episode). Reset on a new
+    /// episode and after 30 s of healthy playback.
+    private var midPlayFallbackUsed = false
+    private var preparedSeenForEpisode = false
+    private var failedEnginesForEpisode: [VideoEngine] = []
+    /// Healthy-playback accumulation for the 30 s reset above:
+    /// seconds of continuous position progress (0.5 s per tick
+    /// that advances). Any stall resets it to 0.
+    private var healthyPlaybackAccumulated: Double = 0
+    private var lastHealthyPosition: Double = 0
+    /// (Build 36, item 14, G-H) Whether the Emby transcode last
+    /// resort was already tried for this request (one attempt).
+    private var transcodeAttemptedForRequest = false
+    /// (Build 36, item 14, G-J) Whether any ladder attempt of the
+    /// open in flight timed out on its own budget (a hanging
+    /// backend) — the open then reports `.timeout`, not
+    /// `.loadFailed`.
+    private var openAttemptTimedOut = false
+    /// Engines the open ladder attempted, in try order (G-K:
+    /// recorded into the failure + diagnostics).
+    private var lastAttemptedEngines: [VideoEngine] = []
 
     override init() {
         super.init()
@@ -327,8 +381,55 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             fps: lastFps,
             droppedFrames: lastDroppedFrames,
             facts: currentURLFacts(),
-            fellBackForSoftwareDecode: fellBackForSoftwareDecode
+            fellBackForSoftwareDecode: fellBackForSoftwareDecode,
+            attemptedEngines: lastAttemptedEngines
         )
+    }
+
+    /// Human format summary for a failure, e.g. "MKV · AV1 ·
+    /// TrueHD" — unknown parts omitted, "" when nothing is
+    /// known (build 36, item 14, G-K).
+    private func formatDescriptionForFailure() -> String {
+        guard let url = currentURL else { return "" }
+        var parts: [String] = []
+        let format = videoFormatOf(url: url, declaredFormat: nil)
+        if format != .unknown { parts.append(format.rawValue.uppercased()) }
+        if let facts = currentURLFacts() {
+            if let vcodec = facts.videoCodec, !vcodec.isEmpty { parts.append(vcodec.uppercased()) }
+            if let acodec = facts.audioCodec, !acodec.isEmpty { parts.append(acodec.uppercased()) }
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Record the specific failure for the card + diagnostics.
+    /// `hadURL` is false only when no URL could be resolved at
+    /// all (`.noPlayableURL`); the format description is then
+    /// empty (a stale URL from a previous episode must never
+    /// leak into this episode's failure).
+    private func recordFailure(error: MusicPlayerError, hadURL: Bool) {
+        lastOpenFailed = true
+        let timedOut = error == .timeout
+        let candidatesEmpty: Bool
+        if let url = currentURL {
+            candidatesEmpty = PlayerKernel.candidatesFor(url: url, dvDowngradeToHdr: dvP8Downgrade).isEmpty
+        } else {
+            candidatesEmpty = false
+        }
+        let description = hadURL ? formatDescriptionForFailure() : ""
+        lastFailure = VideoPlaybackFailure(
+            reason: VideoPlaybackFailure.reason(
+                candidatesWereEmpty: candidatesEmpty, timedOut: timedOut,
+                hadURL: hadURL, formatDescription: description),
+            attemptedEngines: lastAttemptedEngines,
+            formatDescription: description)
+    }
+
+    /// The Emby HLS transcode URL for the episode now playing, or
+    /// nil when the current URL is not an Emby direct stream
+    /// (build 36, item 14, G-H).
+    private func transcodeURLForCurrentEpisode() -> URL? {
+        guard let url = currentURL else { return nil }
+        return EmbyClient.transcodedHlsUrl(fromStreamUrl: url.absoluteString)
     }
 
     /// Stream facts for the current URL, when it carries them
@@ -460,6 +561,14 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         self.pendingItem = item
         self.stallFailed = false
         self.lastOpenFailed = false
+        self.lastFailure = nil
+        self.midPlayFallbackUsed = false
+        self.preparedSeenForEpisode = false
+        self.failedEnginesForEpisode = []
+        self.healthyPlaybackAccumulated = 0
+        self.lastHealthyPosition = 0
+        self.transcodeAttemptedForRequest = false
+        self.lastAttemptedEngines = []
         self.isLoading = true
         self.resolveURL?(item, []) { [weak self] url in
             guard let self = self else { return }
@@ -468,7 +577,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                 guard let url = url else {
                     self.isLoading = false
                     self.pendingItem = nil
-                    self.lastOpenFailed = true
+                    self.recordFailure(error: .noPlayableURL, hadURL: false)
                     self.onEpisodeFailed?(item, .noPlayableURL)
                     return
                 }
@@ -478,6 +587,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         if self.resolveURL == nil {
             self.isLoading = false
             self.pendingItem = nil
+            self.recordFailure(error: .noPlayableURL, hadURL: false)
             self.onEpisodeFailed?(item, .noPlayableURL)
         }
     }
@@ -495,10 +605,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                 return
             case .failure(let error):
                 guard tried.count < 2 else {
-                    self.isLoading = false
-                    self.pendingItem = nil
-                    self.lastOpenFailed = true
-                    self.onEpisodeFailed?(item, error)
+                    self.failOrTranscode(item: item, error: error)
                     return
                 }
                 self.resolveURL?(item, tried) { [weak self] nextURL in
@@ -506,32 +613,64 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                     self.ensureMain {
                         guard self.pendingItem?.id == item.id else { return }
                         guard let nextURL = nextURL else {
-                            self.isLoading = false
-                            self.pendingItem = nil
-                            self.lastOpenFailed = true
-                            self.onEpisodeFailed?(item, error)
+                            self.failOrTranscode(item: item, error: error)
                             return
                         }
                         self.attemptOpen(item: item, url: nextURL, tried: tried + [nextURL])
                     }
                 }
                 if self.resolveURL == nil {
-                    self.isLoading = false
-                    self.pendingItem = nil
-                    self.onEpisodeFailed?(item, error)
+                    self.failOrTranscode(item: item, error: error)
                 }
             }
         }
     }
 
+    /// Terminal failure for one request: the Emby transcode last
+    /// resort first (build 36, item 14, G-H), the specific
+    /// failure otherwise. The transcode is tried once, after the
+    /// direct URL failed on every engine and the fallback
+    /// re-resolution is spent (or empty) — never for playable
+    /// files, and never twice.
+    private func failOrTranscode(item: PlaybackItem, error: MusicPlayerError) {
+        if !transcodeAttemptedForRequest,
+           let transcodeURL = transcodeURLForCurrentEpisode() {
+            transcodeAttemptedForRequest = true
+            open(item: item, url: transcodeURL) { [weak self] transcodeResult in
+                guard let self = self else { return }
+                switch transcodeResult {
+                case .success:
+                    return
+                case .failure(let transcodeError):
+                    self.isLoading = false
+                    self.pendingItem = nil
+                    self.recordFailure(error: transcodeError, hadURL: true)
+                    self.onEpisodeFailed?(item, transcodeError)
+                }
+            }
+            return
+        }
+        isLoading = false
+        pendingItem = nil
+        recordFailure(error: error, hadURL: true)
+        onEpisodeFailed?(item, error)
+    }
+
     /// Open a URL on the first capable engine, falling down the
     /// ladder (MPV / IJK / AVPlayer in capability order) on
-    /// failure. 10 s open timeout (P0-04): a timeout is a stream
-    /// error, the load is dropped and the driver falls to the next
+    /// failure. (Build 36, item 14, G-J) Timeouts are per
+    /// attempt now, not per open: each ladder attempt gets its
+    /// own `openTimeoutInterval` budget (10 s in production), and
+    /// the whole open is capped at 2.5x that (25 s). A slow first
+    /// engine can no longer starve the rest of the ladder; a
+    /// timeout is a stream error and the driver falls to the next
     /// candidate. The completion fires exactly once for the live
     /// attempt; a newer open supersedes this one (its completion
     /// is then dropped, never double-reported).
-    func open(item: PlaybackItem, url: URL, completion: @escaping (Result<Void, MusicPlayerError>) -> Void) {
+    /// `excludingEngines` removes engines that already failed for
+    /// this episode (G-E mid-play fallback): the retry never
+    /// loops back to the engine that just failed.
+    func open(item: PlaybackItem, url: URL, excludingEngines: [VideoEngine] = [], completion: @escaping (Result<Void, MusicPlayerError>) -> Void) {
         ensureMain {
             let gen = self.nextGeneration()
             self.stopBackendForNewRequest()
@@ -567,14 +706,79 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                 finish(.failure(.timeout))
             }
             self.openTimeoutWork = timeoutWork
-            DispatchQueue.main.asyncAfter(deadline: .now() + self.openTimeoutInterval, execute: timeoutWork)
-            let engines = PlayerKernel.candidatesFor(url: url, dvDowngradeToHdr: self.dvP8Downgrade)
+            DispatchQueue.main.asyncAfter(deadline: .now() + self.openTimeoutInterval * VideoDriver.openTotalTimeoutFactor, execute: timeoutWork)
+            // (G-B) The ASS / multi-track / external-subtitle
+            // flags finally reach the candidate list: the facts
+            // ride the URL as `hao_*` markers (Emby), and the
+            // routing rule (ASS/multi-track/external -> MPV) was
+            // dead code until this call passed them.
+            let facts = self.currentURLFacts()
+            let engines = PlayerKernel.candidatesFor(
+                url: url, dvDowngradeToHdr: self.dvP8Downgrade,
+                hasAssSubtitles: facts?.hasAssSubtitles ?? false,
+                hasMultipleAudioTracks: facts?.hasMultipleAudioTracks ?? false,
+                hasExternalSubtitles: facts?.hasExternalSubtitles ?? false,
+                excluding: excludingEngines)
+            // Accumulate across the opens of one episode (original
+            // open + mid-play retry / transcode), so the failure +
+            // diagnostics name every engine that was tried — not
+            // just the last open's list. startNewPlayback resets it.
+            for engine in engines where !self.lastAttemptedEngines.contains(engine) {
+                self.lastAttemptedEngines.append(engine)
+            }
+            self.openAttemptTimedOut = false
             let ladder = VideoRecoveryLadder(engines: engines, urls: [url], attempt: { [weak self] engine, attemptURL, attemptCompletion in
                 guard let self = self else {
                     attemptCompletion(false)
                     return
                 }
-                self.openOnEngine(engine, url: attemptURL, gen: gen, completion: attemptCompletion)
+                // (G-J) Per-attempt timeout: a hanging attempt
+                // fails like a stream error after its own budget,
+                // and the ladder moves to the next engine. The
+                // `settled` guard makes the completion fire
+                // exactly once — a late backend answer after the
+                // timeout is dropped (and its backend shut down)
+                // instead of double-reporting or sounding behind
+                // the engine the ladder moved on to.
+                var settled = false
+                var attemptBackend: VideoPlayerBackend?
+                let attemptTimeout = DispatchWorkItem { [weak self] in
+                    guard let self = self else { return }
+                    self.ensureMain {
+                        guard !settled else { return }
+                        settled = true
+                        self.openAttemptTimedOut = true
+                        if let current = self.backend, current.engine == engine {
+                            current.shutdown()
+                            if self.backend === current { self.backend = nil }
+                        }
+                        attemptCompletion(false)
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + self.openTimeoutInterval, execute: attemptTimeout)
+                self.openOnEngine(engine, url: attemptURL, gen: gen) { [weak self] ok in
+                    guard let self = self else { return }
+                    self.ensureMain {
+                        guard !settled else {
+                            // Late answer after the per-attempt
+                            // timeout: shut this attempt's backend
+                            // down so it cannot sound behind the
+                            // next engine (the timeout handler
+                            // already shut it down when it was
+                            // still current — shutdown is
+                            // idempotent — this covers the case
+                            // where the ladder already moved on).
+                            if let attemptBackend = attemptBackend, self.backend !== attemptBackend {
+                                attemptBackend.shutdown()
+                            }
+                            return
+                        }
+                        settled = true
+                        attemptTimeout.cancel()
+                        attemptCompletion(ok)
+                    }
+                }
+                attemptBackend = self.backend
             }, onAttempt: { [weak self] engine, _ in
                 self?.currentEngine = engine
             })
@@ -588,7 +792,12 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                         self.playRequested = false
                         self.isLoading = false
                         self.recomputePlayingState()
-                        finish(.failure(.loadFailed))
+                        // (G-J) The ladder exhausted because every
+                        // attempt timed out on its own budget (a
+                        // hanging backend), not because engines
+                        // failed fast: report a timeout, exactly
+                        // like the overall cap.
+                        finish(.failure(self.openAttemptTimedOut ? .timeout : .loadFailed))
                         return
                     }
                     self.startPlaybackAfterLoad(item: item, backend: backend, gen: gen, finish: finish)
@@ -609,6 +818,22 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         let backend = makeBackend(engine)
         backend.onEvent = { [weak self] event in self?.handleBackendEvent(event) }
         backend.onVideoSize = { [weak self] _ in self?.updateDiagnostics() }
+        // (G-F) The backend publishes its track list when the
+        // file's tracks are known. A stale publish from a
+        // superseded backend must not overwrite the current one,
+        // so the handler checks identity before publishing.
+        if let capable = backend as? VodTrackListCapable {
+            capable.onTracksChanged = { [weak self] audio, subtitles in
+                guard let self = self else { return }
+                self.ensureMain {
+                    guard self.backend === backend else { return }
+                    self.audioTracks = audio
+                    self.subtitleTracks = subtitles
+                    self.applyStoredTrackPicks(to: backend)
+                    self.updateDiagnostics()
+                }
+            }
+        }
         self.backend = backend
         self.currentEngine = engine
         backend.open(url: url, headers: PlayerKernel.httpHeaders(platform: nil)) { [weak self] ok in
@@ -733,6 +958,12 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         if let capable = backend as? VodSubtitleAppearanceCapable {
             capable.setSubtitleAppearance(fontSize: currentSubtitleAppearance.fontSize, color: currentSubtitleAppearance.color, position: currentSubtitleAppearance.position)
         }
+        // (G-F) The stored track picks land through the
+        // onTracksChanged handler (wired in openOnEngine before
+        // open() runs, so it always sees the publish) — no second
+        // apply here, or `aid` / `sid` would be set twice.
+        // (G-G) Load external subtitles on MPV.
+        loadExternalSubtitlesIfNeeded()
         do {
             let mix = defaults.bool(forKey: SettingsStore.mixWithOthersKey)
             let options: AVAudioSession.CategoryOptions = mix ? [.mixWithOthers] : []
@@ -748,6 +979,8 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         position = 0
         duration = backend.duration.isFinite ? backend.duration : 0
         watchdog.resetForNewEpisode()
+        healthyPlaybackAccumulated = 0
+        lastHealthyPosition = 0
         startPositionTimerIfNeeded()
         fpsSampler.start()
         updateDiagnostics()
@@ -901,6 +1134,133 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         }
     }
 
+    // MARK: - Audio / subtitle tracks (build 36, item 14, G-F)
+
+    /// Select the audio track by list position (-1 = default /
+    /// auto). The pick is stored and forwarded live when the
+    /// backend can switch; when the list is not published yet it
+    /// is applied when it lands (see `applyStoredTrackPicks`).
+    /// The `index` is a POSITION in `audioTracks`, translated to
+    /// the engine-native id (`VodTrackInfo.index`) here.
+    func selectAudioTrack(index: Int) {
+        ensureMain {
+            self.currentAudioTrackIndex = index
+            guard let backend = self.backend, let capable = backend as? VodTrackListCapable else { return }
+            if index < 0 {
+                capable.selectAudioTrack(index: -1)
+                return
+            }
+            guard self.audioTracks.indices.contains(index) else { return }
+            capable.selectAudioTrack(index: self.audioTracks[index].index)
+        }
+    }
+
+    /// Select the subtitle track by list position (-1 = no
+    /// subtitles). Same stored + live discipline as audio. Note
+    /// the asymmetry with `applyStoredTrackPicks`: a stored -1 is
+    /// never forced at open (the backend's auto-select is left
+    /// alone until the user picks) — only an explicit live pick
+    /// of -1 turns subtitles off.
+    func selectSubtitleTrack(index: Int) {
+        ensureMain {
+            self.currentSubtitleTrackIndex = index
+            guard let backend = self.backend, let capable = backend as? VodTrackListCapable else { return }
+            if index < 0 {
+                capable.selectSubtitleTrack(index: -1)
+                return
+            }
+            guard self.subtitleTracks.indices.contains(index) else { return }
+            capable.selectSubtitleTrack(index: self.subtitleTracks[index].index)
+        }
+    }
+
+    /// Apply the stored track picks to a backend whose list is
+    /// already published. Only explicit picks (index >= 0) are
+    /// applied: a stored -1 means "never picked", and forcing it
+    /// would turn off the backend's auto-selected subtitles.
+    private func applyStoredTrackPicks(to backend: VideoPlayerBackend) {
+        guard let capable = backend as? VodTrackListCapable else { return }
+        if currentAudioTrackIndex >= 0, audioTracks.indices.contains(currentAudioTrackIndex) {
+            capable.selectAudioTrack(index: audioTracks[currentAudioTrackIndex].index)
+        }
+        if currentSubtitleTrackIndex >= 0, subtitleTracks.indices.contains(currentSubtitleTrackIndex) {
+            capable.selectSubtitleTrack(index: subtitleTracks[currentSubtitleTrackIndex].index)
+        }
+    }
+
+    // MARK: - External subtitles (build 36, item 14, G-G)
+
+    /// Load external subtitles on a capable backend (MPV only).
+    /// Emby external streams come from the URL facts (indexes +
+    /// media-source id; the URL is built from the stream URL
+    /// itself — the driver has no EmbyClient). Local sidecar files
+    /// next to a local file use mpv's `sub-auto=exact` semantics
+    /// (same basename, `.srt` / `.ass` / `.vtt`). AVPlayer / IJK
+    /// do not conform, so they never reach here — external subs
+    /// route to MPV (see the `hasExternalSubtitles` routing flag).
+    private func loadExternalSubtitlesIfNeeded() {
+        guard let backend = backend, let capable = backend as? VodExternalSubtitleCapable,
+              let url = currentURL else { return }
+        if let facts = currentURLFacts(), !facts.externalSubtitles.isEmpty,
+           let mediaSourceId = facts.mediaSourceId, !mediaSourceId.isEmpty {
+            for ref in facts.externalSubtitles {
+                if let subURL = EmbyClient.subtitleUrl(fromStreamUrl: url.absoluteString, mediaSourceId: mediaSourceId, index: ref.index) {
+                    capable.addSubtitle(url: subURL, language: ref.language)
+                }
+            }
+        }
+        if url.isFileURL {
+            let base = url.deletingPathExtension()
+            for ext in ["srt", "ass", "vtt"] {
+                let sidecar = base.appendingPathExtension(ext)
+                if FileManager.default.fileExists(atPath: sidecar.path) {
+                    capable.addSubtitle(url: sidecar, language: nil)
+                }
+            }
+        }
+    }
+
+    // MARK: - Mid-play engine fallback (build 36, item 14, G-E)
+
+    /// Try the next engine after a mid-play failure, once per
+    /// failure episode. Re-opens the same URL at the saved
+    /// position with the failed engines excluded (the ladder
+    /// never loops back to the engine that just failed). Returns
+    /// false when no retry is available — the caller then fails
+    /// outright with the specific reason. Only a backend that
+    /// already prepared can fail mid-play; an open-time failure
+    /// never reaches here (the open ladder owns those).
+    @discardableResult
+    private func tryNextEngineAfterFailure() -> Bool {
+        guard let item = currentEpisode, let url = currentURL else { return false }
+        guard !midPlayFallbackUsed, preparedSeenForEpisode else { return false }
+        let facts = currentURLFacts()
+        let failed = failedEnginesForEpisode + (currentEngine.map { [$0] } ?? [])
+        let remaining = PlayerKernel.candidatesFor(
+            url: url, dvDowngradeToHdr: dvP8Downgrade,
+            hasAssSubtitles: facts?.hasAssSubtitles ?? false,
+            hasMultipleAudioTracks: facts?.hasMultipleAudioTracks ?? false,
+            hasExternalSubtitles: facts?.hasExternalSubtitles ?? false,
+            excluding: failed)
+        guard !remaining.isEmpty else { return false }
+        midPlayFallbackUsed = true
+        failedEnginesForEpisode = failed
+        startPosition = max(0, position)
+        // A fresh open on the same URL with the failed engines
+        // excluded; finishStartPlayback seeks to the saved
+        // position. This is NOT attemptOpen — there is no
+        // re-resolution loop. On failure the open's own failure
+        // path reports it (specific reason + onEpisodeFailed).
+        open(item: item, url: url, excludingEngines: failed) { [weak self] result in
+            guard let self = self else { return }
+            if case .failure(let error) = result {
+                self.recordFailure(error: error, hadURL: true)
+                self.onEpisodeFailed?(item, error)
+            }
+        }
+        return true
+    }
+
     /// Reopen the current episode at the current position — the
     /// mechanism for settings that only take effect at open (DV P8
     /// routing; Flutter `_reopenAtCurrentPosition` parity). Only
@@ -956,6 +1316,13 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             self.duration = 0
             self.isLoading = false
             self.fellBackForSoftwareDecode = false
+            self.midPlayFallbackUsed = false
+            self.preparedSeenForEpisode = false
+            self.failedEnginesForEpisode = []
+            self.healthyPlaybackAccumulated = 0
+            self.lastHealthyPosition = 0
+            self.audioTracks = []
+            self.subtitleTracks = []
             self.lastFps = 0
             self.lastDroppedFrames = 0
             self.diagnostics = .empty
@@ -999,6 +1366,13 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             self.duration = 0
             self.isLoading = false
             self.fellBackForSoftwareDecode = false
+            self.midPlayFallbackUsed = false
+            self.preparedSeenForEpisode = false
+            self.failedEnginesForEpisode = []
+            self.healthyPlaybackAccumulated = 0
+            self.lastHealthyPosition = 0
+            self.audioTracks = []
+            self.subtitleTracks = []
             self.diagnostics = .empty
             self.recomputePlayingState()
             completion()
@@ -1067,6 +1441,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         ensureMain {
             switch event {
             case .prepared:
+                self.preparedSeenForEpisode = true
                 self.isLoading = false
                 self.updateDiagnostics()
             case .firstFrame:
@@ -1085,8 +1460,17 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                     self.handleEpisodeEnded()
                 case .error:
                     if let item = self.currentEpisode {
+                        // (G-E) Mid-play failure on an engine that
+                        // had already prepared: try the next engine
+                        // once at the same position instead of
+                        // failing outright (live already recovers
+                        // this way; VOD never did). An open-time
+                        // failure never reaches here — the open
+                        // ladder owns those — so the `prepared`
+                        // gate above is what makes this mid-play.
+                        if self.tryNextEngineAfterFailure() { break }
                         self.stop()
-                        self.lastOpenFailed = true
+                        self.recordFailure(error: .loadFailed, hadURL: true)
                         self.onEpisodeFailed?(item, .loadFailed)
                     }
                 }
@@ -1134,6 +1518,21 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         position = pos
         if dur.isFinite, dur > 0 { duration = dur }
         recomputePlayingState()
+        // (G-E) Healthy-playback clock for the mid-play retry
+        // reset: 30 s of continuous position progress re-arms the
+        // one retry per failure episode. Any stall resets it.
+        if pos > lastHealthyPosition {
+            healthyPlaybackAccumulated += 0.5
+            lastHealthyPosition = pos
+            if healthyPlaybackAccumulated >= 30 {
+                healthyPlaybackAccumulated = 0
+                midPlayFallbackUsed = false
+                failedEnginesForEpisode = []
+            }
+        } else {
+            healthyPlaybackAccumulated = 0
+            lastHealthyPosition = pos
+        }
         // Emby (build 36, item 13): periodic progress, throttled
         // to one report per 15 s inside the reporter, plus the
         // played marking at the end margin.
@@ -1147,8 +1546,16 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             stallFailed = true
             stallWarning = false
             if let item = currentEpisode {
+                // (G-E) A stall after a successful open tries the
+                // next engine once before failing (same retry as
+                // a mid-play error). Pre-start stalls keep the
+                // current behaviour — the open ladder owns those.
+                if preparedSeenForEpisode, tryNextEngineAfterFailure() {
+                    stallFailed = false
+                    break
+                }
                 stop()
-                lastOpenFailed = true
+                recordFailure(error: .timeout, hadURL: true)
                 onEpisodeFailed?(item, .timeout)
             }
         case .atEnd:

@@ -167,6 +167,11 @@ struct VideoPlaybackDiagnostics: Equatable {
     /// True when the driver switched engines because of a verified
     /// software decode (4K HEVC / Dolby Vision -> AVPlayer).
     let fellBackForSoftwareDecode: Bool
+    /// Engines the open ladder attempted, in try order (build 36,
+    /// item 14, G-K): the failure card and the diagnosis sheet
+    /// show what was tried. `var` with a default so the existing
+    /// memberwise constructions keep compiling.
+    var attemptedEngines: [VideoEngine] = []
 
     static let empty = VideoPlaybackDiagnostics(
         engine: .mpv, hardwareDecode: .unknown, rejectedOptionNames: [],
@@ -203,6 +208,9 @@ struct VideoPlaybackDiagnostics: Equatable {
         }
         if !rejectedOptionNames.isEmpty {
             lines.append("被拒属性：\(rejectedOptionNames.joined(separator: "、"))")
+        }
+        if !attemptedEngines.isEmpty {
+            lines.append("已尝试引擎：\(attemptedEngines.map { $0.displayName }.joined(separator: "、"))")
         }
         if fellBackForSoftwareDecode {
             lines.append("已因软解自动切换到系统播放器")

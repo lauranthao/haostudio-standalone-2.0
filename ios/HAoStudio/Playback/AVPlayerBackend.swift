@@ -8,9 +8,12 @@
 //
 // What it plays: HLS (.m3u8) and MP4 — i.e. VOD movies/episodes
 // (HLS/MP4), HEVC / Dolby Vision P8 in an Apple container. What
-// it CANNOT play: FLV / MKV / AV1 / TrueHD / DTS audio — the
-// capability gate in VideoCapability never sends those here, so
-// this backend never wastes an open attempt on them.
+// it CANNOT play: FLV / MKV / AVI / WMV / RMVB / TS / WebM / MPG /
+// DASH / AV1 / VP8 / VP9 / TrueHD / DTS / APE / Opus / Vorbis
+// audio — the capability gate in VideoCapability never sends
+// those here, so this backend never wastes an open attempt on
+// them. (Build 36, item 14, G-A/G-D: the new containers and
+// codecs joined the gate; the old comment only named FLV/MKV.)
 //
 // Hard decode: none requested, none needed — AVPlayer decodes
 // through VideoToolbox natively. Once the item is ready, the
@@ -45,11 +48,27 @@ private func observePlayerItem<Value>(_ item: AVPlayerItem, _ keyPath: KeyPath<A
     return item.observe(keyPath, options: [.new]) { _, _ in handler() }
 }
 
-final class AVPlayerBackend: NSObject, VideoPlayerBackend {
+final class AVPlayerBackend: NSObject, VideoPlayerBackend, VodTrackListCapable {
     var onEvent: ((VideoBackendEvent) -> Void)?
     var onVideoSize: ((CGSize) -> Void)?
 
     let engine: VideoEngine = .avplayer
+
+    /// Audio / subtitle tracks from the current item's media
+    /// selection groups (build 36, item 14, G-F). Published
+    /// through `onTracksChanged` when the item is ready; the
+    /// driver mirrors them into the settings sheet pickers.
+    /// `VodTrackInfo.index` is the position in the group, so
+    /// `selectAudioTrack` / `selectSubtitleTrack` map it back to
+    /// the same option. Empty when the item has no selection
+    /// groups yet (e.g. a remote HLS whose groups are not loaded)
+    /// — the pickers then stay hidden, never fake.
+    private var cachedAudioTracks: [VodTrackInfo] = []
+    private var cachedSubtitleTracks: [VodTrackInfo] = []
+    var onTracksChanged: (([VodTrackInfo], [VodTrackInfo]) -> Void)?
+
+    var audioTracks: [VodTrackInfo] { cachedAudioTracks }
+    var subtitleTracks: [VodTrackInfo] { cachedSubtitleTracks }
 
     private let player = AVPlayer()
     private let playerLayer = AVPlayerLayer()
@@ -130,6 +149,8 @@ final class AVPlayerBackend: NSObject, VideoPlayerBackend {
         didEmitFirstFrame = false
         didEmitPrepared = false
         hardwareDecode = .unknown
+        cachedAudioTracks = []
+        cachedSubtitleTracks = []
         openCompletion = completion
         // NOTE: AVURLAssetHTTPHeaderFieldsKey is NOT in scope on this
         // Xcode version (same as NativeMusicPlayer.swift) — use the
@@ -160,6 +181,68 @@ final class AVPlayerBackend: NSObject, VideoPlayerBackend {
 
     func play() {
         player.rate = Float(rate)
+    }
+
+    // MARK: - Audio / subtitle tracks (build 36, item 14, G-F)
+
+    /// Read the current item's media-selection groups and publish
+    /// them. Called when the item is ready. A group with one
+    /// option still publishes (the picker then shows the single
+    /// track); a missing group publishes an empty list.
+    private func refreshTrackLists() {
+        guard let item = player.currentItem else { return }
+        let asset = item.asset
+        var audio: [VodTrackInfo] = []
+        if let group = asset.mediaSelectionGroup(forMediaCharacteristic: .audible) {
+            for (position, option) in group.options.enumerated() {
+                let lang = option.extendedLanguageTag ?? option.locale?.identifier
+                let name = option.displayName.isEmpty
+                    ? (lang?.uppercased() ?? "音轨 \(position + 1)") : option.displayName
+                audio.append(VodTrackInfo(
+                    index: position, displayName: name, language: lang,
+                    isDefault: option == group.defaultOption, isExternal: false))
+            }
+        }
+        var subtitles: [VodTrackInfo] = []
+        if let group = asset.mediaSelectionGroup(forMediaCharacteristic: .legible) {
+            for (position, option) in group.options.enumerated() {
+                let lang = option.extendedLanguageTag ?? option.locale?.identifier
+                let name = option.displayName.isEmpty
+                    ? (lang?.uppercased() ?? "字幕 \(position + 1)") : option.displayName
+                subtitles.append(VodTrackInfo(
+                    index: position, displayName: name, language: lang,
+                    isDefault: option == group.defaultOption, isExternal: false))
+            }
+        }
+        cachedAudioTracks = audio
+        cachedSubtitleTracks = subtitles
+        onTracksChanged?(audio, subtitles)
+    }
+
+    /// Switch the audio track: the index is the position in the
+    /// `.audible` group (-1 = the group's default option).
+    func selectAudioTrack(index: Int) {
+        guard let item = player.currentItem,
+              let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .audible) else { return }
+        if index < 0 {
+            if let def = group.defaultOption { item.select(def, in: group) }
+            return
+        }
+        guard group.options.indices.contains(index) else { return }
+        item.select(group.options[index], in: group)
+    }
+
+    /// Switch the subtitle track: the index is the position in
+    /// the `.legible` group (-1 = no subtitles).
+    func selectSubtitleTrack(index: Int) {
+        guard let item = player.currentItem,
+              let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .legible) else { return }
+        if index < 0 {
+            item.select(nil, in: group)
+            return
+        }
+        guard group.options.indices.contains(index) else { return }
+        item.select(group.options[index], in: group)
     }
 
     func pause() {
@@ -229,6 +312,7 @@ final class AVPlayerBackend: NSObject, VideoPlayerBackend {
         case .readyToPlay:
             // Native decode: a ready item is hardware-decoded.
             hardwareDecode = .hardware(decoder: "VideoToolbox")
+            refreshTrackLists()
             if !didEmitPrepared {
                 didEmitPrepared = true
                 emit(.prepared)

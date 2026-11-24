@@ -58,6 +58,14 @@ protocol VideoPlayerEngine: AnyObject {
     /// True when the most recent open failed outright; the page
     /// shows the failure + a retry from this.
     var lastOpenFailed: Bool { get }
+    /// The specific failure, when the most recent open failed
+    /// (build 36, item 14, G-K) — the card shows its specific
+    /// line instead of a generic "加载失败".
+    var lastFailure: VideoPlaybackFailure? { get }
+    /// Audio / subtitle tracks of the running backend (build 36,
+    /// item 14, G-F) — the settings sheet pickers read these.
+    var audioTracks: [VodTrackInfo] { get }
+    var subtitleTracks: [VodTrackInfo] { get }
     var videoView: UIView? { get }
     var currentEngine: VideoEngine? { get }
     var diagnostics: VideoPlaybackDiagnostics { get }
@@ -65,6 +73,12 @@ protocol VideoPlayerEngine: AnyObject {
     func playEpisode(lineIndex: Int, episodeIndex: Int, startPositionSeconds: Double)
     func setSpeed(_ speed: Double)
     func setVideoFit(_ fit: VideoFit)
+    /// Select an audio / subtitle track by list position (-1 =
+    /// default/auto for audio, -1 = no subtitles). The driver
+    /// stores the pick and forwards it live when the backend can
+    /// switch (build 36, item 14, G-F).
+    func selectAudioTrack(index: Int)
+    func selectSubtitleTrack(index: Int)
     func seek(to seconds: Double, completion: @escaping (Bool) -> Void)
     func pause()
     func resume()
@@ -108,6 +122,21 @@ final class VideoPlayerViewModel: ObservableObject {
     /// frame with a dead play button and no way back.
     @Published private(set) var isLoading = false
     @Published private(set) var loadFailed = false
+    /// Specific failure line, synced from the engine on every poll
+    /// tick (build 36, item 14, G-K). Nil while nothing failed.
+    @Published private(set) var failureDetail: String?
+    /// Track display names for the settings sheet pickers, synced
+    /// from the engine on every poll tick (G-F). Empty until the
+    /// backend publishes its track list; external subtitles carry
+    /// the "（外挂）" source mark (G-G).
+    @Published private(set) var audioTrackNames: [String] = []
+    @Published private(set) var subtitleTrackNames: [String] = []
+    /// Last track picks pushed to the driver (change guard, G-F):
+    /// the stored -1 default must never be pushed as an explicit
+    /// "turn subtitles off" — only a real change, or a stored
+    /// non-default pick on the first push, is pushed.
+    private var lastPushedAudioTrackIndex: Int?
+    private var lastPushedSubtitleTrackIndex: Int?
     @Published var dragPosition: Double?
     /// Player settings (picture fit / speed / danmaku), persisted
     /// by VodSettingsState. Applied to the engine on attach and on
@@ -177,9 +206,10 @@ final class VideoPlayerViewModel: ObservableObject {
 
     /// Push the settings to the engine + danmaku layer and persist
     /// them. Called on engine attach and on every settings change.
-    /// Audio / subtitle track picks have state bits in the driver
-    /// but no backend wiring yet (MPV aid/sid — A-leg known gap),
-    /// so those two rows persist only.
+    /// Audio / subtitle track picks are pushed to the driver,
+    /// which stores them and forwards them live to a capable
+    /// backend (MPV `aid` / `sid`, AVPlayer media selection —
+    /// build 36, item 14, G-F).
     func applySettings() {
         settings.persist()
         pushVodSettingsToDriver()
@@ -200,6 +230,39 @@ final class VideoPlayerViewModel: ObservableObject {
         pushEnhancementToDriver()
         pushSubtitleAppearanceToDriver()
         pushDialogueBoostToDriver()
+        pushTrackPicksToDriver()
+    }
+
+    /// Push the audio / subtitle track picks into the driver
+    /// (build 36, item 14, G-F). Only a CHANGED pick is pushed,
+    /// and on the first push only a stored non-default pick: the
+    /// stored -1 default is "never picked", and pushing it would
+    /// force the backend's auto-selected subtitles off. The
+    /// driver stores the pick and re-applies it at every open, so
+    /// a pick made before the backend existed still lands.
+    private func pushTrackPicksToDriver() {
+        if let last = lastPushedAudioTrackIndex {
+            if settings.audioTrackIndex != last {
+                lastPushedAudioTrackIndex = settings.audioTrackIndex
+                vodDriver?.selectAudioTrack(index: settings.audioTrackIndex)
+            }
+        } else {
+            lastPushedAudioTrackIndex = settings.audioTrackIndex
+            if settings.audioTrackIndex >= 0 {
+                vodDriver?.selectAudioTrack(index: settings.audioTrackIndex)
+            }
+        }
+        if let last = lastPushedSubtitleTrackIndex {
+            if settings.subtitleTrackIndex != last {
+                lastPushedSubtitleTrackIndex = settings.subtitleTrackIndex
+                vodDriver?.selectSubtitleTrack(index: settings.subtitleTrackIndex)
+            }
+        } else {
+            lastPushedSubtitleTrackIndex = settings.subtitleTrackIndex
+            if settings.subtitleTrackIndex >= 0 {
+                vodDriver?.selectSubtitleTrack(index: settings.subtitleTrackIndex)
+            }
+        }
     }
 
     private func pushDvP8ToDriver() {
@@ -600,6 +663,11 @@ final class VideoPlayerViewModel: ObservableObject {
         // driver owns the truth, the page only shows it.
         isLoading = engine.isLoading
         loadFailed = engine.lastOpenFailed
+        // (Build 36, item 14, G-K/G-F) Specific failure line and
+        // track lists, mirrored from the engine on every tick.
+        failureDetail = engine.lastFailure?.displayLine
+        audioTrackNames = engine.audioTracks.map { $0.displayName + ($0.isExternal ? "（外挂）" : "") }
+        subtitleTrackNames = engine.subtitleTracks.map { $0.displayName + ($0.isExternal ? "（外挂）" : "") }
         // Resume save: once the position crosses 5 s, then every
         // ~15 s of playback.
         if isPlaying && position >= VideoLibraryStore.minSaveSeconds
@@ -839,7 +907,7 @@ struct VideoPlayerView: View {
                     Text("加载失败")
                         .font(.haoCalloutStrong)
                         .foregroundStyle(.white)
-                    Text("该集暂时无法播放，换个线路或重试。")
+                    Text(videoPlayer.failureDetail ?? "该集暂时无法播放，换个线路或重试。")
                         .font(.haoFootnote)
                         .foregroundStyle(.white.opacity(0.72))
                     Button("重试") { videoPlayer.retry() }
@@ -925,6 +993,8 @@ struct VideoPlayerView: View {
                 state: $videoPlayer.settings,
                 engine: videoPlayer.currentEngine ?? .avplayer,
                 diagnostics: videoPlayer.diagnostics,
+                audioTracks: videoPlayer.audioTrackNames,
+                subtitleTracks: videoPlayer.subtitleTrackNames,
                 brightness: Binding(
                     get: { videoPlayer.brightnessLevel },
                     set: { videoPlayer.setBrightness($0) }
