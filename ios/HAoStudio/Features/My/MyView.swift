@@ -186,6 +186,14 @@ struct MyView: View {
                 .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { _ in
                     counts = MyEntryCounts.reload()
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .haoVideoFavChanged)) { _ in
+                    // Same staleness as the music/live counts above:
+                    // the video store already posts on every favourite
+                    // toggle; this page just never listened, so the
+                    // "影视收藏" count stayed stale after an
+                    // unfavourite from the pushed list.
+                    counts = MyEntryCounts.reload()
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .haoLiveFollowChanged)) { _ in
                 // Same staleness as the music counts above: a
