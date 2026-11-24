@@ -117,7 +117,7 @@ struct GlassTabBar: View {
     /// switching (chrome O1: scroll-to-top).
     private func tabButton(_ item: GlassTabBarItem) -> some View {
         let isSelected = item.tab == selection
-        Button {
+        return Button {
             if isSelected {
                 onReselect(item.tab)
             } else {
