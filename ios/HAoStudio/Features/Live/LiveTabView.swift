@@ -228,78 +228,82 @@ struct LiveTabView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    // Scroll anchor for the bottom chrome (b35 tab-bar
-                    // link): drives minimize / restore as this tab scrolls.
-                    HaoChromeScrollAnchor()
-                    platformRow
-                        .padding(.top, 12)
-                    if !viewModel.categories.isEmpty {
-                        categoryStrip
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        // Scroll anchor for the bottom chrome (b35 tab-bar
+                        // link): drives minimize / restore as this tab scrolls.
+                        HaoChromeScrollAnchor()
+                            .id(HaoTabScrollTop.id(for: .live))
+                        platformRow
                             .padding(.top, 12)
-                    }
-                    searchEntry
-                        .padding(.horizontal, 24)
-                        .padding(.top, 12)
-                    if !viewModel.follows.isEmpty {
-                        followSection
+                        if !viewModel.categories.isEmpty {
+                            categoryStrip
+                                .padding(.top, 12)
+                        }
+                        searchEntry
+                            .padding(.horizontal, 24)
+                            .padding(.top, 12)
+                        if !viewModel.follows.isEmpty {
+                            followSection
+                                .padding(.top, 16)
+                        }
+                        if !viewModel.history.isEmpty {
+                            historySection
+                                .padding(.top, 16)
+                        }
+                        recommendSection
                             .padding(.top, 16)
+                        Spacer(minLength: 16)
                     }
-                    if !viewModel.history.isEmpty {
-                        historySection
-                            .padding(.top, 16)
+                }
+                .haoBottomChromePadding()
+                .haoChromeScrollTracking()
+                .haoReselectScrollToTop(tab: .live, proxy: proxy)
+                .refreshable { viewModel.reload() }
+                .background(theme.scaffoldBackground)
+                .navigationTitle("直播")
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button(action: { path.append(.history) }) {
+                            Image(systemName: "clock")
+                        }
+                        .accessibilityLabel("观看历史")
                     }
-                    recommendSection
-                        .padding(.top, 16)
-                    Spacer(minLength: 16)
-                }
-            }
-            .haoBottomChromePadding()
-            .haoChromeScrollTracking()
-            .refreshable { viewModel.reload() }
-            .background(theme.scaffoldBackground)
-            .navigationTitle("直播")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { path.append(.history) }) {
-                        Image(systemName: "clock")
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button(action: { path.append(.follows) }) {
+                            Image(systemName: "heart")
+                        }
+                        .accessibilityLabel("我的关注")
                     }
-                    .accessibilityLabel("观看历史")
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { path.append(.follows) }) {
-                        Image(systemName: "heart")
+                .navigationDestination(for: LiveDestination.self) { destination in
+                    switch destination {
+                    case .search:
+                        LiveSearchView(gateway: viewModel.gateway, onSelect: { room, rooms in
+                            openRoom(room, playlist: rooms)
+                        })
+                    case .follows:
+                        LiveFollowsView(onSelect: { room in
+                            openRoom(room, playlist: [room])
+                        })
+                    case .history:
+                        LiveHistoryView(onSelect: { room in
+                            openRoom(room, playlist: [room])
+                        })
+                    case .room(let room, let playlist):
+                        LiveRoomView(room: room, playlist: playlist)
                     }
-                    .accessibilityLabel("我的关注")
                 }
-            }
-            .navigationDestination(for: LiveDestination.self) { destination in
-                switch destination {
-                case .search:
-                    LiveSearchView(gateway: viewModel.gateway, onSelect: { room, rooms in
-                        openRoom(room, playlist: rooms)
-                    })
-                case .follows:
-                    LiveFollowsView(onSelect: { room in
-                        openRoom(room, playlist: [room])
-                    })
-                case .history:
-                    LiveHistoryView(onSelect: { room in
-                        openRoom(room, playlist: [room])
-                    })
-                case .room(let room, let playlist):
-                    LiveRoomView(room: room, playlist: playlist)
+                .onAppear { viewModel.loadIfNeeded() }
+                // Follow toggles from a card's long-press menu (or the
+                // room page, or the follows page's swipe delete) write
+                // the store directly — refresh the local rows at once
+                // instead of waiting for the next appear.
+                .onReceive(NotificationCenter.default.publisher(for: .haoLiveFollowChanged)) { _ in
+                    viewModel.refreshLibrary()
                 }
-            }
-            .onAppear { viewModel.loadIfNeeded() }
-            // Follow toggles from a card's long-press menu (or the
-            // room page, or the follows page's swipe delete) write
-            // the store directly — refresh the local rows at once
-            // instead of waiting for the next appear.
-            .onReceive(NotificationCenter.default.publisher(for: .haoLiveFollowChanged)) { _ in
-                viewModel.refreshLibrary()
             }
         }
     }
@@ -711,6 +715,6 @@ struct LivePlatformTextTabs: View {
             }
             .padding(.horizontal, 24)
         }
-        .sensoryFeedback(.selection, trigger: selected)
+        .haoSensoryFeedback(.selection, trigger: selected)
     }
 }

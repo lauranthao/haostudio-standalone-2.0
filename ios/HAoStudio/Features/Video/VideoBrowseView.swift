@@ -344,7 +344,7 @@ struct VideoBrowseView: View {
                 .onChange(of: viewModel.mode) { newMode in
                     VideoLibraryStore.setTabMode(newMode)
                 }
-                .sensoryFeedback(.selection, trigger: viewModel.mode)
+                .haoSensoryFeedback(.selection, trigger: viewModel.mode)
                 if viewModel.mode == "emby" && !viewModel.isEmbyConfigured {
                     MusicEmptyState(
                         icon: "server.rack",

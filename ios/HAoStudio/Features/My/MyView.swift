@@ -138,50 +138,54 @@ struct MyView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                // Scroll anchor for the bottom chrome (b35 tab-bar
-                // link): drives minimize / restore as this tab scrolls.
-                // A zero-height, separator-less first row — the List
-                // equivalent of the ScrollView anchor.
-                HaoChromeScrollAnchor()
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                entriesSection
-                migrationSection
-                settingsSection
-            }
-            .haoBottomChromePadding()
-            .haoChromeScrollTracking()
-            .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
-            .background(theme.scaffoldBackground)
-            .navigationTitle("我的")
-            .navigationDestination(item: $selectedLiveRoom) { room in
-                LiveRoomView(room: room, playlist: [room])
-            }
-            .onAppear {
-                counts = MyEntryCounts.reload()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .haoBackupImported)) { _ in
-                // b35-sweep-settings: 导入备份后本页不重进，
-                // onAppear 不触发，8 个计数还停在导入前（例如导
-                // 入 5 个歌单仍显示 0）。导入成功即重读计数与
-                // 迁移提示（提示本身的判定见 MigrationStore）。
-                counts = MyEntryCounts.reload()
-                showMigrationNotice = MigrationStore.migrationNoticeNeeded()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .haoMusicRecentChanged)) { _ in
-                // b36 item 8, F7: counts went stale while this
-                // page was on screen — playing from the mini
-                // player changes recent plays, a favourite toggle
-                // anywhere changes favourites, and neither
-                // re-triggers onAppear. Reload on the
-                // notifications the music leg already posts.
-                counts = MyEntryCounts.reload()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { _ in
-                counts = MyEntryCounts.reload()
+            ScrollViewReader { proxy in
+                List {
+                    // Scroll anchor for the bottom chrome (b35 tab-bar
+                    // link): drives minimize / restore as this tab scrolls.
+                    // A zero-height, separator-less first row — the List
+                    // equivalent of the ScrollView anchor.
+                    HaoChromeScrollAnchor()
+                        .id(HaoTabScrollTop.id(for: .my))
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                    entriesSection
+                    migrationSection
+                    settingsSection
+                }
+                .haoBottomChromePadding()
+                .haoChromeScrollTracking()
+                .haoReselectScrollToTop(tab: .my, proxy: proxy)
+                .listStyle(.insetGrouped)
+                .scrollContentBackground(.hidden)
+                .background(theme.scaffoldBackground)
+                .navigationTitle("我的")
+                .navigationDestination(item: $selectedLiveRoom) { room in
+                    LiveRoomView(room: room, playlist: [room])
+                }
+                .onAppear {
+                    counts = MyEntryCounts.reload()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .haoBackupImported)) { _ in
+                    // b35-sweep-settings: 导入备份后本页不重进，
+                    // onAppear 不触发，8 个计数还停在导入前（例如导
+                    // 入 5 个歌单仍显示 0）。导入成功即重读计数与
+                    // 迁移提示（提示本身的判定见 MigrationStore）。
+                    counts = MyEntryCounts.reload()
+                    showMigrationNotice = MigrationStore.migrationNoticeNeeded()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .haoMusicRecentChanged)) { _ in
+                    // b36 item 8, F7: counts went stale while this
+                    // page was on screen — playing from the mini
+                    // player changes recent plays, a favourite toggle
+                    // anywhere changes favourites, and neither
+                    // re-triggers onAppear. Reload on the
+                    // notifications the music leg already posts.
+                    counts = MyEntryCounts.reload()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { _ in
+                    counts = MyEntryCounts.reload()
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .haoLiveFollowChanged)) { _ in
                 // Same staleness as the music counts above: a

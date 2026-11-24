@@ -144,7 +144,7 @@ struct HaoDragSidebar<Sidebar: View, Content: View>: View {
             }
             .onAppear { state.setWidth(width) }
             .onChange(of: geometry.size.width) { _, _ in state.setWidth(width) }
-            .sensoryFeedback(.selection, trigger: state.isOpen)
+            .haoSensoryFeedback(.selection, trigger: state.isOpen)
         }
     }
 

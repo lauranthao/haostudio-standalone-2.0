@@ -37,35 +37,41 @@ struct MusicHomeView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    // Scroll anchor for the bottom chrome (b35 tab-bar
-                    // link): drives minimize / restore as this tab scrolls.
-                    HaoChromeScrollAnchor()
-                    featureShelf
-                    fmRow
-                        .padding(.top, 12)
-                    playlistsSection
-                        .padding(.top, 12)
-                    recentSection
-                        .padding(.top, 12)
-                    Spacer(minLength: 16)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        // Scroll anchor for the bottom chrome (b35 tab-bar
+                        // link): drives minimize / restore as this tab scrolls.
+                        // It also carries this tab's scroll-to-top id (chrome
+                        // O1): a reselect scrolls the proxy to it.
+                        HaoChromeScrollAnchor()
+                            .id(HaoTabScrollTop.id(for: .music))
+                        featureShelf
+                        fmRow
+                            .padding(.top, 12)
+                        playlistsSection
+                            .padding(.top, 12)
+                        recentSection
+                            .padding(.top, 12)
+                        Spacer(minLength: 16)
+                    }
+                    .padding(.horizontal, 20)
                 }
-                .padding(.horizontal, 20)
-            }
-            .haoBottomChromePadding()
-            .haoChromeScrollTracking()
-            .background(theme.scaffoldBackground)
-            .navigationTitle("音乐")
-            .navigationBarTitleDisplayMode(.large)
-            .navigationDestination(for: MusicDestination.self) { destination in
-                destinationView(destination)
-            }
-            .onAppear { homeVM.reload() }
-            .alert("本地曲库还是空的", isPresented: $fmEmptyNote) {
-                Button("知道了", role: .cancel) { }
-            } message: {
-                Text("先收藏几首歌或播几首歌，私人漫游和心动模式才能从本地生成歌单。")
+                .haoBottomChromePadding()
+                .haoChromeScrollTracking()
+                .haoReselectScrollToTop(tab: .music, proxy: proxy)
+                .background(theme.scaffoldBackground)
+                .navigationTitle("音乐")
+                .navigationBarTitleDisplayMode(.large)
+                .navigationDestination(for: MusicDestination.self) { destination in
+                    destinationView(destination)
+                }
+                .onAppear { homeVM.reload() }
+                .alert("本地曲库还是空的", isPresented: $fmEmptyNote) {
+                    Button("知道了", role: .cancel) { }
+                } message: {
+                    Text("先收藏几首歌或播几首歌，私人漫游和心动模式才能从本地生成歌单。")
+                }
             }
         }
     }

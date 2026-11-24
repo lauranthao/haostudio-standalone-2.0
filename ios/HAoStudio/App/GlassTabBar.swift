@@ -48,8 +48,9 @@ struct GlassTabBarItem: Identifiable {
 struct GlassTabBar: View {
     let items: [GlassTabBarItem]
     @Binding var selection: HaoTab
-    /// Called when the already-selected tab is tapped again. Foundation:
-    /// no-op (placeholder pages have nothing to scroll to top yet).
+    /// Called when the already-selected tab is tapped again.
+    /// MainTabView posts `.haoTabReselected`; each tab root scrolls
+    /// only its own list to the top.
     var onReselect: (HaoTab) -> Void = { _ in }
     /// Selected-tab colour override (S5-C): the user's chosen tab
     /// accent from Settings; nil keeps the theme default.
@@ -86,7 +87,7 @@ struct GlassTabBar: View {
         // own — the minimized capsule had one, the full bar had
         // none. The capsule and the bar never render together, so
         // this never double-fires with the capsule's feedback.
-        .sensoryFeedback(.selection, trigger: selection)
+        .haoSensoryFeedback(.selection, trigger: selection)
         // Vertical inner inset only (4 top / 4 bottom; total 64pt).
         // Horizontal padding used to be here too, but the system
         // tab bar paints its background over its own frame, so it
@@ -153,7 +154,7 @@ struct MinimizedTabCapsule: View {
         .haoGlassRoundedRect()
         .scaleEffect(dragBaseIndex != nil ? 0.96 : 1)
         .animation(HaoLayout.settleSpring, value: dragBaseIndex != nil)
-        .sensoryFeedback(.selection, trigger: selection)
+        .haoSensoryFeedback(.selection, trigger: selection)
         .accessibilityLabel("当前标签：\(tab.title)，点按展开菜单栏，长按滑动切换标签")
         .gesture(
             LongPressGesture(minimumDuration: HaoLayout.minimizedCapsuleLongPressDuration)

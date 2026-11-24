@@ -43,85 +43,91 @@ struct HomeView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    // Scroll anchor for the bottom chrome (b35 tab-bar
-                    // link): drives minimize / restore as this tab scrolls.
-                    HaoChromeScrollAnchor()
-                    continueWatchingSection
-                        .padding(.top, 12)
-                    continueListeningSection
-                        .padding(.top, 16)
-                    hotLiveSection
-                        .padding(.top, 16)
-                    dailySection
-                        .padding(.top, 16)
-                    recentSection
-                        .padding(.top, 16)
-                    Spacer(minLength: 16)
-                }
-            }
-            .haoBottomChromePadding()
-            .haoChromeScrollTracking()
-            .refreshable { viewModel.reload() }
-            .background(theme.scaffoldBackground)
-            .navigationTitle("首页")
-            .navigationBarTitleDisplayMode(.large)
-            // Opaque nav-bar background (fix 2026-11-24, build
-            // 35): the bar is translucent by default, so a cover
-            // scrolling underneath it shows through as a blurred
-            // grey block with no readable content — the grey smear
-            // at the top of the build-34 screenshot is the
-            // "继续听" cover seen through the bar (HomeView has no
-            // banner / hero / header image to delete). A solid
-            // scaffold-coloured bar removes the artifact at every
-            // scroll position. Theme-owned, so all 4 themes x
-            // light/dark keep working; toolbarBackground is
-            // iOS 16+, deploy target is 17, no gating needed.
-            // The bottom glass tab bar is untouched.
-            .toolbarBackground(theme.scaffoldBackground, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .navigationDestination(for: HomeDestination.self) { destination in
-                switch destination {
-                case .detail(let item):
-                    VideoDetailView(item: item)
-                case .history:
-                    VideoHistoryView()
-                case .recent:
-                    HomeRecentPlaysView(viewModel: viewModel)
-                case .hotLive:
-                    HomeHotLiveView(viewModel: viewModel) { room, playlist in
-                        openRoom(room, playlist: playlist)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        // Scroll anchor for the bottom chrome (b35 tab-bar
+                        // link): drives minimize / restore as this tab scrolls.
+                        // It also carries this tab's scroll-to-top id (chrome
+                        // O1): a reselect scrolls the proxy to it.
+                        HaoChromeScrollAnchor()
+                            .id(HaoTabScrollTop.id(for: .home))
+                        continueWatchingSection
+                            .padding(.top, 12)
+                        continueListeningSection
+                            .padding(.top, 16)
+                        hotLiveSection
+                            .padding(.top, 16)
+                        dailySection
+                            .padding(.top, 16)
+                        recentSection
+                            .padding(.top, 16)
+                        Spacer(minLength: 16)
                     }
-                case .room(let room, let playlist):
-                    LiveRoomView(room: room, playlist: playlist)
                 }
-            }
-            // Appearance reload, coalesced in the view model:
-            // a tab switch back (onAppear) and a pop back
-            // (path-empty below) are different triggers for the
-            // same "back at home" event — one return trip pays
-            // for one reload, never two.
-            .onAppear { viewModel.reloadForAppearance() }
-            // Follow toggle from a card's long-press menu (shared
-            // LiveRoomCard) writes the store directly — the home
-            // section used to keep the unfollowed card until the
-            // next reload. Rebuild hot live from local data at
-            // once; the "全部" page shares this view model, so it
-            // updates too. No network is spent (see
-            // refreshHotLiveForFollowChange).
-            .onReceive(NotificationCenter.default.publisher(for: .haoLiveFollowChanged)) { _ in
-                viewModel.refreshHotLiveForFollowChange()
-            }
-            // Return-to-home refresh: NavigationStack's own
-            // onAppear does not re-fire when a pushed detail or
-            // room pops (the stack itself never disappears), so
-            // without this the sections still showed the data from
-            // before the push — a video watched from home stayed
-            // in its old place in 继续观看 until the tab was
-            // switched. An empty path means back at the home root.
-            .onChange(of: path) { _, newPath in
-                if newPath.isEmpty { viewModel.reloadForAppearance() }
+                .haoBottomChromePadding()
+                .haoChromeScrollTracking()
+                .haoReselectScrollToTop(tab: .home, proxy: proxy)
+                .refreshable { viewModel.reload() }
+                .background(theme.scaffoldBackground)
+                .navigationTitle("首页")
+                .navigationBarTitleDisplayMode(.large)
+                // Opaque nav-bar background (fix 2026-11-24, build
+                // 35): the bar is translucent by default, so a cover
+                // scrolling underneath it shows through as a blurred
+                // grey block with no readable content — the grey smear
+                // at the top of the build-34 screenshot is the
+                // "继续听" cover seen through the bar (HomeView has no
+                // banner / hero / header image to delete). A solid
+                // scaffold-coloured bar removes the artifact at every
+                // scroll position. Theme-owned, so all 4 themes x
+                // light/dark keep working; toolbarBackground is
+                // iOS 16+, deploy target is 17, no gating needed.
+                // The bottom glass tab bar is untouched.
+                .toolbarBackground(theme.scaffoldBackground, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
+                .navigationDestination(for: HomeDestination.self) { destination in
+                    switch destination {
+                    case .detail(let item):
+                        VideoDetailView(item: item)
+                    case .history:
+                        VideoHistoryView()
+                    case .recent:
+                        HomeRecentPlaysView(viewModel: viewModel)
+                    case .hotLive:
+                        HomeHotLiveView(viewModel: viewModel) { room, playlist in
+                            openRoom(room, playlist: playlist)
+                        }
+                    case .room(let room, let playlist):
+                        LiveRoomView(room: room, playlist: playlist)
+                    }
+                }
+                // Appearance reload, coalesced in the view model:
+                // a tab switch back (onAppear) and a pop back
+                // (path-empty below) are different triggers for the
+                // same "back at home" event — one return trip pays
+                // for one reload, never two.
+                .onAppear { viewModel.reloadForAppearance() }
+                // Follow toggle from a card's long-press menu (shared
+                // LiveRoomCard) writes the store directly — the home
+                // section used to keep the unfollowed card until the
+                // next reload. Rebuild hot live from local data at
+                // once; the "全部" page shares this view model, so it
+                // updates too. No network is spent (see
+                // refreshHotLiveForFollowChange).
+                .onReceive(NotificationCenter.default.publisher(for: .haoLiveFollowChanged)) { _ in
+                    viewModel.refreshHotLiveForFollowChange()
+                }
+                // Return-to-home refresh: NavigationStack's own
+                // onAppear does not re-fire when a pushed detail or
+                // room pops (the stack itself never disappears), so
+                // without this the sections still showed the data from
+                // before the push — a video watched from home stayed
+                // in its old place in 继续观看 until the tab was
+                // switched. An empty path means back at the home root.
+                .onChange(of: path) { _, newPath in
+                    if newPath.isEmpty { viewModel.reloadForAppearance() }
+                }
             }
         }
     }

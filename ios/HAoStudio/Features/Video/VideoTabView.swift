@@ -124,7 +124,7 @@ struct VideoTabView: View {
                 .onChange(of: mode) { newMode in
                     VideoLibraryStore.setTabMode(newMode)
                 }
-                .sensoryFeedback(.selection, trigger: mode)
+                .haoSensoryFeedback(.selection, trigger: mode)
                 if mode == "emby" {
                     EmbyTabView(
                         onSelect: { path.append(.embyDetail($0)) },
@@ -190,48 +190,52 @@ struct VideoTabView: View {
     // MARK: - CMS home
 
     private var cmsHome: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                // Scroll anchor for the bottom chrome (b35 tab-bar
-                // link): drives minimize / restore as this tab scrolls.
-                HaoChromeScrollAnchor()
-                searchEntry
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
-                categoryStrip
-                    .padding(.top, 12)
-                libraryRow
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
-                if !viewModel.continueWatching.isEmpty {
-                    continueSection
-                        .padding(.top, 16)
-                }
-                if viewModel.isLoading && viewModel.rows.isEmpty {
-                    ProgressView()
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 32)
-                } else if viewModel.rows.isEmpty {
-                    MusicEmptyState(
-                        icon: "film",
-                        title: viewModel.loadFailed ? "片源暂不可用" : "还没有内容",
-                        note: viewModel.loadFailed
-                            ? "影视源没有返回数据，下拉重试或检查源设置。"
-                            : "影视源返回了空列表。"
-                    )
-                    .padding(.horizontal, 24)
-                } else {
-                    ForEach(viewModel.rows) { row in
-                        homeRowSection(row)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Scroll anchor for the bottom chrome (b35 tab-bar
+                    // link): drives minimize / restore as this tab scrolls.
+                    HaoChromeScrollAnchor()
+                        .id(HaoTabScrollTop.id(for: .movies))
+                    searchEntry
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                    categoryStrip
+                        .padding(.top, 12)
+                    libraryRow
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                    if !viewModel.continueWatching.isEmpty {
+                        continueSection
                             .padding(.top, 16)
                     }
+                    if viewModel.isLoading && viewModel.rows.isEmpty {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 32)
+                    } else if viewModel.rows.isEmpty {
+                        MusicEmptyState(
+                            icon: "film",
+                            title: viewModel.loadFailed ? "片源暂不可用" : "还没有内容",
+                            note: viewModel.loadFailed
+                                ? "影视源没有返回数据，下拉重试或检查源设置。"
+                                : "影视源返回了空列表。"
+                        )
+                        .padding(.horizontal, 24)
+                    } else {
+                        ForEach(viewModel.rows) { row in
+                            homeRowSection(row)
+                                .padding(.top, 16)
+                        }
+                    }
+                    Spacer(minLength: 16)
                 }
-                Spacer(minLength: 16)
             }
+            .haoBottomChromePadding()
+            .haoChromeScrollTracking()
+            .haoReselectScrollToTop(tab: .movies, proxy: proxy)
+            .refreshable { viewModel.loadFresh() }
         }
-        .haoBottomChromePadding()
-        .haoChromeScrollTracking()
-        .refreshable { viewModel.loadFresh() }
     }
 
     private var searchEntry: some View {
