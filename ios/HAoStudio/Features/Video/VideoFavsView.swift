@@ -38,6 +38,12 @@ struct VideoFavsView: View {
         .navigationDestination(item: $selectedItem) { item in
             VideoDetailView(item: item)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .haoVideoFavChanged)) { _ in
+            // A poster long-press unfavourite (or a detail-page
+            // toggle) must drop the card at once, not on the next
+            // appear.
+            items = VideoLibraryStore.favourites()
+        }
         .onAppear { items = VideoLibraryStore.favourites() }
     }
 }

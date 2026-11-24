@@ -24,6 +24,9 @@
 // Swift 5.0: completion handlers only, no async/await, no `any`.
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // MARK: - Models
 
@@ -589,7 +592,7 @@ final class DoubanService {
     // MARK: - Cast photos (Baidu Baike lemma card, free, no key)
 
     private static func defaultCastPhotoFetcher(name: String, completion: @escaping (String) -> Void) {
-        guard let url = URL(string: "https://baike.baidu.com/api/openapi/BaikeLemmaCardApi?scope=103&format=json&appid=379020&bk_key=\(name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? name)&bk_length=600") else {
+        guard let url = URL(string: "https://baike.baidu.com/api/openapi/BaikeLemmaCardApi?scope=103&format=json&appid=379020&bk_key=\(name.addingPercentEncoding(withAllowedCharacters: videoStrictQueryAllowed) ?? name)&bk_length=600") else {
             completion("")
             return
         }
@@ -701,7 +704,7 @@ final class DoubanService {
             completion([])
             return
         }
-        guard let url = URL(string: "https://movie.douban.com/j/subject_suggest?q=\(title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? title)") else {
+        guard let url = URL(string: "https://movie.douban.com/j/subject_suggest?q=\(title.addingPercentEncoding(withAllowedCharacters: videoStrictQueryAllowed) ?? title)") else {
             completion([])
             return
         }
@@ -765,7 +768,7 @@ final class DoubanService {
     }
 
     private func searchPageId(title: String, completion: @escaping (String?) -> Void) {
-        guard let url = URL(string: "https://www.douban.com/search?cat=1002&q=\(title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? title)") else {
+        guard let url = URL(string: "https://www.douban.com/search?cat=1002&q=\(title.addingPercentEncoding(withAllowedCharacters: videoStrictQueryAllowed) ?? title)") else {
             completion(nil)
             return
         }

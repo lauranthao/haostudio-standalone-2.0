@@ -28,6 +28,14 @@ final class VideoSearchViewModel: ObservableObject {
     /// second submit while the first is in flight used to let the
     /// first answer win when it landed later).
     private var searchGeneration = 0
+    /// One flag per in-flight request: the spinner clears only
+    /// when BOTH are done. CMS used to clear it alone, so a fast
+    /// empty CMS answer flashed "没有找到相关影片" while the Emby
+    /// request was still flying — even when Emby had results.
+    /// `embyDone` starts true when Emby is not configured, so
+    /// the CMS-only path is unchanged.
+    private var cmsDone = true
+    private var embyDone = true
 
     init(gateway: VideoDataGateway = VideoServices.makeGateway()) {
         self.gateway = gateway
@@ -42,12 +50,15 @@ final class VideoSearchViewModel: ObservableObject {
         searched = true
         results = []
         embyResults = []
+        cmsDone = false
+        embyDone = !gateway.embyConfigured
         searchGeneration += 1
         let generation = searchGeneration
         gateway.search(keyword: query) { [weak self] items in
             guard let self = self, self.searchGeneration == generation else { return }
             self.results = items
-            self.isSearching = false
+            self.cmsDone = true
+            if self.embyDone { self.isSearching = false }
         }
         if gateway.embyConfigured {
             gateway.searchEmby(keyword: query) { [weak self] result in
@@ -56,6 +67,8 @@ final class VideoSearchViewModel: ObservableObject {
                 // Failure keeps the Emby section hidden (CMS results
                 // still show); the dedicated Emby search page is
                 // where the error is surfaced.
+                self.embyDone = true
+                if self.cmsDone { self.isSearching = false }
             }
         }
     }
@@ -103,7 +116,7 @@ struct VideoSearchView: View {
                                 resultSection(title: "影视源", items: viewModel.results)
                             }
                             if !viewModel.embyResults.isEmpty {
-                                resultSection(title: "Emby", items: viewModel.embyResults)
+                                resultSection(title: "Emby", items: viewModel.embyResults, isEmby: true)
                                     .padding(.top, 16)
                             }
                         }
@@ -167,7 +180,7 @@ struct VideoSearchView: View {
                         .foregroundStyle(theme.accent)
                 }
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 16)
             if viewModel.history.isEmpty {
                 Text("还没有搜索记录。")
                     .font(.haoRowSubtitle)
@@ -187,7 +200,7 @@ struct VideoSearchView: View {
         }
     }
 
-    private func resultSection(title: String, items: [VideoItem]) -> some View {
+    private func resultSection(title: String, items: [VideoItem], isEmby: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title)
@@ -201,7 +214,11 @@ struct VideoSearchView: View {
                     .foregroundStyle(theme.textMuted)
             }
             .padding(.horizontal, 16)
-            VideoPosterGrid(items: items) { item in
+            // Emby posters carry no api_key (auth rides the
+            // request header), so plain AsyncImage 401s on them:
+            // the Emby section must route through EmbyPosterImage
+            // or every result shows the placeholder tile.
+            VideoPosterGrid(items: items, isEmby: isEmby) { item in
                 onSelect(item)
             }
             .padding(.horizontal, 16)
@@ -300,6 +317,14 @@ final class VideoCategoryViewModel: ObservableObject {
     private let type: String
     private var page = 0
     private var loadingMore = false
+    /// Load generation, copied from VideoBrowseViewModel: every
+    /// reload bumps it, and a page landing for an older generation
+    /// is dropped. Without it, a reload issued while a page was in
+    /// flight cleared `items` and then the stale page appended its
+    /// (wrong-page) items as if they were page 0. The re-issue
+    /// below matters too: a reload whose loadMore is blocked by the
+    /// in-flight guard must not leave the grid empty forever.
+    private var generation = 0
 
     init(type: String, gateway: VideoDataGateway = VideoServices.makeGateway()) {
         self.type = type
@@ -307,24 +332,56 @@ final class VideoCategoryViewModel: ObservableObject {
     }
 
     func reload() {
+        generation += 1
         page = 0
         hasMore = true
         items = []
         loadMore()
     }
 
+    /// First load only. The view used to call reload() on every
+    /// appear, so coming back from a detail page re-fetched page 0
+    /// and lost the scroll position; returning must keep the grid
+    /// as it was. Pull-to-refresh still calls reload() explicitly.
+    func loadIfNeeded() {
+        guard items.isEmpty else { return }
+        reload()
+    }
+
     func loadMore() {
         guard !loadingMore && hasMore else { return }
         loadingMore = true
         isLoading = true
+        let requestGeneration = generation
         gateway.fetchByType(type, page: page, area: "all", year: "all", by: "") { [weak self] result in
             guard let self = self else { return }
             self.loadingMore = false
             self.isLoading = false
+            guard requestGeneration == self.generation else {
+                // Stale page: a reload landed while it was in
+                // flight. Its items belong to the old query, so
+                // drop them; the reload's loadMore was dropped by
+                // the loadingMore guard above, so re-issue it now
+                // (items is empty after the reset).
+                if self.items.isEmpty { self.loadMore() }
+                return
+            }
             if result.items.isEmpty {
-                self.hasMore = false
+                // An empty page ends the list only when the service
+                // says there is nothing after it. A hole page (all
+                // rows dropped in parsing) with hasMore set must
+                // advance instead of stranding the list.
+                if result.hasMore {
+                    self.page += 1
+                    self.loadMore()
+                } else {
+                    self.hasMore = false
+                }
             } else {
-                self.items.append(contentsOf: result.items)
+                var seen = Set(self.items.map { "\($0.sourceId ?? -1)|\($0.id)" })
+                for item in result.items where seen.insert("\(item.sourceId ?? -1)|\(item.id)").inserted {
+                    self.items.append(item)
+                }
                 self.page += 1
                 self.hasMore = result.hasMore
             }
@@ -380,6 +437,6 @@ struct VideoCategoryView: View {
         .navigationTitle(type)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { viewModel.reload() }
-        .onAppear { viewModel.reload() }
+        .onAppear { viewModel.loadIfNeeded() }
     }
 }

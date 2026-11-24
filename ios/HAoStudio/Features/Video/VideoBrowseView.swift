@@ -152,10 +152,21 @@ final class VideoBrowseViewModel: ObservableObject {
             return
         }
         if result.items.isEmpty {
-            // Empty page = end of list. This is what terminates
-            // filtered pagination (a filtered leaf page is a
-            // 10-CMS-page window, so pagecount is approximate).
-            hasMore = false
+            // An empty page ends the list ONLY when the service
+            // says there is nothing after it. A filtered window
+            // can come back empty while later windows still hold
+            // matches (a rare area in the first 10 CMS pages, a
+            // parent page whose children all filter out) — ending
+            // there shows "这个分类下没有内容" for a list that is
+            // not empty. Advance instead; hasMore (page <
+            // pagecount) still bounds the walk, so this cannot
+            // spin forever.
+            if result.hasMore {
+                page += 1
+                loadMore()
+            } else {
+                hasMore = false
+            }
         } else {
             var seen = Set(items.map { "\($0.sourceId ?? -1)|\($0.id)" })
             for item in result.items {
@@ -238,8 +249,17 @@ struct VideoBrowseView: View {
                 selectedType: viewModel.selectedType,
                 selectedLibraryId: viewModel.selectedLibraryId,
                 selectedGenre: viewModel.selectedGenre,
-                onOpenHistory: onOpenHistory,
-                onOpenFavourites: onOpenFavourites,
+                onOpenHistory: {
+                    // Like the type rows below: close the panel
+                    // first, or it is still open over the grid
+                    // when the user comes back from history.
+                    sidebarDrag.close()
+                    onOpenHistory()
+                },
+                onOpenFavourites: {
+                    sidebarDrag.close()
+                    onOpenFavourites()
+                },
                 onSelectType: { type in
                     viewModel.selectedType = type
                     sidebarDrag.close()

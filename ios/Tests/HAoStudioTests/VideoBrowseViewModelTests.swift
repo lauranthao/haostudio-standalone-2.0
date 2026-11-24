@@ -65,7 +65,22 @@ private final class FakeBrowseGateway: VideoDataGateway {
         pendingEmby.append(completion)
     }
     func fetchEmbyDetail(item: VideoItem, completion: @escaping (VideoDetail?) -> Void) { completion(nil) }
-    func searchEmby(keyword: String, completion: @escaping ([VideoItem]) -> Void) { completion([]) }
+    /// Hold the Emby search completion when `holdSearchEmby` is
+    /// set, so a test can observe the spinner while Emby is still
+    /// in flight (V9: it must not clear on the CMS answer alone).
+    var holdSearchEmby = false
+    private var pendingSearchEmby: [(Result<[VideoItem], EmbyError>) -> Void] = []
+    func searchEmby(keyword: String, completion: @escaping (Result<[VideoItem], EmbyError>) -> Void) {
+        if holdSearchEmby {
+            pendingSearchEmby.append(completion)
+        } else {
+            completion(.success([]))
+        }
+    }
+    func completeSearchEmbyNext(with result: Result<[VideoItem], EmbyError>) {
+        guard !pendingSearchEmby.isEmpty else { return }
+        pendingSearchEmby.removeFirst()(result)
+    }
     func enqueueDownload(
         detail: VideoDetail, episode: PlayEpisode, line: PlayLine,
         completion: @escaping (Bool) -> Void
@@ -205,12 +220,92 @@ final class VideoBrowseViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.items.map { $0.title }, ["A", "B", "C"])
 
         viewModel.loadMore()
+        // An empty page ends the list only when the service says
+        // there is nothing after it: empty + hasMore advances to
+        // the next page (a filtered window can come back empty
+        // while later windows still hold matches).
         gateway.completeByTypeNext(with: page([], hasMore: true))
+        XCTAssertTrue(viewModel.hasMore)
+        XCTAssertEqual(gateway.byTypeCalls.last?.page, 3)
+        XCTAssertEqual(viewModel.items.map { $0.title }, ["A", "B", "C"])
+
+        gateway.completeByTypeNext(with: page([], hasMore: false))
         XCTAssertFalse(viewModel.hasMore)
 
         let callsBefore = gateway.byTypeCalls.count
         viewModel.loadMore()
         XCTAssertEqual(gateway.byTypeCalls.count, callsBefore)
+    }
+
+    /// An empty first page with more pages behind it must not end
+    /// the list: the grid advances instead of showing "这个分类下
+    /// 没有内容" for a list that is not empty.
+    func testEmptyPageWithMoreAdvancesToNextPage() {
+        let gateway = FakeBrowseGateway()
+        let viewModel = VideoBrowseViewModel(initialType: nil, gateway: gateway)
+        gateway.completeByTypeNext(with: page([], hasMore: true))
+        XCTAssertEqual(gateway.byTypeCalls.last?.page, 1)
+        XCTAssertTrue(viewModel.items.isEmpty)
+        XCTAssertTrue(viewModel.hasMore)
+        gateway.completeByTypeNext(with: page([item("1", title: "A")], hasMore: false))
+        XCTAssertEqual(viewModel.items.map { $0.title }, ["A"])
+        XCTAssertFalse(viewModel.hasMore)
+    }
+
+    // MARK: - Category view-model: generation guard + load-once
+
+    /// A reload issued while a page is in flight must not let the
+    /// stale page append its (wrong-page) items: the stale
+    /// completion is dropped and the fresh query re-issued.
+    func testCategoryReloadDuringFlightDropsStalePage() {
+        let gateway = FakeBrowseGateway()
+        let viewModel = VideoCategoryViewModel(type: "电影", gateway: gateway)
+        viewModel.loadIfNeeded()
+        XCTAssertEqual(gateway.byTypeCalls.count, 1)
+
+        viewModel.reload()
+        // The reload's loadMore is dropped by the loadingMore
+        // guard while the first page is still in flight.
+        XCTAssertEqual(gateway.byTypeCalls.count, 1)
+
+        gateway.completeByTypeNext(with: page([item("9", title: "STALE")], hasMore: true))
+        XCTAssertEqual(gateway.byTypeCalls.count, 2)
+        XCTAssertEqual(gateway.byTypeCalls.last?.page, 0)
+        XCTAssertTrue(viewModel.items.isEmpty)
+
+        gateway.completeByTypeNext(with: page([item("1", title: "FRESH")], hasMore: false))
+        XCTAssertEqual(viewModel.items.map { $0.title }, ["FRESH"])
+    }
+
+    /// Returning to the category page must not re-fetch: items
+    /// already loaded stay put (scroll position preserved).
+    func testCategoryLoadIfNeededDoesNotRefetch() {
+        let gateway = FakeBrowseGateway()
+        let viewModel = VideoCategoryViewModel(type: "电影", gateway: gateway)
+        viewModel.loadIfNeeded()
+        gateway.completeByTypeNext(with: page([item("1", title: "A")], hasMore: false))
+        let callsBefore = gateway.byTypeCalls.count
+        viewModel.loadIfNeeded()
+        XCTAssertEqual(gateway.byTypeCalls.count, callsBefore)
+        XCTAssertEqual(viewModel.items.map { $0.title }, ["A"])
+    }
+
+    // MARK: - Search: spinner waits for both requests
+
+    /// CMS answering empty must not clear the spinner while the
+    /// Emby request is still in flight — otherwise the page
+    /// flashes "没有找到相关影片" before the Emby results land.
+    func testSearchSpinnerWaitsForEmby() {
+        let gateway = FakeBrowseGateway()
+        gateway.embyConfigured = true
+        gateway.holdSearchEmby = true
+        let viewModel = VideoSearchViewModel(gateway: gateway)
+        viewModel.search("b36-test-query")
+        defer { VideoLibraryStore.removeSearchHistory(term: "b36-test-query") }
+        XCTAssertTrue(viewModel.isSearching)
+        XCTAssertTrue(viewModel.results.isEmpty)
+        gateway.completeSearchEmbyNext(with: .success([]))
+        XCTAssertFalse(viewModel.isSearching)
     }
 
     // MARK: - Stale-page drop

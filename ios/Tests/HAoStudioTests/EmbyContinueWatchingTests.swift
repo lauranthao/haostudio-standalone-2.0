@@ -256,4 +256,28 @@ final class EmbyContinueWatchingTests: XCTestCase {
         XCTAssertTrue(viewModel.canPlay)
         XCTAssertEqual(viewModel.playButtonLabel, "播放")
     }
+
+    // MARK: - Refresh local state without refetching (b36 item 8)
+
+    /// Returning from the player must pick up the new resume
+    /// without re-fetching the detail: refreshLocalState re-reads
+    /// favourite / resume / watched from the store, and the loader
+    /// is not called again.
+    func testRefreshLocalStatePicksUpNewResume() {
+        let item = embyMovieItem()
+        let gateway = StubVideoGateway()
+        gateway.embyDetailResults = [embyMovieDetail(item: item)]
+        let viewModel = VideoDetailViewModel(item: item, gateway: gateway)
+        viewModel.load()
+        XCTAssertEqual(viewModel.playButtonLabel, "播放")
+        XCTAssertFalse(viewModel.isWatched)
+        VideoLibraryStore.savePosition(
+            item: item, episodeName: "正片", episodeIndex: 0,
+            lineName: "直链", positionSeconds: 600, durationSeconds: 7200)
+        defer { VideoLibraryStore.removeHistory(title: item.title, year: item.year) }
+        viewModel.refreshLocalState()
+        XCTAssertTrue(viewModel.isWatched)
+        XCTAssertEqual(viewModel.playButtonLabel, "继续播放 · 10:00")
+        XCTAssertEqual(gateway.fetchEmbyDetailCalls, 1)
+    }
 }
