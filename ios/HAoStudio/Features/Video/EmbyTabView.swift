@@ -24,6 +24,10 @@ final class EmbyTabViewModel: ObservableObject {
     /// Set only on failure — an empty library stays an empty state,
     /// never an error state.
     @Published private(set) var errorMessage: String?
+    /// True when the last failure was a 401: the credential is
+    /// wrong, so the error state offers a re-login path (not just
+    /// a retry that fails the same way).
+    @Published private(set) var isUnauthorized = false
     @Published var selectedLibraryId: String?
 
     private let gateway: VideoDataGateway
@@ -54,6 +58,7 @@ final class EmbyTabViewModel: ObservableObject {
         hasMore = true
         items = []
         errorMessage = nil
+        isUnauthorized = false
         hasLoaded = true
         gateway.fetchEmbyLibraries { [weak self] libs in
             self?.libraries = libs
@@ -79,6 +84,7 @@ final class EmbyTabViewModel: ObservableObject {
         hasMore = true
         items = []
         errorMessage = nil
+        isUnauthorized = false
         loadMore()
     }
 
@@ -113,6 +119,7 @@ final class EmbyTabViewModel: ObservableObject {
                 // A dead server used to show "媒体库是空的" (the
                 // gateway swallowed the failure to .empty). Say so.
                 self.errorMessage = error.message
+                self.isUnauthorized = error.kind == .unauthorized
                 self.hasMore = false
             }
         }
@@ -128,6 +135,10 @@ struct EmbyTabView: View {
     var onSearch: () -> Void
 
     @StateObject private var viewModel = EmbyTabViewModel()
+    /// Re-login sheet (401 only): the config page lives in
+    /// Settings; from here it opens as a sheet, never pushed
+    /// onto the video tab's NavigationStack.
+    @State private var showingEmbyConfig = false
 
     @Environment(\.haoTheme) private var theme
 
@@ -171,12 +182,31 @@ struct EmbyTabView: View {
                                     title: "连不上 Emby",
                                     note: error
                                 )
-                                Button("重试") { viewModel.reload() }
-                                    .font(.haoSubheadStrong)
-                                    .foregroundStyle(theme.onAccent)
-                                    .padding(.horizontal, 24)
-                                    .padding(.vertical, 12)
-                                    .background(theme.accent, in: Capsule())
+                                HStack(spacing: 12) {
+                                    Button("重试") { viewModel.reload() }
+                                        .font(.haoSubheadStrong)
+                                        .foregroundStyle(theme.onAccent)
+                                        .padding(.horizontal, 24)
+                                        .padding(.vertical, 12)
+                                        .background(theme.accent, in: Capsule())
+                                    // 401 means the credential itself
+                                    // is wrong: retrying fails the
+                                    // same way. Offer the login page
+                                    // directly instead of stranding
+                                    // the user on a dead retry.
+                                    if viewModel.isUnauthorized {
+                                        Button("重新登录") { showingEmbyConfig = true }
+                                            .font(.haoSubheadStrong)
+                                            .foregroundStyle(theme.accentText)
+                                            .padding(.horizontal, 24)
+                                            .padding(.vertical, 12)
+                                            .background(theme.surface, in: Capsule())
+                                            .overlay {
+                                                Capsule()
+                                                    .strokeBorder(theme.hairline, lineWidth: 0.5)
+                                            }
+                                    }
+                                }
                             }
                             .padding(.horizontal, 16)
                             } else if viewModel.items.isEmpty {
@@ -210,6 +240,9 @@ struct EmbyTabView: View {
             }
         }
         .onAppear { viewModel.reloadIfNeeded() }
+        .sheet(isPresented: $showingEmbyConfig, onDismiss: { viewModel.reload() }) {
+            NavigationStack { EmbyConfigView() }
+        }
     }
 
     /// Search entry (build 36, item 17): visually identical to
