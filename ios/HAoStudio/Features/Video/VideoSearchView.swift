@@ -193,12 +193,24 @@ struct VideoSearchView: View {
 }
 
 /// Wrapping chips layout for search history (no LazyVGrid: chips
-/// have intrinsic widths).
+/// have intrinsic widths). Shared by the video search and the live
+/// search — one chip language for the whole app (build-35 polish:
+/// live used a stretched adaptive grid, video used this flow).
+/// The wrap width is the real content width (screen − 48), not a
+/// fixed 340 — a fixed width overflowed the 320pt iPhone SE and
+/// wasted space on 430pt phones. A single over-long term is
+/// capped at the content width instead of drawing past the edge.
 struct FlowChips: View {
     var items: [String]
     var onTap: (String) -> Void
 
     @Environment(\.haoTheme) private var theme
+
+    /// Content width the chips wrap inside (screen − 24pt margins
+    /// each side).
+    private var availableWidth: CGFloat {
+        UIScreen.main.bounds.width - 48
+    }
 
     var body: some View {
         // A simple left-aligned flow built from rows: measure-free,
@@ -210,7 +222,7 @@ struct FlowChips: View {
                     ForEach(row, id: \.self) { term in
                         Button(action: { onTap(term) }) {
                             Text(term)
-                                .font(.system(size: 14))
+                                .font(.system(size: 14, weight: .medium))
                                 .foregroundStyle(theme.textPrimary)
                                 .lineLimit(1)
                                 .padding(.horizontal, 12)
@@ -221,6 +233,7 @@ struct FlowChips: View {
                                 }
                         }
                         .buttonStyle(.plain)
+                        .frame(maxWidth: availableWidth)
                     }
                 }
             }
@@ -235,7 +248,7 @@ struct FlowChips: View {
         var width = 0
         for term in items {
             let w = term.count * 15 + 28
-            if !current.isEmpty && width + w + 8 > 340 {
+            if !current.isEmpty && CGFloat(width + w + 8) > availableWidth {
                 rows.append(current)
                 current = []
                 width = 0

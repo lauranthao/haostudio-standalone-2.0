@@ -86,31 +86,41 @@ struct MusicSearchView: View {
                     .padding(.horizontal, 24)
                     .padding(.top, 20)
                     ForEach(searchVM.history, id: \.self) { item in
-                        Button(action: {
-                            query = item
-                            searchVM.search(item)
-                        }) {
-                            HStack(spacing: 10) {
-                                Image(systemName: "clock")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(theme.textMuted)
-                                Text(item)
-                                    .font(.system(size: 15))
-                                    .foregroundStyle(theme.textPrimary)
-                                    .lineLimit(1)
-                                Spacer()
-                                Button(action: { searchVM.removeHistoryItem(item) }) {
-                                    Image(systemName: "xmark")
-                                        .font(.system(size: 11, weight: .semibold))
+                        // Sibling buttons, NOT a Button inside a
+                        // Button (fix 2026-11-24, build 35): a
+                        // nested Button also fires the outer tap,
+                        // so deleting a history term would search
+                        // for it at the same time. Same rule as
+                        // MiniPlayerBar's sibling buttons.
+                        HStack(spacing: 10) {
+                            Button(action: {
+                                query = item
+                                searchVM.search(item)
+                            }) {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "clock")
+                                        .font(.system(size: 13))
                                         .foregroundStyle(theme.textMuted)
+                                    Text(item)
+                                        .font(.system(size: 15))
+                                        .foregroundStyle(theme.textPrimary)
+                                        .lineLimit(1)
+                                    Spacer()
                                 }
-                                .buttonStyle(.plain)
+                                .contentShape(Rectangle())
                             }
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 12)
-                            .contentShape(Rectangle())
+                            .buttonStyle(.plain)
+                            Button(action: { searchVM.removeHistoryItem(item) }) {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(theme.textMuted)
+                                    .frame(width: 28, height: 28)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("删除搜索记录")
                         }
-                        .buttonStyle(.plain)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
                     }
                 } else {
                     MusicEmptyState(

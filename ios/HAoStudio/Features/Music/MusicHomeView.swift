@@ -44,11 +44,11 @@ struct MusicHomeView: View {
                     HaoChromeScrollAnchor()
                     featureShelf
                     fmRow
-                        .padding(.top, 10)
+                        .padding(.top, 12)
                     playlistsSection
-                        .padding(.top, 10)
+                        .padding(.top, 12)
                     recentSection
-                        .padding(.top, 10)
+                        .padding(.top, 12)
                     Spacer(minLength: 16)
                 }
                 .padding(.horizontal, 24)
@@ -103,7 +103,7 @@ struct MusicHomeView: View {
                     .foregroundStyle(theme.accent)
                 Spacer()
                 Text(title)
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(theme.textPrimary)
             }
             .padding(16)
@@ -134,7 +134,7 @@ struct MusicHomeView: View {
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(theme.accent)
                 Text(title)
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
             }
@@ -225,7 +225,9 @@ struct MusicHomeView: View {
     private var divider: some View {
         Divider()
             .background(theme.hairline)
-            .padding(.leading, 12)
+            // Inset to the text column (icon 28 + spacing 12),
+            // not to the row edge — the iOS grouped-list rule.
+            .padding(.leading, 40)
     }
 
     private func libraryRow(icon: String, title: String, subtitle: String, action: @escaping () -> Void) -> some View {

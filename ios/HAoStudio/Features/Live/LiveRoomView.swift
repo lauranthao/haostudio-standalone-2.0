@@ -268,37 +268,25 @@ struct LiveRoomView: View {
     /// The video frame: the A-leg native surface when attached;
     /// before that, the room cover dimmed as the backdrop and an
     /// honest "no picture yet" note — never a fake frame.
+    ///
+    /// Tap-to-play lives ONLY on the background layer below
+    /// (videoBackground), NOT on this whole ZStack (fix
+    /// 2026-11-24, build 35): the on-video buttons (play/pause,
+    /// danmaku toggle, [ ] fullscreen) and the back button are
+    /// siblings ABOVE that layer, so a tap on them hits only
+    /// them. When the gesture sat on the whole area, SwiftUI
+    /// fired it as well as the button — [ ] also paused once,
+    /// and play/pause toggled twice (net zero, button looked
+    /// dead). The same sibling pattern as the VOD player's
+    /// gesture layer (VideoPlayerView): chrome above, gesture
+    /// below. The danmaku overlay is already hit-test
+    /// transparent (LiveDanmakuOverlayView), so taps pass
+    /// through it to the background; only the two gradient
+    /// chrome strips (top back row, bottom control strip)
+    /// keep their taps, like any player's chrome.
     private var videoArea: some View {
         ZStack {
-            Color.black
-            if let videoView = livePlayer.videoView {
-                LiveVideoSurfaceView(view: videoView)
-            } else if let url = liveCoverURL(for: currentRoom) {
-                AsyncImage(url: url) { phase in
-                    if case .success(let image) = phase {
-                        image.resizable().scaledToFill().opacity(0.35)
-                    }
-                }
-            }
-            if livePlayer.videoView == nil {
-                VStack(spacing: 8) {
-                    Image(systemName: "antenna.radiowaves.left.and.right")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.white.opacity(0.6))
-                    Text("暂无画面")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.8))
-                }
-            }
-            if !livePlayer.isPlaying && livePlayer.videoView != nil {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 34))
-                    .foregroundStyle(.white.opacity(0.9))
-            }
-            // Flying danmaku over the portrait video (same layer
-            // as landscape, same switch): the portrait room used
-            // to show danmaku only as the list below, so the
-            // toggle had no layer to control on the video.
+            videoBackground
             if danmakuEnabledForRoom {
                 LiveDanmakuOverlayView(
                     messages: livePlayer.messages,
@@ -348,6 +336,40 @@ struct LiveRoomView: View {
                     )
                     Spacer()
                 }
+            }
+        }
+    }
+
+    /// The video background alone: black + native surface (or
+    /// dimmed cover / "暂无画面" placeholder) + paused play
+    /// glyph. The tap-to-play gesture lives here and only here,
+    /// so it can never double-fire with a button above it.
+    private var videoBackground: some View {
+        ZStack {
+            Color.black
+            if let videoView = livePlayer.videoView {
+                LiveVideoSurfaceView(view: videoView)
+            } else if let url = liveCoverURL(for: currentRoom) {
+                AsyncImage(url: url) { phase in
+                    if case .success(let image) = phase {
+                        image.resizable().scaledToFill().opacity(0.35)
+                    }
+                }
+            }
+            if livePlayer.videoView == nil {
+                VStack(spacing: 8) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.white.opacity(0.6))
+                    Text("暂无画面")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+            }
+            if !livePlayer.isPlaying && livePlayer.videoView != nil {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 34))
+                    .foregroundStyle(.white.opacity(0.9))
             }
         }
         .contentShape(Rectangle())
@@ -602,6 +624,12 @@ struct LiveRoomView: View {
                     settings: danmakuSettings
                 )
             }
+            // Tap layer, UNDER the chrome (核查 2026-11-24,
+            // build 35 — same pattern as the VOD player): it is
+            // a sibling BELOW the controls VStack, not an
+            // ancestor of the buttons, so a tap on a button hits
+            // only the button. No double-fire here, unlike the
+            // portrait videoArea before its fix.
             Color.clear
                 .contentShape(Rectangle())
                 .onTapGesture {

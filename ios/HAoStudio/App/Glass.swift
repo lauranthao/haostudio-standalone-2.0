@@ -42,12 +42,17 @@ enum HaoLayout {
     /// Corner radius of the floating chrome (mini player + tab bar):
     /// a rounded rectangle, NOT a capsule. chen's Apple Music
     /// reference (2026-11-24 build 34): the mini and the bar share
-    /// one shape, one width, stacked with an 8pt gap. 12pt, on the
-    /// 4pt grid. One constant: the system tab bar's own rendered
-    /// radius is system-determined, so if the two still read as
-    /// different shapes on device, this is the single place to
-    /// adjust — never a second hand-written number in the mini.
-    static let floatingChromeCornerRadius: CGFloat = 12
+    /// one shape, one width, stacked with an 8pt gap. 24pt, on the
+    /// 4pt grid (raised from 12 in the build-35 polish pass): the
+    /// iOS 26 reference measures the mini and the floating tab bar
+    /// at ~20–28pt — near half the 50pt strip height, almost a
+    /// capsule — so 12 read square next to the system bar, whose
+    /// radius is Apple's own (~20–30pt). One constant: if the two
+    /// still read as different shapes on device, this is the
+    /// single place to adjust — never a second hand-written number
+    /// in the mini. True-device confirmation still pending (chen's
+    /// phone is the judge: "看着像同一套").
+    static let floatingChromeCornerRadius: CGFloat = 24
     /// Horizontal content padding inside the mini player strip,
     /// symmetric both sides (was 10 leading / 6 trailing — the
     /// strip read lopsided). Same 12pt step as the tab bar's side
