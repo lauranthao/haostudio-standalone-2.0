@@ -20,7 +20,7 @@ struct LiveRoomCard: View {
 
     var body: some View {
         Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 coverView
                 Text(room.title.isEmpty ? "直播间" : room.title)
                     .font(.haoDenseTitle)

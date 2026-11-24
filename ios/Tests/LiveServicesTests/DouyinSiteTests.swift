@@ -140,4 +140,22 @@ final class DouyinSiteTests: XCTestCase {
     func testParseRenderDataThrowsWithoutState() {
         XCTAssertThrowsError(try DouyinLiveSite.parseRenderData("<html></html>"))
     }
+
+    /// roomInfo reports a transient failure as a failure (build
+    /// 36 item 8 — same reason as Bilibili: the disguise hid
+    /// the LIVE badge, zeroed the watching count and discarded
+    /// the card's danmaku credentials).
+    func testRoomInfoReportsTransientFailure() {
+        let site = DouyinLiveSite(fetcher: stubFetcher(data: nil, status: 404))
+        let expectation = self.expectation(description: "roomInfo failure")
+        site.roomInfo(roomId: "123456") { result in
+            if case .failure = result {
+                // Expected.
+            } else {
+                XCTFail("expected failure, got \(result)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+    }
 }

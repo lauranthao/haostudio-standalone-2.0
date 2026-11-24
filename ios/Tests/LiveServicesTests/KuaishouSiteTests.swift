@@ -234,4 +234,24 @@ final class KuaishouSiteTests: XCTestCase {
         let room = LiveRoom(roomId: "1", platform: .huya, isLive: true, data: ["playUrls": jsonObject(playUrlsJSON)])
         XCTAssertNil(site.resolutionFromRoom(room, quality: nil))
     }
+
+    /// roomInfo reports a transient failure as a failure (build
+    /// 36 item 8 — same reason as Bilibili: the disguise hid
+    /// the LIVE badge, zeroed the watching count and discarded
+    /// the card's danmaku credentials — the feed rooms carry
+    /// liveStreamId, so a rate-limited roomInfo used to kill
+    /// danmaku outright).
+    func testRoomInfoReportsTransientFailure() {
+        let site = KuaishouLiveSite(fetcher: stubFetcher(data: nil, status: 404))
+        let expectation = self.expectation(description: "roomInfo failure")
+        site.roomInfo(roomId: "ks123") { result in
+            if case .failure = result {
+                // Expected.
+            } else {
+                XCTFail("expected failure, got \(result)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+    }
 }

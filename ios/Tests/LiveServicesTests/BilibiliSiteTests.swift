@@ -165,4 +165,25 @@ final class BilibiliSiteTests: XCTestCase {
         }
         waitForExpectations(timeout: 5)
     }
+
+    /// roomInfo reports a transient failure as a failure (build
+    /// 36 item 8): it used to disguise any failure as an offline
+    /// room, which hid the LIVE badge the card knew, zeroed the
+    /// watching count, and discarded the card's danmaku
+    /// credentials — so a rate-limited roomInfo also killed
+    /// danmaku for the whole visit. The callers keep the card's
+    /// values on failure.
+    func testRoomInfoReportsTransientFailure() {
+        let site = BilibiliLiveSite(fetcher: stubFetcher(data: nil, status: 404))
+        let expectation = self.expectation(description: "roomInfo failure")
+        site.roomInfo(roomId: "6") { result in
+            if case .failure = result {
+                // Expected.
+            } else {
+                XCTFail("expected failure, got \(result)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+    }
 }

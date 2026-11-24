@@ -298,6 +298,16 @@ struct LiveDanmakuSettings {
         min(max(maxCount, LiveDanmakuSettings.minMaxCount), LiveDanmakuSettings.enginePoolMaxSize)
     }
 
+    /// Flying-danmaku crossing time in seconds at the current
+    /// `speed` (base 8 s at speed 1.0 — VOD parity). The overlay
+    /// and its per-row removal timer both use this one value, so
+    /// a row is never removed before it lands. The model clamps
+    /// speed to 0.5...2.0; the `max` guards a stale stored value
+    /// all the same.
+    var flyingDuration: Double {
+        8.0 / max(speed, 0.5)
+    }
+
     // MARK: - Persistence (tolerant dictionary round-trip)
 
     /// Load from a stored dictionary. Unknown / wrong-typed /

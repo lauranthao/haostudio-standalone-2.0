@@ -64,6 +64,14 @@ struct LiveFollowsView: View {
             Text("关注列表会被清空，这个操作不能撤销。")
         }
         .onAppear { follows = LiveLibraryStore.follows() }
+        // A row's long-press menu unfollows through the store
+        // directly — the swipe delete refreshes local state, the
+        // menu did not, so the unfollowed room stayed listed
+        // until re-appear. Refresh on the same signal the tab
+        // listens to.
+        .onReceive(NotificationCenter.default.publisher(for: .haoLiveFollowChanged)) { _ in
+            follows = LiveLibraryStore.follows()
+        }
     }
 
     private func removeFollows(at offsets: IndexSet) {
@@ -197,7 +205,7 @@ private struct LiveHistoryListRow: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MusicPressScaleStyle())
     }
 
     private var rowCover: some View {
@@ -225,7 +233,7 @@ private struct LiveHistoryListRow: View {
         Rectangle()
             .fill(theme.surfaceStrong)
             .overlay {
-                Image(systemName: "clock")
+                Image(systemName: "antenna.radiowaves.left.and.right")
                     .font(.haoCallout)
                     .foregroundStyle(theme.textSecondary)
             }

@@ -85,16 +85,16 @@ final class BilibiliLiveSite: LiveSiteResolver {
             completion(.failure(LiveError.invalidRoomId))
             return
         }
-        loadRoomInfo(roomId: trimmed) { result in
-            switch result {
-            case .success(let room):
-                completion(.success(room))
-            case .failure:
-                // UI path: a transient failure must not blank the
-                // card — return the room as offline.
-                completion(.success(LiveRoom(roomId: trimmed, platform: .bilibili, isLive: false, link: LivePlatform.bilibili.roomLink(roomId: trimmed))))
-            }
-        }
+        // A transient failure is reported as a failure, never
+        // disguised as "offline" (build 36 item 8): all three
+        // callers already keep the card's values on failure (the
+        // room page falls back to the card room AND its danmaku
+        // credentials, the gateway answers nil, the home check
+        // treats it as unknown). The old disguise hid the LIVE
+        // badge the card knew, zeroed the watching count, and
+        // discarded the card's danmakuData — so a rate-limited
+        // roomInfo also killed danmaku for the whole visit.
+        loadRoomInfo(roomId: trimmed, completion: completion)
     }
 
     /// Strict room load: throws when no parseable room metadata is

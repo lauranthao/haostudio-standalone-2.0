@@ -167,16 +167,13 @@ final class DouyuLiveSite: LiveSiteResolver {
             completion(.failure(LiveError.invalidRoomId))
             return
         }
-        fetchRoomInfo(roomId: trimmed) { result in
-            switch result {
-                case .success(let room):
-                    completion(.success(room))
-                case .failure:
-                    // UI path: a transient failure must not blank the
-                    // card — return the room as offline.
-                    completion(.success(LiveRoom(roomId: trimmed, platform:.douyu, isLive: false, link: LivePlatform.douyu.roomLink(roomId: trimmed))))
-            }
-        }
+        // A transient failure is reported as a failure, never
+        // disguised as "offline" (build 36 item 8 — same reason
+        // as Bilibili: the callers keep the card's values on
+        // failure, and the disguise hid the LIVE badge, zeroed
+        // the watching count and discarded the card's danmaku
+        // credentials).
+        fetchRoomInfo(roomId: trimmed, completion: completion)
     }
 
     private func fetchRoomInfo(roomId: String, completion: @escaping (Result<LiveRoom, Error>) -> Void) {
