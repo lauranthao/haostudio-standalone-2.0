@@ -1141,6 +1141,11 @@ struct LiveRoomView: View {
                     .background(Color.black.opacity(0.45), in: Circle())
             }
             .buttonStyle(.plain)
+            // 44pt hit target, visual stays 36pt (same as the
+            // portrait back button, L1): 36pt is below the
+            // file's own 44pt standard for on-video buttons.
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
             .accessibilityLabel("退出全屏")
             VStack(alignment: .leading, spacing: 2) {
                 Text(currentRoom.title.isEmpty ? "直播间" : currentRoom.title)
@@ -1173,6 +1178,8 @@ struct LiveRoomView: View {
                     .background(Color.black.opacity(0.45), in: Circle())
             }
             .buttonStyle(.plain)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
             .accessibilityLabel("亮度与音量")
             Button(action: { showDanmakuSettings = true }) {
                 Image(systemName: "gearshape")
@@ -1182,6 +1189,8 @@ struct LiveRoomView: View {
                     .background(Color.black.opacity(0.45), in: Circle())
             }
             .buttonStyle(.plain)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
             .accessibilityLabel("弹幕设置")
         }
         .padding(.horizontal, 20)
@@ -1282,6 +1291,10 @@ struct LiveRoomView: View {
                     .frame(width: 40, height: 40)
             }
             .buttonStyle(.plain)
+            // 44pt hit target, visual stays 40pt (same class as
+            // the top-bar buttons above).
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
             .accessibilityLabel("退出全屏")
         }
         .padding(.horizontal, 20)
