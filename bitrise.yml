@@ -1,0 +1,112 @@
+# HAo Studio 独立版 2.0 — Bitrise 工作流
+#
+# 仓库：GitHub lauranthao/haostudio-standalone-2.0，分支 main
+# 与 .github/workflows/ios-unsigned.yml 1:1 对照（同一批脚本步骤），
+# 仅当 GitHub Actions 的 macOS 托管运行器没空位时走 Bitrise。
+# 手动触发，不配自动触发；产物为未签名 IPA ios/HAoStudio.ipa。
+# Stack: Xcode 26.2（与 GitHub 工作流的 xcode-select 一致）。
+format_version: '13'
+default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
+project_type: ios
+trigger_map: []
+workflows:
+  primary:
+    meta:
+      bitrise.io:
+        stack: osx-xcode-26.2.x
+        machine_type_id: g2.mac.medium
+    steps:
+    - activate-ssh-key@4:
+        run_if: '{{getenv "SSH_RSA_PRIVATE_KEY" | ne ""}}'
+    - git-clone@8: {}
+    - script@1:
+        title: Preflight checks (S0 gate)
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -e
+            python3 ios/preflight_check.py
+    - script@1:
+        title: Migration unit tests (S1)
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -e
+            cd ios
+            swift test
+    - script@1:
+        title: Download libmpv frameworks (MPV player backend)
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -e
+            LIBMPV_URL="https://github.com/Predidit/libmpv-darwin-build/releases/download/0.6.8/libmpv-xcframeworks_0.6.8_ios-universal-video-default.tar.gz"
+            LIBMPV_SHA256="d428641cc6c100de8234eae04e229966e46949eb73fcabd526a008a02e9bf968"
+            mkdir -p ios/Vendor/libmpv
+            cd ios/Vendor/libmpv
+            curl -L --fail -o libmpv-ios.tar.gz "$LIBMPV_URL"
+            echo "$LIBMPV_SHA256  libmpv-ios.tar.gz" | shasum -a 256 -c -
+            tar -xzf libmpv-ios.tar.gz --strip-components=1
+            test -d Mpv.xcframework || { echo "libmpv extract failed: Mpv.xcframework missing"; exit 1; }
+            rm libmpv-ios.tar.gz
+            ls
+    - script@1:
+        title: Install CocoaPods dependencies
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -e
+            cd ios
+            if [ ! -f Podfile ]; then
+              echo "no Podfile; skipping pod install"
+              exit 0
+            fi
+            if ! command -v pod >/dev/null 2>&1; then
+              echo "CocoaPods not found, installing..."
+              sudo gem install cocoapods --no-document
+            fi
+            pod --version
+            pod install
+    - script@1:
+        title: Build unsigned app
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -e
+            cd ios
+            if [ -d HAoStudio.xcworkspace ]; then
+              xcodebuild -workspace HAoStudio.xcworkspace \
+                -scheme HAoStudio \
+                -configuration Release \
+                -sdk iphoneos \
+                -derivedDataPath build \
+                CODE_SIGNING_ALLOWED=NO \
+                CODE_SIGN_IDENTITY="" \
+                CODE_SIGNING_REQUIRED=NO
+            else
+              xcodebuild -project HAoStudio.xcodeproj \
+                -scheme HAoStudio \
+                -configuration Release \
+                -sdk iphoneos \
+                -derivedDataPath build \
+                CODE_SIGNING_ALLOWED=NO \
+                CODE_SIGN_IDENTITY="" \
+                CODE_SIGNING_REQUIRED=NO
+            fi
+    - script@1:
+        title: Package IPA
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -e
+            cd ios
+            APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+            echo "App: $APP_PATH"
+            rm -rf Payload HAoStudio.ipa
+            mkdir -p Payload
+            cp -r "$APP_PATH" Payload/
+            zip -r HAoStudio.ipa Payload
+            ls -lh HAoStudio.ipa
+            mkdir -p "$BITRISE_DEPLOY_DIR"
+            cp HAoStudio.ipa "$BITRISE_DEPLOY_DIR/HAoStudio.ipa"
+    - deploy-to-bitrise-io@2: {}
