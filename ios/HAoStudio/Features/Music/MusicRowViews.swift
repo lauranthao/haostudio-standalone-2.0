@@ -101,8 +101,11 @@ struct MusicSongRow: View {
     var trackNumber: Int? = nil
     var onTap: () -> Void
     /// Post-toggle hook only: the row toggles the favourite itself
-    /// (MusicSongMenuHost). Lists that reload after a toggle (home
-    /// daily / recent) pass their reload here.
+    /// (MusicSongMenuHost) and refreshes its own star from the
+    /// haoMusicFavChanged notification — no list reload is needed
+    /// for the star. Lists that still want a refresh after a
+    /// toggle (music home) pass it here; home does not (build 36,
+    /// item 10: a favourite tap no longer pays for a full reload).
     var onToggleFav: (() -> Void)? = nil
     /// Queue-only extra menu item ("不喜欢"): nil everywhere else.
     var onDislike: (() -> Void)? = nil
