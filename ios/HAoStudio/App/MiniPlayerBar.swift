@@ -109,7 +109,7 @@ struct MiniPlayerBar: View {
                         .foregroundStyle(theme.textPrimary)
                         .frame(width: 44, height: 44)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(MusicPressScaleStyle())
                 .contentShape(Rectangle())
                 .accessibilityLabel(musicPlayer.isPlaying ? "暂停" : "播放")
             }
@@ -168,7 +168,7 @@ struct MiniPlayerBar: View {
                             .foregroundStyle(theme.textPrimary)
                             .frame(width: 44, height: 44)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(MusicPressScaleStyle())
                     .contentShape(Rectangle())
                     .accessibilityLabel(musicPlayer.isPlaying ? "暂停" : "播放")
                     // Apple Music's mini has a next button next to
@@ -180,7 +180,7 @@ struct MiniPlayerBar: View {
                             .foregroundStyle(theme.textPrimary)
                             .frame(width: 44, height: 44)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(MusicPressScaleStyle())
                     .contentShape(Rectangle())
                     .accessibilityLabel("下一曲")
                 }
@@ -190,7 +190,7 @@ struct MiniPlayerBar: View {
                         .foregroundStyle(theme.textSecondary)
                         .frame(width: 24, height: 32)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(MusicPressScaleStyle())
             }
             // Symmetric content padding (was leading 10 / trailing
             // 6 — the strip read lopsided). Same 12pt step as the
@@ -206,17 +206,23 @@ struct MiniPlayerBar: View {
             // layout change; haoGlassRoundedRect already clips to
             // the rounded shape, so the line never pokes past the
             // corners. Inline form has no line (no room, and Apple
-            // drops it in the narrowed tray too).
+            // drops it in the narrowed tray too). Music only
+            // (b36-8): the ratio reads the music player's
+            // position/duration, which is stale under a VOD/live
+            // item — an old music progress line under a video
+            // title is wrong, not decorative.
             .overlay(alignment: .bottom) {
-                GeometryReader { geo in
-                    let ratio = musicPlayer.duration > 0
-                        ? min(max(musicPlayer.position / musicPlayer.duration, 0), 1) : 0
-                    Capsule()
-                        .fill(theme.accent)
-                        .frame(width: max(0, geo.size.width * ratio), height: 2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                if item.kind == .music {
+                    GeometryReader { geo in
+                        let ratio = musicPlayer.duration > 0
+                            ? min(max(musicPlayer.position / musicPlayer.duration, 0), 1) : 0
+                        Capsule()
+                            .fill(theme.accent)
+                            .frame(width: max(0, geo.size.width * ratio), height: 2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(height: 2)
                 }
-                .frame(height: 2)
             }
             .accessibilityLabel("迷你播放器：\(item.title)，点按打开全屏播放器")
         }

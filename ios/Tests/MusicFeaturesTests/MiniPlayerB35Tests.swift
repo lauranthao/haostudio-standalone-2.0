@@ -401,4 +401,28 @@ final class BottomChromeB36Tests: XCTestCase {
         }
         XCTAssertTrue(state.isMinimized)
     }
+
+    /// b36-8: a pull-to-refresh / overscroll bounce at the top
+    /// must not raise the learned rest offset. The anchor's minY
+    /// briefly rises above the true top during the bounce; the old
+    /// running-max learning adopted it, and the chrome then wedged
+    /// minimized at the top (minY could never reach the inflated
+    /// rest - 16 again). The rest is learned once, from the first
+    /// report after a reset — later upward moves are bounce.
+    func testBounceOvershootDoesNotRaiseRest() {
+        let state = BottomChromeState()
+        state.noteScrollOffset(100)
+        XCTAssertFalse(state.isMinimized)
+        // Pull down past the top (bounce to +180) and spring back.
+        for offset in [130, 160, 180, 160, 130, 110, 100] as [CGFloat] {
+            state.noteScrollOffset(offset)
+            XCTAssertFalse(state.isMinimized, "offset \(offset)")
+        }
+        // Still at the top, still expanded — and scrolling down
+        // from the true top still minimizes after 64pt.
+        for offset in [96, 92, 88, 84, 80, 76, 72, 68, 64, 60, 56, 52, 48, 44, 40, 36] as [CGFloat] {
+            state.noteScrollOffset(offset)
+        }
+        XCTAssertTrue(state.isMinimized)
+    }
 }

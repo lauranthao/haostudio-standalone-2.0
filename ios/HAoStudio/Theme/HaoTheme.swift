@@ -364,6 +364,36 @@ func haoAccentOnBlack(_ accent: Color) -> Color {
     return contrastVsBlack >= 3 ? accent : .white
 }
 
+/// Tab-bar selected-item tint guard (build 36, item 8): a custom
+/// tab accent is used as-is unless it is near-invisible on the
+/// bar — near-white in light mode, near-black in dark mode. The
+/// bar is translucent glass, so it is judged against white
+/// (light) / black (dark). The bar is 1.5:1, deliberately lower
+/// than the 3:1 on-video bar: it only rescues invisible picks,
+/// never overrides a visible deliberate one — every preset
+/// clears it (light: cyan 1.72 is the lowest; dark: grey 4.64
+/// is the lowest), while pure white in light (1.00) and pure
+/// black in dark (1.00) fall back to the theme's tabSelected
+/// (black light / white dark). Nil accent (no custom pick) also
+/// falls back.
+func haoTabTint(_ accent: Color?, scheme: ColorScheme, fallback: Color) -> Color {
+    guard let accent else { return fallback }
+    let ui = UIColor(accent)
+    var r: CGFloat = 0
+    var g: CGFloat = 0
+    var b: CGFloat = 0
+    var a: CGFloat = 0
+    guard ui.getRed(&r, green: &g, blue: &b, alpha: &a) else { return fallback }
+    let luminance = haoRelativeLuminance(red: Double(r), green: Double(g), blue: Double(b))
+    let contrast: Double
+    if scheme == .dark {
+        contrast = (luminance + 0.05) / 0.05
+    } else {
+        contrast = 1.05 / (luminance + 0.05)
+    }
+    return contrast >= 1.5 ? accent : fallback
+}
+
 // MARK: - Type scale (build 36, item 4)
 //
 // ONE type scale for the whole app. chen (2026-11-24): "app很多字体大小

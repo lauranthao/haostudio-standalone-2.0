@@ -118,7 +118,13 @@ struct MainTabView: View {
         let palette = themeStore.palette(for: colorScheme)
         ZStack {
             backgroundLayer(palette: palette)
+            // b36-8: tab switches crossfade (Apple Music: content
+            // cross-dissolves, no sideways slide), 200ms ease-out.
+            // The outgoing tab is static during the fade, so its
+            // scroll anchor cannot flip the chrome mid-transition.
             tabContent
+                .transition(.opacity)
+                .animation(.easeOut(duration: 0.2), value: selectedTab)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // Immersive pages (a live room pushed inside a tab)
