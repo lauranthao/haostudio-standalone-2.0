@@ -19,6 +19,14 @@ HAo Studio 独立版（2.0）是一个完全自包含的 iOS 应用：音乐、�
 - **直播**：Bilibili / 斗鱼 / 虎牙 / 抖音 / 快手五大平台，Pure Live 风格
 - **我的**：设置、源管理、Emby 配置、文件备份、在线更新
 
+## 界面
+
+以下为界面渲染图，非实机截图；实机截图后续替换。
+
+| 首页 | 音乐播放器 | 影视 |
+| --- | --- | --- |
+| ![首页](docs/screenshots/home.png) | ![音乐播放器](docs/screenshots/music-player.png) | ![影视](docs/screenshots/video.png) |
+
 ## 功能
 
 ### 首页
