@@ -166,7 +166,14 @@ struct LiveRoomView: View {
             // VM's only screen writer (armed by notePlayerEntry).
             LiveBrightnessVolumeSheet(brightness: Binding(get: { livePlayer.brightnessLevel }, set: { livePlayer.setBrightness($0) }))
         }
-        .toolbar(isFullscreen ? .hidden : .visible, for: .navigationBar)
+        // The room never shows the system nav bar (fix 2026-11-24,
+        // build 35): in portrait the bar stayed visible, so the
+        // whole page was laid out below it and the bar area — with
+        // no app view painting it — rendered as a black band above
+        // the video. The video now reaches the top edge and the
+        // back button is overlaid on it (portraitTopBar).
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationBarBackButtonHidden(true)
         .statusBarHidden(isFullscreen)
     }
 
@@ -254,6 +261,7 @@ struct LiveRoomView: View {
             danmakuSection
             portraitBottomBar
         }
+        .ignoresSafeArea(edges: .top)
         .background(theme.scaffoldBackground)
     }
 
@@ -309,6 +317,37 @@ struct LiveRoomView: View {
                 Spacer()
                 portraitVideoControls
             }
+            // Back button over the portrait video (fix 2026-11-24,
+            // build 35): with the nav bar hidden the video reaches
+            // the top edge, so the back button lives here — the
+            // same 36pt black-0.45 circle + 0.55 top gradient as
+            // landscapeTopBar. The GeometryReader only positions
+            // the row below the status bar; the gradient is the
+            // row's own background, so taps still reach the video.
+            GeometryReader { geo in
+                VStack {
+                    HStack {
+                        Button(action: { dismiss() }) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 36, height: 36)
+                                .background(Color.black.opacity(0.45), in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("返回")
+                        Spacer()
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, geo.safeAreaInsets.top + 8)
+                    .background(
+                        LinearGradient(
+                            colors: [Color.black.opacity(0.55), Color.black.opacity(0)],
+                            startPoint: .top, endPoint: .bottom)
+                    )
+                    Spacer()
+                }
+            }
         }
         .contentShape(Rectangle())
         .onTapGesture { livePlayer.togglePlayPause() }
@@ -346,6 +385,12 @@ struct LiveRoomView: View {
         )
     }
 
+    /// Watching-count text ("" when the count is unavailable —
+    /// never invent a number). Both the portrait info section and
+    /// the landscape bottom bar hide the whole "N人在看" line when
+    /// it is empty instead of rendering a dangling label.
+    private var watchingText: String { liveWatchingText(watchingCount) }
+
     private var roomInfoSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 8) {
@@ -363,9 +408,11 @@ struct LiveRoomView: View {
                                 .padding(.vertical, 3)
                                 .background(theme.liveRed, in: Capsule())
                         }
-                        Text("\(liveWatchingText(watchingCount)) 人在看")
-                            .font(.system(size: 13))
-                            .foregroundStyle(theme.textSecondary)
+                        if !watchingText.isEmpty {
+                            Text("\(watchingText) 人在看")
+                                .font(.system(size: 13))
+                                .foregroundStyle(theme.textSecondary)
+                        }
                     }
                 }
                 Spacer()
@@ -651,9 +698,11 @@ struct LiveRoomView: View {
             .buttonStyle(.plain)
             DanmakuToggleButton(isOn: danmakuEnabledForRoom, action: toggleDanmaku)
             Spacer()
-            Text("\(liveWatchingText(watchingCount)) 人在看")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white.opacity(0.85))
+            if !watchingText.isEmpty {
+                Text("\(watchingText) 人在看")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
             Button(action: { isFullscreen = false }) {
                 Image(systemName: "arrow.down.right.and.arrow.up.left")
                     .font(.system(size: 18, weight: .semibold))
