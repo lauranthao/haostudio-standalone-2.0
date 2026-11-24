@@ -3,9 +3,9 @@
 //
 // chen's standard is Apple Music Now Playing (iOS 27): the order
 // from top to bottom is cover -> title/artist + star + … ->
-// progress (elapsed left, remaining right) -> transport -> volume
-// slider (speaker at each end) -> bottom row of 3 pure icons
-// (lyrics / AirPlay / queue). No text labels on the bottom controls.
+// progress (elapsed left, remaining right) -> transport ->
+// bottom row of 3 pure icons (lyrics / AirPlay / queue). No text
+// labels on the bottom controls.
 // - immersive face: blurred cover + cover-tinted gradient
 //   background (Apple Music's album-art-derived gradient — the
 //   dominant cover colour through a darker variant, not a black
@@ -23,10 +23,15 @@
 //   once on release.
 // - three big white triangles prev/play/next, NO background
 //   circles; press-scale 0.92.
-// - volume slider (build 36: the old "NO volume slider on iOS"
-//   line is reversed — chen's screenshot and Apple Music both
-//   have the player's own volume slider; it drives the
-//   app-internal AVPlayer volume, never the system volume).
+// - NO volume slider (build 37, chen 2026-11-24: "音乐播放器的
+//   音量调整没用的 直接删掉" — deleted outright with its
+//   plumbing; the hardware buttons / Control Center are the
+//   volume control now).
+// - NO mode row (build 37): Apple Music has no such row —
+//   shuffle / repeat live in its queue sheet and speed / sleep
+//   / EQ do not exist there at all. The play mode, speed and
+//   sleep timer moved to the … sheet ("播放" section); EQ was
+//   already there.
 // - bottom row: 3 pure icons only (lyrics / AirPlay / queue).
 // - lyrics live BEHIND the cover: tap cover -> lyrics in the
 //   cover area; tap a lyric line -> seek to that line; tap lyric
@@ -43,8 +48,8 @@
 //   overflowing — the portrait chrome + a 340 cover cannot fit
 //   in ~390pt of height): landscape is a two-column layout,
 //   cover + badge on the left, all the controls in a right
-//   column (top bar, title, progress, transport, volume, mode,
-//   bottom row). Same components, same sizes where they fit.
+//   column (top bar, title, progress, transport, bottom row).
+//   Same components, same sizes where they fit.
 // - CLOSE (chen 2026-11-24: opened player could not be closed):
 //   fullScreenCover has no system swipe-down dismiss, and the old
 //   close control was a bare 32pt white chevron with no scrim —
@@ -229,12 +234,6 @@ struct MusicPlayerView: View {
             transportRow
                 .padding(.top, 6)
                 .frame(maxWidth: .infinity)
-            volumeRow
-                .padding(.top, 8)
-                .frame(maxWidth: .infinity)
-            modeRow
-                .padding(.top, 10)
-                .frame(maxWidth: .infinity)
             Spacer()
             bottomRow
                 .padding(.bottom, 8)
@@ -247,11 +246,11 @@ struct MusicPlayerView: View {
     // MARK: - Landscape body (two columns: cover left, controls right)
 
     /// Landscape cannot stack the portrait column — cover 340 +
-    /// chrome 366 needs ~800pt of height and the screen only has
+    /// chrome 284 needs ~700pt of height and the screen only has
     /// ~390. Apple Music's landscape Now Playing puts the artwork
     /// on the left and the controls on the right; this does the
     /// same with the same components (cover/lyrics slot, badge,
-    /// title, progress, transport, volume, mode, bottom row), so
+    /// title, progress, transport, bottom row), so
     /// nothing is lost or re-implemented for the orientation.
     private func landscapeBody(geo: GeometryProxy) -> some View {
         let cover = MusicPlayerLayout.landscapeCoverSize(
@@ -274,12 +273,6 @@ struct MusicPlayerView: View {
                     .frame(maxWidth: .infinity)
                 transportRow
                     .padding(.top, 4)
-                    .frame(maxWidth: .infinity)
-                volumeRow
-                    .padding(.top, 6)
-                    .frame(maxWidth: .infinity)
-                modeRow
-                    .padding(.top, 8)
                     .frame(maxWidth: .infinity)
                 Spacer()
                 bottomRow
@@ -619,6 +612,9 @@ struct MusicPlayerView: View {
     /// fill, honest 0:00 / -0:00). Drag scrubs locally; seek fires
     /// once on release and the VM rolls back on failure — the same
     /// semantics the Slider had (see seek(to:)).
+    /// Build 37: the visual stays 4pt but the HIT area is 28pt
+    /// (the old 4pt frame was nearly untappable — the drag only
+    /// fired when the finger landed exactly on the 4pt line).
     private var thinProgressBar: some View {
         GeometryReader { geo in
             let width = geo.size.width
@@ -641,6 +637,7 @@ struct MusicPlayerView: View {
                     .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
                     .offset(x: min(max(width * ratio - 5, 0), max(0, width - 10)))
             }
+            .frame(height: 28)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -656,7 +653,7 @@ struct MusicPlayerView: View {
             .accessibilityLabel("播放进度")
             .accessibilityValue("\(musicDurationText(seconds: Int(current))) / \(musicDurationText(seconds: Int(duration)))")
         }
-        .frame(height: 4)
+        .frame(height: 28)
     }
 
     private var remainingText: String {
@@ -697,144 +694,6 @@ struct MusicPlayerView: View {
         .padding(.horizontal, 16)
     }
 
-    // MARK: - Volume (Apple Music: speaker — slider — speaker)
-
-    /// Volume slider, same thin-bar language as the progress bar
-    /// (4pt track, white fill, 10pt knob) with a speaker icon at
-    /// each end. Live on every drag tick (setVolume applies at
-    /// once in the player) — Apple Music's slider tracks the
-    /// finger, it does not commit on release. It drives the
-    /// app-internal AVPlayer volume only (see userVolume in
-    /// NativeMusicPlayer): the system volume, the hardware
-    /// buttons and Control Center are untouched.
-    private var volumeRow: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "speaker.fill")
-                .font(.haoFootnote)
-                .foregroundStyle(.white.opacity(0.85))
-            volumeSlider
-            Image(systemName: "speaker.wave.3.fill")
-                .font(.haoFootnote)
-                .foregroundStyle(.white.opacity(0.85))
-        }
-    }
-
-    private var volumeSlider: some View {
-        GeometryReader { geo in
-            let width = geo.size.width
-            let ratio = min(max(playerVM.volume, 0), 1)
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(.white.opacity(0.3))
-                    .frame(height: 4)
-                Capsule()
-                    .fill(.white)
-                    .frame(width: max(0, width * ratio), height: 4)
-                Circle()
-                    .fill(.white)
-                    .frame(width: 10, height: 10)
-                    .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
-                    .offset(x: min(max(width * ratio - 5, 0), max(0, width - 10)))
-            }
-            .frame(height: 28)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        let r = min(max(value.location.x / width, 0), 1)
-                        playerVM.setVolume(r)
-                    }
-            )
-            .accessibilityLabel("音量")
-            .accessibilityValue("\(Int(ratio * 100))%")
-        }
-        .frame(height: 28)
-    }
-
-    // MARK: - Mode / speed / sleep / EQ
-
-    private var modeRow: some View {
-        // Spacing 16 (fix 2026-11-24, build 35): 24 overflowed the
-        // 320pt iPhone SE (row ≈ 333 > 272 usable). Labels 12pt —
-        // secondary chrome, still legible; icons stay 14.
-        // Apple Music has no such row — shuffle / repeat live in
-        // its queue sheet and speed / sleep / EQ do not exist
-        // there at all — but this row is the only home for the
-        // play mode, speed, sleep timer and equalizer, so the
-        // redo keeps it (removing it would delete behaviour) and
-        // keeps it visually secondary under the volume slider.
-        HStack(spacing: 16) {
-            Button(action: { playerVM.cycleMode() }) {
-                HStack(spacing: 5) {
-                    Image(systemName: playerVM.playMode.icon)
-                        .font(.haoDenseTitle)
-                    Text(playerVM.playMode.label)
-                        .font(.haoCaptionMedium)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                }
-                .foregroundStyle(.white.opacity(0.85))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("播放模式：\(playerVM.playMode.label)")
-            Menu {
-                ForEach([0.6, 0.8, 1.0, 1.25, 1.5, 2.0], id: \.self) { speed in
-                    Button(action: {
-                        playerVM.setSpeed(speed)
-                    }) {
-                        // Build 36, item 8: the menu used to show
-                        // six speeds with no mark on the active one
-                        // — the current speed was invisible. The
-                        // speeds come from this same literal list,
-                        // so == is exact here.
-                        HStack {
-                            Text(String(format: "%.2fx", speed).replacingOccurrences(of: ".00", with: ".0"))
-                            if speed == playerVM.playbackSpeed {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                }
-            } label: {
-                Text(String(format: "%.1fx", playerVM.playbackSpeed))
-                    .font(.haoCaptionMedium)
-                    .foregroundStyle(.white.opacity(0.85))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(.white.opacity(0.35), lineWidth: 0.5)
-                    }
-            }
-            .accessibilityLabel("倍速")
-            Button(action: { showSleep = true }) {
-                HStack(spacing: 5) {
-                    Image(systemName: "moon.fill")
-                        .font(.haoDenseTitle)
-                    Text(playerVM.sleepActive ? playerVM.sleepRemainingText : "睡眠")
-                        .font(.haoCaptionMedium)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                }
-                .foregroundStyle(.white.opacity(0.85))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("睡眠定时")
-            Button(action: { showEqualizer = true }) {
-                HStack(spacing: 5) {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.haoDenseTitle)
-                    Text("均衡器")
-                        .font(.haoCaptionMedium)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                }
-                .foregroundStyle(.white.opacity(0.85))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("均衡器")
-        }
-    }
 
     // MARK: - Bottom row (3 pure icons only)
 
@@ -896,6 +755,55 @@ struct MusicPlayerView: View {
                         Button("查看歌手") {
                             showMore = false
                             showArtist = true
+                        }
+                    }
+                }
+                // Build 37: the old mode row (play mode / speed /
+                // sleep / EQ) is gone — Apple Music has no such row.
+                // EQ was already here; the other three live in
+                // this section now. The play-mode row does NOT
+                // close the sheet on tap, so the new mode label
+                // is visible in place (it is shown nowhere else
+                // on the player any more).
+                Section("播放") {
+                    Button {
+                        playerVM.cycleMode()
+                    } label: {
+                        HStack {
+                            Text("播放模式")
+                            Spacer()
+                            Text(playerVM.playMode.label)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Menu {
+                        ForEach([0.6, 0.8, 1.0, 1.25, 1.5, 2.0], id: \.self) { speed in
+                            Button(action: { playerVM.setSpeed(speed) }) {
+                                HStack {
+                                    Text(String(format: "%.2fx", speed).replacingOccurrences(of: ".00", with: ".0"))
+                                    if speed == playerVM.playbackSpeed {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Text("倍速")
+                            Spacer()
+                            Text(String(format: "%.1fx", playerVM.playbackSpeed))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Button {
+                        showMore = false
+                        showSleep = true
+                    } label: {
+                        HStack {
+                            Text("睡眠定时")
+                            Spacer()
+                            Text(playerVM.sleepActive ? playerVM.sleepRemainingText : "未设置")
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -967,12 +875,13 @@ struct MusicAirPlayButton: View {
 enum MusicPlayerLayout {
     /// Horizontal side padding of the player stack (24pt each side).
     static let sidePadding: CGFloat = 24
-    /// Fixed chrome below the cover slot (~366pt: top bar 40 + gaps
-    /// 60 + badge 23 + title 45 + progress 52 + transport 52 +
-    /// volume 36 + mode 28 + bottom row 30) + safe areas + slack —
-    /// the height budget the cover shrinks against on short phones.
-    /// Build 36 adds the volume row (36) to build 35's 330.
-    static let fixedChromeHeight: CGFloat = 366
+    /// Fixed chrome below the cover slot (~284pt: top bar 40 + gaps
+    /// 42 + badge 23 + title 45 + progress 52 + transport 52 +
+    /// bottom row 30) + safe areas + slack — the height budget the
+    /// cover shrinks against on short phones. Build 37 removes the
+    /// volume row (36 + 8 gap) and the mode row (28 + 10 gap)
+    /// from build 36's 366.
+    static let fixedChromeHeight: CGFloat = 284
 
     static func contentWidth(screenWidth: CGFloat) -> CGFloat {
         screenWidth - sidePadding * 2
@@ -983,7 +892,7 @@ enum MusicPlayerLayout {
     /// screen with no scrolling on any phone height. Tall phones
     /// still get the 340 cap.
     static func coverSize(screenWidth: CGFloat, screenHeight: CGFloat) -> CGFloat {
-        min(screenWidth - sidePadding * 2, 340, max(180, screenHeight - 470))
+        min(screenWidth - sidePadding * 2, 340, max(180, screenHeight - 388))
     }
 
     /// The whole player fits on one screen iff cover + chrome +
@@ -1019,39 +928,26 @@ enum MusicPlayerLayout {
         return (prev, play, next)
     }
 
-    // MARK: - Mode row (must fit the narrowest phone)
-
-    /// Mode-row spacing (16pt — was 24, which overflowed the
-    /// 320pt iPhone SE) and item widths at the 12pt label size
-    /// (upper bounds: icon 14 + 5 gap + label).
-    static let modeRowSpacing: CGFloat = 16
-    /// 顺序播放 / 1.0x / 睡眠 / 均衡器.
-    static let modeRowItemWidths: [CGFloat] = [67, 50, 45, 57]
-
-    static func modeRowFits(screenWidth: CGFloat) -> Bool {
-        modeRowItemWidths.reduce(0, +)
-            + modeRowSpacing * CGFloat(modeRowItemWidths.count - 1)
-            <= contentWidth(screenWidth: screenWidth)
-    }
-
     // MARK: - Landscape (two columns; build 36)
 
     /// Right column height in landscape (top bar 40 + title 45 +
-    /// progress 24 + transport 52 + volume 28 + mode 28 + bottom
-    /// 30 + the tighter 6–8pt landscape gaps ≈ 287). The left
-    /// column is cover + badge (35). Both must fit the safe height.
-    static let landscapeRightColumnHeight: CGFloat = 287
+    /// progress 24 + transport 52 + bottom 30 + the tighter 6–8pt
+    /// landscape gaps ≈ 217). The left column is cover + badge
+    /// (35). Both must fit the safe height. Build 37 removes the
+    /// volume row (28 + 6 gap) and the mode row (28 + 8 gap) from
+    /// build 36's 287.
+    static let landscapeRightColumnHeight: CGFloat = 217
     /// Badge height + its top gap in the left column.
     static let landscapeBadgeHeight: CGFloat = 35
 
     /// Landscape cover / lyrics slot: bounded by 42% of the safe
-    /// width (so the right column keeps room for the mode row),
+    /// width (so the right column keeps room for the transport),
     /// by the safe height minus badge (35) + vertical padding
     /// (24) + slack (37), and by the same 340 cap as portrait.
-    /// The 96pt height term is what keeps the mode row inside
-    /// the right column on the narrowest landscape phone (SE 1st
-    /// gen, 568pt: cover 224, right column 272 vs the mode row's
-    /// 267 upper bound).
+    /// The 96pt height term is what keeps the left column
+    /// (cover + badge 35 + padding 24 + slack 37) inside the safe
+    /// height on the narrowest landscape phone (SE 1st gen,
+    /// 568pt: cover 224, left column 271 vs safe height 320).
     static func landscapeCoverSize(safeWidth: CGFloat, safeHeight: CGFloat) -> CGFloat {
         min(safeWidth * 0.42, safeHeight - 96, 340)
     }
