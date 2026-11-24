@@ -432,7 +432,15 @@ final class PlaybackCoordinator: ObservableObject {
         if let current = driver.currentTrack, current.id == item.id {
             if driver.isPlaying { return }
             driver.resume()
-            currentItem = item
+            // #8: only record the item when the resume actually
+            // started — resume() is a guarded no-op when the engine
+            // is gone (after a failed open the current track still
+            // holds the old item while no engine exists), and
+            // recording it then shows the mini player for a song
+            // that never plays.
+            if driver.isPlaying {
+                currentItem = item
+            }
             return
         }
         vodDriver?.stop()
@@ -453,7 +461,15 @@ final class PlaybackCoordinator: ObservableObject {
         if let current = driver.currentEpisode, current.id == item.id {
             if driver.isPlaying { return }
             driver.resume()
-            currentItem = item
+            // #8: only record the item when the resume actually
+            // started — resume() is a guarded no-op when the
+            // backend is gone (after a failed open the current
+            // episode still holds the old item while backend is
+            // nil), and recording it then shows the mini player
+            // for an episode that never plays.
+            if driver.isPlaying {
+                currentItem = item
+            }
             return
         }
         musicDriver?.stop()
@@ -472,7 +488,15 @@ final class PlaybackCoordinator: ObservableObject {
         if let current = driver.currentRoom, current.id == item.id {
             if driver.isPlaying { return }
             driver.resume()
-            currentItem = item
+            // #8: only record the item when the resume actually
+            // started — resume() is a guarded no-op when the
+            // backend is gone (after a failed open the current room
+            // still holds the old room while backend is nil), and
+            // recording it then shows the mini player for a room
+            // that never plays.
+            if driver.isPlaying {
+                currentItem = item
+            }
             return
         }
         musicDriver?.stop()
