@@ -110,6 +110,7 @@ struct LXSourceManagementView: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(theme.scaffoldBackground)
+        .haoBottomChromePadding()
         .navigationTitle("音源管理")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
@@ -354,6 +355,7 @@ struct CmsSourceManagementView: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(theme.scaffoldBackground)
+        .haoBottomChromePadding()
         .navigationTitle("影视源管理")
         .navigationBarTitleDisplayMode(.inline)
         .environment(\.editMode, .constant(.active))
@@ -463,6 +465,7 @@ struct LiveSourceManagementView: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(theme.scaffoldBackground)
+        .haoBottomChromePadding()
         .navigationTitle("直播源管理")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {

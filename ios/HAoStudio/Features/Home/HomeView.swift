@@ -343,24 +343,27 @@ private struct HomeRecentPlaysView: View {
                     note: "播过的歌会出现在这里。"
                 )
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(viewModel.recentPlays.enumerated()), id: \.element.id) { index, song in
-                        MusicSongRow(
-                            song: song,
-                            isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
-                            onTap: {
-                                playerVM.play(song: song, in: viewModel.recentPlays, startAt: index)
-                            },
-                            onToggleFav: {
-                                _ = MusicLibraryStore.toggleFav(song)
-                                viewModel.reload()
-                            },
-                            onAddToPlaylist: nil
-                        )
-                        .padding(.vertical, 6)
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(Array(viewModel.recentPlays.enumerated()), id: \.element.id) { index, song in
+                            MusicSongRow(
+                                song: song,
+                                isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
+                                onTap: {
+                                    playerVM.play(song: song, in: viewModel.recentPlays, startAt: index)
+                                },
+                                onToggleFav: {
+                                    _ = MusicLibraryStore.toggleFav(song)
+                                    viewModel.reload()
+                                },
+                                onAddToPlaylist: nil
+                            )
+                            .padding(.vertical, 6)
+                        }
                     }
+                    .padding(.horizontal, 24)
                 }
-                .padding(.horizontal, 24)
+                .haoBottomChromePadding()
             }
         }
         .background(theme.scaffoldBackground)
