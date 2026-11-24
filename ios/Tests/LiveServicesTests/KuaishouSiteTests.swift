@@ -165,4 +165,73 @@ final class KuaishouSiteTests: XCTestCase {
         }
         waitForExpectations(timeout: 5)
     }
+
+    // MARK: - Rate-limit card (live probe 2026-11-24)
+
+    /// A room page carrying the `errorType` rate-limit card is a
+    /// transient platform refusal, NOT an offline room: it must
+    /// throw `apiRejected` (code 2) so callers can fall back to
+    /// data they already hold instead of showing "暂无画面".
+    func testParseRoomPageThrowsApiRejectedOnRateLimitCard() {
+        let html = "<script>window.__INITIAL_STATE__ = {\"liveroom\":{\"playList\":[{\"author\":{},\"liveStream\":{},\"gameInfo\":{},\"isLiving\":false,\"errorType\":{\"type\":2,\"title\":\"请求过快，请稍后重试\",\"content\":\"浏览其他内容\",\"url\":\"/\"}}]}};</script>"
+        XCTAssertThrowsError(try KuaishouLiveSite.parseKuaishouRoomPage(html: html, roomId: "ks123")) { error in
+            guard let liveError = error as? LiveError, case .apiRejected(let code, let message) = liveError else {
+                XCTFail("expected LiveError.apiRejected, got \(error)")
+                return
+            }
+            XCTAssertEqual(code, 2)
+            XCTAssertEqual(message, "请求过快，请稍后重试")
+        }
+    }
+
+    /// The feeds' `living` flag is dead (verified 2026-11-24:
+    /// 48/48 home/list items and 20/20 gameboard items carry
+    /// `living: false` while their signed playUrls stream live
+    /// FLV): an item with playable URLs is live despite the flag.
+    func testRecommendRoomsLivingFalseWithPlayUrlsIsLive() {
+        let json = jsonObject("""
+        {"data":{"list":[{"gameLiveInfo":[{"liveInfo":[{"id":"LS1","poster":"https://a/p","caption":"cap","watchingCount":"18","living":false,"playUrls":[{"adaptationSet":{"representation":[{"url":"https://cdn1/x.flv","name":"超清","level":3,"bitrate":3000000}]}}],"author":{"id":"ks1","name":"主播","avatar":"https://a/av.jpg","description":"d"}}]}]}]}}
+        """)
+        let rooms = KuaishouLiveSite.parseRecommendRooms(json)
+        XCTAssertEqual(rooms?.count, 1)
+        XCTAssertTrue(rooms?[0].isLive ?? false)
+        XCTAssertEqual(rooms?[0].onlineCount, 18)
+        XCTAssertEqual(rooms?[0].danmakuData?["liveStreamId"] as? String, "LS1")
+        XCTAssertNotNil(rooms?[0].data?["playUrls"])
+    }
+
+    /// …and an item with the flag false and NO stream URLs is
+    /// genuinely offline.
+    func testRecommendRoomsLivingFalseWithoutPlayUrlsIsOffline() {
+        let json = jsonObject("""
+        {"data":{"list":[{"gameLiveInfo":[{"liveInfo":[{"id":"LS1","poster":"https://a/p","caption":"cap","watchingCount":"0","living":false,"author":{"id":"ks1","name":"主播","avatar":"https://a/av.jpg","description":"d"}}]}]}]}}
+        """)
+        let rooms = KuaishouLiveSite.parseRecommendRooms(json)
+        XCTAssertEqual(rooms?.count, 1)
+        XCTAssertFalse(rooms?[0].isLive ?? true)
+        XCTAssertNil(rooms?[0].data)
+    }
+
+    // MARK: - resolutionFromRoom (list-feed fallback)
+
+    func testResolutionFromRoomUsesListPlayUrls() {
+        let site = KuaishouLiveSite()
+        let room = LiveRoom(roomId: "ks1", platform: .kuaishou, isLive: true, data: ["playUrls": jsonObject(playUrlsJSON)])
+        let resolution = site.resolutionFromRoom(room, quality: nil)
+        XCTAssertEqual(resolution?.quality?.name, "超清")
+        XCTAssertEqual(resolution?.appliedUrls, ["https://cdn1/x.m3u8"])
+        XCTAssertEqual(resolution?.qualities.count, 3)
+    }
+
+    func testResolutionFromRoomReturnsNilWithoutPlayUrls() {
+        let site = KuaishouLiveSite()
+        XCTAssertNil(site.resolutionFromRoom(LiveRoom(roomId: "ks1", platform: .kuaishou), quality: nil))
+        XCTAssertNil(site.resolutionFromRoom(LiveRoom(roomId: "ks1", platform: .kuaishou, data: ["playUrls": jsonObject("{}")]), quality: nil))
+    }
+
+    func testResolutionFromRoomReturnsNilForOtherPlatforms() {
+        let site = KuaishouLiveSite()
+        let room = LiveRoom(roomId: "1", platform: .huya, isLive: true, data: ["playUrls": jsonObject(playUrlsJSON)])
+        XCTAssertNil(site.resolutionFromRoom(room, quality: nil))
+    }
 }

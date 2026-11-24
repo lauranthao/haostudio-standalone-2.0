@@ -167,11 +167,16 @@ extension KuaishouLiveSite {
     /// a top-level `room` object (older shape). The room id is
     /// `author.id`; the live-stream id goes to
     /// `danmakuData['liveStreamId']` and `link` only. An offline room
-    /// (empty `liveStream`, `isLiving: false`, or an `errorType`
-    /// card such as the rate-limit "请求过快，请稍后重试") parses as
-    /// `isLive: false` with whatever author info the page carried —
-    /// never throws for a reachable page. Throws when the page
-    /// carries no room metadata at all.
+    /// (empty `liveStream`, `isLiving: false`, no `errorType` card)
+    /// parses as `isLive: false` with whatever author info the page
+    /// carried — never throws for a reachable page. A page carrying
+    /// a nonzero `errorType` card (type 2 = rate-limit "请求过快，
+    /// 请稍后重试", verified live 2026-11-24 on every room page
+    /// from a flagged client) is a transient platform refusal, NOT
+    /// an offline room: it throws `LiveError.apiRejected` so
+    /// callers can tell it apart from "主播未开播" and fall back to
+    /// data they already hold. Throws when the page carries no room
+    /// metadata at all.
     static func parseKuaishouRoomPage(html: String, roomId: String) throws -> LiveRoom {
         let state = try extractKuaishouInitialState(html: html)
         var room: [String: Any]?
@@ -185,6 +190,11 @@ extension KuaishouLiveSite {
         }
         guard let room = room else {
             throw LiveError.parseFailed("快手房间元数据缺失")
+        }
+        if let errorType = LiveJSON.asMap(room["errorType"]),
+           let code = LiveJSON.asIntOrNil(errorType["type"]), code != 0 {
+            let title = LiveJSON.asString(errorType["title"])
+            throw LiveError.apiRejected(code: code, message: title.isEmpty ? "快手房间加载被拒绝" : title)
         }
         let liveStream = LiveJSON.asMap(room["liveStream"]) ?? [:]
         let author = LiveJSON.asMap(room["author"]) ?? [:]
@@ -464,6 +474,29 @@ final class KuaishouLiveSite: LiveSiteResolver {
             }
         }
     }
+
+    /// Resolve from a room the app already holds (list feed):
+    /// the recommend / category feeds carry signed `playUrls`,
+    /// so a room tapped straight from the list can play even when
+    /// the room-page re-parse is rate-limited (`errorType` 2 —
+    /// the room page answered the card on every probe 2026-11-24
+    /// while the same feed's FLV URLs streamed live video).
+    /// Nil when the room carries no playable URLs, so the caller
+    /// falls through to the network resolve. No request is made
+    /// here; the URLs are used as issued (same shape as `resolve`
+    /// returns, minus a fresh re-parse).
+    func resolutionFromRoom(_ room: LiveRoom, quality: LiveQuality?) -> LivePlayUrlResolution? {
+        guard room.platform == .kuaishou else {
+            return nil
+        }
+        let playUrls = LiveJSON.asMap(room.data)?["playUrls"]
+        let qualities = KuaishouLiveSite.parseKuaishouPlayQualities(playUrls)
+        guard !qualities.isEmpty else {
+            return nil
+        }
+        let requested = qualities.first { $0.id == quality?.id } ?? qualities[0]
+        return LivePlayUrlResolution.applying(requested, in: qualities)
+    }
 }
 
 // MARK: - Lists (recommend / categories / search)
@@ -695,14 +728,24 @@ extension KuaishouLiveSite {
         let streamPoster = LiveJSON.asString(item["poster"])
         let gamePoster = LiveJSON.asString(gameInfo["poster"])
         let cover = streamPoster.isEmpty ? gamePoster : streamPoster
-        let living = item["living"]
-        let live: Bool
-        if let livingFlag = living as? Bool {
-            live = livingFlag
-        } else {
-            live = true
-        }
         let playUrls = item["playUrls"]
+        // `living` no longer reports live status in the feeds
+        // (verified 2026-11-24: 48/48 home/list items and 20/20
+        // gameboard items carry `living: false` while their signed
+        // playUrls stream live FLV). A false flag therefore must
+        // not mark a room offline: an item is live when the flag
+        // says so, or when it carries playable stream URLs. With
+        // no flag at all the old default (live) stands; a flag that
+        // is present but not a Bool falls through to the URL check.
+        let hasPlayableUrls = !KuaishouLiveSite.parseKuaishouPlayQualities(playUrls).isEmpty
+        let live: Bool
+        if let livingFlag = item["living"] as? Bool {
+            live = livingFlag || hasPlayableUrls
+        } else if item["living"] == nil {
+            live = true
+        } else {
+            live = hasPlayableUrls
+        }
         return LiveRoom(
             roomId: authorId, platform: .kuaishou,
             title: titleText,

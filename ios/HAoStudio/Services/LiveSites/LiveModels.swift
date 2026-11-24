@@ -384,6 +384,15 @@ protocol LiveSiteResolver {
     func roomInfo(roomId: String, completion: @escaping (Result<LiveRoom, Error>) -> Void)
     func resolve(roomId: String, quality: LiveQuality?, completion: @escaping (Result<LivePlayUrlResolution, Error>) -> Void)
 
+    /// Resolve from a room the caller already holds (its list-feed
+    /// `data`), without a network request. The session tries this
+    /// when the network resolve fails with anything but a
+    /// definitive offline — e.g. Kuaishou, whose list feeds carry
+    /// signed `playUrls` while its room page can be rate-limited.
+    /// Default nil: only platforms whose list feeds carry signed
+    /// stream URLs implement it.
+    func resolutionFromRoom(_ room: LiveRoom, quality: LiveQuality?) -> LivePlayUrlResolution?
+
     /// The receive-only danmaku transport for this platform,
     /// configured from a room's `danmakuData` at `start` time.
     func makeDanmakuTransport() -> LiveDanmakuTransport
@@ -393,6 +402,12 @@ extension LiveSiteResolver {
     /// Default-quality resolve (highest available).
     func resolve(roomId: String, completion: @escaping (Result<LivePlayUrlResolution, Error>) -> Void) {
         resolve(roomId: roomId, quality: nil, completion: completion)
+    }
+
+    /// Default: no list-feed resolution — the network resolve is
+    /// the only source.
+    func resolutionFromRoom(_ room: LiveRoom, quality: LiveQuality?) -> LivePlayUrlResolution? {
+        nil
     }
 }
 
