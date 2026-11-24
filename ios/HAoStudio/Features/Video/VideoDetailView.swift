@@ -185,6 +185,11 @@ struct VideoDetailView: View {
 
     private func play(lineIndex: Int, episodeIndex: Int) {
         guard let detail = viewModel.detail else { return }
+        // Keep the grid highlight on the episode actually played:
+        // a grid tap used to open the episode without updating the
+        // selection, so the highlight stayed on the old cell.
+        viewModel.selectedLineIndex = lineIndex
+        viewModel.selectedEpisodeIndex = episodeIndex
         videoPlayer.open(detail: detail, lineIndex: lineIndex, episodeIndex: episodeIndex)
         showingPlayer = true
     }
@@ -230,6 +235,19 @@ struct VideoDetailContentView: View {
                             title: "暂无可播剧集",
                             note: "该片源没有返回播放线路，换个片源试试。"
                         )
+                        // A failed detail fetch used to leave this
+                        // state with no way back except leaving the
+                        // page (load() only runs on appear).
+                        Button(action: { viewModel.load() }) {
+                            Text("重试")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(theme.onAccent)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 10)
+                                .background(theme.accent, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity, alignment: .center)
                     }
                     Spacer(minLength: 24)
                 }

@@ -123,6 +123,12 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     @Published private(set) var diagnostics: VideoPlaybackDiagnostics = .empty
     @Published private(set) var stallWarning: Bool = false
     @Published private(set) var isLoading: Bool = false
+    /// True when the most recent open request failed outright (no
+    /// playable URL, open timeout, watchdog stall, backend error).
+    /// The player page shows the failure + a retry from this; a
+    /// new open request clears it. Never set by stop(): the
+    /// failure callbacks below run after stop() and set it there.
+    @Published private(set) var lastOpenFailed: Bool = false
 
     // Driver wiring, set by the coordinator (callbacks) and by
     // HAoStudioApp (resolver, C leg).
@@ -436,6 +442,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         self.stopBackendForNewRequest()
         self.pendingItem = item
         self.stallFailed = false
+        self.lastOpenFailed = false
         self.isLoading = true
         self.resolveURL?(item, []) { [weak self] url in
             guard let self = self else { return }
@@ -444,6 +451,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                 guard let url = url else {
                     self.isLoading = false
                     self.pendingItem = nil
+                    self.lastOpenFailed = true
                     self.onEpisodeFailed?(item, .noPlayableURL)
                     return
                 }
@@ -472,6 +480,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                 guard tried.count < 2 else {
                     self.isLoading = false
                     self.pendingItem = nil
+                    self.lastOpenFailed = true
                     self.onEpisodeFailed?(item, error)
                     return
                 }
@@ -482,6 +491,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                         guard let nextURL = nextURL else {
                             self.isLoading = false
                             self.pendingItem = nil
+                            self.lastOpenFailed = true
                             self.onEpisodeFailed?(item, error)
                             return
                         }
@@ -523,6 +533,15 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             let timeoutWork = DispatchWorkItem { [weak self] in
                 guard let self = self else { return }
                 guard gen == self.generation, !completed else { return }
+                // Invalidate the generation FIRST: a ladder attempt
+                // that completes after this timeout must see the
+                // stale gen and shut its backend down (mpv /
+                // AVPlayer start on open — without the bump a late
+                // success would keep playing with no owner, no UI,
+                // and a dead play button). The fallback re-resolve
+                // in attemptOpen calls open() again, which takes a
+                // fresh generation, so this bump cannot strand it.
+                _ = self.nextGeneration()
                 self.backend?.shutdown()
                 self.backend = nil
                 self.playRequested = false
@@ -1019,6 +1038,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                 case .error:
                     if let item = self.currentEpisode {
                         self.stop()
+                        self.lastOpenFailed = true
                         self.onEpisodeFailed?(item, .loadFailed)
                     }
                 }
@@ -1029,7 +1049,12 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     private func handleEpisodeEnded() {
         guard let item = currentEpisode else { return }
         // Advance within the same line when there is a next episode.
-        if autoAdvanceToNextEpisode,
+        // The stored `hao_video_auto_next` preference gates this
+        // path too: the settings toggle used to stop only the view
+        // model's poll-tick advance, while a natural end
+        // (.finished) still advanced here regardless of the switch.
+        let autoNextEnabled = defaults.object(forKey: SettingsStore.autoNextEpisodeKey) as? Bool ?? true
+        if autoAdvanceToNextEpisode, autoNextEnabled,
            let line = currentLine,
            line.episode(at: currentEpisodeIndex + 1) != nil {
             _ = playEpisode(at: currentEpisodeIndex + 1)
@@ -1064,6 +1089,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             stallWarning = false
             if let item = currentEpisode {
                 stop()
+                lastOpenFailed = true
                 onEpisodeFailed?(item, .timeout)
             }
         case .atEnd:

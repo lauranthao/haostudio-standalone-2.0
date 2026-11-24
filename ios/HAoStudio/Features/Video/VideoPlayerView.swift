@@ -52,6 +52,12 @@ protocol VideoPlayerEngine: AnyObject {
     var positionSeconds: Double { get }
     var durationSeconds: Double { get }
     var isPlaying: Bool { get }
+    /// True while an open is in flight (resolve + ladder); the
+    /// page shows a spinner from this, never a bare black frame.
+    var isLoading: Bool { get }
+    /// True when the most recent open failed outright; the page
+    /// shows the failure + a retry from this.
+    var lastOpenFailed: Bool { get }
     var videoView: UIView? { get }
     var currentEngine: VideoEngine? { get }
     var diagnostics: VideoPlaybackDiagnostics { get }
@@ -95,6 +101,13 @@ final class VideoPlayerViewModel: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var isDoubleSpeed = false
     @Published private(set) var seekFailed = false
+    /// Loading / failure state, synced from the engine on every
+    /// poll tick (the driver owns the truth; the page only mirrors
+    /// it). The page shows a spinner while loading and a retry
+    /// when the open failed — a failed open used to leave a black
+    /// frame with a dead play button and no way back.
+    @Published private(set) var isLoading = false
+    @Published private(set) var loadFailed = false
     @Published var dragPosition: Double?
     /// Player settings (picture fit / speed / danmaku), persisted
     /// by VodSettingsState. Applied to the engine on attach and on
@@ -316,7 +329,11 @@ final class VideoPlayerViewModel: ObservableObject {
             startPosition = 0
         }
         position = startPosition
-        duration = resume?.durationSeconds ?? 0
+        // The stored duration belongs to the resume episode only:
+        // a tap on another episode used to display the old
+        // episode's duration until the first poll tick corrected
+        // it. Any other episode starts at an unknown duration (0).
+        duration = (resume?.episodeName == episode.name) ? (resume?.durationSeconds ?? 0) : 0
         recordHistory(position: startPosition)
         // Danmaku for this title (B-leg client, read-only). The
         // layer no-ops on a re-load of the same episode.
@@ -356,6 +373,11 @@ final class VideoPlayerViewModel: ObservableObject {
     func selectEpisode(_ index: Int) {
         guard let detail = detail, currentLine?.episode(at: index) != nil else { return }
         saveCurrentPosition()
+        // The periodic resume save keys off this value: leaving
+        // the old episode's position here stalled all saves for
+        // the new episode until its position passed the old one
+        // (+15 s), so a kill in that window lost the new resume.
+        lastSavedPosition = 0
         episodeIndex = index
         didAutoAdvance = false
         position = 0
@@ -377,20 +399,38 @@ final class VideoPlayerViewModel: ObservableObject {
     /// position (the driver owns the resume; the position is passed
     /// explicitly so a switch never restarts from 0).
     func selectLine(_ index: Int) {
-        guard let detail = detail, detail.lines.indices.contains(index),
-              detail.lines[index].episode(at: episodeIndex) != nil else { return }
+        guard let detail = detail, detail.lines.indices.contains(index) else { return }
+        let line = detail.lines[index]
+        guard !line.episodes.isEmpty else { return }
         saveCurrentPosition()
-        let resumePosition = position
+        // Same periodic-save reset as selectEpisode (see there).
+        lastSavedPosition = 0
+        // A shorter line may not carry this episode: clamp to its
+        // last episode (from 0) instead of silently ignoring the
+        // tap — a tap that does nothing is a dead end.
+        let previousEpisode = episodeIndex
+        let targetEpisode = min(episodeIndex, line.episodes.count - 1)
+        let resumePosition = targetEpisode == previousEpisode ? position : 0
         lineIndex = index
+        episodeIndex = targetEpisode
         didAutoAdvance = false
+        if targetEpisode != previousEpisode {
+            position = 0
+            skipIntroPill = nil
+            skipCreditsPill = false
+        }
         if let engine = engine {
             engine.playEpisode(
-                lineIndex: index, episodeIndex: episodeIndex,
+                lineIndex: index, episodeIndex: targetEpisode,
                 startPositionSeconds: resumePosition)
-        } else if let episode = currentEpisode {
-            configureDriver(detail: detail, line: detail.lines[index], episode: episode, resumeFrom: resumePosition)
+        } else if let episode = line.episode(at: targetEpisode) {
+            configureDriver(detail: detail, line: line, episode: episode, resumeFrom: resumePosition)
             coordinator.requestVodPlay(playbackItem(for: detail, episode: episode))
         }
+        if targetEpisode != previousEpisode, let episode = currentEpisode {
+            danmaku.load(for: episode, provider: danmakuProvider)
+        }
+        recordHistory(position: resumePosition)
     }
 
     func playNextEpisode() {
@@ -440,12 +480,27 @@ final class VideoPlayerViewModel: ObservableObject {
                 self.position = target
             } else {
                 self.seekFailed = true
+                // Same rollback as the engine path: the driver
+                // republishes the real position on a failed seek,
+                // so read it back instead of leaving the bar on
+                // the target that never landed.
+                self.position = (self.coordinator.vodDriver as? VideoDriver)?.position ?? self.position
             }
         }
     }
 
     func clearSeekFailed() {
         seekFailed = false
+    }
+
+    /// Retry the current episode after a failed open: re-open it
+    /// through open(), which re-reads the saved resume (the failed
+    /// attempt saved the breakpoint on stop) and clears the failure
+    /// flag on the next request. No-op when nothing is open.
+    func retry() {
+        guard let detail = detail else { return }
+        loadFailed = false
+        open(detail: detail, lineIndex: lineIndex, episodeIndex: episodeIndex)
     }
 
     /// Long-press 2x (VOD only). Only the engine can change speed;
@@ -541,6 +596,10 @@ final class VideoPlayerViewModel: ObservableObject {
         position = engine.positionSeconds
         duration = engine.durationSeconds
         isPlaying = engine.isPlaying
+        // Loading / failure mirror (see the published flags): the
+        // driver owns the truth, the page only shows it.
+        isLoading = engine.isLoading
+        loadFailed = engine.lastOpenFailed
         // Resume save: once the position crosses 5 s, then every
         // ~15 s of playback.
         if isPlaying && position >= VideoLibraryStore.minSaveSeconds
@@ -715,7 +774,7 @@ struct VideoPlayerView: View {
                         }
                     }
                 }
-                .onLongPressGesture(minimumDuration: 0.4, pressing: { pressing in
+                .onLongPressGesture(minimumDuration: VodGestureConfig.longPressMinimumDuration, pressing: { pressing in
                     videoPlayer.setDoubleSpeed(pressing)
                 }, perform: {})
                 // S7 wiring: double-tap seek (left third back,
@@ -764,6 +823,40 @@ struct VideoPlayerView: View {
                                 videoPlayer.clearSeekFailed()
                             }
                         }
+                }
+            }
+            // Loading / failure state (B3): a spinner while the
+            // open is in flight, and a failure card with a retry
+            // when it failed outright — never a bare black frame
+            // with a dead play button. The stack is content-sized
+            // and centred, so taps outside it still reach the
+            // gesture layer underneath.
+            if videoPlayer.loadFailed {
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.white.opacity(0.8))
+                    Text("加载失败")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("该集暂时无法播放，换个线路或重试。")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.72))
+                    Button("重试") { videoPlayer.retry() }
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 10)
+                        .background(.white, in: Capsule())
+                        .buttonStyle(.plain)
+                }
+            } else if videoPlayer.isLoading {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .tint(.white)
+                    Text("正在加载…")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.8))
                 }
             }
             // S7 wiring: skip-intro / skip-credits pills. Shown
