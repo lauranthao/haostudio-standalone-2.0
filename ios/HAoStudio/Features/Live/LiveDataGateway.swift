@@ -112,3 +112,87 @@ func liveAvatarURL(for room: LiveRoom) -> URL? {
     guard !room.avatar.isEmpty else { return nil }
     return URL(string: room.avatar)
 }
+
+// MARK: - Recommend / search grid layout (fix 2026-11-24)
+//
+// Build 33 on chen's phone showed the recommend grid unaligned:
+// the right column ran past the screen edge, the title overlapped
+// the watching count, and rows overlapped. The grid itself was
+// already two flexible columns — the defects were (a) the grid
+// identified cells by `roomId` alone while room identity is
+// platform + room id, so a repeated room in one page (the
+// recommend endpoints merge sub-lists and can repeat a room)
+// gave SwiftUI duplicate cell identities, which misplaces cells;
+// and (b) the card squeezed anchor + watching into one HStack,
+// so a long anchor name squeezed the count. The fix: dedupe by
+// the real identity before the grid ever sees the list, identify
+// cells by the room itself (LiveRoom's Hashable IS platform +
+// room id), anchor and watching on separate lines, and one
+// canonical set of metrics below that every live grid (tab
+// recommend, search results, home hot-live) shares — the numbers
+// here are the single source of truth and the unit tests assert
+// the arithmetic (cell width + spacing + margins == container,
+// no overflow) for every iPhone width.
+//
+// Pure numbers on purpose (Double, no SwiftUI / CoreGraphics):
+// this file is in AppCore, so the tests run under `swift test` on
+// Linux too. The SwiftUI views convert with CGFloat(...) at the
+// call site; LiveRoomCard.swift adds the GridItem columns.
+
+/// Canonical metrics for the two-column live room grids.
+enum LiveGridLayout {
+    /// Columns in every live room grid.
+    static let columns = 2
+    /// Horizontal page margin the grid sits inside (points).
+    static let edgePadding: Double = 24
+    /// Gap between the two columns (points).
+    static let interItemSpacing: Double = 12
+    /// Gap between grid rows (points).
+    static let rowSpacing: Double = 14
+    /// Cover aspect ratio (width / height), 16:10.
+    static let coverAspectRatio: Double = 16.0 / 10.0
+
+    /// Width of one cell inside a container of the given width:
+    /// margins and the inter-column gap come off first, the rest
+    /// splits evenly over the two columns. Never negative.
+    static func cellWidth(containerWidth: Double) -> Double {
+        let usable = containerWidth - 2 * edgePadding - Double(columns - 1) * interItemSpacing
+        return max(0, usable / Double(columns))
+    }
+
+    /// Cover height for a cell of the given width (16:10).
+    static func coverHeight(cellWidth: Double) -> Double {
+        cellWidth / coverAspectRatio
+    }
+
+    /// True when the two cells, the gap and the margins exactly
+    /// fill the container — i.e. the grid cannot overflow it.
+    /// (Floating-point equality with a 0.001 pt tolerance.)
+    static func fills(containerWidth: Double) -> Bool {
+        let cell = cellWidth(containerWidth: containerWidth)
+        guard cell > 0 else { return false }
+        let total = 2 * edgePadding + Double(columns) * cell + Double(columns - 1) * interItemSpacing
+        return abs(total - containerWidth) < 0.001
+    }
+}
+
+/// Drop repeated rooms from a list page, keeping the first
+/// occurrence in order. Identity is platform + room id — the
+/// same identity LiveRoom's own Equatable/Hashable uses. A page
+/// from a recommend endpoint can repeat a room (the endpoints
+/// merge sub-lists); without this the grid's ForEach sees
+/// duplicate identities and SwiftUI misplaces cells (rows
+/// overlapping, a cell drawn past the edge). Same-room-id on a
+/// different platform is a different room and is kept.
+func deduplicatedLiveRooms(_ rooms: [LiveRoom]) -> [LiveRoom] {
+    var seen = Set<String>()
+    var kept: [LiveRoom] = []
+    kept.reserveCapacity(rooms.count)
+    for room in rooms {
+        let key = room.platform.rawValue + "|" + room.roomId
+        guard !seen.contains(key) else { continue }
+        seen.insert(key)
+        kept.append(room)
+    }
+    return kept
+}
