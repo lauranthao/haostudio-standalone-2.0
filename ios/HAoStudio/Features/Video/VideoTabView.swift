@@ -266,7 +266,7 @@ struct VideoTabView: View {
                 // First chip, never scrolled out of sight: the
                 // browse page (build 36 item 18), first visible
                 // category pre-selected.
-                Button(action: { path.append(.browse(type: nil)) }) {
+                Button(action: { path.append(.browse(nil)) }) {
                     Label("浏览全部", systemImage: "square.grid.2x2")
                         .font(.haoDenseBody)
                         .foregroundStyle(theme.onAccent)
@@ -354,7 +354,7 @@ struct VideoTabView: View {
                 // section's "全部". The daily row passes nil (first
                 // visible category); every other row passes its own
                 // type.
-                Button("全部") { path.append(.browse(type: row.id == "daily" ? nil : row.title)) }
+                Button("全部") { path.append(.browse(row.id == "daily" ? nil : row.title)) }
                     .font(.haoDenseBody)
                     .foregroundStyle(theme.accentText)
             }

@@ -165,11 +165,11 @@ func liveDanmakuRowPadding(_ spacing: String) -> CGFloat {
 func liveDanmakuColor(argb: UInt32) -> Color {
     let rgb = argb & 0x00FF_FFFF
     guard rgb != 0 else { return .white }
-    let alpha = CGFloat((argb >> 24) & 0xFF) / 255
+    let alpha = CGFloat((argb >> 24) & 0xFF) / CGFloat(255)
     return Color(
-        red: CGFloat((argb >> 16) & 0xFF) / 255,
-        green: CGFloat((argb >> 8) & 0xFF) / 255,
-        blue: CGFloat(argb & 0xFF) / 255,
+        red: CGFloat((argb >> 16) & 0xFF) / CGFloat(255),
+        green: CGFloat((argb >> 8) & 0xFF) / CGFloat(255),
+        blue: CGFloat(argb & 0xFF) / CGFloat(255),
         opacity: alpha > 0 ? alpha : 1)
 }
 

@@ -679,6 +679,15 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     /// `excludingEngines` removes engines that already failed for
     /// this episode (G-E mid-play fallback): the retry never
     /// loops back to the engine that just failed.
+    /// Protocol witness for `VideoPlaybackDriver.open(item:url:completion:)`:
+    /// the ladder entry below carries an extra `excludingEngines`
+    /// parameter (defaulted), which does NOT satisfy the protocol
+    /// requirement — the witness must match the protocol signature
+    /// exactly. Forwards with no exclusions.
+    func open(item: PlaybackItem, url: URL, completion: @escaping (Result<Void, MusicPlayerError>) -> Void) {
+        open(item: item, url: url, excludingEngines: [], completion: completion)
+    }
+
     func open(item: PlaybackItem, url: URL, excludingEngines: [VideoEngine] = [], completion: @escaping (Result<Void, MusicPlayerError>) -> Void) {
         ensureMain {
             let gen = self.nextGeneration()
@@ -723,10 +732,11 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             // dead code until this call passed them.
             let facts = self.currentURLFacts()
             let engines = PlayerKernel.candidatesFor(
-                url: url, dvDowngradeToHdr: self.dvP8Downgrade,
+                url: url,
                 hasAssSubtitles: facts?.hasAssSubtitles ?? false,
                 hasMultipleAudioTracks: facts?.hasMultipleAudioTracks ?? false,
                 hasExternalSubtitles: facts?.hasExternalSubtitles ?? false,
+                dvDowngradeToHdr: self.dvP8Downgrade,
                 excluding: excludingEngines)
             // Accumulate across the opens of one episode (original
             // open + mid-play retry / transcode), so the failure +
@@ -1247,10 +1257,11 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         let facts = currentURLFacts()
         let failed = failedEnginesForEpisode + (currentEngine.map { [$0] } ?? [])
         let remaining = PlayerKernel.candidatesFor(
-            url: url, dvDowngradeToHdr: dvP8Downgrade,
+            url: url,
             hasAssSubtitles: facts?.hasAssSubtitles ?? false,
             hasMultipleAudioTracks: facts?.hasMultipleAudioTracks ?? false,
             hasExternalSubtitles: facts?.hasExternalSubtitles ?? false,
+            dvDowngradeToHdr: dvP8Downgrade,
             excluding: failed)
         guard !remaining.isEmpty else { return false }
         midPlayFallbackUsed = true
