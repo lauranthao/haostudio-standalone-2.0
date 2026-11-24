@@ -1047,23 +1047,6 @@ struct LiveRoomView: View {
                     EmptyView()
                 }
             }
-            // Same honest placeholder as portrait (build 36 item
-            // 8): landscape used to show only a dimmed cover or
-            // black with no explanation when there was no picture.
-            if livePlayer.videoView == nil {
-                VStack(spacing: 8) {
-                    Image(systemName: "antenna.radiowaves.left.and.right")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.white.opacity(0.6))
-                    Text("暂无画面")
-                        .font(.haoCalloutStrong)
-                        .foregroundStyle(.white.opacity(0.9))
-                    Text("房间未开播或暂时无法观看")
-                        .font(.haoFootnote)
-                        .foregroundStyle(.white.opacity(0.7))
-                    liveFailureCard
-                }
-            }
             if danmakuEnabledForRoom {
                 LiveDanmakuOverlayView(
                     messages: livePlayer.messages,
@@ -1089,6 +1072,39 @@ struct LiveRoomView: View {
                     }
                 )
                 .gesture(liveDragGesture(isLandscape: true))
+            // Same honest placeholder as portrait (build 36 item
+            // 8): it sits ABOVE the tap layer, not below it —
+            // the layer is a full-screen Color.clear with a
+            // contentShape, so a placeholder below it never
+            // receives a tap and the 重试 button was dead in
+            // fullscreen (a tap only toggled the chrome). The
+            // controls VStack above still wins its own area.
+            // While the open is still in flight, show loading,
+            // not "not live" (same as portrait above).
+            if livePlayer.videoView == nil {
+                if livePlayer.isLoading && livePlayer.openFailure == nil {
+                    VStack(spacing: 8) {
+                        ProgressView()
+                            .tint(.white)
+                        Text("加载中…")
+                            .font(.haoCalloutStrong)
+                            .foregroundStyle(.white.opacity(0.9))
+                    }
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .font(.system(size: 28))
+                            .foregroundStyle(.white.opacity(0.6))
+                        Text("暂无画面")
+                            .font(.haoCalloutStrong)
+                            .foregroundStyle(.white.opacity(0.9))
+                        Text("房间未开播或暂时无法观看")
+                            .font(.haoFootnote)
+                            .foregroundStyle(.white.opacity(0.7))
+                        liveFailureCard
+                    }
+                }
+            }
             if controlsVisible {
                 VStack(spacing: 0) {
                     landscapeTopBar
