@@ -116,6 +116,12 @@ enum VideoLibraryStore {
 
     static func saveHistory(_ entries: [VideoHistoryEntry]) {
         LocalStore.saveCollection(named: historyCollection, value: entries)
+        // Keep the in-memory watched set in step (build 36,
+        // item 10): saveHistory is the single funnel for
+        // video-history writes, so the cache never lags a
+        // write made through this store.
+        watchedKeysCache = Set(entries.map { $0.id })
+        watchedKeysCacheMTime = historyFileMTime()
     }
 
     static func historyEntry(title: String, year: String?) -> VideoHistoryEntry? {
@@ -173,8 +179,37 @@ enum VideoLibraryStore {
     /// it used to appear only on the home rows, which pass their
     /// own keys. Callers with a live list may still pass their
     /// own set; it wins over this default.
+    ///
+    /// In-memory (build 36, item 10): the grid used to pay a
+    /// full history-file read + JSON decode on EVERY
+    /// construction (its default parameter). The set now lives
+    /// in memory — loaded once, then updated by saveHistory
+    /// on every write. The file's modification stamp is the
+    /// guard for writers outside this store (a backup import
+    /// replaces the file directly): a moved stamp reloads the
+    /// set once. The stamp is metadata only — no file content
+    /// is read while the cache is warm.
+    private static var watchedKeysCache: Set<String>?
+    private static var watchedKeysCacheMTime: Date?
+
     static func watchedKeys() -> Set<String> {
-        Set(history().map { $0.id })
+        let mtime = historyFileMTime()
+        if let cached = watchedKeysCache, mtime == watchedKeysCacheMTime {
+            return cached
+        }
+        let keys = Set(history().map { $0.id })
+        watchedKeysCache = keys
+        watchedKeysCacheMTime = mtime
+        return keys
+    }
+
+    /// Modification date of the history file, nil when the
+    /// file does not exist (or the stamp cannot be read).
+    /// A `stat`, not a read — safe to call on every grid
+    /// construction.
+    private static func historyFileMTime() -> Date? {
+        let url = LocalStore.collectionURL(named: historyCollection)
+        return (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
     }
 
     // MARK: - Favourites

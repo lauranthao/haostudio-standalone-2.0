@@ -16,6 +16,15 @@ final class LiveSearchViewModel: ObservableObject {
     @Published private(set) var hasSearched = false
     @Published var platform: LivePlatform = .bilibili
 
+    /// Search history, read from disk once (build 36, item
+    /// 10): this used to be a computed property, so every
+    /// keystroke — every body re-evaluation — paid a full
+    /// history-file read + JSON decode. It is now stored and
+    /// refreshed only when history actually changes (search
+    /// submit / clear / delete), like the music and video
+    /// search view models.
+    @Published private(set) var searchHistory: [String] = []
+
     private let gateway: LiveDataGateway?
     /// Generation bumped on every submitted query: a completion
     /// from an older query is stale and must not overwrite the
@@ -28,18 +37,22 @@ final class LiveSearchViewModel: ObservableObject {
 
     init(gateway: LiveDataGateway? = nil) {
         self.gateway = gateway
+        self.searchHistory = LiveLibraryStore.searchHistory()
     }
 
     var hasGateway: Bool { gateway != nil }
 
-    var searchHistory: [String] {
-        LiveLibraryStore.searchHistory()
+    /// Re-read history from the store after a write. One
+    /// disk read per history change — never per keystroke.
+    private func refreshSearchHistory() {
+        searchHistory = LiveLibraryStore.searchHistory()
     }
 
     func search(query: String) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         LiveLibraryStore.saveSearchQuery(trimmed)
+        refreshSearchHistory()
         searchGeneration += 1
         let generation = searchGeneration
         guard let gateway = gateway else {
@@ -62,12 +75,14 @@ final class LiveSearchViewModel: ObservableObject {
 
     func clearSearchHistory() {
         LiveLibraryStore.clearSearchHistory()
+        refreshSearchHistory()
     }
 
     /// Delete one history keyword (long-press on a history chip —
     /// the same shape as the video search's `removeHistoryItem`).
     func removeHistoryItem(_ term: String) {
         LiveLibraryStore.removeSearchHistory(term: term)
+        refreshSearchHistory()
     }
 
     /// Switch platform (build 36 item 8): the old platform's
@@ -95,7 +110,6 @@ struct LiveSearchView: View {
 
     @StateObject private var viewModel: LiveSearchViewModel
     @State private var query = ""
-    @State private var historyVersion = 0
 
     @Environment(\.haoTheme) private var theme
 
@@ -149,7 +163,6 @@ struct LiveSearchView: View {
                 .autocorrectionDisabled()
                 .onSubmit {
                     viewModel.search(query: query)
-                    historyVersion += 1
                 }
             if !query.isEmpty {
                 Button(action: { query = "" }) {
@@ -186,7 +199,6 @@ struct LiveSearchView: View {
                 if !viewModel.searchHistory.isEmpty {
                     Button("清空") {
                         viewModel.clearSearchHistory()
-                        historyVersion += 1
                     }
                     .font(.haoDenseBody)
                     .foregroundStyle(theme.accent)
@@ -208,13 +220,11 @@ struct LiveSearchView: View {
                     },
                     onDelete: { term in
                         viewModel.removeHistoryItem(term)
-                        historyVersion += 1
                     }
                 )
                 .padding(.horizontal, 24)
             }
         }
-        .id(historyVersion)
     }
 
     private var resultsSection: some View {
