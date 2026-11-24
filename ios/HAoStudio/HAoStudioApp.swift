@@ -50,6 +50,12 @@ struct HAoStudioApp: App {
     @StateObject private var settingsStore: SettingsStore
 
     init() {
+        // Build 36 item 10 leg 6: size the shared HTTP cache
+        // (32MB memory / 200MB disk) before anything loads an
+        // image — the shared image loader's disk cache. Runs
+        // before the migration below; the loader also configures
+        // lazily on first load, so this is the eager path.
+        HaoImageLoader.configureSharedURLCache()
         // S1: the snapshot migration runs before anything reads
         // settings, so the first frame already uses the migrated
         // theme and preferences. It is synchronous, idempotent, and

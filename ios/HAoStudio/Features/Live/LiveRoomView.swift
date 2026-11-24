@@ -447,10 +447,19 @@ struct LiveRoomView: View {
             if let videoView = livePlayer.videoView {
                 LiveVideoSurfaceView(view: videoView)
             } else if let url = liveCoverURL(for: currentRoom) {
-                AsyncImage(url: url) { phase in
-                    if case .success(let image) = phase {
-                        image.resizable().scaledToFill().opacity(0.35)
-                    }
+                // Shared loader (build 36 item 10 leg 6): same
+                // cover the card already loaded, downsampled to
+                // screen size. Failure shows nothing — the error
+                // widget below explains the state.
+                let target = HaoImageLoader.fullScreenTargetPoints
+                HaoCachedImage(
+                    urlString: url.absoluteString,
+                    targetWidth: CGFloat(target.width),
+                    targetHeight: CGFloat(target.height)
+                ) { image in
+                    image.resizable().scaledToFill().opacity(0.35)
+                } placeholder: {
+                    EmptyView()
                 }
             }
             if livePlayer.videoView == nil {
@@ -610,15 +619,16 @@ struct LiveRoomView: View {
     private var anchorAvatar: some View {
         Group {
             if let url = liveAvatarURL(for: currentRoom) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    case .failure, .empty:
-                        avatarPlaceholder
-                    @unknown default:
-                        avatarPlaceholder
-                    }
+                // Shared loader (build 36 item 10 leg 6): 28pt
+                // avatar — decode 28x28, not the original.
+                HaoCachedImage(
+                    urlString: url.absoluteString,
+                    targetWidth: 28,
+                    targetHeight: 28
+                ) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    avatarPlaceholder
                 }
             } else {
                 avatarPlaceholder
@@ -730,10 +740,17 @@ struct LiveRoomView: View {
             if let videoView = livePlayer.videoView {
                 LiveVideoSurfaceView(view: videoView)
             } else if let url = liveCoverURL(for: currentRoom) {
-                AsyncImage(url: url) { phase in
-                    if case .success(let image) = phase {
-                        image.resizable().scaledToFill().opacity(0.35)
-                    }
+                // Shared loader (build 36 item 10 leg 6): same as
+                // the portrait backdrop — screen-size downsample.
+                let target = HaoImageLoader.fullScreenTargetPoints
+                HaoCachedImage(
+                    urlString: url.absoluteString,
+                    targetWidth: CGFloat(target.width),
+                    targetHeight: CGFloat(target.height)
+                ) { image in
+                    image.resizable().scaledToFill().opacity(0.35)
+                } placeholder: {
+                    EmptyView()
                 }
             }
             // Same honest placeholder as portrait (build 36 item

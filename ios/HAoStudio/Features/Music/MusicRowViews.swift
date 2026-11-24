@@ -33,12 +33,17 @@ extension EnvironmentValues {
     }
 }
 
-/// Cover art with a themed placeholder. AsyncImage handles the fetch;
-/// a missing/empty URL shows the note placeholder, never a grey block.
-/// The URL is upgraded http -> https at this choke point (ATS blocks
-/// http under NSAllowsArbitraryLoads = false, and AsyncImage fails
+/// Cover art with a themed placeholder. Loads through the shared
+/// image loader (HaoImageLoader, build 36 item 10 leg 6) at the
+/// display size — a 56pt row cover decodes 168px at @3x, not the
+/// full original — with the same placeholder on failure as the
+/// old AsyncImage branch. The URL is upgraded http -> https at
+/// this choke point (ATS blocks http under
+/// NSAllowsArbitraryLoads = false, and AsyncImage fails
 /// silently), so every display site — rows, album/artist detail,
-/// queue, recent, mini player — gets a fetchable URL.
+/// queue, recent, mini player — gets a fetchable URL. The loader
+/// normalises http -> https again internally, so the background
+/// path (MusicPlayerView), which never upgraded, is covered too.
 struct MusicCoverView: View {
     var urlString: String
     var size: CGFloat
@@ -48,16 +53,15 @@ struct MusicCoverView: View {
 
     var body: some View {
         Group {
-            if let url = URL(string: MusicText.toHttps(urlString)), !urlString.isEmpty {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    case .failure, .empty:
-                        placeholder
-                    @unknown default:
-                        placeholder
-                    }
+            if !urlString.isEmpty {
+                HaoCachedImage(
+                    urlString: MusicText.toHttps(urlString),
+                    targetWidth: size,
+                    targetHeight: size
+                ) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    placeholder
                 }
             } else {
                 placeholder

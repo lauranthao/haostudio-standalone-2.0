@@ -2131,26 +2131,32 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         let trackId = currentTrack?.id
         let attempt = nowPlayingArtworkAttempts + 1
         nowPlayingArtworkAttempts = attempt
-        URLSession.shared.dataTask(with: coverURL) { [weak self] data, response, error in
+        // Shared loader (build 36 item 10 leg 6): the player cover
+        // already fetched this URL — the loader checks the memory
+        // / disk cache first instead of a third independent
+        // download, and downsamples to 600pt (lock screen /
+        // Control Center never show more). The 3-attempt budget
+        // and backoff below are unchanged; the loader completion
+        // already runs on the main queue, so the old
+        // DispatchQueue.main hop inside the fetch is gone.
+        HaoImageLoader.shared.load(
+            urlString: coverURL.absoluteString,
+            targetWidthPoints: 600,
+            targetHeightPoints: 600
+        ) { [weak self] image in
             guard let self = self else { return }
-            let status = (response as? HTTPURLResponse)?.statusCode
-            if error == nil, (status == nil || status == 200),
-               let data = data, let image = UIImage(data: data) {
+            if let image = image {
                 let art = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self else { return }
-                    // A slow fetch from the previous track must never
-                    // paint its art onto the new one.
-                    guard self.currentTrack?.id == trackId,
-                          self.nowPlayingArtwork == nil else { return }
-                    self.nowPlayingArtwork = art
-                    self.updateNowPlayingInfo()
-                }
+                // A slow fetch from the previous track must never
+                // paint its art onto the new one.
+                guard self.currentTrack?.id == trackId,
+                      self.nowPlayingArtwork == nil else { return }
+                self.nowPlayingArtwork = art
+                self.updateNowPlayingInfo()
                 return
             }
-            NSLog("[HAoStudio][Music] Now Playing artwork fetch failed (attempt %d/%d) track=%@ status=%@ error=%@",
-                  Int32(attempt), Int32(Self.nowPlayingArtworkMaxAttempts), trackId ?? "",
-                  status.map(String.init) ?? "-", error?.localizedDescription ?? "-")
+            NSLog("[HAoStudio][Music] Now Playing artwork fetch failed (attempt %d/%d) track=%@",
+                  Int32(attempt), Int32(Self.nowPlayingArtworkMaxAttempts), trackId ?? "")
             // Retry on the main queue after a backoff, unless the
             // track already changed (then the next track's own
             // fetch takes over).
@@ -2163,7 +2169,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             self.nowPlayingArtworkRetryWork?.cancel()
             self.nowPlayingArtworkRetryWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
-        }.resume()
+        }
     }
 
     /// Track changed: drop the artwork, its retry state and any

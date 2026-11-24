@@ -442,15 +442,16 @@ struct VideoPosterCardImage: View {
             if item.detailSource == .emby {
                 EmbyPosterImage(urlString: item.coverURL?.absoluteString ?? "", cornerRadius: 8)
             } else if let url = item.coverURL {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    case .failure, .empty:
-                        placeholder
-                    @unknown default:
-                        placeholder
-                    }
+                // Shared loader (build 36 item 10 leg 6): thumb is
+                // size x 2/3 wide — decode that, not the original.
+                HaoCachedImage(
+                    urlString: url.absoluteString,
+                    targetWidth: size * 2 / 3,
+                    targetHeight: size
+                ) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    placeholder
                 }
             } else {
                 placeholder
