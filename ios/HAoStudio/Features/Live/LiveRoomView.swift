@@ -556,18 +556,22 @@ struct LiveRoomView: View {
                         .lineLimit(1)
                     HStack(spacing: 6) {
                         if isLiveNow {
+                            // O-D3: fade in on async confirmation
+                            // (0.2s ease-out); removal stays instant.
                             Text("LIVE")
                                 .font(.haoBadge)
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3)
                                 .background(theme.liveRed, in: Capsule())
+                                .transition(.asymmetric(insertion: .opacity, removal: .identity))
                         }
                         Text(currentRoom.platform.displayName)
                             .font(.haoCaption)
                             .foregroundStyle(theme.textMuted)
                             .lineLimit(1)
                     }
+                    .animation(.easeOut(duration: 0.2), value: isLiveNow)
                 }
                 Spacer()
                 Button(action: toggleFollow) {
@@ -834,12 +838,15 @@ struct LiveRoomView: View {
             Spacer()
             landscapeClockAndBattery
             if isLiveNow {
+                // O-D3: fade in on async confirmation (0.2s
+                // ease-out); removal stays instant.
                 Text("LIVE")
                     .font(.haoBadge)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
                     .background(theme.liveRed, in: Capsule())
+                    .transition(.asymmetric(insertion: .opacity, removal: .identity))
             }
             Button(action: { showBrightnessVolume = true }) {
                 Image(systemName: "sun.max")
@@ -867,6 +874,10 @@ struct LiveRoomView: View {
                 colors: [Color.black.opacity(0.55), Color.black.opacity(0)],
                 startPoint: .top, endPoint: .bottom)
         )
+        // O-D3: only the LIVE badge's appearance animates
+        // (0.2s ease-out fade-in); isLiveNow gates nothing else
+        // in this bar, so no other change animates with it.
+        .animation(.easeOut(duration: 0.2), value: isLiveNow)
     }
 
     /// Clock + battery for the landscape top bar (Pure Live
