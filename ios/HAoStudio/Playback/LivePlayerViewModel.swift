@@ -107,9 +107,15 @@ final class LivePlayerViewModel: ObservableObject {
     /// background-queue transport callbacks can be forwarded to
     /// `appendDanmaku` on the main queue.
     private var danmakuTransport: LiveDanmakuTransport?
+    /// Danmaku start generation (build 35 D1): bumped by every
+    /// start/stop, so a late `roomInfo` callback from a previous
+    /// room (or from after the room closed) cannot revive a
+    /// transport for the wrong room.
+    private var danmakuGeneration = 0
 
     func startDanmaku(room: LiveRoom, resolver: LiveSiteResolver) {
         stopDanmaku()
+        let generation = danmakuGeneration
         if let data = room.danmakuData, !data.isEmpty {
             startTransport(with: data, resolver: resolver)
             return
@@ -118,7 +124,7 @@ final class LivePlayerViewModel: ObservableObject {
         // `roomInfo` supplies them (and a fresh watching count).
         resolver.roomInfo(roomId: room.roomId) { [weak self] result in
             DispatchQueue.main.async {
-                guard let self = self else { return }
+                guard let self = self, generation == self.danmakuGeneration else { return }
                 let fullRoom: LiveRoom
                 switch result {
                 case .success(let info):
@@ -134,11 +140,18 @@ final class LivePlayerViewModel: ObservableObject {
     }
 
     func stopDanmaku() {
+        // Invalidate any in-flight roomInfo callback: a late
+        // answer must not start a transport after the room closed.
+        danmakuGeneration += 1
         danmakuTransport?.stop()
         danmakuTransport = nil
     }
 
     private func startTransport(with data: [String: Any], resolver: LiveSiteResolver) {
+        // A start stops the old transport first (header contract):
+        // without this, a fast A->B switch left both sockets alive
+        // and the wrong room's danmaku kept feeding `messages`.
+        danmakuTransport?.stop()
         let transport = resolver.makeDanmakuTransport()
         transport.onMessage = { [weak self] message in
             DispatchQueue.main.async {
