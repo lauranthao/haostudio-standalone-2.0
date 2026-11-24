@@ -461,6 +461,18 @@ final class PlaybackCoordinator: ObservableObject {
         driver.play(item: item)
     }
 
+    /// Stop music only — rule 1 for a VOD open that bypasses
+    /// requestVodPlay: the VOD engine path plays through the
+    /// driver directly, so the music stop in requestVodPlay never
+    /// runs and a second-or-later VOD open leaves the song playing
+    /// (build 37, P1). Leaves the VOD/live drivers and currentItem
+    /// untouched: the caller owns the new item (the driver's
+    /// onEpisodeStarted sets currentItem when the episode really
+    /// starts). No auto-resume: exiting never restarts the music.
+    func stopMusic() {
+        musicDriver?.stop()
+    }
+
     /// Stop everything. Clears the current item; the player slice also
     /// stops the engine here (rule 1: starting anything else stops the
     /// current playback first).
