@@ -144,7 +144,7 @@ final class LiveDataGatewayAdapter: LiveDataGateway {
             site.recommendRooms(page: sitePage, pageSize: 30) { rooms in
                 let hasMore = LiveDataGatewayAdapter.pageHasMore(platform: platformValue, count: rooms.count)
                 DispatchQueue.main.async {
-                    completion(LiveRoomPage(rooms: rooms, hasMore: hasMore))
+                    completion(LiveRoomPage(rooms: LiveDataGatewayAdapter.deduplicated(rooms), hasMore: hasMore))
                 }
             }
         }
@@ -170,7 +170,7 @@ final class LiveDataGatewayAdapter: LiveDataGateway {
             return
         }
         site(for: platformValue).searchRooms(query: trimmed, page: 1, pageSize: 30) { rooms in
-            DispatchQueue.main.async { completion(rooms) }
+            DispatchQueue.main.async { completion(LiveDataGatewayAdapter.deduplicated(rooms)) }
         }
     }
 
@@ -222,7 +222,7 @@ final class LiveDataGatewayAdapter: LiveDataGateway {
         site.categoryRooms(areaId: areaId, page: page, pageSize: 30) { rooms in
             let hasMore = LiveDataGatewayAdapter.pageHasMore(platform: platform, count: rooms.count)
             DispatchQueue.main.async {
-                completion(LiveRoomPage(rooms: rooms, hasMore: hasMore))
+                completion(LiveRoomPage(rooms: LiveDataGatewayAdapter.deduplicated(rooms), hasMore: hasMore))
             }
         }
     }
@@ -243,15 +243,30 @@ final class LiveDataGatewayAdapter: LiveDataGateway {
                     completion(.empty)
                     return
                 }
-                self.recommendCache[platform.rawValue] = rooms
-                let pageRooms = LiveDataGatewayAdapter.slice(rooms, page: page, pageSize: 30)
+                // Dedup before caching: every slice of this feed
+                // hands rooms to a ForEach(id: roomId), so a repeat
+                // anywhere in the feed would trap on any page.
+                let unique = LiveDataGatewayAdapter.deduplicated(rooms)
+                self.recommendCache[platform.rawValue] = unique
+                let pageRooms = LiveDataGatewayAdapter.slice(unique, page: page, pageSize: 30)
                 let end = (page - 1) * 30 + pageRooms.count
-                completion(LiveRoomPage(rooms: pageRooms, hasMore: end < rooms.count))
+                completion(LiveRoomPage(rooms: pageRooms, hasMore: end < unique.count))
             }
         }
     }
 
     // MARK: - Pure paging helpers (fixture-testable, no network)
+
+    /// Drop repeated rooms (same platform + room id, first wins):
+    /// the tab grid and the search grid both render with
+    /// `ForEach(id: roomId)`, and a repeated id in one page traps
+    /// there. Server pages do repeat rooms (overlapping pages,
+    /// hot-room duplication), so every list this gateway hands out
+    /// goes through here first.
+    static func deduplicated(_ rooms: [LiveRoom]) -> [LiveRoom] {
+        var seen = Set<String>()
+        return rooms.filter { seen.insert($0.platform.rawValue + "|" + $0.roomId).inserted }
+    }
 
     /// Full-page heuristic for server-paged lists: a page that
     /// came back exactly full probably has a next page.

@@ -132,6 +132,19 @@ final class BilibiliDanmakuTests: XCTestCase {
         XCTAssertEqual(messages[0].colorArgb, 0xFFFFFFFF)
     }
 
+    func testDecodeDanmuMessageWithShortMetaDoesNotTrap() {
+        // A truncated info[0] (fewer than 4 elements) used to trap
+        // on meta[3] in the live room; it must parse with the
+        // default colour instead of crashing.
+        let shortMeta = decodeOne("{\"cmd\":\"DANMU_MSG\",\"info\":[[0],\"hello\",[123,\"tester\",0]]}")
+        XCTAssertEqual(shortMeta.count, 1)
+        XCTAssertEqual(shortMeta[0].text, "hello")
+        XCTAssertEqual(shortMeta[0].colorArgb, 0xFFFFFFFF)
+        let emptyMeta = decodeOne("{\"cmd\":\"DANMU_MSG\",\"info\":[[],\"hello\",[123,\"tester\",0]]}")
+        XCTAssertEqual(emptyMeta.count, 1)
+        XCTAssertEqual(emptyMeta[0].colorArgb, 0xFFFFFFFF)
+    }
+
     func testDecodeGiftAndSuperChat() {
         let gift = decodeOne("{\"cmd\":\"SEND_GIFT\",\"data\":{\"uname\":\"送礼人\",\"giftName\":\"小花花\",\"num\":3}}")
         XCTAssertEqual(gift[0].text, "送出 小花花 ×3")

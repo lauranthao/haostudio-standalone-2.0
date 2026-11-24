@@ -54,6 +54,19 @@ final class BilibiliLiveSite: LiveSiteResolver {
     /// category room list is only attempted when the parent is known.
     private var categoryParentIds: [String: String] = [:]
 
+    /// Guards the buvid / access-id / category-parent state below:
+    /// these run from URLSession background callbacks and two
+    /// concurrent calls used to mutate the same caches/arrays
+    /// with no lock — a data race that traps. The lock is only
+    /// ever held for the state touch, never across a network call
+    /// or a completion.
+    private let stateLock = NSLock()
+    private func locked<T>(_ body: () -> T) -> T {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return body()
+    }
+
     init(fetcher: LiveDataFetcher? = nil, wbiSigner: BilibiliWbiSigner? = nil) {
         let sharedFetcher = fetcher ?? LiveHTTP.defaultFetcher
         self.fetcher = sharedFetcher
@@ -294,15 +307,24 @@ final class BilibiliLiveSite: LiveSiteResolver {
     }
 
     private func resolveBuvid(completion: @escaping (String, String) -> Void) {
-        if !buvid3.isEmpty {
-            completion(buvid3, buvid4)
+        let cached: (String, String)? = locked {
+            buvid3.isEmpty ? nil : (buvid3, buvid4)
+        }
+        if let cached = cached {
+            completion(cached.0, cached.1)
             return
         }
-        buvidCompletions.append(completion)
-        if buvidRequestInFlight {
+        let alreadyInFlight = locked {
+            buvidCompletions.append(completion)
+            if buvidRequestInFlight {
+                return true
+            }
+            buvidRequestInFlight = true
+            return false
+        }
+        if alreadyInFlight {
             return
         }
-        buvidRequestInFlight = true
         guard let url = URL(string: BilibiliLiveSite.buvidUrl) else {
             finishBuvidFetch(buvid3: "", buvid4: "")
             return
@@ -322,11 +344,14 @@ final class BilibiliLiveSite: LiveSiteResolver {
     }
 
     private func finishBuvidFetch(buvid3: String, buvid4: String) {
-        self.buvid3 = buvid3
-        self.buvid4 = buvid4
-        buvidRequestInFlight = false
-        let completions = buvidCompletions
-        buvidCompletions = []
+        let completions = locked {
+            self.buvid3 = buvid3
+            self.buvid4 = buvid4
+            buvidRequestInFlight = false
+            let completions = buvidCompletions
+            buvidCompletions = []
+            return completions
+        }
         for item in completions {
             item(buvid3, buvid4)
         }
@@ -722,7 +747,7 @@ extension BilibiliLiveSite {
                     return
                 }
                 for triple in triples {
-                    self.categoryParentIds[triple.id] = triple.parentId
+                    self.locked { self.categoryParentIds[triple.id] = triple.parentId }
                 }
                 completion(triples.map { (id: $0.id, name: $0.name) })
             }
@@ -735,7 +760,7 @@ extension BilibiliLiveSite {
     /// unknown parent yields an empty list rather than a request
     /// the server rejects (-400).
     func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
-        if categoryParentIds.isEmpty {
+        if locked({ categoryParentIds.isEmpty }) {
             listCategories { [weak self] _ in
                 guard let self = self else { return }
                 self.requestCategoryRooms(areaId: areaId, page: page, completion: completion)
@@ -746,7 +771,7 @@ extension BilibiliLiveSite {
     }
 
     private func requestCategoryRooms(areaId: String, page: Int, completion: @escaping ([LiveRoom]) -> Void) {
-        guard let parentId = categoryParentIds[areaId] else {
+        guard let parentId = locked({ categoryParentIds[areaId] }) else {
             completion([])
             return
         }
@@ -826,15 +851,22 @@ extension BilibiliLiveSite {
     /// (Dart `getAccessId`): an empty w_webid answers -352, so the
     /// scrape is best-effort and the request still goes out.
     private func fetchAccessId(completion: @escaping (String) -> Void) {
-        if !accessId.isEmpty {
-            completion(accessId)
+        let cached: String? = locked { accessId.isEmpty ? nil : accessId }
+        if let cached = cached {
+            completion(cached)
             return
         }
-        accessIdCompletions.append(completion)
-        if accessIdInFlight {
+        let alreadyInFlight = locked {
+            accessIdCompletions.append(completion)
+            if accessIdInFlight {
+                return true
+            }
+            accessIdInFlight = true
+            return false
+        }
+        if alreadyInFlight {
             return
         }
-        accessIdInFlight = true
         headers { [weak self] headers in
             guard let self = self else { return }
             guard let url = URL(string: BilibiliLiveSite.accessIdURL) else {
@@ -860,10 +892,13 @@ extension BilibiliLiveSite {
     }
 
     private func finishAccessIdFetch(_ value: String) {
-        accessId = value
-        accessIdInFlight = false
-        let completions = accessIdCompletions
-        accessIdCompletions = []
+        let completions = locked {
+            accessId = value
+            accessIdInFlight = false
+            let completions = accessIdCompletions
+            accessIdCompletions = []
+            return completions
+        }
         for item in completions {
             item(value)
         }

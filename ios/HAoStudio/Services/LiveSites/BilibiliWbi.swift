@@ -120,6 +120,19 @@ final class BilibiliWbiSigner {
     private var pendingCompletions: [(Result<(String, String), Error>) -> Void] = []
     private var isFetchingKeys: Bool = false
 
+    /// Guards the key cache + in-flight dedup below: `getKeys`
+    /// runs from URLSession background callbacks and two
+    /// concurrent callers used to mutate the same array/flag with
+    /// no lock — a data race that traps (Array simultaneous
+    /// mutation). The lock is only ever held for the state touch,
+    /// never across a network call or a completion.
+    private let stateLock = NSLock()
+    private func locked<T>(_ body: () -> T) -> T {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return body()
+    }
+
     init(fetcher: LiveDataFetcher? = nil) {
         self.fetcher = fetcher ?? LiveHTTP.defaultFetcher
     }
@@ -127,23 +140,37 @@ final class BilibiliWbiSigner {
     /// (imgKey, subKey), cached 6 h; concurrent callers share the
     /// in-flight nav fetch.
     func getKeys(forceRefresh: Bool = false, completion: @escaping (Result<(String, String), Error>) -> Void) {
-        if !forceRefresh, !imgKey.isEmpty, !subKey.isEmpty, let updatedAt = keysUpdatedAt {
-            if Date().timeIntervalSince(updatedAt) < 6 * 60 * 60 {
-                completion(.success((imgKey, subKey)))
-                return
+        let cached: (String, String)? = locked {
+            if !forceRefresh, !imgKey.isEmpty, !subKey.isEmpty, let updatedAt = keysUpdatedAt,
+               Date().timeIntervalSince(updatedAt) < 6 * 60 * 60 {
+                return (imgKey, subKey)
             }
+            return nil
         }
-        pendingCompletions.append(completion)
-        if isFetchingKeys {
+        if let cached = cached {
+            completion(.success(cached))
             return
         }
-        isFetchingKeys = true
+        let alreadyFetching = locked {
+            pendingCompletions.append(completion)
+            if isFetchingKeys {
+                return true
+            }
+            isFetchingKeys = true
+            return false
+        }
+        if alreadyFetching {
+            return
+        }
         var request = URLRequest(url: BilibiliWbiSigner.navUrl, timeoutInterval: LiveHTTP.defaultTimeoutSeconds)
         request.setValue(BilibiliLiveSite.userAgent, forHTTPHeaderField: "User-Agent")
         fetcher(request) { data, status, error in
-            self.isFetchingKeys = false
-            let completions = self.pendingCompletions
-            self.pendingCompletions = []
+            let completions = self.locked {
+                self.isFetchingKeys = false
+                let completions = self.pendingCompletions
+                self.pendingCompletions = []
+                return completions
+            }
             if let error = error {
                 for item in completions {
                     item(.failure(error))
@@ -162,9 +189,11 @@ final class BilibiliWbiSigner {
                 }
                 return
             }
-            self.imgKey = keys.0
-            self.subKey = keys.1
-            self.keysUpdatedAt = Date()
+            self.locked {
+                self.imgKey = keys.0
+                self.subKey = keys.1
+                self.keysUpdatedAt = Date()
+            }
             for item in completions {
                 item(.success(keys))
             }

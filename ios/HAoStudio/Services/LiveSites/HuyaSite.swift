@@ -564,6 +564,20 @@ final class HuyaLiveSite: LiveSiteResolver {
     private var playbackTransportIssuedAt: [String: Date] = [:]
     private var playbackTokenLeases: [String: HuyaCdnTokenLease] = [:]
 
+    /// Guards the token/identity/lease state above: resolve runs
+    /// from URLSession background callbacks and two concurrent
+    /// resolves (prefetch + recovery, or a fast room switch) used
+    /// to mutate the same dictionaries/arrays/flags with no lock
+    /// — a data race that traps (Dictionary/Array simultaneous
+    /// mutation). The lock is only ever held for the state touch,
+    /// never across a network call or a completion.
+    private let stateLock = NSLock()
+    private func locked<T>(_ body: () -> T) -> T {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return body()
+    }
+
     init(fetcher: LiveDataFetcher? = nil, wupClient: HuyaWupClient? = nil) {
         let resolvedFetcher = fetcher ?? LiveHTTP.defaultFetcher
         self.fetcher = resolvedFetcher
@@ -861,12 +875,15 @@ final class HuyaLiveSite: LiveSiteResolver {
     /// Each consumer signs a new URL from the shared lease.
     private func fetchNativeToken(line: HuyaLine, completion: @escaping (Result<HuyaCdnTokenLease, Error>) -> Void) {
         let key = line.streamName
-        nativeTokenPending[key, default: []].append(completion)
-        if nativeTokenPending[key]!.count > 1 {
+        let alreadyPending = locked {
+            nativeTokenPending[key, default: []].append(completion)
+            return nativeTokenPending[key]!.count > 1
+        }
+        if alreadyPending {
             return
         }
         wupClient.fetchNativeCdnToken(line: line) { result in
-            let completions = self.nativeTokenPending.removeValue(forKey: key) ?? []
+            let completions = self.locked { self.nativeTokenPending.removeValue(forKey: key) ?? [] }
             for item in completions {
                 item(result)
             }
@@ -878,12 +895,15 @@ final class HuyaLiveSite: LiveSiteResolver {
     /// lease.
     private func fetchWebToken(line: HuyaLine, viewer: HuyaViewerIdentity, completion: @escaping (Result<HuyaCdnTokenLease, Error>) -> Void) {
         let key = "\(viewer.uid)|\(line.baseUrl)|\(line.streamName)"
-        webTokenPending[key, default: []].append(completion)
-        if webTokenPending[key]!.count > 1 {
+        let alreadyPending = locked {
+            webTokenPending[key, default: []].append(completion)
+            return webTokenPending[key]!.count > 1
+        }
+        if alreadyPending {
             return
         }
         wupClient.fetchWebCdnToken(line: line, viewer: viewer) { result in
-            let completions = self.webTokenPending.removeValue(forKey: key) ?? []
+            let completions = self.locked { self.webTokenPending.removeValue(forKey: key) ?? [] }
             for item in completions {
                 item(result)
             }
@@ -900,22 +920,32 @@ final class HuyaLiveSite: LiveSiteResolver {
     /// so the next acquisition retries the official endpoint instead
     /// of turning a brief outage into persistent 403s.
     func resolveViewerIdentity(completion: @escaping (HuyaViewerIdentity) -> Void) {
-        if let cached = anonymousViewerIdentity {
+        let cached: HuyaViewerIdentity? = locked { anonymousViewerIdentity }
+        if let cached = cached {
             completion(cached)
             return
         }
-        viewerIdentityCompletions.append(completion)
-        if viewerIdentityInFlight {
+        let alreadyInFlight = locked {
+            viewerIdentityCompletions.append(completion)
+            if viewerIdentityInFlight {
+                return true
+            }
+            viewerIdentityInFlight = true
+            return false
+        }
+        if alreadyInFlight {
             return
         }
-        viewerIdentityInFlight = true
         loadAnonymousViewerIdentity { identity in
-            self.viewerIdentityInFlight = false
-            if identity.uid != self.fallbackViewerUid {
-                self.anonymousViewerIdentity = identity
+            let completions = self.locked {
+                self.viewerIdentityInFlight = false
+                if identity.uid != self.fallbackViewerUid {
+                    self.anonymousViewerIdentity = identity
+                }
+                let completions = self.viewerIdentityCompletions
+                self.viewerIdentityCompletions = []
+                return completions
             }
-            let completions = self.viewerIdentityCompletions
-            self.viewerIdentityCompletions = []
             for item in completions {
                 item(identity)
             }
@@ -979,33 +1009,39 @@ final class HuyaLiveSite: LiveSiteResolver {
     /// guard: two URLs signed in the same millisecond would share a
     /// seqid).
     private func monotonicNow() -> Date {
-        let wallMillis = Int(Date().timeIntervalSince1970 * 1000)
-        let currentMillis = wallMillis > lastSignatureMillis ? wallMillis : lastSignatureMillis + 1
-        lastSignatureMillis = currentMillis
-        return Date(timeIntervalSince1970: TimeInterval(currentMillis) / 1000)
+        locked {
+            let wallMillis = Int(Date().timeIntervalSince1970 * 1000)
+            let currentMillis = wallMillis > lastSignatureMillis ? wallMillis : lastSignatureMillis + 1
+            lastSignatureMillis = currentMillis
+            return Date(timeIntervalSince1970: TimeInterval(currentMillis) / 1000)
+        }
     }
 
     private func rememberTransportIssuedAt(_ url: String, issuedAt: Date) {
-        if playbackTransportIssuedAt.count >= 64 && playbackTransportIssuedAt[url] == nil, let first = playbackTransportIssuedAt.keys.first {
-            playbackTransportIssuedAt.removeValue(forKey: first)
+        locked {
+            if playbackTransportIssuedAt.count >= 64 && playbackTransportIssuedAt[url] == nil, let first = playbackTransportIssuedAt.keys.first {
+                playbackTransportIssuedAt.removeValue(forKey: first)
+            }
+            playbackTransportIssuedAt[url] = issuedAt
         }
-        playbackTransportIssuedAt[url] = issuedAt
     }
 
     private func rememberedTransportIssuedAt(_ url: String) -> Date? {
         // Keep a past deadline authoritative. Removing it exactly at
         // expiry would reveal the much later wsTime bound and
         // incorrectly make a dead URL look healthy again.
-        playbackTransportIssuedAt[url]
+        locked { playbackTransportIssuedAt[url] }
     }
 
     private func rememberPlaybackTokenLease(_ url: String, lease: HuyaCdnTokenLease) {
-        let now = Date()
-        playbackTokenLeases = playbackTokenLeases.filter { !$0.value.isExpired(now) }
-        if playbackTokenLeases.count >= 32 && playbackTokenLeases[url] == nil, let first = playbackTokenLeases.keys.first {
-            playbackTokenLeases.removeValue(forKey: first)
+        locked {
+            let now = Date()
+            playbackTokenLeases = playbackTokenLeases.filter { !$0.value.isExpired(now) }
+            if playbackTokenLeases.count >= 32 && playbackTokenLeases[url] == nil, let first = playbackTokenLeases.keys.first {
+                playbackTokenLeases.removeValue(forKey: first)
+            }
+            playbackTokenLeases[url] = lease
         }
-        playbackTokenLeases[url] = lease
     }
 
     private func playbackTokenLease(for url: String) -> HuyaCdnTokenLease? {
@@ -1013,7 +1049,7 @@ final class HuyaLiveSite: LiveSiteResolver {
         // Forgetting it at the exact expiry instant would make the
         // longer wsTime bound appear valid again and postpone a
         // recovery that is already due.
-        playbackTokenLeases[url]
+        locked { playbackTokenLeases[url] }
     }
 
     private static func earliest(_ first: Date?, _ second: Date?) -> Date? {
