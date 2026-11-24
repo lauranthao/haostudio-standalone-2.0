@@ -30,6 +30,12 @@ import Foundation
 /// need it. (Music has the same pattern: `haoMusicFavChanged`.)
 extension Notification.Name {
     static let haoVideoFavChanged = Notification.Name("haoVideoFavChanged")
+    /// Posted by `VideoLibraryStore.saveHistory` on every history
+    /// write (watch, remove, clear-all). saveHistory is the single
+    /// funnel, so every writer is covered. Home's 继续观看 and 我的's
+    /// 影视历史 count listen for it; without it they only refreshed
+    /// on appear / pop-back.
+    static let haoVideoHistoryChanged = Notification.Name("haoVideoHistoryChanged")
 }
 
 /// One history row: the film + where playback stopped. The film
@@ -122,6 +128,10 @@ enum VideoLibraryStore {
         // write made through this store.
         watchedKeysCache = Set(entries.map { $0.id })
         watchedKeysCacheMTime = historyFileMTime()
+        // A1: history changed — home 继续观看 and 我的's 影视历史
+        // count reload on this (they used to refresh only on
+        // appear / pop-back).
+        NotificationCenter.default.post(name: .haoVideoHistoryChanged, object: nil)
     }
 
     static func historyEntry(title: String, year: String?) -> VideoHistoryEntry? {

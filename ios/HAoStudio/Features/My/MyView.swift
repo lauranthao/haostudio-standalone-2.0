@@ -194,6 +194,13 @@ struct MyView: View {
                     // unfavourite from the pushed list.
                     counts = MyEntryCounts.reload()
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .haoVideoHistoryChanged)) { _ in
+                    // A1: same staleness for the 影视历史 count —
+                    // a watch / remove / clear-all from the player or
+                    // the pushed history list now posts, so the count
+                    // updates while this page is on screen.
+                    counts = MyEntryCounts.reload()
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .haoLiveFollowChanged)) { _ in
                 // Same staleness as the music counts above: a

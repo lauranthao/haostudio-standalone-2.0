@@ -130,6 +130,14 @@ struct HomeView: View {
                 .onReceive(NotificationCenter.default.publisher(for: .haoMusicRecentChanged)) { _ in
                     viewModel.reload()
                 }
+                // Video-history change (A1): a film watched from the
+                // player, or a history row removed/cleared from the
+                // pushed list, posts haoVideoHistoryChanged — home's
+                // 继续观看 reloads without waiting for a tab switch
+                // or pop-back.
+                .onReceive(NotificationCenter.default.publisher(for: .haoVideoHistoryChanged)) { _ in
+                    viewModel.reload()
+                }
                 // Return-to-home refresh: NavigationStack's own
                 // onAppear does not re-fire when a pushed detail or
                 // room pops (the stack itself never disappears), so
