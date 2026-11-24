@@ -23,9 +23,9 @@ HAo Studio 独立版（2.0）是一个完全自包含的 iOS 应用：音乐、�
 
 以下为界面渲染图，非实机截图；实机截图后续替换。
 
-| 首页 | 音乐播放器 | 影视 |
-| --- | --- | --- |
-| ![首页](docs/screenshots/home.png) | ![音乐播放器](docs/screenshots/music-player.png) | ![影视](docs/screenshots/video.png) |
+| 首页 | 音乐播放器 | 影视 | 直播 |
+| --- | --- | --- | --- |
+| ![首页](docs/screenshots/home.png) | ![音乐播放器](docs/screenshots/music-player.png) | ![影视](docs/screenshots/video.png) | ![直播](docs/screenshots/live.png) |
 
 ## 功能
 
