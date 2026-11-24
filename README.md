@@ -67,7 +67,7 @@ HAo Studio 独立版（2.0）是一个完全自包含的 iOS 应用：音乐、�
 
 ## 下载
 
-当前版本 **2.0.0 build 35**（2026-11-24），IPA 13,824,703 字节，md5 `e1022946e350f1605ecb1a796c277c2d`。
+当前版本 **2.0.0 build 36**（2026-11-24），IPA 14,402,015 字节，md5 `9f8434a537e50c7424ee859fbbfb89b2`。
 
 - **下载 IPA**：https://chen-hao-shop-production.up.railway.app/HAoStudio-standalone-v2.0.0.ipa
 - **系统要求**：iOS 17.0 以上，iPhone / iPad
@@ -93,7 +93,7 @@ pod install          # 只有一个 pod：IJKMediaFramework（解 FLV 用）
 python3 ios/preflight_check.py   # 工程引用、资产、版本对齐等；不代替编译
 ```
 
-正式打包走 GitHub Actions：工作流 **iOS Unsigned IPA**（`.github/workflows/ios-unsigned.yml`，macOS 26 + Xcode 26.2），在 Actions 页面手动触发 `workflow_dispatch`（push 不自动触发），产物是 `HAoStudio-ipa`。libmpv 在构建时下载，不在仓库里。
+正式打包走 Bitrise（`bitrise.yml`，Xcode 26.2，手动触发 `primary` 工作流；GitHub Actions 工作流 **iOS Unsigned IPA**（`.github/workflows/ios-unsigned.yml`，macOS 26 + Xcode 26.2）备用，Actions 页面手动触发 `workflow_dispatch`（push 不自动触发），产物是 `HAoStudio-ipa`）。libmpv 在构建时下载，不在仓库里。未签名 IPA 以 `.zip` 形式上传（Bitrise 的 Deploy 步骤会解析 `.ipa` 的描述文件，未签名包没有这个文件）。
 
 ## 工程结构
 
@@ -119,14 +119,11 @@ version.json                # 当前版本、更新日志、IPA 地址
 
 | 版本 | Build | 日期 | 说明 |
 | --- | --- | --- | --- |
-| 2.0.0 | 35 | 2026-11-24 | **当前版本**：修 build 34 反馈的问题（直播打开闪退、直播间顶部黑条、首页卡片重叠、音乐播放器布局、迷你播放器与底栏联动、设置收放）；音乐/影视源按真实播放重测，失效的删掉、换上能用的；全 app bug 大扫除；影视按 VidHub、音乐按 Apple Music、直播按 Pure Live 重做样式 |
+| 2.0.0 | 36 | 2026-11-24 | **当前版本**：修 build 35 反馈的 19 项（迷你播放器与底栏联动、Apple Music 风格音乐播放器、30 秒试听识别、字号体系、直播返回闪退、歌源替换、每日推荐、全 app bug 大扫除、点播手势、性能优化、点播弹幕设置、歌单行菜单、杜比与 Emby 上报、全格式播放、播放器按钮跟随主题色、Emby 继续观看、Emby 搜索、浏览页、原生拖拽手感）；已删歌源直接丢弃，不再重新播种与加载 |
+| 2.0.0 | 35 | 2026-11-24 | 修 build 34 反馈的问题（直播打开闪退、直播间顶部黑条、首页卡片重叠、音乐播放器布局、迷你播放器与底栏联动、设置收放）；音乐/影视源按真实播放重测，失效的删掉、换上能用的；全 app bug 大扫除；影视按 VidHub、音乐按 Apple Music、直播按 Pure Live 重做样式 |
 | 2.0.0 | 34 | 2026-11-24 | 2.0 首个公开版之后的第一轮修复 |
 | 2.0.0 | 33 | 2026-11-23 | Swift 原生重写首版：首页聚合、音乐、影视、直播、我的全部原生 |
 | 1.1.6 | 32 | — | Flutter 旧版，已停止维护，由 2.0 取代 |
-
-## 开发中
-
-v2.0.0 build 36：19 项修复与优化已全部做完并验过，正在打包验证，验证通过后发布。
 
 ## 已知限制
 
