@@ -32,6 +32,14 @@ struct MusicFavouritesView: View {
                         )
                         .listRowBackground(theme.scaffoldBackground)
                         .listRowSeparatorTint(theme.hairline)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button {
+                                _ = MusicLibraryStore.toggleFav(song)
+                            } label: {
+                                Label("取消收藏", systemImage: "star.slash")
+                            }
+                            .tint(theme.accent)
+                        }
                     }
                 }
                 .haoBottomChromePadding()

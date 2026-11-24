@@ -59,8 +59,14 @@ struct LiveRoomCard: View {
             // the right column). Truncation above handles long
             // text inside that bound.
             .frame(maxWidth: .infinity, alignment: .leading)
+        }        .buttonStyle(MusicPressScaleStyle())
+        .contextMenu {
+            Button(LiveLibraryStore.isFollowed(platform: room.platform.rawValue, roomId: room.roomId) ? "取消关注" : "关注") {
+                _ = LiveLibraryStore.toggleFollow(
+                    platform: room.platform.rawValue, roomId: room.roomId,
+                    title: room.title, nick: room.streamer, cover: room.cover)
+            }
         }
-        .buttonStyle(.plain)
     }
 
     private var coverView: some View {
@@ -173,8 +179,14 @@ struct LiveRoomRow: View {
                     .foregroundStyle(theme.textMuted)
             }
             .contentShape(Rectangle())
+        }        .buttonStyle(MusicPressScaleStyle())
+        .contextMenu {
+            Button(LiveLibraryStore.isFollowed(platform: room.platform.rawValue, roomId: room.roomId) ? "取消关注" : "关注") {
+                _ = LiveLibraryStore.toggleFollow(
+                    platform: room.platform.rawValue, roomId: room.roomId,
+                    title: room.title, nick: room.streamer, cover: room.cover)
+            }
         }
-        .buttonStyle(.plain)
     }
 
     private var rowCover: some View {

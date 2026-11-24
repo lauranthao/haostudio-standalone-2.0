@@ -308,6 +308,8 @@ struct MusicSongMenuHost<Content: View>: View {
         content(handle)
             .sheet(isPresented: $showAddToPlaylist) {
                 MusicAddToPlaylistSheet(song: song) { showAddToPlaylist = false }
+                    .presentationDetents([.medium])
+                    .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $showAlbum) {
                 NavigationStack {
@@ -405,7 +407,7 @@ struct MusicSectionHeader: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Button(action: onToggle) {
+            Button(action: { withAnimation(HaoLayout.settleSpring) { onToggle() } }) {
                 HStack(spacing: 6) {
                     Text(title)
                         .font(.haoDetailTitle)
@@ -413,6 +415,7 @@ struct MusicSectionHeader: View {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
                         .font(.haoDenseTitle)
                         .foregroundStyle(theme.textSecondary)
+                        .animation(HaoLayout.settleSpring, value: expanded)
                 }
             }
             .buttonStyle(.plain)

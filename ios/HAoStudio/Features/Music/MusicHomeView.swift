@@ -114,7 +114,7 @@ struct MusicHomeView: View {
                     .strokeBorder(theme.hairline, lineWidth: 0.5)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MusicPressScaleStyle())
         .accessibilityLabel(title)
     }
 
@@ -147,7 +147,7 @@ struct MusicHomeView: View {
                     .strokeBorder(theme.hairline, lineWidth: 0.5)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MusicPressScaleStyle())
         .accessibilityLabel(title)
     }
 

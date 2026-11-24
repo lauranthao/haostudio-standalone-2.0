@@ -11,6 +11,8 @@
 		000000000000000000000003 /* HaoTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000004 /* HaoTheme.swift */; };
 		000000000000000000000005 /* ThemeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000006 /* ThemeStore.swift */; };
 		000000000000000000000007 /* Glass.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000008 /* Glass.swift */; };
+		0000000000000000000001F7 /* HaoSidebarDragMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001F6 /* HaoSidebarDragMath.swift */; };
+		0000000000000000000001F9 /* HaoDragSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001F8 /* HaoDragSidebar.swift */; };
 		000000000000000000000009 /* GlassTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000A /* GlassTabBar.swift */; };
 		00000000000000000000000B /* MiniPlayerBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000C /* MiniPlayerBar.swift */; };
 		00000000000000000000000D /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000E /* MainTabView.swift */; };
@@ -241,6 +243,8 @@
 		000000000000000000000004 /* HaoTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HaoTheme.swift; sourceTree = "<group>"; };
 		000000000000000000000006 /* ThemeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeStore.swift; sourceTree = "<group>"; };
 		000000000000000000000008 /* Glass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Glass.swift; sourceTree = "<group>"; };
+		0000000000000000000001F6 /* HaoSidebarDragMath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HaoSidebarDragMath.swift; sourceTree = "<group>"; };
+		0000000000000000000001F8 /* HaoDragSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HaoDragSidebar.swift; sourceTree = "<group>"; };
 		00000000000000000000000A /* GlassTabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassTabBar.swift; sourceTree = "<group>"; };
 		00000000000000000000000C /* MiniPlayerBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniPlayerBar.swift; sourceTree = "<group>"; };
 		00000000000000000000000E /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
@@ -512,6 +516,8 @@
 				00000000000000000000000C /* MiniPlayerBar.swift */,
 				00000000000000000000000E /* MainTabView.swift */,
 				0000000000000000000001E5 /* ImmersiveChromeState.swift */,
+				0000000000000000000001F6 /* HaoSidebarDragMath.swift */,
+				0000000000000000000001F8 /* HaoDragSidebar.swift */,
 			); path = App; sourceTree = "<group>"; };
 		00000000000000000000005F /* Playback */ = {isa = PBXGroup; children = (
 				0000000000000000000000EA /* AVPlayerBackend.swift */,
@@ -881,6 +887,8 @@
 				0000000000000000000001F3 /* EmbySearchView.swift in Sources */,
 				0000000000000000000000FD /* EmbyTabView.swift in Sources */,
 				000000000000000000000007 /* Glass.swift in Sources */,
+				0000000000000000000001F7 /* HaoSidebarDragMath.swift in Sources */,
+				0000000000000000000001F9 /* HaoDragSidebar.swift in Sources */,
 				000000000000000000000009 /* GlassTabBar.swift in Sources */,
 				000000000000000000000001 /* HAoStudioApp.swift in Sources */,
 				000000000000000000000003 /* HaoTheme.swift in Sources */,

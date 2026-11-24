@@ -64,6 +64,11 @@ final class VideoSearchViewModel: ObservableObject {
         VideoLibraryStore.clearSearchHistory()
         history = []
     }
+
+    func removeHistoryItem(_ term: String) {
+        VideoLibraryStore.removeSearchHistory(term: term)
+        history = VideoLibraryStore.searchHistory()
+    }
 }
 
 struct VideoSearchView: View {
@@ -174,7 +179,8 @@ struct VideoSearchView: View {
                     onTap: { term in
                         query = term
                         viewModel.search(term)
-                    }
+                    },
+                    onDelete: { term in viewModel.removeHistoryItem(term) }
                 )
                 .padding(.horizontal, 16)
             }
@@ -214,6 +220,9 @@ struct VideoSearchView: View {
 struct FlowChips: View {
     var items: [String]
     var onTap: (String) -> Void
+    /// Optional per-term delete (video search history). Nil at
+    /// the live-search reuse site: no menu there.
+    var onDelete: ((String) -> Void)? = nil
 
     @Environment(\.haoTheme) private var theme
 
@@ -244,6 +253,13 @@ struct FlowChips: View {
                                 }
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            if let onDelete = onDelete {
+                                Button("删除这条记录", role: .destructive) {
+                                    onDelete(term)
+                                }
+                            }
+                        }
                         .frame(maxWidth: availableWidth)
                     }
                 }

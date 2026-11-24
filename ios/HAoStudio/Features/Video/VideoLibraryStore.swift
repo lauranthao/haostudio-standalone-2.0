@@ -210,6 +210,13 @@ enum VideoLibraryStore {
         LocalStore.saveCollection(named: searchHistoryCollection, value: [String]())
     }
 
+    /// Delete one search term (video search history chips,
+    /// build 36 item 19). Same write path as clearSearchHistory.
+    static func removeSearchHistory(term: String) {
+        let history = searchHistory().filter { $0 != term }
+        LocalStore.saveCollection(named: searchHistoryCollection, value: history)
+    }
+
     // MARK: - Home cache
 
     static func cachedHome() -> [VideoHomeRow] {
