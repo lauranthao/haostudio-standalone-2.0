@@ -211,31 +211,48 @@ struct VideoBrowseView: View {
         _viewModel = StateObject(wrappedValue: VideoBrowseViewModel(initialType: initialType))
     }
 
-    /// Area options (label, value). Values are the CmsClient
+    /// One filter option: `id` is the filter value sent to the
+    /// gateway (e.g. "all", "hits"), `label` is the chip text.
+    /// (Was an unnamed `(String, String)` tuple; the two elements
+    /// only meant anything by position.)
+    private struct FilterOption {
+        let id: String
+        let label: String
+    }
+
+    /// Area options. Values are the CmsClient
     /// filter values: "all" default, "other" = none of the known
     /// areas; area filtering itself lives in filterByTypeItems.
-    private static let areaOptions: [(String, String)] = [
-        ("全部", "all"), ("大陆", "大陆"), ("香港", "香港"), ("台湾", "台湾"),
-        ("美国", "美国"), ("韩国", "韩国"), ("日本", "日本"), ("英国", "英国"),
-        ("其他", "other"),
+    private static let areaOptions: [FilterOption] = [
+        FilterOption(id: "all", label: "全部"),
+        FilterOption(id: "大陆", label: "大陆"),
+        FilterOption(id: "香港", label: "香港"),
+        FilterOption(id: "台湾", label: "台湾"),
+        FilterOption(id: "美国", label: "美国"),
+        FilterOption(id: "韩国", label: "韩国"),
+        FilterOption(id: "日本", label: "日本"),
+        FilterOption(id: "英国", label: "英国"),
+        FilterOption(id: "other", label: "其他"),
     ]
 
-    /// Sort options (label, `by` value): "" default, "hits" most
+    /// Sort options (`by` value): "" default, "hits" most
     /// viewed, "score" highest rated.
-    private static let sortOptions: [(String, String)] = [
-        ("默认", ""), ("最热", "hits"), ("评分最高", "score"),
+    private static let sortOptions: [FilterOption] = [
+        FilterOption(id: "", label: "默认"),
+        FilterOption(id: "hits", label: "最热"),
+        FilterOption(id: "score", label: "评分最高"),
     ]
 
     /// Year options: 全部 + the 5 most recent years from the
     /// calendar (never hardcoded) + 更早 (year ≤ 2021).
-    private var yearOptions: [(String, String)] {
+    private var yearOptions: [FilterOption] {
         let current = Calendar.current.component(.year, from: Date())
-        var options: [(String, String)] = [("全部", "all")]
+        var options: [FilterOption] = [FilterOption(id: "all", label: "全部")]
         for offset in 0..<5 {
             let year = String(current - offset)
-            options.append((year, year))
+            options.append(FilterOption(id: year, label: year))
         }
-        options.append(("更早", "earlier"))
+        options.append(FilterOption(id: "earlier", label: "更早"))
         return options
     }
 
@@ -397,7 +414,7 @@ struct VideoBrowseView: View {
     /// strip, same capsule style as categoryStrip / libraryChip.
     private func filterRow(
         title: String,
-        options: [(String, String)],
+        options: [FilterOption],
         selected: String,
         onSelect: @escaping (String) -> Void
     ) -> some View {
@@ -408,9 +425,9 @@ struct VideoBrowseView: View {
                 .frame(width: 36, alignment: .leading)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(options, id: \.1) { option in
-                        filterChip(label: option.0, selected: selected == option.1) {
-                            onSelect(option.1)
+                    ForEach(options, id: \.id) { option in
+                        filterChip(label: option.label, selected: selected == option.id) {
+                            onSelect(option.id)
                         }
                     }
                 }
