@@ -217,7 +217,7 @@ private struct LiveHistoryListRow: View {
                 rowCoverPlaceholder
             }
         }
-        .frame(width: 96, height: 60)
+        .frame(width: 96, height: 54)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 

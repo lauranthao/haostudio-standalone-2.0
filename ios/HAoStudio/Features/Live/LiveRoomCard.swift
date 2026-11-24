@@ -2,7 +2,7 @@
 //
 // One room card, shared by the tab grid, search results, the
 // follows page and the history page (Flutter _RoomCard):
-// 16:10 cover, LIVE badge (theme liveRed — the only red in the
+// 16:9 cover, LIVE badge (theme liveRed — the only red in the
 // app) when the room is live, title, anchor nick, watching
 // count. No cover URL means the themed placeholder, never a fake
 // image. Tapping is the caller's job (the card itself holds no
@@ -11,7 +11,7 @@
 import Foundation
 import SwiftUI
 
-/// A room card for a grid (tab / search). Fixed 16:10 cover.
+/// A room card for a grid (tab / search). Fixed 16:9 cover.
 struct LiveRoomCard: View {
     var room: LiveRoom
     var onTap: () -> Void
@@ -26,22 +26,32 @@ struct LiveRoomCard: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1)
-                // Anchor and watching on SEPARATE lines (fix
-                // 2026-11-24): build 33 squeezed both into one
-                // HStack, so a long anchor name squeezed the
-                // count and the two read as overlapping. One
-                // line each can only truncate, never overlap.
-                Text(room.streamer.isEmpty ? room.platform.displayName : room.streamer)
-                    .font(.system(size: 12))
-                    .foregroundStyle(theme.textSecondary)
-                    .lineLimit(1)
-                // Always rendered, blank when the count is 0:
-                // every card keeps the same three text lines, so
-                // all cards in a grid row stay the same height.
-                Text(watchingLine)
-                    .font(.system(size: 12))
-                    .foregroundStyle(theme.textMuted)
-                    .lineLimit(1)
+                // Anchor + watching on ONE row (Pure Live card):
+                // the anchor truncates, the flame + count is a
+                // fixed trailing group after a Spacer, so a long
+                // anchor name can only truncate — never squeeze
+                // or overlap the count. (Build 33 squeezed both
+                // into one HStack with no truncation priority;
+                // the 2026-11-24 fix split them onto two lines.
+                // This keeps that guarantee in one row: the
+                // count group has a fixed size and the anchor is
+                // lineLimit 1, so the two can never collide.)
+                HStack(spacing: 4) {
+                    Text(room.streamer.isEmpty ? room.platform.displayName : room.streamer)
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.textSecondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 6)
+                    if !liveWatchingText(room.onlineCount).isEmpty {
+                        Image(systemName: "flame.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.textMuted)
+                        Text(liveWatchingText(room.onlineCount))
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.textMuted)
+                            .lineLimit(1)
+                    }
+                }
             }
             // Bound the label to the grid cell: the VStack must
             // never report wider than the cell, or the card
@@ -53,24 +63,16 @@ struct LiveRoomCard: View {
         .buttonStyle(.plain)
     }
 
-    /// Watching line: "12.3万 人在看" (same wording as the list
-    /// row), blank when the platform gave no count.
-    private var watchingLine: String {
-        let text = liveWatchingText(room.onlineCount)
-        guard !text.isEmpty else { return " " }
-        return "\(text) 人在看"
-    }
-
     private var coverView: some View {
         ZStack(alignment: .topLeading) {
             // .fit, not .fill (fix 2026-11-24, build 35): in a
             // LazyVGrid row the height proposal is unbounded, so
             // .fill lets the downloaded image's intrinsic size
             // drive the cell — a portrait cover drew at portrait
-            // proportions, several times the 16:10 height,
+            // proportions, several times the 16:9 height,
             // overlapping the rows below it and burying the
             // titles. .fit derives the height from the
-            // grid-proposed width (cell / 16:10,
+            // grid-proposed width (cell / 16:9,
             // LiveGridLayout.coverHeight), the same pattern
             // VideoPosterCard uses in its grid; the inner
             // scaledToFill image is cropped to that box by
@@ -154,10 +156,15 @@ struct LiveRoomRow: View {
                             .lineLimit(1)
                     }
                     if !liveWatchingText(room.onlineCount).isEmpty {
-                        Text("\(liveWatchingText(room.onlineCount)) 人在看")
-                            .font(.system(size: 12))
-                            .foregroundStyle(theme.textMuted)
-                            .lineLimit(1)
+                        HStack(spacing: 4) {
+                            Image(systemName: "flame.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(theme.textMuted)
+                            Text(liveWatchingText(room.onlineCount))
+                                .font(.system(size: 12))
+                                .foregroundStyle(theme.textMuted)
+                                .lineLimit(1)
+                        }
                     }
                 }
                 Spacer()
@@ -187,7 +194,7 @@ struct LiveRoomRow: View {
                 rowCoverPlaceholder
             }
         }
-        .frame(width: 96, height: 60)
+        .frame(width: 96, height: 54)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 

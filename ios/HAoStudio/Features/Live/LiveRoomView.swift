@@ -74,6 +74,19 @@ struct LiveRoomView: View {
     @State private var danmakuSettings = LiveDanmakuSettings.load()
     @State private var autoHideWork: DispatchWorkItem?
     @State private var toastWork: DispatchWorkItem?
+    /// Battery level for the landscape top bar (Pure Live
+    /// TopActionBar shows time + battery — the status bar is
+    /// hidden in fullscreen, so the room shows them itself).
+    /// -1 = unknown (simulator / not yet read): hidden then.
+    @State private var batteryLevel: Float = -1
+
+    /// HH:mm formatter for the landscape clock (one shared
+    /// instance — a DateFormatter per render would be wasteful).
+    private static let clockFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }()
 
     init(room: LiveRoom, playlist: [LiveRoom]) {
         self.room = room
@@ -123,6 +136,10 @@ struct LiveRoomView: View {
             // system value.
             livePlayer.notePlayerEntry()
             livePlayer.setVolume(Double(AVAudioSession.sharedInstance().outputVolume))
+            // Landscape top bar shows time + battery (Pure Live
+            // TopActionBar): enable monitoring and take a reading.
+            UIDevice.current.isBatteryMonitoringEnabled = true
+            batteryLevel = UIDevice.current.batteryLevel
         }
         .onDisappear {
             // The room is gone: the shell bottom chrome comes back.
@@ -216,6 +233,9 @@ struct LiveRoomView: View {
             toastWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.batteryLevelDidChangeNotification)) { _ in
+            batteryLevel = UIDevice.current.batteryLevel
+        }
     }
 
     /// Live status for the badges: the view model's refreshed
@@ -288,11 +308,17 @@ struct LiveRoomView: View {
 
     private func showControlsTemporarily() {
         autoHideWork?.cancel()
-        controlsVisible = true
+        // Pure Live slides both bars in/out over 300ms; the
+        // show and the auto-hide both animate.
+        withAnimation(.easeOut(duration: 0.3)) {
+            controlsVisible = true
+        }
         guard livePlayer.isPlaying else { return }
         let work = DispatchWorkItem { [self] in
             guard self.livePlayer.isPlaying, self.isFullscreen else { return }
-            self.controlsVisible = false
+            withAnimation(.easeOut(duration: 0.3)) {
+                self.controlsVisible = false
+            }
         }
         autoHideWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
@@ -306,7 +332,17 @@ struct LiveRoomView: View {
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
                 .background(Color.black)
             roomInfoSection
+            // Hairline between the info block and the danmaku
+            // list (Pure Live's Divider under ResolutionsRow).
+            Rectangle()
+                .fill(theme.hairline)
+                .frame(height: 0.5)
             danmakuSection
+            // Hairline above the tools bar: the bar is a toolbar
+            // surface, and the list runs up to it.
+            Rectangle()
+                .fill(theme.hairline)
+                .frame(height: 0.5)
             portraitBottomBar
         }
         .ignoresSafeArea(edges: .top)
@@ -405,13 +441,18 @@ struct LiveRoomView: View {
                 }
             }
             if livePlayer.videoView == nil {
+                // Pure Live's error widget, same two lines:
+                // what happened, then why.
                 VStack(spacing: 8) {
                     Image(systemName: "antenna.radiowaves.left.and.right")
                         .font(.system(size: 28))
                         .foregroundStyle(.white.opacity(0.6))
                     Text("暂无画面")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.8))
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                    Text("房间未开播或暂时无法观看")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.7))
                 }
             }
             if !livePlayer.isPlaying && livePlayer.videoView != nil {
@@ -457,19 +498,38 @@ struct LiveRoomView: View {
     }
 
     /// Watching-count text ("" when the count is unavailable —
-    /// never invent a number). Both the portrait info section and
-    /// the landscape bottom bar hide the whole "N人在看" line when
-    /// it is empty instead of rendering a dangling label.
+    /// never invent a number). The portrait tools bar and the
+    /// landscape bottom bar hide the whole flame + count group
+    /// when it is empty instead of rendering a dangling label.
     private var watchingText: String { liveWatchingText(watchingCount) }
 
+    /// Room info under the video, Pure Live AppBar-title style:
+    /// title on its own line, then the anchor row — avatar 28 +
+    /// nick 15 semibold + a sub-line carrying the LIVE badge and
+    /// the platform name (Pure Live shows "PLATFORM / AREA"
+    /// there; rooms carry no area, so the platform name alone) —
+    /// then the follow pill. The watching count lives in the
+    /// tools bar below (Pure Live ResolutionsRow), not here, and
+    /// the platform capsule is gone: a quiet caption, not a chip.
     private var roomInfoSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 8) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(currentRoom.title.isEmpty ? "直播间" : currentRoom.title)
-                        .font(.system(size: 17, weight: .semibold))
+                Text(currentRoom.title.isEmpty ? "直播间" : currentRoom.title)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+                    .lineLimit(2)
+                Spacer()
+                if playlist.count > 1 {
+                    roomSwitchButtons
+                }
+            }
+            HStack(spacing: 10) {
+                anchorAvatar
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(currentRoom.streamer.isEmpty ? currentRoom.platform.displayName : currentRoom.streamer)
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(theme.textPrimary)
-                        .lineLimit(2)
+                        .lineLimit(1)
                     HStack(spacing: 6) {
                         if isLiveNow {
                             Text("LIVE")
@@ -479,30 +539,12 @@ struct LiveRoomView: View {
                                 .padding(.vertical, 3)
                                 .background(theme.liveRed, in: Capsule())
                         }
-                        if !watchingText.isEmpty {
-                            Text("\(watchingText) 人在看")
-                                .font(.system(size: 13))
-                                .foregroundStyle(theme.textSecondary)
-                        }
+                        Text(currentRoom.platform.displayName)
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.textMuted)
+                            .lineLimit(1)
                     }
                 }
-                Spacer()
-                if playlist.count > 1 {
-                    roomSwitchButtons
-                }
-            }
-            HStack(spacing: 10) {
-                anchorAvatar
-                Text(currentRoom.streamer.isEmpty ? currentRoom.platform.displayName : currentRoom.streamer)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(theme.textPrimary)
-                    .lineLimit(1)
-                Text(currentRoom.platform.displayName)
-                    .font(.system(size: 12))
-                    .foregroundStyle(theme.textSecondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(theme.surface, in: Capsule())
                 Spacer()
                 Button(action: toggleFollow) {
                     Label(
@@ -565,7 +607,7 @@ struct LiveRoomView: View {
                 avatarPlaceholder
             }
         }
-        .frame(width: 36, height: 36)
+        .frame(width: 28, height: 28)
         .clipShape(Circle())
     }
 
@@ -574,7 +616,7 @@ struct LiveRoomView: View {
             .fill(theme.surfaceStrong)
             .overlay {
                 Image(systemName: "person.fill")
-                    .font(.system(size: 16))
+                    .font(.system(size: 14))
                     .foregroundStyle(theme.textSecondary)
             }
     }
@@ -605,22 +647,32 @@ struct LiveRoomView: View {
         }
     }
 
-    /// Page tools row (portrait). Play / danmaku / fullscreen
-    /// live on the video control strip now (see portraitVideoControls),
-    /// so this row holds only the room tools: quality (live only),
-    /// brightness/volume, danmaku settings. One control, one place.
+    /// Page tools row (portrait) — Pure Live's ResolutionsRow,
+    /// iOS edition: flame + watching on the left, the quality
+    /// name as a plain text button (the current tier in the
+    /// accent, no capsule — Pure Live shows each quality as
+    /// text), then brightness/volume and danmaku settings as icon
+    /// buttons. Play / danmaku / fullscreen live on the video
+    /// control strip (see portraitVideoControls). One control,
+    /// one place.
     private var portraitBottomBar: some View {
         HStack(spacing: 16) {
+            if !watchingText.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "flame.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.textSecondary)
+                    Text(watchingText)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(theme.textSecondary)
+                        .lineLimit(1)
+                }
+            }
             Button(action: { showQualitySheet = true }) {
                 Text(livePlayer.currentQuality?.name ?? "画质")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(theme.textPrimary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(theme.surface, in: Capsule())
-                    .overlay {
-                        Capsule().strokeBorder(theme.hairline, lineWidth: 0.5)
-                    }
+                    .foregroundStyle(theme.accent)
+                    .lineLimit(1)
             }
             .buttonStyle(.plain)
             Spacer()
@@ -682,7 +734,9 @@ struct LiveRoomView: View {
                 .contentShape(Rectangle())
                 .onTapGesture {
                     if controlsVisible {
-                        controlsVisible = false
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            controlsVisible = false
+                        }
                         autoHideWork?.cancel()
                     } else {
                         showControlsTemporarily()
@@ -691,8 +745,10 @@ struct LiveRoomView: View {
             if controlsVisible {
                 VStack(spacing: 0) {
                     landscapeTopBar
+                        .transition(.move(edge: .top).combined(with: .opacity))
                     Spacer()
                     landscapeBottomBar
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
         }
@@ -723,6 +779,7 @@ struct LiveRoomView: View {
                     .lineLimit(1)
             }
             Spacer()
+            landscapeClockAndBattery
             if isLiveNow {
                 Text("LIVE")
                     .font(.system(size: 10, weight: .bold))
@@ -757,6 +814,47 @@ struct LiveRoomView: View {
         )
     }
 
+    /// Clock + battery for the landscape top bar (Pure Live
+    /// TopActionBar: HH:mm in 14 white, refreshed every 10 s,
+    /// and a 35×15 battery outline with the percentage inside).
+    /// The status bar is hidden in fullscreen, so the room shows
+    /// them itself. Hidden when the level is unknown (simulator).
+    private var landscapeClockAndBattery: some View {
+        HStack(spacing: 8) {
+            TimelineView(.periodic(from: Date(), by: 10)) { timeline in
+                Text(Self.clockFormatter.string(from: timeline.date))
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white)
+            }
+            if batteryLevel >= 0 {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .strokeBorder(.white, lineWidth: 1)
+                        .frame(width: 35, height: 15)
+                    HStack(spacing: 0) {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.4))
+                            .frame(width: max(0, 31 * CGFloat(batteryLevel)))
+                        Spacer(minLength: 0)
+                    }
+                    .frame(width: 31, height: 11)
+                    .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
+                    Text("\(Int(batteryLevel * 100))")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 35, height: 15)
+            }
+        }
+    }
+
+    /// Landscape bottom bar — Pure Live BottomActionBar order:
+    /// play, danmaku, follow, quality as plain white text (no
+    /// capsule — the bars are white-on-scrim throughout), Spacer,
+    /// flame + watching, exit fullscreen. No refresh button:
+    /// Pure Live has one, but there is no public refresh entry
+    /// on the driver (refreshURLs is private) — see the style
+    /// list. 56pt bar: 44pt controls + 12pt bottom padding.
     private var landscapeBottomBar: some View {
         HStack(spacing: 16) {
             Button(action: { livePlayer.togglePlayPause() }) {
@@ -766,21 +864,32 @@ struct LiveRoomView: View {
                     .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
+            DanmakuToggleButton(isOn: danmakuEnabledForRoom, action: toggleDanmaku)
+            Button(action: toggleFollow) {
+                Image(systemName: isFollowing ? "heart.fill" : "heart")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isFollowing ? "取消关注" : "关注")
             Button(action: { showQualitySheet = true }) {
                 Text(livePlayer.currentQuality?.name ?? "画质")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.black.opacity(0.45), in: Capsule())
+                    .lineLimit(1)
             }
             .buttonStyle(.plain)
-            DanmakuToggleButton(isOn: danmakuEnabledForRoom, action: toggleDanmaku)
             Spacer()
             if !watchingText.isEmpty {
-                Text("\(watchingText) 人在看")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.85))
+                HStack(spacing: 4) {
+                    Image(systemName: "flame.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.85))
+                    Text(watchingText)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.85))
+                }
             }
             Button(action: { isFullscreen = false }) {
                 Image(systemName: "arrow.down.right.and.arrow.up.left")
@@ -791,7 +900,7 @@ struct LiveRoomView: View {
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 20)
-        .padding(.bottom, 16)
+        .padding(.bottom, 12)
         .background(
             LinearGradient(
                 colors: [Color.black.opacity(0), Color.black.opacity(0.55)],

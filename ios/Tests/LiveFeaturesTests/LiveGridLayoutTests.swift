@@ -42,12 +42,12 @@ final class LiveGridLayoutTests: XCTestCase {
         XCTAssertFalse(LiveGridLayout.fills(containerWidth: 50))
     }
 
-    // MARK: - Cover height: 16:10 of the cell width
+    // MARK: - Cover height: 16:9 of the cell width
 
-    func testCoverHeightIsSixteenToTen() {
-        XCTAssertEqual(LiveGridLayout.coverHeight(cellWidth: 165), 103.125, accuracy: 0.001)
+    func testCoverHeightIsSixteenToNine() {
+        XCTAssertEqual(LiveGridLayout.coverHeight(cellWidth: 165), 92.8125, accuracy: 0.001)
         XCTAssertEqual(
-            LiveGridLayout.coverHeight(cellWidth: 200) / 200, 10.0 / 16.0, accuracy: 0.001)
+            LiveGridLayout.coverHeight(cellWidth: 200) / 200, 9.0 / 16.0, accuracy: 0.001)
     }
 
     // MARK: - Dedupe: platform + room id is the identity

@@ -137,7 +137,7 @@ struct LiveSearchView: View {
             }
         }
         .padding(.horizontal, 14)
-        .frame(height: 40)
+        .frame(height: 36)
         .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -146,29 +146,8 @@ struct LiveSearchView: View {
     }
 
     private var platformRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(LivePlatform.allCases) { platform in
-                    Button(action: { viewModel.platform = platform }) {
-                        Text(platform.displayName)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(
-                                platform == viewModel.platform
-                                    ? theme.onAccent : theme.textPrimary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(
-                                platform == viewModel.platform
-                                    ? theme.accent : theme.surface,
-                                in: Capsule())
-                            .overlay {
-                                Capsule().strokeBorder(theme.hairline, lineWidth: 0.5)
-                            }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 24)
+        LivePlatformTextTabs(selected: viewModel.platform) { platform in
+            viewModel.platform = platform
         }
     }
 

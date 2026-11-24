@@ -307,32 +307,17 @@ struct LiveTabView: View {
         path.append(.room(room, playlist))
     }
 
-    // MARK: - Platform row (Big-5 only)
+    // MARK: - Platform row (Big-5 only, Pure Live TabBar style)
 
+    /// Text tabs, not capsule chips (Pure Live home TabBar):
+    /// the selected platform reads in the accent with a 2.5pt
+    /// indicator bar under it, the rest in secondary. The
+    /// category strip below keeps capsule chips, so the two
+    /// levels of navigation no longer look equal — platform is
+    /// the tab level, category is the chip level.
     private var platformRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(LivePlatform.allCases) { platform in
-                    Button(action: { viewModel.selectPlatform(platform) }) {
-                        Text(platform.displayName)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(
-                                platform == viewModel.platform
-                                    ? theme.onAccent : theme.textPrimary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(
-                                platform == viewModel.platform
-                                    ? theme.accent : theme.surface,
-                                in: Capsule())
-                            .overlay {
-                                Capsule().strokeBorder(theme.hairline, lineWidth: 0.5)
-                            }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 24)
+        LivePlatformTextTabs(selected: viewModel.platform) { platform in
+            viewModel.selectPlatform(platform)
         }
     }
 
@@ -396,7 +381,7 @@ struct LiveTabView: View {
                 Spacer()
             }
             .padding(.horizontal, 14)
-            .frame(height: 40)
+            .frame(height: 36)
             .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -543,7 +528,7 @@ struct LiveFollowCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 ZStack(alignment: .topLeading) {
                     followCover
-                        .aspectRatio(16.0 / 10.0, contentMode: .fill)
+                        .aspectRatio(16.0 / 9.0, contentMode: .fill)
                         .frame(width: 140)
                         .clipped()
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -604,7 +589,7 @@ struct LiveHistoryCard: View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 6) {
                 historyCover
-                    .aspectRatio(16.0 / 10.0, contentMode: .fill)
+                    .aspectRatio(16.0 / 9.0, contentMode: .fill)
                     .frame(width: 140)
                     .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -674,5 +659,43 @@ extension LiveHistoryEntry {
             roomId: roomId, platform: LivePlatform(rawValue: platform) ?? .bilibili,
             title: title, streamer: nick, avatar: "", cover: cover,
             onlineCount: 0, isLive: false, link: "")
+    }
+}
+
+// MARK: - Shared platform text tabs (Pure Live home TabBar style)
+
+/// The one platform switcher the live tab and live search share:
+/// text tabs with a 2.5pt accent indicator under the selected
+/// platform, the rest in secondary. Same weight (medium) selected
+/// and unselected, so selecting never changes a tab's width and
+/// the strip never jumps. Used by LiveTabView and LiveSearchView
+/// so the two pages cannot drift apart again.
+struct LivePlatformTextTabs: View {
+    var selected: LivePlatform
+    var onSelect: (LivePlatform) -> Void
+
+    @Environment(\.haoTheme) private var theme
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 24) {
+                ForEach(LivePlatform.allCases) { platform in
+                    Button(action: { onSelect(platform) }) {
+                        VStack(spacing: 6) {
+                            Text(platform.displayName)
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(
+                                    platform == selected
+                                        ? theme.accent : theme.textSecondary)
+                            Capsule()
+                                .fill(platform == selected ? theme.accent : Color.clear)
+                                .frame(height: 2.5)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 24)
+        }
     }
 }
