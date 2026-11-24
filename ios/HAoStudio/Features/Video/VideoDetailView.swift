@@ -21,14 +21,6 @@
 
 import SwiftUI
 
-/// Where a detail comes from: CMS detail (lines + Douban meta)
-/// or Emby detail (streams as lines). The view model switches
-/// its loader on this; the layout is identical.
-enum VideoDetailSource {
-    case cms
-    case emby
-}
-
 @MainActor
 final class VideoDetailViewModel: ObservableObject {
     @Published private(set) var detail: VideoDetail?
@@ -46,15 +38,19 @@ final class VideoDetailViewModel: ObservableObject {
 
     let item: VideoItem
     private let gateway: VideoDataGateway
-    private let source: VideoDetailSource
+    /// Resolved in init: an explicit source wins, otherwise the
+    /// item decides (VideoItem.detailSource — Emby items carry no
+    /// CMS source id). Internal so the view's empty state can use
+    /// source-aware copy.
+    let source: VideoDetailSource
 
     init(
         item: VideoItem,
-        source: VideoDetailSource = .cms,
+        source: VideoDetailSource? = nil,
         gateway: VideoDataGateway = VideoServices.makeGateway()
     ) {
         self.item = item
-        self.source = source
+        self.source = source ?? item.detailSource
         self.gateway = gateway
         self.isFavourite = VideoLibraryStore.isFavourite(item: item)
         self.resume = VideoLibraryStore.resumeInfo(title: item.title, year: item.year)
@@ -84,27 +80,56 @@ final class VideoDetailViewModel: ObservableObject {
 
     var playButtonLabel: String {
         guard let line = selectedLine, let episode = line.episode(at: playEpisodeIndex) else {
-            return isLoading ? "加载中…" : "暂无可播剧集"
+            if isLoading { return "加载中…" }
+            // A film has no episodes: never show the series copy
+            // ("剧集") for an Emby title that failed to load.
+            return source == .emby ? "暂无可播内容" : "暂无可播剧集"
         }
         if let resume = resume, resume.episodeName == episode.name {
+            // A single-episode line is a film (or a one-episode
+            // item): the entry point is play, not an episode name.
+            if line.episodes.count == 1 {
+                return "继续播放 · \(videoTimeText(seconds: resume.positionSeconds))"
+            }
             return "继续播放 · \(episode.name) · \(videoTimeText(seconds: resume.positionSeconds))"
+        }
+        if line.episodes.count == 1 {
+            return "播放"
         }
         return episode.displayName
     }
 
     var canPlay: Bool { selectedEpisode != nil }
 
+    /// Re-resolve the detail from the source, every time. The
+    /// previous detail is dropped first, so a retry visibly
+    /// re-fetches (loading state, then the fresh result) instead
+    /// of re-rendering the same empty state — and a failed retry
+    /// cannot leave a stale successful detail on screen.
     func load() {
         isLoading = true
+        detail = nil
         let completion: (VideoDetail?) -> Void = { [weak self] loaded in
             guard let self = self else { return }
             self.isLoading = false
             self.detail = loaded
-            self.isWatched = VideoLibraryStore.historyEntry(title: self.item.title, year: self.item.year) != nil
-            if let resume = self.resume, let line = loaded?.firstPlayableLine {
-                self.selectedLineIndex = loaded?.lines.firstIndex(where: { $0.id == line.id }) ?? 0
-                if let index = line.episodes.firstIndex(where: { $0.name == resume.episodeName }) {
-                    self.selectedEpisodeIndex = index
+            let entry = VideoLibraryStore.historyEntry(title: self.item.title, year: self.item.year)
+            self.isWatched = entry != nil
+            if let resume = self.resume, let loaded = loaded {
+                // The resume episode may live on a later line
+                // (Emby lines are seasons) — search all lines,
+                // not just the first playable one. The recorded
+                // line name disambiguates same-name episodes
+                // across seasons.
+                if let selection = VideoDetailRouting.resumeSelection(
+                    lines: loaded.lines, resume: resume, lineName: entry?.lineName) {
+                    self.selectedLineIndex = selection.lineIndex
+                    self.selectedEpisodeIndex = selection.episodeIndex
+                } else if let line = loaded.firstPlayableLine {
+                    self.selectedLineIndex = loaded.lines.firstIndex(where: { $0.id == line.id }) ?? 0
+                    if let index = line.episodes.firstIndex(where: { $0.name == resume.episodeName }) {
+                        self.selectedEpisodeIndex = index
+                    }
                 }
             }
         }
@@ -147,7 +172,10 @@ final class VideoDetailViewModel: ObservableObject {
 
 struct VideoDetailView: View {
     var item: VideoItem
-    var source: VideoDetailSource = .cms
+    /// Resolved from the item when omitted (VideoItem.detailSource),
+    /// so an Emby entry opened from home / history / favourites /
+    /// search loads the Emby detail instead of the CMS one.
+    var source: VideoDetailSource
 
     @StateObject private var viewModel: VideoDetailViewModel
     @EnvironmentObject private var videoPlayer: VideoPlayerViewModel
@@ -155,10 +183,10 @@ struct VideoDetailView: View {
 
     @Environment(\.haoTheme) private var theme
 
-    init(item: VideoItem, source: VideoDetailSource = .cms) {
+    init(item: VideoItem, source: VideoDetailSource? = nil) {
         self.item = item
-        self.source = source
-        _viewModel = StateObject(wrappedValue: VideoDetailViewModel(item: item, source: source))
+        self.source = source ?? item.detailSource
+        _viewModel = StateObject(wrappedValue: VideoDetailViewModel(item: item, source: self.source))
     }
 
     var body: some View {
@@ -237,13 +265,26 @@ struct VideoDetailContentView: View {
                         metaBlock(meta)
                     }
                     if !viewModel.lines.isEmpty {
-                        linePicker
-                        episodeGrid
+                        // A film has no episodes to choose from: the
+                        // line picker only appears with > 1 line
+                        // (a CMS film with several sources) and the
+                        // episode grid only with > 1 episode on the
+                        // selected line. A single line + single
+                        // episode (every Emby film) shows neither —
+                        // the big play button is the whole entry.
+                        if viewModel.lines.count > 1 {
+                            linePicker
+                        }
+                        if (viewModel.selectedLine?.episodes.count ?? 0) > 1 {
+                            episodeGrid
+                        }
                     } else if !viewModel.isLoading {
                         MusicEmptyState(
                             icon: "film",
-                            title: "暂无可播剧集",
-                            note: "该片源没有返回播放线路，换个片源试试。"
+                            title: viewModel.source == .emby ? "暂无可播内容" : "暂无可播剧集",
+                            note: viewModel.source == .emby
+                                ? "Emby 没有返回这部影片的播放地址，检查服务器连接后重试。"
+                                : "该片源没有返回播放线路，换个片源试试。"
                         )
                         // A failed detail fetch used to leave this
                         // state with no way back except leaving the
