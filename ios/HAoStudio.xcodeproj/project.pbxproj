@@ -152,6 +152,7 @@
 		000000000000000000000109 /* MusicCommentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000108 /* MusicCommentsView.swift */; };
 		00000000000000000000010B /* PlayerKernel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000010A /* PlayerKernel.swift */; };
 		00000000000000000000010D /* VideoCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000010C /* VideoCapability.swift */; };
+		0000000000000000000001E8 /* VideoBrowseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001E9 /* VideoBrowseView.swift */; };
 		00000000000000000000010F /* VideoDataGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000010E /* VideoDataGateway.swift */; };
 		000000000000000000000111 /* VideoDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000110 /* VideoDetailView.swift */; };
 		000000000000000000000113 /* VideoDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000112 /* VideoDriver.swift */; };
@@ -226,6 +227,7 @@
 		0000000000000000000001D4 /* HomeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001D5 /* HomeViewModel.swift */; };
 		0000000000000000000001D6 /* HomeAggregationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001D7 /* HomeAggregationTests.swift */; };
 		0000000000000000000001F0 /* EmbyContinueWatchingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001F1 /* EmbyContinueWatchingTests.swift */; };
+		0000000000000000000001EA /* VideoBrowseViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001EB /* VideoBrowseViewModelTests.swift */; };
 		0000000000000000000001BA /* MusicSleepTimerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001B9 /* MusicSleepTimerTests.swift */; };
 		0000000000000000000001BC /* LiveDriverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001BB /* LiveDriverTests.swift */; };
 		0000000000000000000001BE /* VideoPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001BD /* VideoPlayerTests.swift */; };
@@ -363,6 +365,7 @@
 		000000000000000000000108 /* MusicCommentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicCommentsView.swift; sourceTree = "<group>"; };
 		00000000000000000000010A /* PlayerKernel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerKernel.swift; sourceTree = "<group>"; };
 		00000000000000000000010C /* VideoCapability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCapability.swift; sourceTree = "<group>"; };
+		0000000000000000000001E9 /* VideoBrowseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoBrowseView.swift; sourceTree = "<group>"; };
 		00000000000000000000010E /* VideoDataGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDataGateway.swift; sourceTree = "<group>"; };
 		000000000000000000000110 /* VideoDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDetailView.swift; sourceTree = "<group>"; };
 		000000000000000000000112 /* VideoDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDriver.swift; sourceTree = "<group>"; };
@@ -437,6 +440,7 @@
 		0000000000000000000001D5 /* HomeViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeViewModel.swift; sourceTree = "<group>"; };
 		0000000000000000000001D7 /* HomeAggregationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeAggregationTests.swift; sourceTree = "<group>"; };
 		0000000000000000000001F1 /* EmbyContinueWatchingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbyContinueWatchingTests.swift; sourceTree = "<group>"; };
+		0000000000000000000001EB /* VideoBrowseViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoBrowseViewModelTests.swift; sourceTree = "<group>"; };
 		0000000000000000000001B9 /* MusicSleepTimerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicSleepTimerTests.swift; sourceTree = "<group>"; };
 		0000000000000000000001BB /* LiveDriverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveDriverTests.swift; sourceTree = "<group>"; };
 		0000000000000000000001BD /* VideoPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlayerTests.swift; sourceTree = "<group>"; };
@@ -735,6 +739,7 @@
 				0000000000000000000000F4 /* EmbyCategoryView.swift */,
 				0000000000000000000000F8 /* EmbyDetailView.swift */,
 				0000000000000000000000FC /* EmbyTabView.swift */,
+				0000000000000000000001E9 /* VideoBrowseView.swift */,
 				00000000000000000000010E /* VideoDataGateway.swift */,
 				000000000000000000000110 /* VideoDetailView.swift */,
 				000000000000000000000114 /* VideoFavsView.swift */,
@@ -789,6 +794,7 @@
 				0000000000000000000001C0 /* Info.plist */,
 				0000000000000000000001D7 /* HomeAggregationTests.swift */,
 				0000000000000000000001F1 /* EmbyContinueWatchingTests.swift */,
+				0000000000000000000001EB /* VideoBrowseViewModelTests.swift */,
 			); path = HAoStudioTests; sourceTree = "<group>"; };
 		0000000000000000000001C1 /* Tests */ = {isa = PBXGroup; children = (
 				0000000000000000000001C2 /* SettingsUITests */,
@@ -949,6 +955,7 @@
 				000000000000000000000015 /* SplashView.swift in Sources */,
 				000000000000000000000005 /* ThemeStore.swift in Sources */,
 				00000000000000000000010D /* VideoCapability.swift in Sources */,
+				0000000000000000000001E8 /* VideoBrowseView.swift in Sources */,
 				00000000000000000000010F /* VideoDataGateway.swift in Sources */,
 				000000000000000000000111 /* VideoDetailView.swift in Sources */,
 				000000000000000000000113 /* VideoDriver.swift in Sources */,
@@ -1029,6 +1036,7 @@
 				0000000000000000000001BE /* VideoPlayerTests.swift in Sources */,
 				0000000000000000000001D6 /* HomeAggregationTests.swift in Sources */,
 				0000000000000000000001F0 /* EmbyContinueWatchingTests.swift in Sources */,
+				0000000000000000000001EA /* VideoBrowseViewModelTests.swift in Sources */,
 				0000000000000000000001DC /* WiringFollowupTests.swift in Sources */,
 			); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */

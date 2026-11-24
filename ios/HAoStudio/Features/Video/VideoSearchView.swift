@@ -298,7 +298,7 @@ final class VideoCategoryViewModel: ObservableObject {
         guard !loadingMore && hasMore else { return }
         loadingMore = true
         isLoading = true
-        gateway.fetchByType(type, page: page) { [weak self] result in
+        gateway.fetchByType(type, page: page, area: "all", year: "all", by: "") { [weak self] result in
             guard let self = self else { return }
             self.loadingMore = false
             self.isLoading = false

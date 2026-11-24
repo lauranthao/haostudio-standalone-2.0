@@ -1,0 +1,398 @@
+// HAo Studio 2.0 — video browse page (build 36, item 18).
+//
+// Chen 2026-11-24: "影视所有都展示不全，要有单独页面可以打开，
+// 里面可以选分类" + "Emby 也是啊". The video home only shows the
+// first 10 rows × 10 items (and types 13+ never get a row), so this
+// page is the full grid: type chips + area / year / sort filters
+// (CMS) or library + genre pickers (Emby), paged to the bottom.
+//
+// "全部" semantics (decided): the page opens with the first visible
+// category pre-selected and loading immediately — never an empty
+// "pick a type first" dead end. CMS has no all-types endpoint, so
+// there is no merged all-types grid; per-row "全部" opens the page
+// pre-selected to that row's type, and the "每日推荐" row opens it
+// with no type (first category). No fake "每日推荐" type is invented.
+//
+// The view-model copies the EmbyCategoryViewModel generation guard
+// (stale-page drop + re-issue); VideoCategoryViewModel has none, so
+// its gap is NOT copied here. Area filtering stays inside
+// CmsClient.filterByTypeItems — VideoItem has no area field, so the
+// UI never filters VideoItems by area itself. Emby mode shows no
+// area / year / sort rows: the Emby gateway has none, and none are
+// invented.
+//
+// Layout follows the VidHub reference: clean poster grid, filter
+// chips on top, no clutter. Style reuses theme tokens exactly as
+// categoryStrip / libraryChip do — no new colours, no hardcoded
+// colours, no font-size changes (item 4 owns fonts).
+
+import SwiftUI
+
+@MainActor
+final class VideoBrowseViewModel: ObservableObject {
+    @Published private(set) var categories: [String] = []
+    @Published private(set) var libraries: [VideoEmbyLibrary] = []
+    @Published private(set) var genres: [String] = []
+    @Published private(set) var items: [VideoItem] = []
+    @Published private(set) var isLoading = false
+    @Published private(set) var hasMore = true
+
+    /// Changing any of these reloads the grid from page 0 (one
+    /// mechanism only: didSet + the ready gate below). The oldValue
+    /// guard keeps a same-value assignment from refetching.
+    @Published var selectedType: String? { didSet { if oldValue != selectedType { reload() } } }
+    @Published var area = "all" { didSet { if oldValue != area { reload() } } }
+    @Published var year = "all" { didSet { if oldValue != year { reload() } } }
+    @Published var sort = "" { didSet { if oldValue != sort { reload() } } }
+    @Published var mode: String { didSet { if oldValue != mode { reload() } } }
+    @Published var selectedLibraryId: String? { didSet { if oldValue != selectedLibraryId { reload() } } }
+    @Published var selectedGenre: String? { didSet { if oldValue != selectedGenre { reload() } } }
+
+    private let gateway: VideoDataGateway
+    private let initialType: String?
+    private var page = 0
+    private var loadingMore = false
+    /// Load generation: every reload bumps it. A page that lands
+    /// for an older generation is dropped and the current query
+    /// re-issued — otherwise a filter change mid-pagination lands
+    /// the stale page over fresh items (same class as the
+    /// EmbyCategoryViewModel race, b35 sweep).
+    private var generation = 0
+    /// False until the first category list lands. didSet reloads
+    /// before that point are no-ops: there is no selected type yet
+    /// and nothing to fetch.
+    private var ready = false
+
+    init(initialType: String?, gateway: VideoDataGateway = VideoServices.makeGateway()) {
+        self.initialType = initialType
+        self.gateway = gateway
+        self.mode = VideoLibraryStore.tabMode()
+        loadMeta()
+    }
+
+    var isEmbyConfigured: Bool { gateway.embyConfigured }
+
+    /// Category / library / genre lists. On the category list
+    /// landing, the initial type is kept when it is still in the
+    /// list (a refresh must not reset the user's pick), else the
+    /// requested initial type, else the first visible category —
+    /// hidden-category prefs apply via visibleCategories, so a
+    /// hidden category never reappears here. Then the grid loads.
+    private func loadMeta() {
+        gateway.fetchTypeNames { [weak self] names in
+            guard let self = self else { return }
+            self.categories = VideoLibraryStore.visibleCategories(
+                names, prefs: VideoLibraryStore.categoryPrefs())
+            if let current = self.selectedType, self.categories.contains(current) {
+                // Keep the user's pick across a refresh.
+            } else if let initial = self.initialType, self.categories.contains(initial) {
+                self.selectedType = initial
+            } else {
+                self.selectedType = self.categories.first
+            }
+            self.ready = true
+            self.reload()
+        }
+        gateway.fetchEmbyLibraries { [weak self] libs in
+            self?.libraries = libs
+        }
+        gateway.fetchEmbyGenres { [weak self] names in
+            self?.genres = names
+        }
+    }
+
+    /// Pull-to-refresh: re-fetch the lists (categories may have
+    /// changed) and reload the grid from page 0.
+    func refresh() {
+        loadMeta()
+    }
+
+    func reload() {
+        guard ready else { return }
+        generation += 1
+        page = 0
+        hasMore = true
+        items = []
+        loadMore()
+    }
+
+    func loadMore() {
+        guard !loadingMore, hasMore else { return }
+        if mode == "emby" {
+            guard gateway.embyConfigured else { return }
+        } else {
+            guard selectedType != nil else { return }
+        }
+        loadingMore = true
+        isLoading = true
+        let requestGeneration = generation
+        let pageToLoad = page
+        if mode == "emby" {
+            gateway.fetchEmbyItems(libraryId: selectedLibraryId, genre: selectedGenre, page: pageToLoad) { [weak self] result in
+                self?.handlePage(result, requestGeneration: requestGeneration)
+            }
+        } else {
+            // selectedType is non-nil by the guard above.
+            gateway.fetchByType(selectedType ?? "", page: pageToLoad, area: area, year: year, by: sort) { [weak self] result in
+                self?.handlePage(result, requestGeneration: requestGeneration)
+            }
+        }
+    }
+
+    private func handlePage(_ result: VideoItemPage, requestGeneration: Int) {
+        loadingMore = false
+        isLoading = false
+        guard requestGeneration == generation else {
+            // Stale page: a reload / filter change landed while it
+            // was in flight. Its items belong to the old query, so
+            // drop them; the new query was dropped by the
+            // loadingMore guard above, so re-issue it now (items
+            // is empty after the reset).
+            if items.isEmpty { loadMore() }
+            return
+        }
+        if result.items.isEmpty {
+            // Empty page = end of list. This is what terminates
+            // filtered pagination (a filtered leaf page is a
+            // 10-CMS-page window, so pagecount is approximate).
+            hasMore = false
+        } else {
+            var seen = Set(items.map { "\($0.sourceId ?? -1)|\($0.id)" })
+            for item in result.items {
+                let key = "\(item.sourceId ?? -1)|\(item.id)"
+                if seen.insert(key).inserted { items.append(item) }
+            }
+            page += 1
+            hasMore = result.hasMore
+        }
+    }
+}
+
+/// The browse page: mode switch + pickers + paged poster grid.
+/// Poster taps go out through the callbacks so the caller (the
+/// video tab, which owns the NavigationStack) routes CMS posters
+/// to .detail and Emby posters to .embyDetail on the existing
+/// chains.
+struct VideoBrowseView: View {
+    var initialType: String?
+    var onSelectCMS: (VideoItem) -> Void
+    var onSelectEmby: (VideoItem) -> Void
+
+    @StateObject private var viewModel: VideoBrowseViewModel
+
+    @Environment(\.haoTheme) private var theme
+
+    init(initialType: String?, onSelectCMS: @escaping (VideoItem) -> Void, onSelectEmby: @escaping (VideoItem) -> Void) {
+        self.initialType = initialType
+        self.onSelectCMS = onSelectCMS
+        self.onSelectEmby = onSelectEmby
+        _viewModel = StateObject(wrappedValue: VideoBrowseViewModel(initialType: initialType))
+    }
+
+    /// Area options (label, value). Values are the CmsClient
+    /// filter values: "all" default, "other" = none of the known
+    /// areas; area filtering itself lives in filterByTypeItems.
+    private static let areaOptions: [(String, String)] = [
+        ("全部", "all"), ("大陆", "大陆"), ("香港", "香港"), ("台湾", "台湾"),
+        ("美国", "美国"), ("韩国", "韩国"), ("日本", "日本"), ("英国", "英国"),
+        ("其他", "other"),
+    ]
+
+    /// Sort options (label, `by` value): "" default, "hits" most
+    /// viewed, "score" highest rated.
+    private static let sortOptions: [(String, String)] = [
+        ("默认", ""), ("最热", "hits"), ("评分最高", "score"),
+    ]
+
+    /// Year options: 全部 + the 5 most recent years from the
+    /// calendar (never hardcoded) + 更早 (year ≤ 2021).
+    private var yearOptions: [(String, String)] {
+        let current = Calendar.current.component(.year, from: Date())
+        var options: [(String, String)] = [("全部", "all")]
+        for offset in 0..<5 {
+            let year = String(current - offset)
+            options.append((year, year))
+        }
+        options.append(("更早", "earlier"))
+        return options
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                Picker("片源", selection: $viewModel.mode) {
+                    Text("影视").tag("cms")
+                    Text("Emby").tag("emby")
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .onChange(of: viewModel.mode) { newMode in
+                    VideoLibraryStore.setTabMode(newMode)
+                }
+                if viewModel.mode == "emby" && !viewModel.isEmbyConfigured {
+                    MusicEmptyState(
+                        icon: "server.rack",
+                        title: "未配置 Emby 服务器",
+                        note: "在设置 → Emby 连接里添加服务器地址并登录后，这里会显示你的媒体库。"
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.top, 24)
+                } else if viewModel.mode == "emby" {
+                    embyPickers
+                        .padding(.top, 12)
+                    gridSection
+                } else {
+                    cmsPickers
+                        .padding(.top, 12)
+                    gridSection
+                }
+                Spacer(minLength: 16)
+            }
+        }
+        .haoBottomChromePadding()
+        .background(theme.scaffoldBackground)
+        .navigationTitle("浏览")
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshable { viewModel.refresh() }
+    }
+
+    // MARK: - CMS pickers
+
+    private var cmsPickers: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(viewModel.categories, id: \.self) { type in
+                        filterChip(
+                            label: type,
+                            selected: viewModel.selectedType == type
+                        ) {
+                            viewModel.selectedType = type
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            filterRow(title: "地区", options: Self.areaOptions, selected: viewModel.area) {
+                viewModel.area = $0
+            }
+            filterRow(title: "年份", options: yearOptions, selected: viewModel.year) {
+                viewModel.year = $0
+            }
+            filterRow(title: "排序", options: Self.sortOptions, selected: viewModel.sort) {
+                viewModel.sort = $0
+            }
+        }
+    }
+
+    // MARK: - Emby pickers
+
+    private var embyPickers: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    filterChip(label: "全部", selected: viewModel.selectedLibraryId == nil) {
+                        viewModel.selectedLibraryId = nil
+                    }
+                    ForEach(viewModel.libraries) { library in
+                        filterChip(
+                            label: library.name,
+                            selected: viewModel.selectedLibraryId == library.id
+                        ) {
+                            viewModel.selectedLibraryId = library.id
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            filterRow(
+                title: "分类",
+                options: [("全部", "")] + viewModel.genres.map { ($0, $0) },
+                selected: viewModel.selectedGenre ?? ""
+            ) {
+                viewModel.selectedGenre = $0.isEmpty ? nil : $0
+            }
+        }
+    }
+
+    // MARK: - Grid
+
+    private var gridSection: some View {
+        Group {
+            if viewModel.items.isEmpty && viewModel.isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 32)
+            } else if viewModel.items.isEmpty {
+                MusicEmptyState(
+                    icon: "film",
+                    title: "这个分类下没有内容",
+                    note: viewModel.mode == "emby"
+                        ? "Emby 没有返回该分类的影片。"
+                        : "影视源没有返回该分类的数据。"
+                )
+                .padding(.horizontal, 16)
+            } else {
+                VideoPosterGrid(items: viewModel.items, isEmby: viewModel.mode == "emby") { item in
+                    if viewModel.mode == "emby" {
+                        onSelectEmby(item)
+                    } else {
+                        onSelectCMS(item)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                if viewModel.hasMore {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .onAppear { viewModel.loadMore() }
+                }
+            }
+        }
+    }
+
+    // MARK: - Filter chips
+
+    /// One filter row: a small muted label + a horizontal chip
+    /// strip, same capsule style as categoryStrip / libraryChip.
+    private func filterRow(
+        title: String,
+        options: [(String, String)],
+        selected: String,
+        onSelect: @escaping (String) -> Void
+    ) -> some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .font(.haoDenseBody)
+                .foregroundStyle(theme.textMuted)
+                .frame(width: 36, alignment: .leading)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(options, id: \.1) { option in
+                        filterChip(label: option.0, selected: selected == option.1) {
+                            onSelect(option.1)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private func filterChip(label: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.haoDenseBody)
+                .foregroundStyle(selected ? theme.onAccent : theme.textPrimary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(selected ? theme.accent : theme.surface, in: Capsule())
+                .overlay {
+                    Capsule().strokeBorder(theme.hairline, lineWidth: 0.5)
+                }
+        }
+        .buttonStyle(.plain)
+    }
+}

@@ -160,4 +160,133 @@ final class CmsParsingTests: XCTestCase {
         }
         XCTAssertEqual(CmsClient.dedupeAndRankSearch(rows, query: "片名").count, 40)
     }
+
+    // MARK: - By-type filters (build 36 item 18)
+
+    private func filterRow(_ title: String, area: String, year: String? = "2024", score: Double = 0, hits: Int = 0) -> CmsSearchRow {
+        CmsSearchRow(
+            item: VideoItem(id: title, title: title, coverURL: nil, year: year, typeName: "电影", remarks: nil, sourceId: 1),
+            score: score, hits: hits, area: area
+        )
+    }
+
+    func testFilterByTypeItemsAreaAlias() {
+        let rows = [
+            filterRow("A", area: "中国大陆"),
+            filterRow("B", area: "内地"),
+            filterRow("C", area: "大陆"),
+            filterRow("D", area: "香港"),
+            filterRow("E", area: "美国"),
+        ]
+        XCTAssertEqual(
+            CmsClient.filterByTypeItems(rows, area: "大陆", year: "all", by: "").map { $0.title },
+            ["A", "B", "C"])
+    }
+
+    func testFilterByTypeItemsOtherExcludesKnownAreas() {
+        let rows = [
+            filterRow("A", area: "中国大陆"),
+            filterRow("B", area: "香港"),
+            filterRow("C", area: "法国"),
+        ]
+        XCTAssertEqual(
+            CmsClient.filterByTypeItems(rows, area: "other", year: "all", by: "").map { $0.title },
+            ["C"])
+    }
+
+    func testFilterByTypeItemsEarlierKeeps2021AndBefore() {
+        let rows = [
+            filterRow("A", area: "大陆", year: "2019"),
+            filterRow("B", area: "大陆", year: "2021"),
+            filterRow("C", area: "大陆", year: "2022"),
+            filterRow("D", area: "大陆", year: nil),
+        ]
+        XCTAssertEqual(
+            CmsClient.filterByTypeItems(rows, area: "all", year: "earlier", by: "").map { $0.title },
+            ["A", "B"])
+    }
+
+    func testFilterByTypeItemsYearExact() {
+        let rows = [
+            filterRow("A", area: "大陆", year: "2024"),
+            filterRow("B", area: "大陆", year: "2023"),
+        ]
+        XCTAssertEqual(
+            CmsClient.filterByTypeItems(rows, area: "all", year: "2024", by: "").map { $0.title },
+            ["A"])
+    }
+
+    func testFilterByTypeItemsSortHitsAndScore() {
+        let rows = [
+            filterRow("A", area: "大陆", score: 7.5, hits: 5),
+            filterRow("B", area: "大陆", score: 9.0, hits: 50),
+            filterRow("C", area: "大陆", score: 8.0, hits: 20),
+        ]
+        XCTAssertEqual(
+            CmsClient.filterByTypeItems(rows, area: "all", year: "all", by: "hits").map { $0.title },
+            ["B", "C", "A"])
+        XCTAssertEqual(
+            CmsClient.filterByTypeItems(rows, area: "all", year: "all", by: "score").map { $0.title },
+            ["B", "C", "A"])
+    }
+
+    // MARK: - By-type paging (build 36 item 18)
+
+    /// The filtered byType overload had no callers and its page
+    /// math fetched CMS pages -9...0 for logical page 0. These
+    /// cases pin the 0-based contract: logical page 0 fetches CMS
+    /// page 1 (unfiltered) or the 1...10 window (filtered), and
+    /// logical page 1 fetches the 11...20 window.
+    func testByTypePageZeroFetchesFirstCmsPages() {
+        var requestedPages: [Int] = []
+        let fetcher: VideoJSONFetcher = { url, _, completion in
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            let value = { (name: String) in items.first { $0.name == name }?.value }
+            if value("ac") == "list" {
+                completion(["class": [["type_name": "电影", "type_id": "1", "type_pid": "0"]]])
+                return
+            }
+            if let pg = value("pg").flatMap(Int.init) { requestedPages.append(pg) }
+            completion([
+                "total": 100, "pagecount": 30,
+                "list": [[
+                    "vod_id": "11", "vod_name": "测试片", "vod_pic": "http://x/a.jpg",
+                    "vod_year": "2024", "type_name": "电影", "vod_area": "香港",
+                    "vod_score": 8.0, "vod_hits": 10,
+                ]],
+            ])
+        }
+        let client = CmsClient(sources: [source()], fetcher: fetcher)
+
+        let unfiltered = expectation(description: "unfiltered page 0")
+        client.byType(name: "电影", page: 0) { result in
+            XCTAssertEqual(requestedPages, [1])
+            XCTAssertEqual(result?.page, 0)
+            XCTAssertEqual(result?.pagecount, 30)
+            XCTAssertEqual(result?.items.count, 1)
+            unfiltered.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+
+        requestedPages = []
+        let filtered = expectation(description: "filtered page 0")
+        client.byType(name: "电影", page: 0, area: "香港", year: "all", by: "") { result in
+            XCTAssertEqual(requestedPages.sorted(), Array(1...10))
+            XCTAssertEqual(result?.page, 0)
+            XCTAssertEqual(result?.pagecount, 3)
+            XCTAssertEqual(result?.items.count, 10)
+            filtered.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+
+        requestedPages = []
+        let filteredPageOne = expectation(description: "filtered page 1")
+        client.byType(name: "电影", page: 1, area: "香港", year: "all", by: "") { result in
+            XCTAssertEqual(requestedPages.sorted(), Array(11...20))
+            XCTAssertEqual(result?.page, 1)
+            XCTAssertEqual(result?.pagecount, 3)
+            filteredPageOne.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+    }
 }
