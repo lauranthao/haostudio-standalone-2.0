@@ -847,3 +847,177 @@ final class VodGestureStepTests: XCTestCase {
         XCTAssertEqual(VodGestureMath.seekDelta(x: 10, width: 300), -10)
     }
 }
+
+// MARK: - Player controls round (2026-11-24, chen build-33 report
+// items 3/4/5/9): seek-bar math, danmaku availability, danmaku
+// layer loading flags, live overlay backlog cap, 2x speed restore.
+
+final class VideoSeekBarMathTests: XCTestCase {
+    func testPositionFromTouch() {
+        XCTAssertEqual(VideoSeekBarMath.position(forX: 0, totalWidth: 300, duration: 100), 0)
+        XCTAssertEqual(VideoSeekBarMath.position(forX: 150, totalWidth: 300, duration: 100), 50)
+        XCTAssertEqual(VideoSeekBarMath.position(forX: 300, totalWidth: 300, duration: 100), 100)
+        // Off either end clamps, never overshoots.
+        XCTAssertEqual(VideoSeekBarMath.position(forX: 400, totalWidth: 300, duration: 100), 100)
+        XCTAssertEqual(VideoSeekBarMath.position(forX: -10, totalWidth: 300, duration: 100), 0)
+        // Degenerate inputs are 0, never NaN.
+        XCTAssertEqual(VideoSeekBarMath.position(forX: 150, totalWidth: 0, duration: 100), 0)
+        XCTAssertEqual(VideoSeekBarMath.position(forX: 150, totalWidth: 300, duration: 0), 0)
+    }
+
+    func testFillWidth() {
+        XCTAssertEqual(VideoSeekBarMath.fillWidth(position: 50, duration: 100, totalWidth: 300), 150)
+        XCTAssertEqual(VideoSeekBarMath.fillWidth(position: 0, duration: 100, totalWidth: 300), 0)
+        XCTAssertEqual(VideoSeekBarMath.fillWidth(position: 100, duration: 100, totalWidth: 300), 300)
+        XCTAssertEqual(VideoSeekBarMath.fillWidth(position: 150, duration: 100, totalWidth: 300), 300)
+        XCTAssertEqual(VideoSeekBarMath.fillWidth(position: 50, duration: 0, totalWidth: 300), 0)
+    }
+
+    func testPreviewBubbleStaysInside() {
+        XCTAssertEqual(VideoSeekBarMath.previewCenterX(knobX: 150, totalWidth: 300, bubbleWidth: 72), 150)
+        // Left edge: centre never closer than half the bubble.
+        XCTAssertEqual(VideoSeekBarMath.previewCenterX(knobX: 0, totalWidth: 300, bubbleWidth: 72), 36)
+        // Right edge: same clamp on the other side.
+        XCTAssertEqual(VideoSeekBarMath.previewCenterX(knobX: 300, totalWidth: 300, bubbleWidth: 72), 264)
+        // Bar narrower than the bubble: centre it.
+        XCTAssertEqual(VideoSeekBarMath.previewCenterX(knobX: 150, totalWidth: 60, bubbleWidth: 72), 30)
+    }
+}
+
+final class VodDanmakuAvailabilityTests: XCTestCase {
+    func testResolve() {
+        XCTAssertEqual(
+            VodDanmakuAvailability.resolve(isLoading: true, didLoad: false, itemCount: 0), .loading)
+        XCTAssertEqual(
+            VodDanmakuAvailability.resolve(isLoading: false, didLoad: false, itemCount: 0), .loading)
+        XCTAssertEqual(
+            VodDanmakuAvailability.resolve(isLoading: false, didLoad: true, itemCount: 0), .unavailable)
+        XCTAssertEqual(
+            VodDanmakuAvailability.resolve(isLoading: false, didLoad: true, itemCount: 3), .available)
+        // Items win over loading: a non-empty layer is switchable.
+        XCTAssertEqual(
+            VodDanmakuAvailability.resolve(isLoading: true, didLoad: true, itemCount: 2), .available)
+    }
+}
+
+final class VodDanmakuLayerLoadingTests: XCTestCase {
+    func testNilProviderMarksLoadedWithNoItems() {
+        let state = VodDanmakuLayerState()
+        state.load(for: PlayEpisode(name: "第01集", url: nil, index: 0), provider: nil)
+        XCTAssertTrue(state.items.isEmpty)
+        XCTAssertFalse(state.isLoading)
+        XCTAssertTrue(state.didLoad)
+        XCTAssertEqual(
+            VodDanmakuAvailability.resolve(
+                isLoading: state.isLoading, didLoad: state.didLoad, itemCount: state.items.count),
+            .unavailable)
+    }
+
+    func testProviderLoadPassesThroughLoading() {
+        let state = VodDanmakuLayerState()
+        let provider = FakeDanmakuProvider(items: [
+            DanmakuItem(text: "one", timeSeconds: 1, colorHex: "", isTop: false),
+        ])
+        state.load(for: PlayEpisode(name: "第01集", url: nil, index: 0), provider: provider)
+        // The fetch completion lands on the main queue, so right
+        // after load() the layer is still loading.
+        XCTAssertTrue(state.isLoading)
+        XCTAssertFalse(state.didLoad)
+        let checked = expectation(description: "items loaded")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            XCTAssertFalse(state.isLoading)
+            XCTAssertTrue(state.didLoad)
+            XCTAssertEqual(state.items.count, 1)
+            checked.fulfill()
+        }
+        waitForExpectations(timeout: 2)
+    }
+
+    func testEpisodeChangeResetsLoadingState() {
+        let state = VodDanmakuLayerState()
+        let provider = FakeDanmakuProvider(items: [
+            DanmakuItem(text: "one", timeSeconds: 1, colorHex: "", isTop: false),
+        ])
+        state.load(for: PlayEpisode(name: "第01集", url: nil, index: 0), provider: provider)
+        let checked = expectation(description: "second episode reloads")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            XCTAssertEqual(state.items.count, 1)
+            state.load(for: PlayEpisode(name: "第02集", url: nil, index: 1), provider: provider)
+            XCTAssertTrue(state.items.isEmpty)
+            XCTAssertTrue(state.isLoading)
+            XCTAssertFalse(state.didLoad)
+            checked.fulfill()
+        }
+        waitForExpectations(timeout: 2)
+    }
+}
+
+final class LiveDanmakuOverlayBacklogTests: XCTestCase {
+    func testFreshMountSkipsBacklog() {
+        XCTAssertEqual(
+            LiveDanmakuOverlayView.startIndexForFreshMount(messageCount: 200, maxBacklog: 20), 180)
+        XCTAssertEqual(
+            LiveDanmakuOverlayView.startIndexForFreshMount(messageCount: 10, maxBacklog: 20), 0)
+        XCTAssertEqual(
+            LiveDanmakuOverlayView.startIndexForFreshMount(messageCount: 0, maxBacklog: 20), 0)
+        XCTAssertEqual(
+            LiveDanmakuOverlayView.startIndexForFreshMount(messageCount: 20, maxBacklog: 20), 0)
+    }
+}
+
+// MARK: - 2x speed restore (VOD only)
+
+/// Controllable stand-in for a VideoPlayerEngine: records speed
+/// changes so the long-press 2x restore rule can be asserted
+/// without a real backend.
+final class FakePlayerEngine: VideoPlayerEngine {
+    var positionSeconds: Double = 0
+    var durationSeconds: Double = 100
+    var isPlaying: Bool = false
+    var videoView: UIView? = nil
+    var currentEngine: VideoEngine? = .avplayer
+    var diagnostics: VideoPlaybackDiagnostics = .empty
+    var speeds: [Double] = []
+
+    func play(detail: VideoDetail, lineIndex: Int, episodeIndex: Int, startPositionSeconds: Double) {}
+    func playEpisode(lineIndex: Int, episodeIndex: Int, startPositionSeconds: Double) {}
+    func setSpeed(_ speed: Double) { speeds.append(speed) }
+    func setVideoFit(_ fit: VideoFit) {}
+    func seek(to seconds: Double, completion: @escaping (Bool) -> Void) { completion(true) }
+    func pause() { isPlaying = false }
+    func resume() { isPlaying = true }
+    func stop() { isPlaying = false }
+    func applyVodEnhancement(_ branch: VodEnhancementBranch?) {}
+    func setSubtitleAppearance(_ appearance: VodSubtitleAppearance) {}
+    func setDialogueBoost(_ enabled: Bool) {}
+    func setAudioOnly(_ audioOnly: Bool) {}
+    @discardableResult
+    func reopenAtCurrentPosition() -> Bool { false }
+    func reopenEpisodeAtCurrentPosition() {}
+}
+
+final class VideoPlayerSpeedTests: XCTestCase {
+    @MainActor
+    func testDoubleSpeedRestoresUserSpeed() {
+        let viewModel = VideoPlayerViewModel(coordinator: PlaybackCoordinator())
+        let engine = FakePlayerEngine()
+        viewModel.settings.playbackSpeed = 1.5
+        viewModel.attachEngine(engine)
+        // Attach pushes the user's speed to the engine.
+        XCTAssertEqual(engine.speeds.last, 1.5)
+        viewModel.setDoubleSpeed(true)
+        XCTAssertTrue(viewModel.isDoubleSpeed)
+        XCTAssertEqual(engine.speeds.last, 2.0)
+        // Release restores the USER speed (1.5), not a hardcoded 1.0.
+        viewModel.setDoubleSpeed(false)
+        XCTAssertFalse(viewModel.isDoubleSpeed)
+        XCTAssertEqual(engine.speeds.last, 1.5)
+    }
+
+    @MainActor
+    func testDoubleSpeedWithoutEngineIsNoop() {
+        let viewModel = VideoPlayerViewModel(coordinator: PlaybackCoordinator())
+        viewModel.setDoubleSpeed(true)
+        XCTAssertFalse(viewModel.isDoubleSpeed)
+    }
+}

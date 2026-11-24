@@ -158,6 +158,31 @@ func liveDanmakuRowPadding(_ spacing: String) -> CGFloat {
     }
 }
 
+// MARK: - Shared toggle button
+
+/// The one danmaku on/off button both players use (live portrait
+/// strip + live landscape bar; the VOD "更多" sheet binds the same
+/// on/off rule to a Toggle row instead — one switch rule, one icon
+/// language: filled message = on, outline = off). On-video chrome
+/// is forced-dark (white on the video), the same treatment as the
+/// VOD / live-landscape bars, so it reads over any frame in any of
+/// the 8 theme combinations. Never a fake switch: the button only
+/// appears where a danmaku layer exists to toggle.
+struct DanmakuToggleButton: View {
+    var isOn: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: isOn ? "message.fill" : "message")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(isOn ? .white : .white.opacity(0.5))
+                .frame(width: 44, height: 44)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // MARK: - Portrait chat list
 
 /// The portrait danmaku list: newest at the bottom, auto-scrolls
@@ -337,6 +362,20 @@ struct LiveDanmakuOverlayView: View {
     static let scrollDuration: Double = 8
     /// Flying lanes inside the area fraction (VOD parity).
     static let laneCount: Int = 4
+    /// Backlog cap on a fresh mount: when the overlay (re)appears
+    /// — room open, danmaku toggled back on, room switch — only
+    /// the most recent N messages fly. Without it a busy room's
+    /// capped 200-message history would burst onto the video at
+    /// once; the overlay shows the live flow, not history (the
+    /// portrait list below is the history).
+    static let maxBacklogOnAppear: Int = 20
+
+    /// First message index to ingest on a fresh mount: skip all
+    /// but the most recent `maxBacklog` messages. Pure, so tests
+    /// can drive it without a view.
+    static func startIndexForFreshMount(messageCount: Int, maxBacklog: Int) -> Int {
+        max(0, messageCount - maxBacklog)
+    }
 
     var messages: [DanmakuMessage]
     var settings: LiveDanmakuSettings
@@ -380,6 +419,12 @@ struct LiveDanmakuOverlayView: View {
             recentTexts = []
             lastSeenCount = 0
             nextLane = 0
+        }
+        // Fresh mount (or reset): skip the backlog, fly only the
+        // most recent messages (see maxBacklogOnAppear).
+        if lastSeenCount == 0 {
+            lastSeenCount = Self.startIndexForFreshMount(
+                messageCount: messages.count, maxBacklog: Self.maxBacklogOnAppear)
         }
         guard messages.count > lastSeenCount else { return }
         let fresh = messages[lastSeenCount..<messages.count]
