@@ -133,7 +133,7 @@ struct MusicCommentsView: View {
                         }
                         Section {
                             Text("评论只读 — 发表评论需要平台登录，本应用没有登录入口。")
-                                .font(.system(size: 12))
+                                .font(.haoCaption)
                                 .foregroundStyle(theme.textMuted)
                         }
                     }
@@ -170,11 +170,11 @@ struct MusicCommentRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(comment.nick.isEmpty ? "匿名" : comment.nick)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.haoFootnoteStrong)
                         .foregroundStyle(theme.textPrimary)
                         .lineLimit(1)
                     Text(comment.platform.badgeName)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.haoBadge)
                         .foregroundStyle(theme.textSecondary)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
@@ -185,15 +185,15 @@ struct MusicCommentRow: View {
                     Spacer()
                     if comment.likes > 0 {
                         Label("\(comment.likes)", systemImage: "heart")
-                            .font(.system(size: 12))
+                            .font(.haoCaption)
                             .foregroundStyle(theme.textMuted)
                     }
                 }
                 Text(comment.content)
-                    .font(.system(size: 14))
+                    .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textPrimary)
                 Text(musicCommentDateText(milliseconds: comment.time))
-                    .font(.system(size: 11))
+                    .font(.haoCaption2)
                     .foregroundStyle(theme.textMuted)
             }
         }

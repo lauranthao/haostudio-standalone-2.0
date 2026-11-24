@@ -163,7 +163,7 @@ struct VideoDetailView: View {
                 VStack {
                     Spacer()
                     Text(note)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.haoFootnoteMedium)
                         .foregroundStyle(.white)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
@@ -240,7 +240,7 @@ struct VideoDetailContentView: View {
                         // page (load() only runs on appear).
                         Button(action: { viewModel.load() }) {
                             Text("重试")
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(.haoSubheadStrong)
                                 .foregroundStyle(theme.onAccent)
                                 .padding(.horizontal, 24)
                                 .padding(.vertical, 10)
@@ -306,9 +306,9 @@ struct VideoDetailContentView: View {
                 Button(action: { spoilerCoverRevealed = true }) {
                     HStack(spacing: 6) {
                         Image(systemName: "eye")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.haoDenseTitle)
                         Text("点按查看海报")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.haoDenseTitle)
                     }
                     .foregroundStyle(.white)
                     .padding(.horizontal, 16)
@@ -336,22 +336,22 @@ struct VideoDetailContentView: View {
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(viewModel.item.title)
-                .font(.system(size: 24, weight: .bold))
+                .font(.haoDetailTitle)
                 .foregroundStyle(theme.textPrimary)
             HStack(spacing: 8) {
                 if let year = viewModel.item.year, !year.isEmpty {
                     Text(year)
-                        .font(.system(size: 14))
+                        .font(.haoRowSubtitle)
                         .foregroundStyle(theme.textSecondary)
                 }
                 if let type = viewModel.item.typeName, !type.isEmpty {
                     Text(type)
-                        .font(.system(size: 14))
+                        .font(.haoRowSubtitle)
                         .foregroundStyle(theme.textSecondary)
                 }
                 if let remarks = viewModel.item.remarks, !remarks.isEmpty {
                     Text(remarks)
-                        .font(.system(size: 14))
+                        .font(.haoRowSubtitle)
                         .foregroundStyle(theme.textSecondary)
                 }
             }
@@ -361,11 +361,11 @@ struct VideoDetailContentView: View {
                 // sole metadata source, so no other rating is shown.
                 HStack(spacing: 4) {
                     Image(systemName: "star.fill")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.haoFootnoteStrong)
                     Text(String(format: "%.1f", rating))
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.haoCalloutStrong)
                     Text("豆瓣评分")
-                        .font(.system(size: 13))
+                        .font(.haoFootnote)
                         .foregroundStyle(theme.textMuted)
                 }
                 .foregroundStyle(theme.accent)
@@ -384,9 +384,9 @@ struct VideoDetailContentView: View {
                 // SF Symbol, not the "▶" text glyph (build-35
                 // polish: unicode glyphs are not an icon system).
                 Image(systemName: "play.fill")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.haoSubheadStrong)
                 Text(viewModel.playButtonLabel)
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.haoBodyStrong)
                 Spacer()
             }
             .foregroundStyle(theme.onAccent)
@@ -405,7 +405,7 @@ struct VideoDetailContentView: View {
                     viewModel.isFavourite ? "已收藏" : "收藏",
                     systemImage: viewModel.isFavourite ? "heart.fill" : "heart"
                 )
-                .font(.system(size: 14, weight: .medium))
+                .font(.haoDenseBody)
                 .foregroundStyle(theme.accent)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -414,7 +414,7 @@ struct VideoDetailContentView: View {
             .buttonStyle(.plain)
             Button(action: { viewModel.downloadSelected() }) {
                 Label("下载", systemImage: "arrow.down.circle")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.haoDenseBody)
                     .foregroundStyle(theme.accent)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
@@ -431,7 +431,7 @@ struct VideoDetailContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             if !meta.cast.isEmpty {
                 Text(meta.cast.joined(separator: " / "))
-                    .font(.system(size: 15))
+                    .font(.haoSubhead)
                     .foregroundStyle(theme.textSecondary)
                     .lineLimit(2)
             }
@@ -443,16 +443,16 @@ struct VideoDetailContentView: View {
                     Button(action: { spoilerSynopsisRevealed = true }) {
                         HStack(spacing: 8) {
                             Image(systemName: "eye.slash")
-                                .font(.system(size: 14))
+                                .font(.haoRowSubtitle)
                             Text("简介已隐藏（防剧透），点按查看")
-                                .font(.system(size: 14))
+                                .font(.haoRowSubtitle)
                         }
                         .foregroundStyle(theme.textSecondary)
                     }
                     .buttonStyle(.plain)
                 } else {
                     Text(synopsis)
-                        .font(.system(size: 15))
+                        .font(.haoSubhead)
                         .foregroundStyle(theme.textPrimary)
                         .lineSpacing(4)
                         .lineLimit(6)
@@ -466,7 +466,7 @@ struct VideoDetailContentView: View {
     private var linePicker: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("线路")
-                .font(.system(size: 20, weight: .semibold))
+                .font(.haoSectionTitle)
                 .foregroundStyle(theme.textPrimary)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -476,7 +476,7 @@ struct VideoDetailContentView: View {
                             viewModel.selectedEpisodeIndex = 0
                         }) {
                             Text(line.name)
-                                .font(.system(size: 14, weight: .medium))
+                                .font(.haoDenseBody)
                                 .foregroundStyle(
                                     index == viewModel.selectedLineIndex
                                         ? theme.onAccent : theme.textPrimary)
@@ -500,7 +500,7 @@ struct VideoDetailContentView: View {
     private var episodeGrid: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("选集")
-                .font(.system(size: 20, weight: .semibold))
+                .font(.haoSectionTitle)
                 .foregroundStyle(theme.textPrimary)
             LazyVGrid(
                 columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
@@ -509,7 +509,7 @@ struct VideoDetailContentView: View {
                 ForEach(Array((viewModel.selectedLine?.episodes ?? []).enumerated()), id: \.element.id) { index, episode in
                     Button(action: { onPlay(viewModel.selectedLineIndex, index) }) {
                         Text(episode.displayName)
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.haoFootnoteMedium)
                             .foregroundStyle(
                                 index == viewModel.selectedEpisodeIndex
                                     ? theme.onAccent : theme.textPrimary)

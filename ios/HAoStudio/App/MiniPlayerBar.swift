@@ -94,7 +94,7 @@ struct MiniPlayerBar: View {
                     urlString: item.coverURL?.absoluteString ?? "",
                     size: HaoLayout.miniInlineCoverSize, cornerRadius: 6)
                 Text(item.title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.haoFootnoteStrong)
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1)
                 Spacer()
@@ -105,7 +105,7 @@ struct MiniPlayerBar: View {
             if item.kind == .music {
                 Button(action: { musicPlayer.togglePlayPauseOrRetry() }) {
                     Image(systemName: musicPlayer.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.haoCalloutStrong)
                         .foregroundStyle(theme.textPrimary)
                         .frame(width: 44, height: 44)
                 }
@@ -148,11 +148,11 @@ struct MiniPlayerBar: View {
                         // 14 / 12 — one step up from the old
                         // 12 / 10, still fitting the 36 cover.
                         Text(item.title)
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.haoDenseTitle)
                             .foregroundStyle(theme.textPrimary)
                             .lineLimit(1)
                         Text(item.subtitle)
-                            .font(.system(size: 12))
+                            .font(.haoCaption)
                             .foregroundStyle(theme.textSecondary)
                             .lineLimit(1)
                     }
@@ -164,7 +164,7 @@ struct MiniPlayerBar: View {
                 if item.kind == .music {
                     Button(action: { musicPlayer.togglePlayPauseOrRetry() }) {
                         Image(systemName: musicPlayer.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.haoCalloutStrong)
                             .foregroundStyle(theme.textPrimary)
                             .frame(width: 44, height: 44)
                     }
@@ -176,7 +176,7 @@ struct MiniPlayerBar: View {
                     // full player (MusicPlayerViewModel.next()).
                     Button(action: { musicPlayer.next() }) {
                         Image(systemName: "forward.fill")
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.haoCalloutStrong)
                             .foregroundStyle(theme.textPrimary)
                             .frame(width: 44, height: 44)
                     }
@@ -186,7 +186,7 @@ struct MiniPlayerBar: View {
                 }
                 Button(action: onTapFullPlayer) {
                     Image(systemName: "chevron.up")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.haoDenseTitle)
                         .foregroundStyle(theme.textSecondary)
                         .frame(width: 24, height: 32)
                 }
@@ -237,15 +237,15 @@ struct FullPlayerPlaceholderView: View {
             theme.scaffoldBackground.ignoresSafeArea()
             VStack(spacing: 12) {
                 Text("播放器")
-                    .font(.system(size: 22, weight: .bold))
+                    .font(.haoDetailTitle)
                     .foregroundStyle(theme.textPrimary)
                 if let item = coordinator.currentItem {
                     Text(item.title)
-                        .font(.system(size: 16))
+                        .font(.haoCallout)
                         .foregroundStyle(theme.textSecondary)
                 }
                 Text("当前内容无法播放")
-                    .font(.system(size: 14))
+                    .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textMuted)
             }
             .padding()
@@ -253,7 +253,7 @@ struct FullPlayerPlaceholderView: View {
         .overlay(alignment: .topTrailing) {
             Button(action: { dismiss() }) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.haoDenseTitle)
                     .foregroundStyle(theme.textPrimary)
                     .frame(width: 32, height: 32)
                     .background(theme.surfaceStrong, in: Circle())

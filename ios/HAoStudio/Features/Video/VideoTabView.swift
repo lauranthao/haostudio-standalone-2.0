@@ -174,10 +174,10 @@ struct VideoTabView: View {
         Button(action: { path.append(.search) }) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.haoSubheadStrong)
                     .foregroundStyle(theme.textMuted)
                 Text("搜索影片、剧集")
-                    .font(.system(size: 15))
+                    .font(.haoSubhead)
                     .foregroundStyle(theme.textMuted)
                 Spacer()
             }
@@ -198,7 +198,7 @@ struct VideoTabView: View {
                 ForEach(viewModel.categories, id: \.self) { type in
                     Button(action: { path.append(.category(type)) }) {
                         Text(type)
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.haoDenseBody)
                             .foregroundStyle(theme.textPrimary)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
@@ -218,7 +218,7 @@ struct VideoTabView: View {
         HStack(spacing: 12) {
             Button(action: { path.append(.history) }) {
                 Label("观看历史", systemImage: "clock")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.haoDenseBody)
                     .foregroundStyle(theme.accent)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
@@ -227,7 +227,7 @@ struct VideoTabView: View {
             .buttonStyle(.plain)
             Button(action: { path.append(.favourites) }) {
                 Label("我的收藏", systemImage: "heart")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.haoDenseBody)
                     .foregroundStyle(theme.accent)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
@@ -242,11 +242,11 @@ struct VideoTabView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("继续观看")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.haoSectionTitle)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 Button("全部") { path.append(.history) }
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.haoDenseBody)
                     .foregroundStyle(theme.accent)
             }
             .padding(.horizontal, 16)
@@ -267,7 +267,7 @@ struct VideoTabView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(row.title)
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.haoSectionTitle)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
             }
@@ -303,11 +303,11 @@ struct VideoContinueCard: View {
                 VideoPosterCardImage(item: entry.item, size: 64)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(entry.item.title)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.haoSubheadStrong)
                         .foregroundStyle(theme.textPrimary)
                         .lineLimit(1)
                     Text(entry.episodeName.isEmpty ? "正片" : entry.episodeName)
-                        .font(.system(size: 12))
+                        .font(.haoCaption)
                         .foregroundStyle(theme.textSecondary)
                         .lineLimit(1)
                     if entry.durationSeconds > 0 {
@@ -319,11 +319,11 @@ struct VideoContinueCard: View {
                             // orphaned stub — build-35 polish).
                             .frame(maxWidth: .infinity)
                         Text(videoTimeText(seconds: entry.positionSeconds))
-                            .font(.system(size: 11))
+                            .font(.haoCaption2)
                             .foregroundStyle(theme.textMuted)
                     } else {
                         Text("上次看到这里")
-                            .font(.system(size: 11))
+                            .font(.haoCaption2)
                             .foregroundStyle(theme.textMuted)
                     }
                 }
@@ -376,7 +376,7 @@ struct VideoPosterCardImage: View {
             .fill(theme.surfaceStrong)
             .overlay {
                 Image(systemName: "film")
-                    .font(.system(size: 16))
+                    .font(.haoCallout)
                     .foregroundStyle(theme.textSecondary)
             }
     }

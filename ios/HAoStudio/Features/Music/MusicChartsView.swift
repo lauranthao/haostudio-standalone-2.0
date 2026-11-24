@@ -104,17 +104,17 @@ struct MusicChartsView: View {
                                 // Apple Music charts: a big bold rank
                                 // number leads each row.
                                 Text("\(index + 1)")
-                                    .font(.system(size: 20, weight: .bold))
+                                    .font(.haoDetailTitle)
                                     .foregroundStyle(theme.textPrimary)
                                     .frame(width: 28, alignment: .center)
                                 MusicCoverView(urlString: chart.cover, size: 56, cornerRadius: 10)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(chart.name)
-                                        .font(.system(size: 16, weight: .semibold))
+                                        .font(.haoCalloutStrong)
                                         .foregroundStyle(theme.textPrimary)
                                         .lineLimit(1)
                                     Text(chartSubtitle(chart))
-                                        .font(.system(size: 14))
+                                        .font(.haoRowSubtitle)
                                         .foregroundStyle(theme.textSecondary)
                                         .lineLimit(1)
                                 }
@@ -202,7 +202,7 @@ struct MusicChartDetailView: View {
                     if !viewModel.note.isEmpty {
                         Section {
                             Text(viewModel.note)
-                                .font(.system(size: 13))
+                                .font(.haoFootnote)
                                 .foregroundStyle(theme.textSecondary)
                         }
                         .listRowBackground(theme.scaffoldBackground)

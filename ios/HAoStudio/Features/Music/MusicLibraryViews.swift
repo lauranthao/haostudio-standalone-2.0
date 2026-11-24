@@ -174,12 +174,12 @@ struct MusicDownloadsView: View {
                             MusicCoverView(urlString: download.song.cover, size: 56, cornerRadius: 10)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(download.song.title.isEmpty ? "未知歌曲" : download.song.title)
-                                    .font(.system(size: 15, weight: .semibold))
+                                    .font(.haoSubheadStrong)
                                     .foregroundStyle(theme.textPrimary)
                                     .lineLimit(1)
                                 HStack(spacing: 6) {
                                     Text(MusicLibraryStore.badgeLabel(for: download.quality))
-                                        .font(.system(size: 11, weight: .medium))
+                                        .font(.haoCaption2Strong)
                                         .foregroundStyle(theme.textSecondary)
                                         .padding(.horizontal, 6)
                                         .padding(.vertical, 2)
@@ -188,7 +188,7 @@ struct MusicDownloadsView: View {
                                                 .strokeBorder(theme.hairline, lineWidth: 0.5)
                                         }
                                     Text(fileExists ? formattedSize(download.sizeBytes) : "文件已丢失")
-                                        .font(.system(size: 13))
+                                        .font(.haoFootnote)
                                         .foregroundStyle(fileExists ? theme.textSecondary : theme.textMuted)
                                 }
                             }
@@ -199,7 +199,7 @@ struct MusicDownloadsView: View {
                                 }
                             }) {
                                 Image(systemName: "play.fill")
-                                    .font(.system(size: 15, weight: .semibold))
+                                    .font(.haoSubheadStrong)
                                     .foregroundStyle(fileExists ? theme.accent : theme.textMuted)
                             }
                             .buttonStyle(.plain)

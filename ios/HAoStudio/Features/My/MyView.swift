@@ -213,7 +213,7 @@ struct MyView: View {
                 .foregroundStyle(theme.textPrimary)
             Spacer()
             Text("\(count)")
-                .font(.system(size: 17))
+                .font(.haoBody)
                 .foregroundStyle(theme.textSecondary)
         }
     }
@@ -235,17 +235,17 @@ struct MyView: View {
         if showMigrationNotice {
             Section("旧版数据") {
                 Text("未找到旧版数据，可从备份文件导入。")
-                    .font(.system(size: 15))
+                    .font(.haoSubhead)
                     .foregroundStyle(theme.textSecondary)
                 Button("从备份文件导入") {
                     BackupUpdateFlow.shared.beginImport()
                 }
-                .font(.system(size: 17))
+                .font(.haoBody)
                 Button("不再提示") {
                     MigrationStore.dismissMigrationNotice()
                     showMigrationNotice = false
                 }
-                .font(.system(size: 17))
+                .font(.haoBody)
             }
         }
     }
@@ -281,11 +281,11 @@ private struct MyPlaylistsView: View {
                                 MusicCoverView(urlString: list.cover, size: 48)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(list.name.isEmpty ? "未命名歌单" : list.name)
-                                        .font(.system(size: 15, weight: .semibold))
+                                        .font(.haoSubheadStrong)
                                         .foregroundStyle(theme.textPrimary)
                                         .lineLimit(1)
                                     Text("\(list.trackCount) 首")
-                                        .font(.system(size: 13))
+                                        .font(.haoFootnote)
                                         .foregroundStyle(theme.textSecondary)
                                 }
                             }
@@ -336,11 +336,11 @@ private struct MyRecentPlaysView: View {
                                 MusicCoverView(urlString: song.cover, size: 48)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(song.title.isEmpty ? "未知歌曲" : song.title)
-                                        .font(.system(size: 15, weight: .semibold))
+                                        .font(.haoSubheadStrong)
                                         .foregroundStyle(theme.textPrimary)
                                         .lineLimit(1)
                                     Text(song.artist.isEmpty ? "未知歌手" : song.artist)
-                                        .font(.system(size: 13))
+                                        .font(.haoFootnote)
                                         .foregroundStyle(theme.textSecondary)
                                         .lineLimit(1)
                                 }

@@ -67,7 +67,7 @@ struct LXSourceManagementView: View {
             Section {
                 if rows.isEmpty {
                     Text("没有可用的音源脚本。")
-                        .font(.system(size: 14))
+                        .font(.haoRowSubtitle)
                         .foregroundStyle(theme.textMuted)
                 } else {
                     ForEach(rows) { row in
@@ -85,27 +85,27 @@ struct LXSourceManagementView: View {
                 Button("添加") {
                     importFromURL()
                 }
-                .font(.system(size: 17))
+                .font(.haoBody)
                 .disabled(isImporting)
                 Button("从文件选择 .js 导入") {
                     showingFileImporter = true
                 }
-                .font(.system(size: 17))
+                .font(.haoBody)
                 .disabled(isImporting)
                 if isImporting {
                     ProgressView("正在导入…")
-                        .font(.system(size: 13))
+                        .font(.haoFootnote)
                         .foregroundStyle(theme.textMuted)
                 }
                 Text("粘贴 .js 脚本直链，或从文件 App 选择 .js 文件；导入时会先校验，校验通过才加入列表参与搜歌和播放，失败会提示原因。")
-                    .font(.system(size: 13))
+                    .font(.haoFootnote)
                     .foregroundStyle(theme.textMuted)
             }
             Section {
                 Button("恢复默认") {
                     showingRestoreAlert = true
                 }
-                .font(.system(size: 17))
+                .font(.haoBody)
             }
         }
         .listStyle(.insetGrouped)
@@ -164,16 +164,16 @@ struct LXSourceManagementView: View {
         return HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.name)
-                    .font(.system(size: 17))
+                    .font(.haoBody)
                     .foregroundStyle(theme.textPrimary)
                 if row.isCustom {
                     Text("自定义")
-                        .font(.system(size: 13))
+                        .font(.haoFootnote)
                         .foregroundStyle(theme.textMuted)
                 }
                 if let status = statusText(for: row) {
                     Text(status.text)
-                        .font(.system(size: 13))
+                        .font(.haoFootnote)
                         .foregroundStyle(status.isFailure ? theme.liveRed : theme.textMuted)
                 }
             }
@@ -182,7 +182,7 @@ struct LXSourceManagementView: View {
                 Button("下载") {
                     downloadLegacyScript(row)
                 }
-                .font(.system(size: 13))
+                .font(.haoFootnote)
                 .foregroundStyle(theme.accent)
                 .disabled(isImporting)
             }
@@ -207,7 +207,7 @@ struct LXSourceManagementView: View {
                 deleteScript(row)
             } label: {
                 Image(systemName: "trash")
-                    .font(.system(size: 14))
+                    .font(.haoRowSubtitle)
             }
             .buttonStyle(.plain)
             .disabled(isLastEnabled)
@@ -367,7 +367,7 @@ struct CmsSourceManagementView: View {
             Section {
                 if sources.isEmpty {
                     Text("没有可用的影视源。")
-                        .font(.system(size: 14))
+                        .font(.haoRowSubtitle)
                         .foregroundStyle(theme.textMuted)
                 } else {
                     ForEach(sources) { source in
@@ -382,7 +382,7 @@ struct CmsSourceManagementView: View {
                 Button("恢复默认") {
                     showingRestoreAlert = true
                 }
-                .font(.system(size: 17))
+                .font(.haoBody)
             }
         }
         .listStyle(.insetGrouped)
@@ -412,10 +412,10 @@ struct CmsSourceManagementView: View {
         return HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(source.name)
-                    .font(.system(size: 17))
+                    .font(.haoBody)
                     .foregroundStyle(theme.textPrimary)
                 Text(source.apiUrl)
-                    .font(.system(size: 13))
+                    .font(.haoFootnote)
                     .foregroundStyle(theme.textMuted)
                     .lineLimit(1)
             }
@@ -512,7 +512,7 @@ struct LiveSourceManagementView: View {
         let isLastEnabled = isEnabled && enabledIDs.count == 1
         return HStack {
             Text(platform.displayName)
-                .font(.system(size: 17))
+                .font(.haoBody)
                 .foregroundStyle(theme.textPrimary)
             Spacer()
             Toggle(

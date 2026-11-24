@@ -39,7 +39,7 @@ struct VideoPosterCard: View {
                     .overlay(alignment: .topLeading) {
                         if isWatched {
                             Image(systemName: "checkmark")
-                                .font(.system(size: 10, weight: .bold))
+                                .font(.haoBadge)
                                 .foregroundStyle(.white)
                                 .frame(width: 20, height: 20)
                                 .background(Color.black.opacity(0.6), in: Circle())
@@ -49,7 +49,7 @@ struct VideoPosterCard: View {
                     .overlay(alignment: .bottomTrailing) {
                         if let remarks = item.remarks, !remarks.isEmpty {
                             Text(remarks)
-                                .font(.system(size: 10, weight: .medium))
+                                .font(.haoBadge)
                                 .foregroundStyle(.white)
                                 .lineLimit(1)
                                 .padding(.horizontal, 6)
@@ -59,11 +59,11 @@ struct VideoPosterCard: View {
                         }
                     }
                 Text(item.title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.haoSubheadStrong)
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1)
                 Text(metaLine)
-                    .font(.system(size: 13))
+                    .font(.haoFootnote)
                     .foregroundStyle(theme.textMuted)
                     .lineLimit(1)
             }

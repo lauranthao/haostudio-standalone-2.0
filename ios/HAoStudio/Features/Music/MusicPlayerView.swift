@@ -122,7 +122,7 @@ struct MusicPlayerView: View {
                     VStack {
                         Spacer()
                         Text(toast)
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.haoFootnoteMedium)
                             .foregroundStyle(.white)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 10)
@@ -338,7 +338,7 @@ struct MusicPlayerView: View {
                     // 44pt minimum. The old control was a bare 32pt
                     // white glyph with no surface — invisible on a
                     // light cover and the player's only way out.
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.haoSubheadStrong)
                     .foregroundStyle(.white)
                     .frame(width: 40, height: 40)
                     .haoGlassCircle()
@@ -347,7 +347,7 @@ struct MusicPlayerView: View {
             .accessibilityLabel("关闭")
             Spacer()
             Text(playerVM.currentSong?.album ?? "")
-                .font(.system(size: 14, weight: .medium))
+                .font(.haoDenseBody)
                 .foregroundStyle(.white.opacity(0.72))
                 .lineLimit(1)
             Spacer()
@@ -434,7 +434,7 @@ struct MusicPlayerView: View {
                             .frame(height: height - 48)
                     } else if playerVM.lyrics.isEmpty {
                         Text("暂无歌词")
-                            .font(.system(size: 15))
+                            .font(.haoSubhead)
                             .foregroundStyle(.white.opacity(0.55))
                             .frame(height: height - 48)
                             .contentShape(Rectangle())
@@ -516,7 +516,7 @@ struct MusicPlayerView: View {
         Group {
             if let label = playerVM.qualityBadgeLabel {
                 Text(label)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.haoCaption2Strong)
                     .foregroundStyle(.white.opacity(0.85))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
@@ -526,7 +526,7 @@ struct MusicPlayerView: View {
                     }
             } else {
                 Text(" ")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.haoCaption2Strong)
                     .padding(.vertical, 4)
             }
         }
@@ -543,7 +543,7 @@ struct MusicPlayerView: View {
                 // invented. Empty title / artist is not tappable.
                 Button(action: { showAlbum = true }) {
                     Text(playerVM.currentSong?.title ?? "未在播放")
-                        .font(.system(size: 20, weight: .bold))
+                        .font(.haoSectionTitle)
                         .foregroundStyle(.white)
                         .lineLimit(1)
                 }
@@ -552,7 +552,7 @@ struct MusicPlayerView: View {
                 .accessibilityLabel("专辑：\(playerVM.currentSong?.album ?? "")")
                 Button(action: { showArtist = true }) {
                     Text(playerVM.currentSong?.artist ?? "")
-                        .font(.system(size: 16))
+                        .font(.haoCallout)
                         .foregroundStyle(.white.opacity(0.72))
                         .lineLimit(1)
                 }
@@ -589,11 +589,11 @@ struct MusicPlayerView: View {
             thinProgressBar
             HStack {
                 Text(musicDurationText(seconds: Int(playerVM.scrubSeconds ?? playerVM.position)))
-                    .font(.system(size: 12))
+                    .font(.haoCaption)
                     .foregroundStyle(.white.opacity(0.72))
                 Spacer()
                 Text(remainingText)
-                    .font(.system(size: 12))
+                    .font(.haoCaption)
                     .foregroundStyle(.white.opacity(0.72))
             }
         }
@@ -756,9 +756,9 @@ struct MusicPlayerView: View {
             Button(action: { playerVM.cycleMode() }) {
                 HStack(spacing: 5) {
                     Image(systemName: playerVM.playMode.icon)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.haoDenseTitle)
                     Text(playerVM.playMode.label)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.haoCaptionMedium)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
                 }
@@ -774,7 +774,7 @@ struct MusicPlayerView: View {
                 }
             } label: {
                 Text(String(format: "%.1fx", playerVM.playbackSpeed))
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.haoCaptionMedium)
                     .foregroundStyle(.white.opacity(0.85))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
@@ -787,9 +787,9 @@ struct MusicPlayerView: View {
             Button(action: { showSleep = true }) {
                 HStack(spacing: 5) {
                     Image(systemName: "moon.fill")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.haoDenseTitle)
                     Text(playerVM.sleepActive ? playerVM.sleepRemainingText : "睡眠")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.haoCaptionMedium)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
                 }
@@ -800,9 +800,9 @@ struct MusicPlayerView: View {
             Button(action: { showEqualizer = true }) {
                 HStack(spacing: 5) {
                     Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.haoDenseTitle)
                     Text("均衡器")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.haoCaptionMedium)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
                 }

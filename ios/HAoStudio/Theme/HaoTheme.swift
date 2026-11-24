@@ -329,6 +329,107 @@ func haoOnAccentFor(_ accent: Color) -> Color {
     return light ? Color(hex: 0x0B0B0F) : .white
 }
 
+// MARK: - Type scale (build 36, item 4)
+//
+// ONE type scale for the whole app. chen (2026-11-24): "app很多字体大小
+// 都不一致" — the audit found 17 distinct point sizes (9–52pt) used
+// ad hoc across 412 `.font(.system(size:))` call sites, with the same
+// role set to different sizes on sibling screens (e.g. section headers
+// at 18 / 20 / 22pt, row titles at 14 / 15 / 16pt, subtitles at
+// 12 / 13 / 14pt).
+//
+// Source: the iOS 27.2.1 system Dynamic Type ramp, verified against
+// Apple HIG (largeTitle 34, title1 28, title2 22, title3 20,
+// headline 17 semibold, body 17, callout 16, subheadline 15,
+// footnote 13, caption1 12, caption2 11). iOS 27 adds
+// extraLargeTitle styles but leaves this ramp unchanged. Reference
+// apps: 影视 VidHub (detail title 22, section 20), 音乐 Apple Music
+// (row title 17 semibold, subtitle 13, mini 14/12), 直播 Pure Live
+// (room title 17 semibold, dense lists 14), 设置 iOS system settings
+// (row 17, group footer 13).
+//
+// Two deliberate off-ramp sizes, both pre-existing compromises kept
+// on purpose:
+// - 14pt (rowSubtitle / denseTitle / denseBody): the dominant subtitle
+//   size in the app and the build-35 mini-player compromise (14/12 in
+//   the 50pt strip, Apple Music's mini is 15/13 in a 64pt bar).
+// - 10pt bold (badge): LIVE / quality badges and the live-room battery
+//   readout only; the old 9pt battery text was bumped up to this floor.
+//   Nothing else may use 10pt.
+//
+// The roles are FIXED sizes (`.system(size:weight:)`), matching the
+// app's existing behaviour: every call site used fixed sizes, so no
+// screen currently reflows for Dynamic Type. Switching the roles to
+// SwiftUI text styles (`.headline`, `.body`, …) would newly scale text
+// up to 3x at AX sizes and break fixed-height rows (56pt song rows,
+// 50pt mini player, tab bar). That is a separate layout-hardening job
+// — see the item-4 report — not something to smuggle into a size
+// unification. Colours are untouched: every role still takes its
+// colour from the theme palette (4 themes x light/dark).
+//
+// Rule for new code: never write `.font(.system(size:))` at a call
+// site again — pick the role whose meaning matches the text.
+
+extension Font {
+    /// Screen hero / large title (iOS largeTitle 34). Live-room big
+    /// play glyph and empty-state art use a literal size, not this.
+    static let haoScreenTitle = Font.system(size: 34, weight: .bold)
+    /// Navigation / page title (title1 28).
+    static let haoPageTitle = Font.system(size: 28, weight: .bold)
+    /// Album / artist / video-detail hero title (title2 22).
+    static let haoDetailTitle = Font.system(size: 22, weight: .bold)
+    /// Section header on every tab (title3 20). Was 18 / 20 / 22.
+    static let haoSectionTitle = Font.system(size: 20, weight: .semibold)
+    /// Emphasised body (headline 17 semibold): live-room title, quality
+    /// / line sheet titles, "搜索历史" headers, the video play-button
+    /// label. Song-row titles deliberately stay one step down at
+    /// haoCalloutStrong (16 semibold — Apple Music's row value, see
+    /// MusicRowViews) instead of this, so there is no separate
+    /// 17-semibold card-title role.
+    static let haoBodyStrong = Font.system(size: 17, weight: .semibold)
+    /// Body text: Settings rows, paragraphs, Emby fields (body 17).
+    static let haoBody = Font.system(size: 17)
+    /// Primary action / chip label (callout 16 semibold).
+    static let haoCalloutStrong = Font.system(size: 16, weight: .semibold)
+    /// Secondary body (callout 16).
+    static let haoCallout = Font.system(size: 16)
+    /// Secondary title (subheadline 15 semibold).
+    static let haoSubheadStrong = Font.system(size: 15, weight: .semibold)
+    /// Secondary title, medium weight (subheadline 15 medium).
+    /// Kept for segment / dense-list labels that were already medium.
+    static let haoSubheadMedium = Font.system(size: 15, weight: .medium)
+    /// Secondary body (subheadline 15).
+    static let haoSubhead = Font.system(size: 15)
+    /// Dense-list row title: live-room rows, player sheets, video
+    /// player lists (14 semibold — the off-ramp size, see header).
+    static let haoDenseTitle = Font.system(size: 14, weight: .semibold)
+    /// Dense-list secondary / segment label (14 medium).
+    static let haoDenseBody = Font.system(size: 14, weight: .medium)
+    /// Row subtitle: song artist, video meta, splash / empty-state
+    /// note (14 — the off-ramp size, see header). Was 12 / 13 / 14.
+    static let haoRowSubtitle = Font.system(size: 14)
+    /// Footnote label (footnote 13 semibold).
+    static let haoFootnoteStrong = Font.system(size: 13, weight: .semibold)
+    /// Footnote label, medium weight (13 medium).
+    static let haoFootnoteMedium = Font.system(size: 13, weight: .medium)
+    /// Footnote / secondary text (footnote 13). Was 12 / 13 / 14.
+    static let haoFootnote = Font.system(size: 13)
+    /// Caption label (caption1 12 semibold).
+    static let haoCaptionStrong = Font.system(size: 12, weight: .semibold)
+    /// Caption label, medium weight (12 medium).
+    static let haoCaptionMedium = Font.system(size: 12, weight: .medium)
+    /// Caption / metadata (caption1 12). Mini-player subtitle
+    /// (build-35 compromise 14/12) lives here.
+    static let haoCaption = Font.system(size: 12)
+    /// Small label (caption2 11 semibold): quality badge, chart rank.
+    static let haoCaption2Strong = Font.system(size: 11, weight: .semibold)
+    /// Small metadata (caption2 11).
+    static let haoCaption2 = Font.system(size: 11)
+    /// Badge only: LIVE / quality badges, live-room battery readout
+    /// (10 bold — the app's minimum; the old 9pt text was raised here).
+    static let haoBadge = Font.system(size: 10, weight: .bold)
+}
+
 // MARK: - Environment
 
 private struct HaoThemeKey: EnvironmentKey {

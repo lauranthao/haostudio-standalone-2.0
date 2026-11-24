@@ -81,7 +81,7 @@ struct MusicSongRow: View {
             HStack(spacing: 12) {
                 if let trackNumber = trackNumber {
                     Text("\(trackNumber)")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.haoSubheadMedium)
                         .foregroundStyle(theme.textSecondary)
                         .frame(width: 28, alignment: .center)
                 } else {
@@ -89,13 +89,13 @@ struct MusicSongRow: View {
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(song.title.isEmpty ? "未知歌曲" : song.title)
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.haoCalloutStrong)
                         .foregroundStyle(isPlaying ? theme.accent : theme.textPrimary)
                         .lineLimit(1)
                     HStack(spacing: 6) {
                         if showPlatformBadge, let badge = song.badgePlatform {
                             Text(badge.badgeName)
-                                .font(.system(size: 11, weight: .medium))
+                                .font(.haoCaption2Strong)
                                 .foregroundStyle(theme.textSecondary)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
@@ -105,7 +105,7 @@ struct MusicSongRow: View {
                                 }
                         }
                         Text(song.artist.isEmpty ? "未知艺人" : song.artist)
-                            .font(.system(size: 14))
+                            .font(.haoRowSubtitle)
                             .foregroundStyle(theme.textSecondary)
                             .lineLimit(1)
                     }
@@ -113,7 +113,7 @@ struct MusicSongRow: View {
                 Spacer()
                 if song.dur > 0 {
                     Text(musicDurationText(seconds: song.dur))
-                        .font(.system(size: 13))
+                        .font(.haoFootnote)
                         .foregroundStyle(theme.textMuted)
                 }
                 if isPlaying {
@@ -197,10 +197,10 @@ struct MusicSectionHeader: View {
             Button(action: onToggle) {
                 HStack(spacing: 6) {
                     Text(title)
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(.haoDetailTitle)
                         .foregroundStyle(theme.textPrimary)
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.haoDenseTitle)
                         .foregroundStyle(theme.textSecondary)
                 }
             }
@@ -228,11 +228,11 @@ struct MusicEmptyState: View {
                 .font(.system(size: 28, weight: .regular))
                 .foregroundStyle(theme.textMuted)
             Text(title)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.haoSubheadStrong)
                 .foregroundStyle(theme.textPrimary)
             if let note = note {
                 Text(note)
-                    .font(.system(size: 13))
+                    .font(.haoFootnote)
                     .foregroundStyle(theme.textSecondary)
                     .multilineTextAlignment(.center)
             }
@@ -255,9 +255,9 @@ struct MusicCapsuleButton: View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.haoCaptionStrong)
                 Text(label)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.haoFootnoteStrong)
             }
             .foregroundStyle(enabled ? theme.accent : theme.textMuted)
             .padding(.horizontal, 12)

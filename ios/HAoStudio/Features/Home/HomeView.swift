@@ -106,12 +106,12 @@ struct HomeView: View {
     private func sectionHeader(title: String, onAll: (() -> Void)? = nil) -> some View {
         HStack {
             Text(title)
-                .font(.system(size: 22, weight: .semibold))
+                .font(.haoDetailTitle)
                 .foregroundStyle(theme.textPrimary)
             Spacer()
             if let onAll = onAll {
                 Button("全部", action: onAll)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.haoDenseBody)
                     .foregroundStyle(theme.accent)
             }
         }
@@ -328,11 +328,11 @@ struct HomeSongCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 MusicCoverView(urlString: song.cover, size: 120, cornerRadius: 12)
                 Text(song.title.isEmpty ? "未知歌曲" : song.title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.haoDenseTitle)
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1)
                 Text(song.artist.isEmpty ? "未知艺人" : song.artist)
-                    .font(.system(size: 12))
+                    .font(.haoCaption)
                     .foregroundStyle(theme.textSecondary)
                     .lineLimit(1)
             }

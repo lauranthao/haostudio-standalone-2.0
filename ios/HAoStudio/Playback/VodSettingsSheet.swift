@@ -181,14 +181,14 @@ struct VodSettingsSheet: View {
                     Section {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("线路")
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.haoFootnoteMedium)
                                 .foregroundColor(theme.textSecondary)
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 8) {
                                     ForEach(Array(detail.lines.enumerated()), id: \.element.id) { index, line in
                                         Button(action: { onSelectLine(index) }) {
                                             Text(line.name)
-                                                .font(.system(size: 14, weight: .medium))
+                                                .font(.haoDenseBody)
                                                 .foregroundStyle(
                                                     index == lineIndex
                                                         ? theme.onAccent : theme.textPrimary)
@@ -204,7 +204,7 @@ struct VodSettingsSheet: View {
                                 }
                             }
                             Text("选集")
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.haoFootnoteMedium)
                                 .foregroundColor(theme.textSecondary)
                             LazyVGrid(
                                 columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
@@ -216,7 +216,7 @@ struct VodSettingsSheet: View {
                                         dismiss()
                                     }) {
                                         Text(episode.displayName)
-                                            .font(.system(size: 13, weight: .medium))
+                                            .font(.haoFootnoteMedium)
                                             .foregroundStyle(
                                                 index == episodeIndex
                                                     ? theme.onAccent : theme.textPrimary)

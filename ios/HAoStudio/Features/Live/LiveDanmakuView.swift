@@ -175,7 +175,7 @@ struct DanmakuToggleButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: isOn ? "message.fill" : "message")
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))  // icon size, not text
                 .foregroundStyle(isOn ? .white : .white.opacity(0.5))
                 .frame(width: 44, height: 44)
         }
@@ -251,10 +251,10 @@ struct LiveDanmakuListView: View {
     private var danmakuOffNote: some View {
         VStack(spacing: 8) {
             Text("弹幕已关闭")
-                .font(.system(size: 14, weight: .medium))
+                .font(.haoDenseBody)
                 .foregroundStyle(theme.textSecondary)
             Button("在弹幕设置中开启", action: onOpenSettings)
-                .font(.system(size: 13, weight: .medium))
+                .font(.haoFootnoteMedium)
                 .foregroundStyle(theme.accent)
                 .buttonStyle(.plain)
         }
@@ -263,7 +263,7 @@ struct LiveDanmakuListView: View {
 
     private var emptyNote: some View {
         Text("暂无弹幕")
-            .font(.system(size: 14))
+            .font(.haoRowSubtitle)
             .foregroundStyle(theme.textMuted)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

@@ -217,7 +217,7 @@ struct LiveRoomView: View {
         .overlay(alignment: .bottom) {
             if let toast = livePlayer.toast {
                 Text(toast)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.haoDenseBody)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
@@ -402,7 +402,7 @@ struct LiveRoomView: View {
                     HStack {
                         Button(action: { dismiss() }) {
                             Image(systemName: "chevron.left")
-                                .font(.system(size: 17, weight: .semibold))
+                                .font(.haoBodyStrong)
                                 .foregroundStyle(.white)
                                 .frame(width: 36, height: 36)
                                 .background(Color.black.opacity(0.45), in: Circle())
@@ -448,10 +448,10 @@ struct LiveRoomView: View {
                         .font(.system(size: 28))
                         .foregroundStyle(.white.opacity(0.6))
                     Text("暂无画面")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.haoCalloutStrong)
                         .foregroundStyle(.white.opacity(0.9))
                     Text("房间未开播或暂时无法观看")
-                        .font(.system(size: 13))
+                        .font(.haoFootnote)
                         .foregroundStyle(.white.opacity(0.7))
                 }
             }
@@ -473,7 +473,7 @@ struct LiveRoomView: View {
         HStack(spacing: 8) {
             Button(action: { livePlayer.togglePlayPause() }) {
                 Image(systemName: livePlayer.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.haoSectionTitle)
                     .foregroundStyle(.white)
                     .frame(width: 44, height: 44)
             }
@@ -482,7 +482,7 @@ struct LiveRoomView: View {
             Spacer()
             Button(action: { isFullscreen = true }) {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.haoSectionTitle)
                     .foregroundStyle(.white)
                     .frame(width: 44, height: 44)
             }
@@ -515,7 +515,7 @@ struct LiveRoomView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 8) {
                 Text(currentRoom.title.isEmpty ? "直播间" : currentRoom.title)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.haoBodyStrong)
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(2)
                 Spacer()
@@ -527,20 +527,20 @@ struct LiveRoomView: View {
                 anchorAvatar
                 VStack(alignment: .leading, spacing: 2) {
                     Text(currentRoom.streamer.isEmpty ? currentRoom.platform.displayName : currentRoom.streamer)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.haoSubheadStrong)
                         .foregroundStyle(theme.textPrimary)
                         .lineLimit(1)
                     HStack(spacing: 6) {
                         if isLiveNow {
                             Text("LIVE")
-                                .font(.system(size: 10, weight: .bold))
+                                .font(.haoBadge)
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3)
                                 .background(theme.liveRed, in: Capsule())
                         }
                         Text(currentRoom.platform.displayName)
-                            .font(.system(size: 12))
+                            .font(.haoCaption)
                             .foregroundStyle(theme.textMuted)
                             .lineLimit(1)
                     }
@@ -550,7 +550,7 @@ struct LiveRoomView: View {
                     Label(
                         isFollowing ? "已关注" : "关注",
                         systemImage: isFollowing ? "heart.fill" : "heart")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.haoDenseTitle)
                         .foregroundStyle(isFollowing ? theme.textPrimary : theme.onAccent)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
@@ -571,7 +571,7 @@ struct LiveRoomView: View {
         HStack(spacing: 4) {
             Button(action: { switchToRoom(at: currentIndex - 1) }) {
                 Image(systemName: "chevron.up")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.haoDenseTitle)
                     .foregroundStyle(hasPreviousRoom ? theme.textPrimary : theme.textMuted)
                     .frame(width: 32, height: 32)
                     .background(theme.surface, in: Circle())
@@ -580,7 +580,7 @@ struct LiveRoomView: View {
             .disabled(!hasPreviousRoom)
             Button(action: { switchToRoom(at: currentIndex + 1) }) {
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.haoDenseTitle)
                     .foregroundStyle(hasNextRoom ? theme.textPrimary : theme.textMuted)
                     .frame(width: 32, height: 32)
                     .background(theme.surface, in: Circle())
@@ -616,7 +616,7 @@ struct LiveRoomView: View {
             .fill(theme.surfaceStrong)
             .overlay {
                 Image(systemName: "person.fill")
-                    .font(.system(size: 14))
+                    .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textSecondary)
             }
     }
@@ -625,12 +625,12 @@ struct LiveRoomView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("弹幕")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.haoSubheadStrong)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 if !danmakuEnabledForRoom {
                     Button("已关闭，去开启") { showDanmakuSettings = true }
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.haoFootnoteMedium)
                         .foregroundStyle(theme.accent)
                         .buttonStyle(.plain)
                 }
@@ -660,17 +660,17 @@ struct LiveRoomView: View {
             if !watchingText.isEmpty {
                 HStack(spacing: 4) {
                     Image(systemName: "flame.fill")
-                        .font(.system(size: 12))
+                        .font(.haoCaption)
                         .foregroundStyle(theme.textSecondary)
                     Text(watchingText)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.haoFootnoteMedium)
                         .foregroundStyle(theme.textSecondary)
                         .lineLimit(1)
                 }
             }
             Button(action: { showQualitySheet = true }) {
                 Text(livePlayer.currentQuality?.name ?? "画质")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.haoDenseTitle)
                     .foregroundStyle(theme.accent)
                     .lineLimit(1)
             }
@@ -678,14 +678,14 @@ struct LiveRoomView: View {
             Spacer()
             Button(action: { showBrightnessVolume = true }) {
                 Image(systemName: "sun.max")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 18, weight: .semibold))  // icon size, not text
                     .foregroundStyle(theme.textPrimary)
                     .frame(width: 40, height: 40)
             }
             .buttonStyle(.plain)
             Button(action: { showDanmakuSettings = true }) {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 18, weight: .semibold))  // icon size, not text
                     .foregroundStyle(theme.textPrimary)
                     .frame(width: 40, height: 40)
             }
@@ -762,7 +762,7 @@ struct LiveRoomView: View {
         HStack(spacing: 12) {
             Button(action: { dismiss() }) {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.haoBodyStrong)
                     .foregroundStyle(.white)
                     .frame(width: 36, height: 36)
                     .background(Color.black.opacity(0.45), in: Circle())
@@ -770,11 +770,11 @@ struct LiveRoomView: View {
             .buttonStyle(.plain)
             VStack(alignment: .leading, spacing: 2) {
                 Text(currentRoom.title.isEmpty ? "直播间" : currentRoom.title)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.haoCalloutStrong)
                     .foregroundStyle(.white)
                     .lineLimit(1)
                 Text(currentRoom.streamer.isEmpty ? currentRoom.platform.displayName : currentRoom.streamer)
-                    .font(.system(size: 13))
+                    .font(.haoFootnote)
                     .foregroundStyle(.white.opacity(0.72))
                     .lineLimit(1)
             }
@@ -782,7 +782,7 @@ struct LiveRoomView: View {
             landscapeClockAndBattery
             if isLiveNow {
                 Text("LIVE")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.haoBadge)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
@@ -790,7 +790,7 @@ struct LiveRoomView: View {
             }
             Button(action: { showBrightnessVolume = true }) {
                 Image(systemName: "sun.max")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.haoBodyStrong)
                     .foregroundStyle(.white)
                     .frame(width: 36, height: 36)
                     .background(Color.black.opacity(0.45), in: Circle())
@@ -798,7 +798,7 @@ struct LiveRoomView: View {
             .buttonStyle(.plain)
             Button(action: { showDanmakuSettings = true }) {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.haoBodyStrong)
                     .foregroundStyle(.white)
                     .frame(width: 36, height: 36)
                     .background(Color.black.opacity(0.45), in: Circle())
@@ -823,7 +823,7 @@ struct LiveRoomView: View {
         HStack(spacing: 8) {
             TimelineView(.periodic(from: Date(), by: 10)) { timeline in
                 Text(Self.clockFormatter.string(from: timeline.date))
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.haoDenseBody)
                     .foregroundStyle(.white)
             }
             if batteryLevel >= 0 {
@@ -840,7 +840,7 @@ struct LiveRoomView: View {
                     .frame(width: 31, height: 11)
                     .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
                     Text("\(Int(batteryLevel * 100))")
-                        .font(.system(size: 9, weight: .medium))
+                        .font(.haoBadge)
                         .foregroundStyle(.white)
                 }
                 .frame(width: 35, height: 15)
@@ -859,7 +859,7 @@ struct LiveRoomView: View {
         HStack(spacing: 16) {
             Button(action: { livePlayer.togglePlayPause() }) {
                 Image(systemName: livePlayer.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(.system(size: 22, weight: .semibold))  // icon size, not text
                     .foregroundStyle(.white)
                     .frame(width: 44, height: 44)
             }
@@ -867,7 +867,7 @@ struct LiveRoomView: View {
             DanmakuToggleButton(isOn: danmakuEnabledForRoom, action: toggleDanmaku)
             Button(action: toggleFollow) {
                 Image(systemName: isFollowing ? "heart.fill" : "heart")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.haoSectionTitle)
                     .foregroundStyle(.white)
                     .frame(width: 44, height: 44)
             }
@@ -875,7 +875,7 @@ struct LiveRoomView: View {
             .accessibilityLabel(isFollowing ? "取消关注" : "关注")
             Button(action: { showQualitySheet = true }) {
                 Text(livePlayer.currentQuality?.name ?? "画质")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.haoDenseTitle)
                     .foregroundStyle(.white)
                     .lineLimit(1)
             }
@@ -884,16 +884,16 @@ struct LiveRoomView: View {
             if !watchingText.isEmpty {
                 HStack(spacing: 4) {
                     Image(systemName: "flame.fill")
-                        .font(.system(size: 12))
+                        .font(.haoCaption)
                         .foregroundStyle(.white.opacity(0.85))
                     Text(watchingText)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.haoFootnoteMedium)
                         .foregroundStyle(.white.opacity(0.85))
                 }
             }
             Button(action: { isFullscreen = false }) {
                 Image(systemName: "arrow.down.right.and.arrow.up.left")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 18, weight: .semibold))  // icon size, not text
                     .foregroundStyle(.white)
                     .frame(width: 40, height: 40)
             }
@@ -956,7 +956,7 @@ struct LiveQualityLineSheet: View {
                 VStack(alignment: .leading, spacing: 16) {
                     if !qualities.isEmpty {
                         Text("画质")
-                            .font(.system(size: 17, weight: .semibold))
+                            .font(.haoBodyStrong)
                             .foregroundStyle(theme.textPrimary)
                         LazyVGrid(
                             columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3),
@@ -968,7 +968,7 @@ struct LiveQualityLineSheet: View {
                                     dismiss()
                                 }) {
                                     Text(quality.name)
-                                        .font(.system(size: 14, weight: .medium))
+                                        .font(.haoDenseBody)
                                         .foregroundStyle(
                                             index == selectedQualityIndex
                                                 ? theme.onAccent : theme.textPrimary)
@@ -987,13 +987,13 @@ struct LiveQualityLineSheet: View {
                            qualities.indices.contains(selectedQualityIndex),
                            acked != qualities[selectedQualityIndex].name {
                             Text("清晰度已限制为 \(acked)")
-                                .font(.system(size: 13))
+                                .font(.haoFootnote)
                                 .foregroundStyle(theme.textSecondary)
                         }
                     }
                     if !lines.isEmpty {
                         Text("线路")
-                            .font(.system(size: 17, weight: .semibold))
+                            .font(.haoBodyStrong)
                             .foregroundStyle(theme.textPrimary)
                         LazyVGrid(
                             columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3),
@@ -1005,7 +1005,7 @@ struct LiveQualityLineSheet: View {
                                     dismiss()
                                 }) {
                                     Text("线路 \(index + 1)")
-                                        .font(.system(size: 14, weight: .medium))
+                                        .font(.haoDenseBody)
                                         .foregroundStyle(
                                             index == selectedLineIndex
                                                 ? theme.onAccent : theme.textPrimary)

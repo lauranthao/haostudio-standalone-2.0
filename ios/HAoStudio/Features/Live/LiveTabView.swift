@@ -328,7 +328,7 @@ struct LiveTabView: View {
             HStack(spacing: 8) {
                 Button(action: { viewModel.selectCategory(nil) }) {
                     Text("全部")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.haoDenseBody)
                         .foregroundStyle(
                             viewModel.selectedArea == nil
                                 ? theme.onAccent : theme.textPrimary)
@@ -346,7 +346,7 @@ struct LiveTabView: View {
                 ForEach(viewModel.categories, id: \.self) { area in
                     Button(action: { viewModel.selectCategory(area) }) {
                         Text(area)
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.haoDenseBody)
                             .foregroundStyle(
                                 viewModel.selectedArea == area
                                     ? theme.onAccent : theme.textPrimary)
@@ -373,10 +373,10 @@ struct LiveTabView: View {
         Button(action: { path.append(.search) }) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.haoSubheadStrong)
                     .foregroundStyle(theme.textMuted)
                 Text("搜索直播间、主播")
-                    .font(.system(size: 15))
+                    .font(.haoSubhead)
                     .foregroundStyle(theme.textMuted)
                 Spacer()
             }
@@ -432,11 +432,11 @@ struct LiveTabView: View {
     private func sectionHeader(title: String, onAll: @escaping () -> Void) -> some View {
         HStack {
             Text(title)
-                .font(.system(size: 22, weight: .semibold))
+                .font(.haoDetailTitle)
                 .foregroundStyle(theme.textPrimary)
             Spacer()
             Button("全部", action: onAll)
-                .font(.system(size: 14, weight: .medium))
+                .font(.haoDenseBody)
                 .foregroundStyle(theme.accent)
         }
         .padding(.horizontal, 24)
@@ -448,7 +448,7 @@ struct LiveTabView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("推荐直播")
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(.haoDetailTitle)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
             }
@@ -470,7 +470,7 @@ struct LiveTabView: View {
                 .padding(.horizontal, 24)
                 if viewModel.hasGateway && viewModel.loadFailed {
                     Button("重试") { viewModel.loadFresh() }
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.haoDenseTitle)
                         .foregroundStyle(theme.onAccent)
                         .padding(.horizontal, 20)
                         .padding(.vertical, 10)
@@ -499,7 +499,7 @@ struct LiveTabView: View {
                         .padding(.vertical, 16)
                 } else if viewModel.loadMoreFailed {
                     Button("加载失败，点击重试") { viewModel.loadMore() }
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.haoFootnoteMedium)
                         .foregroundStyle(theme.accent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
@@ -534,12 +534,12 @@ struct LiveFollowCard: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 Text(follow.nick.isEmpty ? follow.title : follow.nick)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.haoFootnoteStrong)
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1)
                     .frame(width: 140, alignment: .leading)
                 Text(follow.title.isEmpty ? "直播间" : follow.title)
-                    .font(.system(size: 12))
+                    .font(.haoCaption)
                     .foregroundStyle(theme.textSecondary)
                     .lineLimit(1)
                     .frame(width: 140, alignment: .leading)
@@ -594,12 +594,12 @@ struct LiveHistoryCard: View {
                     .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 Text(entry.title.isEmpty ? "直播间" : entry.title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.haoFootnoteStrong)
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1)
                     .frame(width: 140, alignment: .leading)
                 Text(liveRelativeTimeText(date: entry.watchedAt))
-                    .font(.system(size: 12))
+                    .font(.haoCaption)
                     .foregroundStyle(theme.textMuted)
                     .lineLimit(1)
                     .frame(width: 140, alignment: .leading)
@@ -683,7 +683,7 @@ struct LivePlatformTextTabs: View {
                     Button(action: { onSelect(platform) }) {
                         VStack(spacing: 6) {
                             Text(platform.displayName)
-                                .font(.system(size: 15, weight: .medium))
+                                .font(.haoSubheadMedium)
                                 .foregroundStyle(
                                     platform == selected
                                         ? theme.accent : theme.textSecondary)
