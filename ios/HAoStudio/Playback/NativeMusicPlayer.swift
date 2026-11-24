@@ -1627,11 +1627,33 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         standbyEndedDuringCrossfade = false
         let outgoing = activeEngine
         let incoming = standbyEngine
+        // Crossfade load timeout (mirrors open()): a load that
+        // never becomes ready stalls auto-advance forever in
+        // silence — the standby asset status stays .unknown
+        // (black-holed host / stalled handshake), runCrossfadeRamp
+        // only starts after a successful load, and the watchdog
+        // cannot rescue it (playRequested is false during the
+        // crossfade load). unload() fires the pending load
+        // completion with ok=false, so the existing failure branch
+        // below (fallback re-resolve once, then skip with attempts
+        // counted) handles it; no new failure path is needed.
+        // Both closures run on main, so the flag needs no lock;
+        // the gen guard covers a superseded crossfade (do not
+        // unload a newer load).
+        var loadFinished = false
+        let timeoutWork = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            guard gen == self.generation, !loadFinished else { return }
+            incoming.unload()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + self.openTimeoutInterval, execute: timeoutWork)
         let outgoingDone = outgoing.durationSeconds > 0 && outgoing.currentTimeSeconds >= outgoing.durationSeconds - 0.05
         let target = Float(targetGain(for: item))
         incoming.load(url: url, headers: nil, identityKey: item.id) { [weak self] ok in
             guard let self = self else { return }
             self.ensureMain {
+                loadFinished = true
+                timeoutWork.cancel()
                 guard gen == self.generation else {
                     if incoming === self.standbyEngine { incoming.pause() }
                     return
