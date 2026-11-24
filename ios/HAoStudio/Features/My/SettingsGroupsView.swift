@@ -1076,6 +1076,12 @@ struct WallpaperManagementView: View {
                 DispatchQueue.main.async {
                     if let imported = imported {
                         settings.wallpaperCurrent = imported
+                        // An import that leaves the wallpaper off
+                        // looks done (checkmark in the list) but
+                        // changes nothing visible until the user
+                        // flips 壁纸 on — enable it: the import IS
+                        // the choice to use this photo.
+                        settings.wallpaperEnabled = true
                         settings.reloadWallpapers()
                         reload()
                     } else {
