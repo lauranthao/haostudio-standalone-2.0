@@ -41,7 +41,9 @@ struct SettingsSectionHeader: View {
 
     var body: some View {
         Button(action: {
-            settings.setSectionExpanded(!settings.sectionExpanded(section.rawValue), for: section.rawValue)
+            withAnimation(HaoLayout.settleSpring) {
+                settings.setSectionExpanded(!settings.sectionExpanded(section.rawValue), for: section.rawValue)
+            }
         }) {
             HStack {
                 Text(section.title)
@@ -51,6 +53,7 @@ struct SettingsSectionHeader: View {
                 Image(systemName: settings.sectionExpanded(section.rawValue) ? "chevron.down" : "chevron.right")
                     .font(.haoCaption2Strong)
                     .foregroundStyle(theme.textMuted)
+                    .animation(HaoLayout.settleSpring, value: settings.sectionExpanded(section.rawValue))
             }
         }
         .buttonStyle(.plain)
@@ -130,6 +133,7 @@ struct SettingsGroupsView: View {
                 onSkip: { backupFlow.skipPromptedVersion() },
                 onLater: { backupFlow.dismissPrompt() }
             )
+            .presentationDragIndicator(.visible)
         }
         .alert(
             backupFlow.alert?.title ?? "提示",

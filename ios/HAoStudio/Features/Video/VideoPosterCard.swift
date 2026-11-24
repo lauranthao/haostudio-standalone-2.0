@@ -68,7 +68,12 @@ struct VideoPosterCard: View {
                     .lineLimit(1)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MusicPressScaleStyle())
+        .contextMenu {
+            Button(VideoLibraryStore.isFavourite(item: item) ? "取消收藏" : "收藏") {
+                _ = VideoLibraryStore.toggleFavourite(item: item)
+            }
+        }
     }
 
     private var metaLine: String {

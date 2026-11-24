@@ -177,15 +177,26 @@ struct VideoBrowseView: View {
     var initialType: String?
     var onSelectCMS: (VideoItem) -> Void
     var onSelectEmby: (VideoItem) -> Void
+    var onOpenHistory: () -> Void
+    var onOpenFavourites: () -> Void
 
     @StateObject private var viewModel: VideoBrowseViewModel
+    @StateObject private var sidebarDrag = HaoSidebarDragState()
 
     @Environment(\.haoTheme) private var theme
 
-    init(initialType: String?, onSelectCMS: @escaping (VideoItem) -> Void, onSelectEmby: @escaping (VideoItem) -> Void) {
+    init(
+        initialType: String?,
+        onSelectCMS: @escaping (VideoItem) -> Void,
+        onSelectEmby: @escaping (VideoItem) -> Void,
+        onOpenHistory: @escaping () -> Void = {},
+        onOpenFavourites: @escaping () -> Void = {}
+    ) {
         self.initialType = initialType
         self.onSelectCMS = onSelectCMS
         self.onSelectEmby = onSelectEmby
+        self.onOpenHistory = onOpenHistory
+        self.onOpenFavourites = onOpenFavourites
         _viewModel = StateObject(wrappedValue: VideoBrowseViewModel(initialType: initialType))
     }
 
@@ -218,7 +229,31 @@ struct VideoBrowseView: View {
     }
 
     var body: some View {
-        ScrollView {
+        HaoDragSidebar(state: sidebarDrag) {
+            BrowseSidebarView(
+                mode: viewModel.mode,
+                categories: viewModel.categories,
+                libraries: viewModel.libraries,
+                genres: viewModel.genres,
+                selectedType: viewModel.selectedType,
+                selectedLibraryId: viewModel.selectedLibraryId,
+                selectedGenre: viewModel.selectedGenre,
+                onOpenHistory: onOpenHistory,
+                onOpenFavourites: onOpenFavourites,
+                onSelectType: { type in
+                    viewModel.selectedType = type
+                    sidebarDrag.close()
+                },
+                onSelectLibrary: { id in
+                    viewModel.selectedLibraryId = id
+                    sidebarDrag.close()
+                },
+                onSelectGenre: { genre in
+                    viewModel.selectedGenre = genre
+                    sidebarDrag.close()
+                }
+            )
+        } content: {
             VStack(alignment: .leading, spacing: 0) {
                 Picker("片源", selection: $viewModel.mode) {
                     Text("影视").tag("cms")
@@ -230,6 +265,7 @@ struct VideoBrowseView: View {
                 .onChange(of: viewModel.mode) { newMode in
                     VideoLibraryStore.setTabMode(newMode)
                 }
+                .sensoryFeedback(.selection, trigger: viewModel.mode)
                 if viewModel.mode == "emby" && !viewModel.isEmbyConfigured {
                     MusicEmptyState(
                         icon: "server.rack",
@@ -238,42 +274,53 @@ struct VideoBrowseView: View {
                     )
                     .padding(.horizontal, 16)
                     .padding(.top, 24)
+                    Spacer()
                 } else if viewModel.mode == "emby" {
-                    embyPickers
-                        .padding(.top, 12)
-                    gridSection
+                    // Emby libraries + genres live in the sidebar;
+                    // nothing on top of the grid in this mode.
+                    gridScrollView
                 } else {
-                    cmsPickers
+                    cmsFilterRows
                         .padding(.top, 12)
-                    gridSection
+                    gridScrollView
                 }
-                Spacer(minLength: 16)
             }
         }
         .haoBottomChromePadding()
         .background(theme.scaffoldBackground)
         .navigationTitle("浏览")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button(action: { sidebarDrag.toggle() }) {
+                    Image(systemName: "sidebar.left")
+                }
+                .accessibilityLabel(sidebarDrag.isOpen ? "关闭分类" : "打开分类")
+            }
+        }
+    }
+
+    /// The grid's own scroll view: the sidebar drag gesture lives
+    /// here and only here, so a horizontal swipe on a filter strip
+    /// scrolls the strip and never moves the panel.
+    private var gridScrollView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                gridSection
+                Spacer(minLength: 16)
+            }
+        }
+        .simultaneousGesture(sidebarDrag.contentDragGesture)
         .refreshable { viewModel.refresh() }
     }
 
-    // MARK: - CMS pickers
+    // MARK: - CMS filter rows
 
-    private var cmsPickers: some View {
+    /// Area / year / sort only. The type list left the top row:
+    /// it lives in the sidebar now (build 36, item 19 — one
+    /// picker for the list, not two).
+    private var cmsFilterRows: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(viewModel.categories, id: \.self) { type in
-                        filterChip(
-                            label: type,
-                            selected: viewModel.selectedType == type
-                        ) {
-                            viewModel.selectedType = type
-                        }
-                    }
-                }
-                .padding(.horizontal, 16)
-            }
             filterRow(title: "地区", options: Self.areaOptions, selected: viewModel.area) {
                 viewModel.area = $0
             }
@@ -286,35 +333,6 @@ struct VideoBrowseView: View {
         }
     }
 
-    // MARK: - Emby pickers
-
-    private var embyPickers: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    filterChip(label: "全部", selected: viewModel.selectedLibraryId == nil) {
-                        viewModel.selectedLibraryId = nil
-                    }
-                    ForEach(viewModel.libraries) { library in
-                        filterChip(
-                            label: library.name,
-                            selected: viewModel.selectedLibraryId == library.id
-                        ) {
-                            viewModel.selectedLibraryId = library.id
-                        }
-                    }
-                }
-                .padding(.horizontal, 16)
-            }
-            filterRow(
-                title: "分类",
-                options: [("全部", "")] + viewModel.genres.map { ($0, $0) },
-                selected: viewModel.selectedGenre ?? ""
-            ) {
-                viewModel.selectedGenre = $0.isEmpty ? nil : $0
-            }
-        }
-    }
 
     // MARK: - Grid
 
@@ -392,6 +410,110 @@ struct VideoBrowseView: View {
                 .overlay {
                     Capsule().strokeBorder(theme.hairline, lineWidth: 0.5)
                 }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Sidebar rows for the browse page (build 36, item 19): the
+/// category picker lives here, not in a top chip row (chen's
+/// Emby-style screenshot is the authority — one picker for the
+/// list, not two). CMS: quick links + 分类; Emby: 媒体库 + 分类.
+/// A row tap changes the same view-model selection the chip used
+/// to change (same reload() path) and springs the sidebar closed.
+private struct BrowseSidebarView: View {
+    var mode: String
+    var categories: [String]
+    var libraries: [VideoEmbyLibrary]
+    var genres: [String]
+    var selectedType: String?
+    var selectedLibraryId: String?
+    var selectedGenre: String?
+    var onOpenHistory: () -> Void
+    var onOpenFavourites: () -> Void
+    var onSelectType: (String) -> Void
+    var onSelectLibrary: (String?) -> Void
+    var onSelectGenre: (String?) -> Void
+
+    @Environment(\.haoTheme) private var theme
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 4) {
+                if mode == "emby" {
+                    sectionTitle("媒体库")
+                    sidebarRow(label: "全部", selected: selectedLibraryId == nil) {
+                        onSelectLibrary(nil)
+                    }
+                    ForEach(libraries) { library in
+                        sidebarRow(label: library.name, selected: selectedLibraryId == library.id) {
+                            onSelectLibrary(library.id)
+                        }
+                    }
+                    sectionTitle("分类")
+                    sidebarRow(label: "全部", selected: selectedGenre == nil) {
+                        onSelectGenre(nil)
+                    }
+                    ForEach(genres, id: \.self) { genre in
+                        sidebarRow(label: genre, selected: selectedGenre == genre) {
+                            onSelectGenre(genre)
+                        }
+                    }
+                } else {
+                    sidebarRow(label: "继续观看", icon: "clock") {
+                        onOpenHistory()
+                    }
+                    sidebarRow(label: "我的收藏", icon: "heart") {
+                        onOpenFavourites()
+                    }
+                    sectionTitle("分类")
+                    ForEach(categories, id: \.self) { type in
+                        sidebarRow(label: type, selected: selectedType == type) {
+                            onSelectType(type)
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal, 12)
+        }
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.haoFootnote)
+            .foregroundStyle(theme.textMuted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+    }
+
+    private func sidebarRow(
+        label: String,
+        icon: String? = nil,
+        selected: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                if let icon = icon {
+                    Image(systemName: icon)
+                        .font(.haoFootnoteStrong)
+                }
+                Text(label)
+                    .font(.haoSubhead)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .foregroundStyle(selected ? theme.accent : theme.textPrimary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background {
+                if selected {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(theme.accentSoft)
+                }
+            }
         }
         .buttonStyle(.plain)
     }

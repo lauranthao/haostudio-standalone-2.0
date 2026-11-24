@@ -292,6 +292,14 @@ private struct MyPlaylistsView: View {
                         }
                         .listRowBackground(theme.scaffoldBackground)
                         .listRowSeparatorTint(theme.hairline)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                MusicLibraryStore.deleteList(id: list.id)
+                                lists = MusicLibraryStore.getLists()
+                            } label: {
+                                Label("删除", systemImage: "trash")
+                            }
+                        }
                     }
                 }
                 .haoBottomChromePadding()
@@ -310,9 +318,10 @@ private struct MyPlaylistsView: View {
 
 // MARK: - Recent plays (new: no recent view existed)
 
-/// Minimal read-only recent list. Tap plays through the shared
-/// music player view model (same as MusicFavouritesView); the
-/// store is only read, never written, here.
+/// Recent list on the shared song row: tap plays through the
+/// shared music player view model (same as MusicFavouritesView);
+/// the row's menu offers favourite / add to playlist
+/// (build 36, item 19).
 private struct MyRecentPlaysView: View {
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
 
@@ -329,25 +338,16 @@ private struct MyRecentPlaysView: View {
             } else {
                 List {
                     ForEach(Array(recent.enumerated()), id: \.element.id) { index, song in
-                        Button(action: {
-                            playerVM.play(song: song, in: recent, startAt: index)
-                        }) {
-                            HStack(spacing: 12) {
-                                MusicCoverView(urlString: song.cover, size: 48)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(song.title.isEmpty ? "未知歌曲" : song.title)
-                                        .font(.haoSubheadStrong)
-                                        .foregroundStyle(theme.textPrimary)
-                                        .lineLimit(1)
-                                    Text(song.artist.isEmpty ? "未知歌手" : song.artist)
-                                        .font(.haoFootnote)
-                                        .foregroundStyle(theme.textSecondary)
-                                        .lineLimit(1)
-                                }
-                                Spacer()
+                        MusicSongRow(
+                            song: song,
+                            isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
+                            onTap: {
+                                playerVM.play(song: song, in: recent, startAt: index)
+                            },
+                            onToggleFav: {
+                                recent = MusicLibraryStore.getRecent()
                             }
-                        }
-                        .buttonStyle(.plain)
+                        )
                         .listRowBackground(theme.scaffoldBackground)
                         .listRowSeparatorTint(theme.hairline)
                     }

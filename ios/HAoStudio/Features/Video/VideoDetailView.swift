@@ -311,7 +311,7 @@ struct VideoDetailContentView: View {
         .navigationTitle(viewModel.item.title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            withAnimation(.easeIn(duration: 0.3)) { coverRevealed = true }
+            withAnimation(HaoLayout.settleSpring) { coverRevealed = true }
         }
     }
 
@@ -463,6 +463,7 @@ struct VideoDetailContentView: View {
                 .background(theme.accentSoft, in: Capsule())
             }
             .buttonStyle(.plain)
+            .sensoryFeedback(.selection, trigger: viewModel.isFavourite)
             Button(action: { viewModel.downloadSelected() }) {
                 Label("下载", systemImage: "arrow.down.circle")
                     .font(.haoDenseBody)

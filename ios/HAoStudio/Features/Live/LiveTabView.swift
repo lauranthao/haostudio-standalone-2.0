@@ -690,6 +690,7 @@ struct LivePlatformTextTabs: View {
                             Capsule()
                                 .fill(platform == selected ? theme.accent : Color.clear)
                                 .frame(height: 2.5)
+                                .animation(HaoLayout.settleSpring, value: selected)
                         }
                     }
                     .buttonStyle(.plain)
@@ -697,5 +698,6 @@ struct LivePlatformTextTabs: View {
             }
             .padding(.horizontal, 24)
         }
+        .sensoryFeedback(.selection, trigger: selected)
     }
 }

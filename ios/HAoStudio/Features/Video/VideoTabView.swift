@@ -96,6 +96,7 @@ struct VideoTabView: View {
                 .onChange(of: mode) { newMode in
                     VideoLibraryStore.setTabMode(newMode)
                 }
+                .sensoryFeedback(.selection, trigger: mode)
                 if mode == "emby" {
                     EmbyTabView(
                         onSelect: { path.append(.embyDetail($0)) },
@@ -131,7 +132,9 @@ struct VideoTabView: View {
                     VideoBrowseView(
                         initialType: type,
                         onSelectCMS: { path.append(.detail($0)) },
-                        onSelectEmby: { path.append(.embyDetail($0)) }
+                        onSelectEmby: { path.append(.embyDetail($0)) },
+                        onOpenHistory: { path.append(.history) },
+                        onOpenFavourites: { path.append(.favourites) }
                     )
                 }
             }
@@ -379,7 +382,7 @@ struct VideoContinueCard: View {
                     .strokeBorder(theme.hairline, lineWidth: 0.5)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MusicPressScaleStyle())
     }
 }
 

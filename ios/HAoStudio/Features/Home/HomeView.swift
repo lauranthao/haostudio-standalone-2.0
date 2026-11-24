@@ -340,7 +340,7 @@ struct HomeSongCard: View {
                 }
                 .frame(width: 120, alignment: .leading)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(MusicPressScaleStyle())
             .contextMenu { menu.menuContent() }
         }
     }

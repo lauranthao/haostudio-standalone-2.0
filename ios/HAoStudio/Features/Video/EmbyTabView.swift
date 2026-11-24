@@ -206,6 +206,7 @@ struct EmbyTabView: View {
             }
             .padding(.horizontal, 16)
         }
+        .sensoryFeedback(.selection, trigger: viewModel.selectedLibraryId)
     }
 
     private func libraryChip(id: String?, name: String) -> some View {
@@ -222,6 +223,7 @@ struct EmbyTabView: View {
                 }
         }
         .buttonStyle(.plain)
+        .animation(HaoLayout.settleSpring, value: viewModel.selectedLibraryId)
     }
 
     /// Genres chips (P0-10: Emby 分类扩展 — 电影/电视之外接 Genres).

@@ -81,6 +81,8 @@ let package = Package(
                 "Playback/PlaybackCoordinator.swift",
                 "Playback/LiveRoomSession.swift",
                 "Features/Video/VideoLibraryStore.swift",
+                // Build 36, item 19: sidebar drag math (Foundation-only).
+                "App/HaoSidebarDragMath.swift",
                 "Features/Live/LiveLibraryStore.swift",
                 "Features/Live/LiveDataGateway.swift",
                 "Features/Live/LiveDataGatewayAdapter.swift",

@@ -195,14 +195,20 @@ struct LiveRoomView: View {
                 onSelectQuality: { index in switchQuality(to: index) },
                 onSelectLine: { index in switchLine(to: index) }
             )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showDanmakuSettings) {
             LiveDanmakuSettingsSheet(settings: $danmakuSettings)
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showBrightnessVolume) {
             // The sheet's slider writes through setBrightness, the
             // VM's only screen writer (armed by notePlayerEntry).
             LiveBrightnessVolumeSheet(brightness: Binding(get: { livePlayer.brightnessLevel }, set: { livePlayer.setBrightness($0) }))
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
         }
         // The room never shows the system nav bar (fix 2026-11-24,
         // build 35): in portrait the bar stayed visible, so the
