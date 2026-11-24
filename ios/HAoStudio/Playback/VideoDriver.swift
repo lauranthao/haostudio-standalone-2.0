@@ -259,6 +259,12 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     private var backend: VideoPlayerBackend?
     private var currentURL: URL?
     private var currentRate: Double?
+    /// Last picture fit pushed (F2, build 36 item 9 — mirrors
+    /// currentRate): a fresh backend starts at .resizeAspect,
+    /// so a ladder swap / reopen must re-apply the fit or it
+    /// silently resets to 适应 even though the sheet state
+    /// still holds the user's pick.
+    private var currentFit: VideoFit?
     /// The ladder for the open in flight. A ladder is a local in
     /// `open()` — without this strong hold nothing would retain it
     /// once `open()` returns (its attempt completion captures it
@@ -936,6 +942,12 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         isLoading = false
         backend.play()
         if let rate = currentRate { backend.playbackRate = rate }
+        // F2: re-apply the stored picture fit to the backend
+        // that just opened (same pattern as the rate above).
+        // A fresh backend defaults to .resizeAspect, so without
+        // this a ladder swap / reopen silently resets the fit
+        // the user picked mid-playback.
+        if let fit = currentFit { backend.setVideoFit(fit) }
         // S7 wiring: re-apply the stored VOD settings to the
         // backend that just opened. A toggle made before the
         // backend existed lands here, and a ladder swap / reopen
@@ -1075,6 +1087,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     /// backend and kept for the next open.
     func setVideoFit(_ fit: VideoFit) {
         ensureMain {
+            self.currentFit = fit
             self.backend?.setVideoFit(fit)
         }
     }

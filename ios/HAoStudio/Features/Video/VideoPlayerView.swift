@@ -1193,6 +1193,18 @@ struct VideoPlayerView: View {
             videoPlayer.settings.dialogueBoostEnabled = newValue
             videoPlayer.applySettings()
         }
+        // F2 (build 36, item 9): same bridge for picture fit.
+        // The settings page writes SettingsStore.videoFit, the
+        // in-player sheet edits videoPlayer.settings.videoFit —
+        // two in-memory values over one UserDefaults key. Without
+        // this bridge a fit picked on the settings page while an
+        // episode was playing never reached the engine (the sheet
+        // route already worked: it edits settings directly, and
+        // the settings onChange above applies it live).
+        .onChange(of: settingsStore.videoFit) { _, newValue in
+            videoPlayer.settings.videoFit = newValue
+            videoPlayer.applySettings()
+        }
         .onChange(of: settingsStore.dvP8Downgrade) { _, _ in
             videoPlayer.applyDvP8DowngradeIfChanged()
         }
