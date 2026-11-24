@@ -171,6 +171,18 @@ struct MyView: View {
                 counts = MyEntryCounts.reload()
                 showMigrationNotice = MigrationStore.migrationNoticeNeeded()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .haoMusicRecentChanged)) { _ in
+                // b36 item 8, F7: counts went stale while this
+                // page was on screen — playing from the mini
+                // player changes recent plays, a favourite toggle
+                // anywhere changes favourites, and neither
+                // re-triggers onAppear. Reload on the
+                // notifications the music leg already posts.
+                counts = MyEntryCounts.reload()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { _ in
+                counts = MyEntryCounts.reload()
+            }
         }
     }
 

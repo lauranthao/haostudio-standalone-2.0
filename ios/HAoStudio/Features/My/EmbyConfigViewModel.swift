@@ -178,6 +178,24 @@ final class EmbyConfigViewModel: ObservableObject {
         let address = baseUrl.trimmingCharacters(in: .whitespaces)
         guard !address.isEmpty else { return false }
         var config = resolvedConfig ?? EmbyConfigStore.load() ?? EmbyServerConfig()
+        // b36 item 8, F4: the merged config may carry a token for
+        // a DIFFERENT server — test server A, then retype the
+        // address as B without re-testing, and A's token would be
+        // saved against B's address (then every Emby call fails
+        // auth while the page claims to be configured). When the
+        // typed address is not the server the merged config came
+        // from, drop the server-bound fields first. A freshly
+        // typed API key (applied below) still saves; otherwise
+        // the guard below fails honestly instead of storing a
+        // dead login. Comparison ignores surrounding whitespace
+        // and a trailing "/" (probe returns the typed address
+        // verbatim, so a match after a successful test is exact).
+        if Self.normalizedBaseUrl(config.baseUrl) != Self.normalizedBaseUrl(address) {
+            config.accessToken = ""
+            config.userId = ""
+            config.serverName = ""
+            config.serverVersion = ""
+        }
         config.baseUrl = address
         config.username = username.trimmingCharacters(in: .whitespaces)
         let typedKey = apiKey.trimmingCharacters(in: .whitespaces)
@@ -218,5 +236,16 @@ final class EmbyConfigViewModel: ObservableObject {
         password = ""
         apiKey = ""
         status = .unconfigured
+    }
+
+    /// Base URL for same-server comparison (b36 item 8, F4):
+    /// surrounding whitespace and trailing slashes ignored, so
+    /// "https://host:8096/" matches "https://host:8096".
+    private static func normalizedBaseUrl(_ url: String) -> String {
+        var text = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        while text.hasSuffix("/") {
+            text.removeLast()
+        }
+        return text
     }
 }

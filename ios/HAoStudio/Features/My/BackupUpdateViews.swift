@@ -43,6 +43,13 @@ final class BackupUpdateFlow: ObservableObject {
 
     @Published var isExporting = false
     @Published var exportedURL: URL?
+    /// Envelope warnings from the last successful export (e.g.
+    /// the Emby credential warning — the credential stays in the
+    /// Keychain and out of the file). Read from the envelope
+    /// after export: the engine writes them there, and until
+    /// this field existed nothing ever read them back, so the
+    /// user never saw them (b36 item 8, F1).
+    @Published var exportWarnings: [String] = []
     @Published var isImporting = false
     @Published var showingImporter = false
     @Published var alert: BackupUpdateAlert?
@@ -70,6 +77,7 @@ final class BackupUpdateFlow: ObservableObject {
         }
         isExporting = true
         exportedURL = nil
+        exportWarnings = []
         engine.exportBackup { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self else {
@@ -79,6 +87,11 @@ final class BackupUpdateFlow: ObservableObject {
                 switch result {
                 case .success(let url):
                     self.exportedURL = url
+                    // b36 item 8, F1: the engine records the
+                    // warnings in the envelope (notably the Emby
+                    // credential warning); surface them so the
+                    // user sees what the file does NOT contain.
+                    self.exportWarnings = BackupEngineCore.warningsInBackup(at: url) ?? []
                 case .failure(let error):
                     self.alert = BackupUpdateAlert(title: "导出失败", message: error.localizedDescription)
                 }

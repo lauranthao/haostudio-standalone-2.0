@@ -285,6 +285,12 @@ struct SettingsGroupsView: View {
                     tabAccentSwatch(choice)
                 }
             }
+            // b36 item 8, F8: this palette and 自定义强调色 above
+            // write the SAME key (hao_tabbar_accent — Flutter
+            // parity, one key, two views). Say so, or picking
+            // "蓝" here and watching every button turn blue looks
+            // like a bug.
+            footnote("与自定义强调色共用同一颜色，改一边另一边跟着变。")
         }
     }
 
@@ -795,6 +801,13 @@ struct SettingsGroupsView: View {
                     }
                 }
                 footnote("已导出，可分享保存到文件 App 或发送给自己。")
+                // b36 item 8, F1: envelope warnings (notably the
+                // Emby credential warning) — the file does not
+                // contain everything, and the user must see that
+                // here, not only at restore time.
+                ForEach(backupFlow.exportWarnings, id: \.self) { warning in
+                    footnote(warning)
+                }
             } else {
                 footnote("导出为单个 .zip 文件；备份不含 Emby 登录凭证。")
             }
@@ -1050,6 +1063,15 @@ struct VideoCategoryEditView: View {
         Group {
             if loaded {
                 List {
+                    if displayNames.isEmpty {
+                        // b36 item 8, F6: without this the page is
+                        // a bare list + footer when the load fails
+                        // or no source answers — a dead end with no
+                        // explanation and nothing to do.
+                        Text("未能加载分类，请检查网络后返回重试。")
+                            .font(.haoRowSubtitle)
+                            .foregroundStyle(theme.textMuted)
+                    }
                     Section {
                         ForEach(displayNames, id: \.self) { name in
                             categoryRow(name)

@@ -18,17 +18,30 @@ struct UpdateChangelog {
     /// Best entry for a language code: zh-Hans takes zh, zh-Hant
     /// takes tw, en takes en; anything else takes the plain string,
     /// then zh, tw, en in that order.
+    ///
+    /// b36 item 8, F5: the input is normalized first (lowercase,
+    /// "_" → "-", prefix match) because the callers pass BCP 47
+    /// tags such as "zh-Hant-TW" / "zh-Hans-CN", and
+    /// `Locale.current.languageCode` returns only "zh" — the
+    /// old exact-match switch never saw a Traditional tag, so
+    /// Traditional users always got the Simplified entry.
     func localized(for languageCode: String?) -> String? {
-        switch languageCode {
-        case "zh-Hans", "zh-CN", "zh-SG", "zh":
-            return zh ?? text
-        case "zh-Hant", "zh-TW", "zh-HK", "zh-MO":
-            return tw ?? text
-        case "en":
-            return en ?? text
-        default:
+        guard let code = languageCode else {
             return text ?? zh ?? tw ?? en
         }
+        let normalized = code.lowercased().replacingOccurrences(of: "_", with: "-")
+        if normalized.hasPrefix("zh-hant") || normalized == "zh-tw"
+            || normalized == "zh-hk" || normalized == "zh-mo" {
+            return tw ?? text
+        }
+        if normalized.hasPrefix("zh-hans") || normalized == "zh-cn"
+            || normalized == "zh-sg" || normalized == "zh" {
+            return zh ?? text
+        }
+        if normalized == "en" || normalized.hasPrefix("en-") {
+            return en ?? text
+        }
+        return text ?? zh ?? tw ?? en
     }
 }
 
