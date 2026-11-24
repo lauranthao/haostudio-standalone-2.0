@@ -172,11 +172,13 @@ struct DanmakuToggleButton: View {
     var isOn: Bool
     var action: () -> Void
 
+    @Environment(\.haoTheme) private var theme
+
     var body: some View {
         Button(action: action) {
             Image(systemName: isOn ? "message.fill" : "message")
                 .font(.system(size: 18, weight: .semibold))  // icon size, not text
-                .foregroundStyle(isOn ? .white : .white.opacity(0.5))
+                .foregroundStyle(isOn ? theme.accentOnVideo : .white.opacity(0.5))
                 .frame(width: 44, height: 44)
         }
         .buttonStyle(.plain)

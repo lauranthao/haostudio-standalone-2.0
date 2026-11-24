@@ -408,7 +408,7 @@ struct LiveRoomView: View {
                         Button(action: { dismiss() }) {
                             Image(systemName: "chevron.left")
                                 .font(.haoBodyStrong)
-                                .foregroundStyle(.white)
+                                .foregroundStyle(theme.accentOnVideo)
                                 .frame(width: 36, height: 36)
                                 .background(Color.black.opacity(0.45), in: Circle())
                         }
@@ -479,7 +479,7 @@ struct LiveRoomView: View {
             Button(action: { livePlayer.togglePlayPause() }) {
                 Image(systemName: livePlayer.isPlaying ? "pause.fill" : "play.fill")
                     .font(.haoSectionTitle)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
@@ -488,7 +488,7 @@ struct LiveRoomView: View {
             Button(action: { isFullscreen = true }) {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
                     .font(.haoSectionTitle)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
@@ -684,14 +684,14 @@ struct LiveRoomView: View {
             Button(action: { showBrightnessVolume = true }) {
                 Image(systemName: "sun.max")
                     .font(.system(size: 18, weight: .semibold))  // icon size, not text
-                    .foregroundStyle(theme.textPrimary)
+                    .foregroundStyle(theme.accent)
                     .frame(width: 40, height: 40)
             }
             .buttonStyle(.plain)
             Button(action: { showDanmakuSettings = true }) {
                 Image(systemName: "gearshape")
                     .font(.system(size: 18, weight: .semibold))  // icon size, not text
-                    .foregroundStyle(theme.textPrimary)
+                    .foregroundStyle(theme.accent)
                     .frame(width: 40, height: 40)
             }
             .buttonStyle(.plain)
@@ -768,7 +768,7 @@ struct LiveRoomView: View {
             Button(action: { dismiss() }) {
                 Image(systemName: "chevron.left")
                     .font(.haoBodyStrong)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 36, height: 36)
                     .background(Color.black.opacity(0.45), in: Circle())
             }
@@ -796,7 +796,7 @@ struct LiveRoomView: View {
             Button(action: { showBrightnessVolume = true }) {
                 Image(systemName: "sun.max")
                     .font(.haoBodyStrong)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 36, height: 36)
                     .background(Color.black.opacity(0.45), in: Circle())
             }
@@ -804,7 +804,7 @@ struct LiveRoomView: View {
             Button(action: { showDanmakuSettings = true }) {
                 Image(systemName: "gearshape")
                     .font(.haoBodyStrong)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 36, height: 36)
                     .background(Color.black.opacity(0.45), in: Circle())
             }
@@ -865,7 +865,7 @@ struct LiveRoomView: View {
             Button(action: { livePlayer.togglePlayPause() }) {
                 Image(systemName: livePlayer.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 22, weight: .semibold))  // icon size, not text
-                    .foregroundStyle(.white)
+                    .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
@@ -873,7 +873,7 @@ struct LiveRoomView: View {
             Button(action: toggleFollow) {
                 Image(systemName: isFollowing ? "heart.fill" : "heart")
                     .font(.haoSectionTitle)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(isFollowing ? theme.accentOnVideo : .white)
                     .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
@@ -881,7 +881,7 @@ struct LiveRoomView: View {
             Button(action: { showQualitySheet = true }) {
                 Text(livePlayer.currentQuality?.name ?? "画质")
                     .font(.haoDenseTitle)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(theme.accentOnVideo)
                     .lineLimit(1)
             }
             .buttonStyle(.plain)
@@ -899,7 +899,7 @@ struct LiveRoomView: View {
             Button(action: { isFullscreen = false }) {
                 Image(systemName: "arrow.down.right.and.arrow.up.left")
                     .font(.system(size: 18, weight: .semibold))  // icon size, not text
-                    .foregroundStyle(.white)
+                    .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 40, height: 40)
             }
             .buttonStyle(.plain)
@@ -1077,5 +1077,6 @@ struct LiveBrightnessVolumeSheet: View {
                 }
             }
         }
+        .tint(theme.accent)
     }
 }

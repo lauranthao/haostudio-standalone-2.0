@@ -70,6 +70,7 @@ struct LiveDanmakuSettingsSheet: View {
                 settings.persist()
             }
         }
+        .tint(theme.accent)
     }
 
     // MARK: - 1. Per-platform switches
@@ -84,6 +85,7 @@ struct LiveDanmakuSettingsSheet: View {
                         set: { settings.enabled[platform.flutterSiteId] = $0 }
                     )
                 )
+                .tint(theme.accent)
             }
         } header: {
             Text("各平台弹幕开关")
@@ -100,6 +102,7 @@ struct LiveDanmakuSettingsSheet: View {
                     in: 12...20,
                     step: 1
                 )
+                .tint(theme.accent)
                 Text("\(Int(settings.fontSize))")
                     .font(.haoSubheadStrong)
                     .foregroundStyle(theme.textPrimary)
@@ -120,6 +123,7 @@ struct LiveDanmakuSettingsSheet: View {
                     in: 0.3...1.0,
                     step: 0.1
                 )
+                .tint(theme.accent)
                 Text(String(format: "%.1f", settings.opacity))
                     .font(.haoSubheadStrong)
                     .foregroundStyle(theme.textPrimary)
@@ -141,6 +145,7 @@ struct LiveDanmakuSettingsSheet: View {
                 Text("上 1/5").tag("fifth")
             }
             .pickerStyle(.segmented)
+            .tint(theme.accent)
             .listRowSeparator(.hidden)
         } header: {
             Text("弹幕区域")
@@ -163,6 +168,7 @@ struct LiveDanmakuSettingsSheet: View {
                 Text("宽松").tag("loose")
             }
             Toggle("显示用户名", isOn: $settings.showUsernames)
+                .tint(theme.accent)
         } header: {
             Text("弹幕列表")
         }
@@ -173,6 +179,7 @@ struct LiveDanmakuSettingsSheet: View {
     private var filterSection: some View {
         Section {
             Toggle("过滤相似弹幕", isOn: $settings.similarityEnabled)
+                .tint(theme.accent)
             if settings.similarityEnabled {
                 HStack {
                     Text("相似度阈值")
@@ -188,12 +195,15 @@ struct LiveDanmakuSettingsSheet: View {
                     in: 0...100,
                     step: 1
                 )
+                .tint(theme.accent)
                 Text("越高越严格（只挡更像的）")
                     .font(.haoFootnote)
                     .foregroundStyle(theme.textMuted)
             }
             Toggle("屏蔽纯表情弹幕", isOn: $settings.blockEmoteOnly)
+                .tint(theme.accent)
             Toggle("屏蔽超长弹幕", isOn: $settings.blockLong)
+                .tint(theme.accent)
             if settings.blockLong {
                 HStack {
                     Text("超长字数")
@@ -209,8 +219,10 @@ struct LiveDanmakuSettingsSheet: View {
                     in: 10...100,
                     step: 1
                 )
+                .tint(theme.accent)
             }
             Toggle("斗鱼疑似机器人过滤", isOn: $settings.douyuBotFilter)
+                .tint(theme.accent)
         } header: {
             Text("内容过滤")
         } footer: {
@@ -230,6 +242,7 @@ struct LiveDanmakuSettingsSheet: View {
                     Text("用户名").tag(true)
                 }
                 .pickerStyle(.segmented)
+                .tint(theme.accent)
                 .frame(width: 140)
                 Button("添加", action: addBlockEntry)
                     .buttonStyle(.plain)

@@ -13,7 +13,8 @@
 // - NO purple anywhere in any theme.
 // - Red appears ONLY where it truly means something: the LIVE badge and
 //   the recording dot (`liveRed`). Buttons / active states use `accent`,
-//   never saturated red.
+//   never saturated red. On-video buttons use `accentOnVideo` (the accent,
+//   white fallback on black — a black accent is invisible on video).
 // - Blue accents are black (chen 2026-11-18): the two blue/cyan accents
 //   (appleGlass, polarIce) are black in light mode and dark grey #76767A
 //   in dark mode (black-on-black would be invisible). Gold and mint
@@ -77,6 +78,11 @@ struct HaoThemePalette {
     /// readability reasoning the Flutter baseline uses for its dark
     /// accents (#76767A instead of black).
     let tabSelected: Color
+
+    /// Accent as rendered on black video: the accent itself, or white
+    /// when the accent is black / near-black (invisible on video).
+    /// On-video buttons use this; on-scaffold controls use `accent`.
+    var accentOnVideo: Color { haoAccentOnBlack(accent) }
 
     /// S5-A: apply the settings-owned overrides on top of a resolved
     /// base palette, without touching the base values:
@@ -309,6 +315,16 @@ func haoClampedAccentARGB(_ argb: UInt32) -> UInt32 {
     return alpha | (clamped.opaqueARGB & 0x00FFFFFF)
 }
 
+/// Relative luminance of an sRGB colour (linearised sRGB, WCAG
+/// weights) — the single source of truth for both helpers below.
+/// Pure doubles, no UIKit: testable without a view.
+func haoRelativeLuminance(red: Double, green: Double, blue: Double) -> Double {
+    func linearised(_ c: Double) -> Double {
+        return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * linearised(red) + 0.7152 * linearised(green) + 0.0722 * linearised(blue)
+}
+
 /// Text/icon colour on top of a custom accent (Flutter
 /// `_onAccentFor`): white on dark accents, near-black on light
 /// ones. The light/dark split is Flutter's
@@ -321,12 +337,31 @@ func haoOnAccentFor(_ accent: Color) -> Color {
     var b: CGFloat = 0
     var a: CGFloat = 0
     guard ui.getRed(&r, green: &g, blue: &b, alpha: &a) else { return .white }
-    func linearised(_ c: CGFloat) -> CGFloat {
-        return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
-    }
-    let luminance = 0.2126 * linearised(r) + 0.7152 * linearised(g) + 0.0722 * linearised(b)
+    let luminance = haoRelativeLuminance(red: Double(r), green: Double(g), blue: Double(b))
     let light = (luminance + 0.05) * (luminance + 0.05) > 0.15
     return light ? Color(hex: 0x0B0B0F) : .white
+}
+
+/// On-video accent (build 36, item 15): the theme accent, unless
+/// it is invisible on black video. WCAG contrast of the accent vs
+/// black >= 3:1 (large-text / non-text bar) -> the accent itself;
+/// otherwise white. Only black / near-black accents fall back —
+/// in the default theme (appleGlass light, accent = black) and
+/// polarIce light the on-video buttons stay white, which IS the
+/// legible rendering; the fix is visible in darkGold / freshMint
+/// (both modes), in dark mode (grey), and with any custom accent
+/// pick. A custom pick flows through the same `theme.accent`, so a
+/// near-black pick also falls back to white automatically.
+func haoAccentOnBlack(_ accent: Color) -> Color {
+    let ui = UIColor(accent)
+    var r: CGFloat = 0
+    var g: CGFloat = 0
+    var b: CGFloat = 0
+    var a: CGFloat = 0
+    guard ui.getRed(&r, green: &g, blue: &b, alpha: &a) else { return .white }
+    let luminance = haoRelativeLuminance(red: Double(r), green: Double(g), blue: Double(b))
+    let contrastVsBlack = (luminance + 0.05) / 0.05
+    return contrastVsBlack >= 3 ? accent : .white
 }
 
 // MARK: - Type scale (build 36, item 4)

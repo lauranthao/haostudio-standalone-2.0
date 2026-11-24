@@ -739,6 +739,7 @@ struct VideoPlayerView: View {
     @EnvironmentObject private var videoPlayer: VideoPlayerViewModel
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var settingsStore: SettingsStore
+    @Environment(\.haoTheme) private var theme
     @Environment(\.dismiss) private var dismiss
 
     @State private var controlsVisible = true
@@ -803,10 +804,10 @@ struct VideoPlayerView: View {
             if videoPlayer.isDoubleSpeed {
                 Text("2x")
                     .font(.haoSubheadStrong)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(haoOnAccentFor(theme.accentOnVideo))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
-                    .background(Color.black.opacity(0.6), in: Capsule())
+                    .background(theme.accentOnVideo, in: Capsule())
             }
             if videoPlayer.seekFailed {
                 VStack {
@@ -844,10 +845,10 @@ struct VideoPlayerView: View {
                         .foregroundStyle(.white.opacity(0.72))
                     Button("重试") { videoPlayer.retry() }
                         .font(.haoSubheadStrong)
-                        .foregroundStyle(.black)
+                        .foregroundStyle(haoOnAccentFor(theme.accentOnVideo))
                         .padding(.horizontal, 24)
                         .padding(.vertical, 10)
-                        .background(.white, in: Capsule())
+                        .background(theme.accentOnVideo, in: Capsule())
                         .buttonStyle(.plain)
                 }
             } else if videoPlayer.isLoading {
@@ -869,19 +870,19 @@ struct VideoPlayerView: View {
                         if let pill = videoPlayer.skipIntroPill {
                             Button(pill) { videoPlayer.skipIntroNow() }
                                 .font(.haoDenseTitle)
-                                .foregroundStyle(.white)
+                                .foregroundStyle(haoOnAccentFor(theme.accentOnVideo))
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 10)
-                                .background(Color.black.opacity(0.7), in: Capsule())
+                                .background(theme.accentOnVideo, in: Capsule())
                                 .buttonStyle(.plain)
                         }
                         if videoPlayer.skipCreditsPill {
                             Button("跳过片尾") { videoPlayer.skipCreditsNow() }
                                 .font(.haoDenseTitle)
-                                .foregroundStyle(.white)
+                                .foregroundStyle(haoOnAccentFor(theme.accentOnVideo))
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 10)
-                                .background(Color.black.opacity(0.7), in: Capsule())
+                                .background(theme.accentOnVideo, in: Capsule())
                                 .buttonStyle(.plain)
                         }
                     }
@@ -999,7 +1000,7 @@ struct VideoPlayerView: View {
             }) {
                 Image(systemName: "xmark")
                     .font(.haoBodyStrong)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 40, height: 40)
                     .background(Color.black.opacity(0.45), in: Circle())
             }
@@ -1023,7 +1024,7 @@ struct VideoPlayerView: View {
             Button(action: { showingMore = true }) {
                 Image(systemName: "ellipsis")
                     .font(.haoBodyStrong)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 40, height: 40)
                     .background(Color.black.opacity(0.45), in: Circle())
             }
@@ -1090,13 +1091,13 @@ struct VideoPlayerView: View {
                 if videoPlayer.hasNextEpisode {
                     Button("下一集") { videoPlayer.playNextEpisode() }
                         .font(.haoDenseTitle)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(theme.accentOnVideo)
                         .buttonStyle(.plain)
                 }
                 Button(action: { videoPlayer.togglePlayPause() }) {
                     Image(systemName: videoPlayer.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(theme.accentOnVideo)
                         .frame(width: 48, height: 48)
                 }
                 .buttonStyle(.plain)
@@ -1105,7 +1106,7 @@ struct VideoPlayerView: View {
                           ? "arrow.down.right.and.arrow.up.left"
                           : "arrow.up.left.and.arrow.down.right")
                         .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(theme.accentOnVideo)
                         .frame(width: 48, height: 48)
                 }
                 .buttonStyle(.plain)
@@ -1174,6 +1175,8 @@ struct VideoSeekBar: View {
 
     @State private var dragging = false
 
+    @Environment(\.haoTheme) private var theme
+
     var body: some View {
         GeometryReader { geometry in
             let fill = VideoSeekBarMath.fillWidth(
@@ -1183,10 +1186,10 @@ struct VideoSeekBar: View {
                     .fill(Color.white.opacity(0.35))
                     .frame(height: dragging ? 6 : 4)
                 Capsule()
-                    .fill(Color.white)
+                    .fill(theme.accentOnVideo)
                     .frame(width: fill, height: dragging ? 6 : 4)
                 Circle()
-                    .fill(Color.white)
+                    .fill(theme.accentOnVideo)
                     .frame(width: dragging ? 18 : 16, height: dragging ? 18 : 16)
                     .offset(x: max(0, fill - (dragging ? 9 : 8)))
             }
@@ -1382,15 +1385,23 @@ struct PlayerBrightnessVolumeRows: View {
 
 /// The system volume slider (MPVolumeView, public API). It
 /// reflects the device volume and changes it when dragged —
-/// there is no app-side volume value to keep in sync.
+/// there is no app-side volume value to keep in sync. Tinted
+/// with the theme accent (build 36, item 15) — device-gated: if
+/// the tint does not visibly colour the slider on a real phone,
+/// revert the tint and leave the system slider untinted rather
+/// than building a custom volume control.
 struct PlayerVolumeSliderView: UIViewRepresentable {
+    @Environment(\.haoTheme) private var theme
+
     func makeUIView(context: Context) -> MPVolumeView {
         let volumeView = MPVolumeView()
         volumeView.showsRouteButton = false
         volumeView.showsVolumeSlider = true
+        volumeView.tintColor = UIColor(theme.accent)
         return volumeView
     }
 
     func updateUIView(_ uiView: MPVolumeView, context: Context) {
+        uiView.tintColor = UIColor(theme.accent)
     }
 }
