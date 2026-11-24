@@ -18,7 +18,20 @@
 // - lyrics live BEHIND the cover: tap cover -> lyrics in the cover
 //   area; tap a lyric line -> seek to that line; tap lyric blank ->
 //   cover back. No word-level karaoke: no source returns word timing.
-// - whole player fits on one phone screen, no scrolling.
+// - whole player fits on one phone screen, no scrolling: the
+//   cover / lyrics slot is sized by width AND by the height left
+//   after the fixed chrome (see coverSize), so short phones
+//   shrink the cover instead of clipping the bottom rows.
+// - CLOSE (chen 2026-11-24: opened player could not be closed):
+//   fullScreenCover has no system swipe-down dismiss, and the old
+//   close control was a bare 32pt white chevron with no scrim —
+//   invisible on a light cover and the only way out. Now the
+//   close is a 40pt glass circle (Beans PlayerView: 38pt glass
+//   circle + white 0.22 hairline) over a 0.55 top scrim, it sets
+//   the presenting binding false (Beans closePlayer()), with
+//   dismiss() only as fallback, AND a downward swipe anywhere on
+//   the player closes it (lyrics mode: swipe must start on the
+//   top bar, so the list keeps its vertical drags).
 //
 // AirPlay uses the player leg's AirPlayPickerView (UIViewRepresentable
 // wrapping AVRoutePickerView).
@@ -26,6 +39,15 @@
 import SwiftUI
 
 struct MusicPlayerView: View {
+    /// The presenting view's binding. Setting it false is the
+    /// close path; defaults to a constant so the view still
+    /// compiles anywhere else (then dismiss() is the fallback).
+    @Binding var isPresented: Bool
+
+    init(isPresented: Binding<Bool> = .constant(true)) {
+        self._isPresented = isPresented
+    }
+
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @Environment(\.dismiss) private var dismiss
@@ -110,6 +132,45 @@ struct MusicPlayerView: View {
         .sheet(item: $showAddToPlaylistSong) { song in
             MusicAddToPlaylistSheet(song: song) { showAddToPlaylistSong = nil }
         }
+        // Swipe down to close (see handleDismissDrag): simultaneous
+        // so the Slider and the lyrics list keep their own drags.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 24).onEnded(handleDismissDrag)
+        )
+    }
+
+    /// Close the player. The binding is the authority (Beans
+    /// PlayerView: closePlayer() sets isPresented = false) — the
+    /// environment dismiss is only a fallback, so the close path
+    /// never depends on which presentation wrapper the caller used.
+    private func close() {
+        isPresented = false
+        dismiss()
+    }
+
+    /// Swipe-down dismiss. fullScreenCover has no system swipe
+    /// dismiss, so the player supplies its own. Only a clearly
+    /// downward swipe closes (horizontal drags belong to the
+    /// Slider); in lyrics mode the swipe must start on the top bar
+    /// because the lyrics list owns vertical drags elsewhere.
+    private func handleDismissDrag(_ value: DragGesture.Value) {
+        let translation = value.translation
+        guard translation.height > 100, abs(translation.width) < 80 else { return }
+        if playerVM.showLyrics && value.startLocation.y > 140 { return }
+        close()
+    }
+
+    /// Cover / lyrics slot size: bounded by width AND by the height
+    /// left after the fixed chrome (~330pt: top bar 40 + gaps 60 +
+    /// badge 23 + title 45 + progress 52 + transport 52 + mode 28
+    /// + bottom row 30) + safe areas + slack, so the whole player
+    /// fits on one screen with no scrolling on any phone height.
+    /// Tall phones (iPhone Air, 874pt) still get the 340 cap — the
+    /// design there is unchanged; short phones shrink the cover
+    /// instead of clipping the bottom rows.
+    private var coverSize: CGFloat {
+        let bounds = UIScreen.main.bounds
+        return min(bounds.width - 48, 340, max(180, bounds.height - 460))
     }
 
     // MARK: - Background
@@ -150,13 +211,21 @@ struct MusicPlayerView: View {
 
     private var topBar: some View {
         HStack {
-            Button(action: { dismiss() }) {
+            Button(action: { close() }) {
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 17, weight: .semibold))
+                    // Beans PlayerView: chevron.down 15 semibold in a
+                    // 38pt glass circle + white 0.22 hairline; ours
+                    // is 40pt so the hit target is closer to Apple's
+                    // 44pt minimum. The old control was a bare 32pt
+                    // white glyph with no surface — invisible on a
+                    // light cover and the player's only way out.
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 40, height: 40)
+                    .haoGlassCircle()
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("关闭")
             Spacer()
             Text(playerVM.currentSong?.album ?? "")
                 .font(.system(size: 14, weight: .medium))
@@ -165,13 +234,22 @@ struct MusicPlayerView: View {
             Spacer()
             Button(action: { showMore = true }) {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 40, height: 40)
+                    .haoGlassCircle()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("更多")
         }
+        // Top scrim so the buttons read on any (even light) cover —
+        // the same 0.55 -> 0 top gradient the VOD player uses.
+        .background(
+            LinearGradient(
+                colors: [Color.black.opacity(0.55), Color.black.opacity(0)],
+                startPoint: .top, endPoint: .bottom
+            )
+        )
     }
 
     // MARK: - Cover / lyrics
@@ -188,7 +266,7 @@ struct MusicPlayerView: View {
     }
 
     private var coverArea: some View {
-        let size = min(UIScreen.main.bounds.width - 48, 340)
+        let size = coverSize
         return Button(action: { playerVM.toggleLyrics() }) {
             MusicCoverView(
                 urlString: playerVM.currentSong?.cover ?? "",
@@ -203,7 +281,7 @@ struct MusicPlayerView: View {
     }
 
     private var lyricsArea: some View {
-        let height = min(UIScreen.main.bounds.width - 48, 340)
+        let height = coverSize
         return ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {

@@ -70,3 +70,37 @@ extension View {
         modifier(HaoGlassCapsule())
     }
 }
+
+/// A circle with native liquid glass on iOS 26+, regular frosted
+/// glass below. Same stroke as the capsule (white 0.22 light /
+/// 0.08 dark, 0.5pt) so round controls read as the same component
+/// family. Used for the full-player top-bar buttons (Beans
+/// PlayerView: 38pt glass circle + white 0.22 hairline; ours is
+/// 40pt so the hit target is closer to Apple's 44pt minimum).
+struct HaoGlassCircle: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        Group {
+            if #available(iOS 26.0, *) {
+                content.glassEffect(.regular, in: Circle())
+            } else {
+                content.background(.ultraThinMaterial, in: Circle())
+            }
+        }
+        .overlay {
+            Circle().strokeBorder(
+                .white.opacity(colorScheme == .dark ? 0.08 : 0.22),
+                lineWidth: 0.5
+            )
+        }
+        .clipShape(Circle())
+    }
+}
+
+extension View {
+    /// Apply the shared round-control glass treatment.
+    func haoGlassCircle() -> some View {
+        modifier(HaoGlassCircle())
+    }
+}
