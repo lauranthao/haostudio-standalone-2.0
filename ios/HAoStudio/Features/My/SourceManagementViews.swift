@@ -73,9 +73,10 @@ struct LXSourceManagementView: View {
                     ForEach(rows) { row in
                         lxRow(row)
                     }
+                    .onMove(perform: moveRows)
                 }
             } footer: {
-                Text("捆绑脚本来自应用内置清单；自定义脚本由你导入。关掉的脚本不会参与搜歌和播放。")
+                Text("捆绑脚本来自应用内置清单；自定义脚本由你导入。关掉的脚本不会参与搜歌和播放。至少保留一个启用的脚本：最后一个启用的不能关掉或删除；拖动可调整顺序，搜歌和播放按这个顺序找源。")
             }
             Section("添加自定义脚本") {
                 TextField("脚本地址（https://…/xxx.js）", text: $urlDraft)
@@ -113,6 +114,7 @@ struct LXSourceManagementView: View {
         .haoBottomChromePadding()
         .navigationTitle("音源管理")
         .navigationBarTitleDisplayMode(.inline)
+        .environment(\.editMode, .constant(.active))
         .onAppear {
             reload()
         }
@@ -148,7 +150,18 @@ struct LXSourceManagementView: View {
     }
 
     private func lxRow(_ row: LXSourceRow) -> some View {
-        HStack {
+        // Keep-at-least-one (fix 2026-11-24, build 35): the LX
+        // page was the only source list without the guard the CMS
+        // and live pages already have — every switch could be
+        // turned off, leaving zero sources for search and
+        // playback with no warning. The last enabled switch is
+        // greyed out, and deleting that row is blocked the same
+        // way (deleting it would leave zero enabled too). The
+        // guard lives in the UI, like the other two pages; the
+        // store itself does not refuse the write.
+        let isRowEnabled = enabledIDs.contains(row.id)
+        let isLastEnabled = isRowEnabled && enabledIDs.count == 1
+        return HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.name)
                     .font(.system(size: 15))
@@ -178,12 +191,18 @@ struct LXSourceManagementView: View {
                 isOn: Binding<Bool>(
                     get: { enabledIDs.contains(row.id) },
                     set: { newValue in
+                        if !newValue && !SourceKeepOneGuard.canDisable(
+                            enabledCount: enabledIDs.count
+                        ) {
+                            return
+                        }
                         scriptStore.setEnabled(row.id, enabled: newValue)
                         reload()
                     }
                 )
             )
             .labelsHidden()
+            .disabled(isLastEnabled)
             Button(role: .destructive) {
                 deleteScript(row)
             } label: {
@@ -191,6 +210,7 @@ struct LXSourceManagementView: View {
                     .font(.system(size: 14))
             }
             .buttonStyle(.plain)
+            .disabled(isLastEnabled)
         }
     }
 
@@ -224,6 +244,19 @@ struct LXSourceManagementView: View {
         // record (bundled ids are marked deleted, never re-seeded).
         LXEngine.shared.removeScript(row.id)
         reload()
+    }
+
+    /// Drag reorder (fix 2026-11-24, build 35): the order
+    /// collections and the resolver's manual order already
+    /// existed, but no UI ever wrote `hao_lx_order`, so the
+    /// list order could never change. The saved order is the
+    /// order search and playback try the scripts in
+    /// (LXSourceResolver sorts its LX jobs by it).
+    private func moveRows(from source: IndexSet, to destination: Int) {
+        var updated = rows
+        updated.move(fromOffsets: source, toOffset: destination)
+        rows = updated
+        scriptStore.saveScriptOrder(updated.map { $0.id })
     }
 
     /// Restore the shipped set: clear disabled / explicit /

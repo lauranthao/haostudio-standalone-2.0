@@ -17,6 +17,14 @@ final class LiveSearchViewModel: ObservableObject {
     @Published var platform: LivePlatform = .bilibili
 
     private let gateway: LiveDataGateway?
+    /// Generation bumped on every submitted query: a completion
+    /// from an older query is stale and must not overwrite the
+    /// newer query's results (same class as the VideoSearch
+    /// searchGeneration fix — a slow first search used to win
+    /// when it landed after a second submit, and a platform
+    /// switch mid-flight showed the old platform's rooms under
+    /// the new one).
+    private var searchGeneration = 0
 
     init(gateway: LiveDataGateway? = nil) {
         self.gateway = gateway
@@ -32,6 +40,8 @@ final class LiveSearchViewModel: ObservableObject {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         LiveLibraryStore.saveSearchQuery(trimmed)
+        searchGeneration += 1
+        let generation = searchGeneration
         guard let gateway = gateway else {
             results = []
             hasSearched = true
@@ -41,7 +51,7 @@ final class LiveSearchViewModel: ObservableObject {
         hasSearched = true
         let platformId = platform.rawValue
         gateway.searchRooms(query: trimmed, platform: platformId) { [weak self] rooms in
-            guard let self = self else { return }
+            guard let self = self, self.searchGeneration == generation else { return }
             self.isSearching = false
             // Same dedupe as the tab grid: a repeated room in
             // one page must never reach the ForEach (fix
@@ -72,19 +82,31 @@ struct LiveSearchView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(spacing: 0) {
             searchField
                 .padding(.horizontal, 24)
                 .padding(.top, 12)
-            platformRow
-                .padding(.top, 12)
-            if !viewModel.hasSearched {
-                searchHistorySection
-                    .padding(.top, 16)
+            // Results scroll (fix 2026-11-24, build 35): the body
+            // used to be a plain VStack, so a result list taller
+            // than the screen had no way to reach its bottom rows
+            // — and the page never had the bottom-chrome padding,
+            // so the last row could sit under the tab bar. Same
+            // shape as VideoSearchView: fixed field on top,
+            // scrolling content below.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    platformRow
+                        .padding(.top, 12)
+                    if !viewModel.hasSearched {
+                        searchHistorySection
+                            .padding(.top, 16)
+                    }
+                    resultsSection
+                        .padding(.top, 16)
+                    Spacer(minLength: 16)
+                }
             }
-            resultsSection
-                .padding(.top, 16)
-            Spacer(minLength: 16)
+            .haoBottomChromePadding()
         }
         .background(theme.scaffoldBackground)
         .navigationTitle("搜索直播")
