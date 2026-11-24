@@ -35,7 +35,18 @@ struct EmbyConfigView: View {
             } header: {
                 Text("服务器")
             } footer: {
-                Text("密码只用于本次登录换取令牌，不会保存。")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("密码只用于本次登录换取令牌，不会保存。")
+                    // A plain-http address (or a bare host, which
+                    // EmbyServerAddress.parse treats as http) sends
+                    // the password and the token in cleartext on
+                    // the local network. ATS allows local
+                    // networking only; remote http stays blocked.
+                    // Shown only for non-https addresses.
+                    if isPlainHttpAddress {
+                        Text("注意：该地址使用 http，同一局域网内可能被窃听；仅用于局域网服务器。")
+                    }
+                }
             }
             Section {
                 DisclosureGroup("高级选项") {
@@ -106,6 +117,15 @@ struct EmbyConfigView: View {
                 .foregroundStyle(theme.textSecondary)
                 .multilineTextAlignment(.trailing)
         }
+    }
+
+    /// Typed address is plain http: an explicit http://, or a bare
+    /// host / host:port, which EmbyServerAddress.parse treats as
+    /// http. Empty and https:// addresses are not http.
+    private var isPlainHttpAddress: Bool {
+        let address = viewModel.baseUrl.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !address.isEmpty else { return false }
+        return !address.hasPrefix("https://")
     }
 
     private var statusText: String {

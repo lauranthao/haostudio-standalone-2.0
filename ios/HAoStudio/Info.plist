@@ -41,6 +41,11 @@
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<false/>
+		<!-- LAN Emby servers on plain http: local-networking only.
+		     Remote http stays blocked (no arbitrary loads); the
+		     Settings page warns when the typed address is http. -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
