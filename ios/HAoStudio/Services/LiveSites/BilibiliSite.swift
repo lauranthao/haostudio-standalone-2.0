@@ -49,6 +49,9 @@ final class BilibiliLiveSite: LiveSiteResolver {
     private var accessId: String = ""
     private var accessIdInFlight: Bool = false
     private var accessIdCompletions: [(String) -> Void] = []
+    /// In-flight room-detail loads, keyed by trimmed room id
+    /// (build 36 item 10 leg 4 — see `loadRoomInfo`).
+    private var roomDetailInFlight: [String: [(Result<LiveRoom, Error>) -> Void]] = [:]
     /// sub-area id -> parent area id, filled by listCategories.
     /// second/getList returns -400 without parent_area_id, so a
     /// category room list is only attempted when the parent is known.
@@ -100,16 +103,55 @@ final class BilibiliLiveSite: LiveSiteResolver {
     /// Strict room load: throws when no parseable room metadata is
     /// available (recovery callers must see the transient error,
     /// never a disguised "offline").
+    ///
+    /// Build 36 item 10 leg 4: entering a room fires two paths at
+    /// once — the playback `resolve` below and the danmaku
+    /// `roomInfo` above — and both used to issue their own
+    /// room-info + danmaku-info requests (5 HTTP per Bilibili
+    /// entry: 2x roomInfo + 2x danmuInfo + 1x playInfo). A
+    /// concurrent load for the same room joins the one already in
+    /// flight instead of starting another; every joiner still gets
+    /// its own completion with the same result, so the failure
+    /// semantics are unchanged (a transient failure is reported
+    /// as a failure to both paths, never disguised as offline —
+    /// build 36 item 8). The entry is dropped when the load
+    /// finishes, so a later load (recovery re-parse, quality
+    /// switch, prefetch) always fetches fresh: this is dedup,
+    /// never a cache.
     func loadRoomInfo(roomId: String, completion: @escaping (Result<LiveRoom, Error>) -> Void) {
+        let alreadyInFlight = locked {
+            var list = roomDetailInFlight[roomId] ?? []
+            list.append(completion)
+            roomDetailInFlight[roomId] = list
+            return list.count > 1
+        }
+        if alreadyInFlight {
+            return
+        }
         fetchRoomInfo(roomId: roomId, attempt: 0) { result in
             switch result {
             case .success(let roomInfo):
                 self.discoverDanmaku(realRoomId: roomInfo.realRoomId) { danmakuData in
-                    completion(.success(BilibiliLiveSite.buildRoom(roomInfo: roomInfo.data, roomId: roomId, realRoomId: roomInfo.realRoomId, danmakuData: danmakuData)))
+                    self.finishRoomDetail(roomId: roomId, result: .success(BilibiliLiveSite.buildRoom(roomInfo: roomInfo.data, roomId: roomId, realRoomId: roomInfo.realRoomId, danmakuData: danmakuData)))
                 }
             case .failure(let error):
-                completion(.failure(error))
+                self.finishRoomDetail(roomId: roomId, result: .failure(error))
             }
+        }
+    }
+
+    /// Drain one in-flight room-detail load (build 36 item 10 leg
+    /// 4): the entry is removed BEFORE the completions run, so a
+    /// completion that re-enters the loader (recovery, quality
+    /// switch) registers a fresh load instead of joining a
+    /// finished one. The lock is only held for the state touch,
+    /// never across a completion.
+    private func finishRoomDetail(roomId: String, result: Result<LiveRoom, Error>) {
+        let completions = locked {
+            roomDetailInFlight.removeValue(forKey: roomId) ?? []
+        }
+        for item in completions {
+            item(result)
         }
     }
 

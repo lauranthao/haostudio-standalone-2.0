@@ -69,6 +69,55 @@ func routingFetcher(_ routes: [(String, Data?, Int?)]) -> LiveDataFetcher {
     }
 }
 
+/// A routing fetcher that answers asynchronously (like URLSession)
+/// and records every requested URL. The repo's `routingFetcher`
+/// answers synchronously, which serializes two back-to-back calls
+/// (the first finishes before the second starts) — the in-flight
+/// room-detail dedup (build 36 item 10 leg 4) only engages when
+/// the second call lands while the first is still in flight, so
+/// dedup tests need this async variant. `fallback` answers
+/// unmatched URLs (Huya's WUP calls need the room page to fall
+/// back to the web-template anti-code, like the repo's resolve
+/// tests do with a blanket stub fetcher).
+final class CountingRoutingFetcher {
+    private let routes: [(String, Data?, Int?)]
+    private let fallback: (Data?, Int?)
+    private let lock = NSLock()
+    private(set) var requestedURLs: [String] = []
+
+    init(_ routes: [(String, Data?, Int?)], fallback: (Data?, Int?) = (nil, 404)) {
+        self.routes = routes
+        self.fallback = fallback
+    }
+
+    /// Requests whose URL contains `needle` (counted for every
+    /// request, whether or not any route matched it).
+    func count(containing needle: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return requestedURLs.filter { $0.contains(needle) }.count
+    }
+
+    var fetcher: LiveDataFetcher {
+        return { [weak self] request, completion in
+            guard let self = self else { return }
+            let url = request.url?.absoluteString ?? ""
+            self.lock.lock()
+            self.requestedURLs.append(url)
+            self.lock.unlock()
+            var answer = self.fallback
+            for (needle, data, status) in self.routes where url.contains(needle) {
+                answer = (data, status ?? 200)
+                break
+            }
+            let captured = answer
+            DispatchQueue.global().async {
+                completion(captured.0, captured.1, nil)
+            }
+        }
+    }
+}
+
 func jsonData(_ string: String) -> Data {
     Data(string.utf8)
 }

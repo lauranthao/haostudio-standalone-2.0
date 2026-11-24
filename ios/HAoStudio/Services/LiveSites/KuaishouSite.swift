@@ -375,6 +375,21 @@ final class KuaishouLiveSite: LiveSiteResolver {
     }
 
     private let fetcher: LiveDataFetcher
+    /// In-flight room-detail loads, keyed by trimmed room id
+    /// (build 36 item 10 leg 4 — see `loadRoomDetail`).
+    private var roomDetailInFlight: [String: [(Result<LiveRoom, Error>) -> Void]] = [:]
+
+    /// Guards the in-flight room-detail dedup above: room loads
+    /// run from URLSession background callbacks and two concurrent
+    /// loads used to mutate the same dictionary with no lock — a
+    /// data race that traps. The lock is only ever held for the
+    /// state touch, never across a network call or a completion.
+    private let stateLock = NSLock()
+    private func locked<T>(_ body: () -> T) -> T {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return body()
+    }
 
     private static let headers: [String: String] = [
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36",
@@ -419,9 +434,32 @@ final class KuaishouLiveSite: LiveSiteResolver {
     /// Strict room load: throws when the page carries no parseable
     /// playback metadata (resolve must see the transient error,
     /// never a disguised "offline").
+    ///
+    /// Build 36 item 10 leg 4: entering a room fires two paths at
+    /// once — the playback `resolve` below and the danmaku
+    /// `roomInfo` above — and both used to fetch the room page
+    /// separately (2x the same room detail per entry). A
+    /// concurrent load for the same room joins the one already in
+    /// flight instead of starting another; every joiner still gets
+    /// its own completion with the same result, so the failure
+    /// semantics are unchanged (a transient failure is reported
+    /// as a failure to both paths, never disguised as offline —
+    /// build 36 item 8). The entry is dropped when the load
+    /// finishes, so a later load (recovery re-parse, quality
+    /// switch, prefetch) always fetches fresh: this is dedup,
+    /// never a cache.
     private func loadRoomDetail(roomId: String, completion: @escaping (Result<LiveRoom, Error>) -> Void) {
         guard let url = URL(string: "\(KuaishouLiveSite.roomBaseUrl)/\(roomId)") else {
             completion(.failure(LiveError.parseFailed("快手房间地址无效")))
+            return
+        }
+        let alreadyInFlight = locked {
+            var list = roomDetailInFlight[roomId] ?? []
+            list.append(completion)
+            roomDetailInFlight[roomId] = list
+            return list.count > 1
+        }
+        if alreadyInFlight {
             return
         }
         var headers = KuaishouLiveSite.headers
@@ -429,18 +467,33 @@ final class KuaishouLiveSite: LiveSiteResolver {
         let request = LiveHTTP.getRequest(url: url, headers: headers)
         fetcher(request) { data, _, error in
             if let error = error {
-                completion(.failure(error))
+                self.finishRoomDetail(roomId: roomId, result: .failure(error))
                 return
             }
             guard let data = data, let html = String(data: data, encoding: .utf8), !html.isEmpty else {
-                completion(.failure(LiveError.emptyResponse))
+                self.finishRoomDetail(roomId: roomId, result: .failure(LiveError.emptyResponse))
                 return
             }
             do {
-                completion(.success(try KuaishouLiveSite.parseKuaishouRoomPage(html: html, roomId: roomId)))
+                self.finishRoomDetail(roomId: roomId, result: .success(try KuaishouLiveSite.parseKuaishouRoomPage(html: html, roomId: roomId)))
             } catch {
-                completion(.failure(error))
+                self.finishRoomDetail(roomId: roomId, result: .failure(error))
             }
+        }
+    }
+
+    /// Drain one in-flight room-detail load (build 36 item 10 leg
+    /// 4): the entry is removed BEFORE the completions run, so a
+    /// completion that re-enters the loader (recovery, quality
+    /// switch) registers a fresh load instead of joining a
+    /// finished one. The lock is only held for the state touch,
+    /// never across a completion.
+    private func finishRoomDetail(roomId: String, result: Result<LiveRoom, Error>) {
+        let completions = locked {
+            roomDetailInFlight.removeValue(forKey: roomId) ?? []
+        }
+        for item in completions {
+            item(result)
         }
     }
 

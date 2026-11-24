@@ -573,6 +573,9 @@ final class DouyinLiveSite: LiveSiteResolver {
     private var cookie = ""
     private var anonymousCookieInFlight = false
     private var anonymousCookieCompletions: [([String: String]) -> Void] = []
+    /// In-flight room-detail loads, keyed by trimmed room id
+    /// (build 36 item 10 leg 4 — see `loadRoomDetail`).
+    private var roomDetailInFlight: [String: [(Result<LiveRoom, Error>) -> Void]] = [:]
 
     /// Guards the anonymous-cookie cache + in-flight dedup above:
     /// headers are built from URLSession background callbacks and
@@ -725,13 +728,53 @@ final class DouyinLiveSite: LiveSiteResolver {
     /// Strict room load: throws when no parseable playback metadata
     /// is available (resolve must see the transient error, never a
     /// disguised "offline").
+    ///
+    /// Build 36 item 10 leg 4: entering a room fires two paths at
+    /// once — the playback `resolve` below and the danmaku
+    /// `roomInfo` above — and both used to fetch the room detail
+    /// separately (2x the same room detail per entry). A
+    /// concurrent load for the same room joins the one already in
+    /// flight instead of starting another; every joiner still gets
+    /// its own completion with the same result, so the failure
+    /// semantics are unchanged (a transient failure is reported
+    /// as a failure to both paths, never disguised as offline —
+    /// build 36 item 8). The entry is dropped when the load
+    /// finishes, so a later load (recovery re-parse, quality
+    /// switch, prefetch) always fetches fresh: this is dedup,
+    /// never a cache.
     private func loadRoomDetail(roomId: String, completion: @escaping (Result<LiveRoom, Error>) -> Void) {
         let trimmed = roomId.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty {
             completion(.failure(LiveError.invalidRoomId))
             return
         }
-        resolveDetail(roomId: trimmed, completion: completion)
+        let alreadyInFlight = locked {
+            var list = roomDetailInFlight[trimmed] ?? []
+            list.append(completion)
+            roomDetailInFlight[trimmed] = list
+            return list.count > 1
+        }
+        if alreadyInFlight {
+            return
+        }
+        resolveDetail(roomId: trimmed) { result in
+            self.finishRoomDetail(roomId: trimmed, result: result)
+        }
+    }
+
+    /// Drain one in-flight room-detail load (build 36 item 10 leg
+    /// 4): the entry is removed BEFORE the completions run, so a
+    /// completion that re-enters the loader (recovery, quality
+    /// switch) registers a fresh load instead of joining a
+    /// finished one. The lock is only held for the state touch,
+    /// never across a completion.
+    private func finishRoomDetail(roomId: String, result: Result<LiveRoom, Error>) {
+        let completions = locked {
+            roomDetailInFlight.removeValue(forKey: roomId) ?? []
+        }
+        for item in completions {
+            item(result)
+        }
     }
 
     private func resolveDetail(roomId: String, completion: @escaping (Result<LiveRoom, Error>) -> Void) {
