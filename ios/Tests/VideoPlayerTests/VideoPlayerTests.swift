@@ -1489,6 +1489,37 @@ final class VideoPlayerSpeedTests: XCTestCase {
     }
 }
 
+// MARK: - Build 37 sweep: audio-track default must be "never picked"
+
+/// A fresh install must not force audio track 0: the sheet's
+/// -1 means "never picked" and the driver leaves the backend's
+/// auto/default pick alone, but `VodSettingsState.load()` read
+/// the key with a bare `defaults.integer`, which returns 0 for a
+/// missing key — so the first push selected track position 0 and
+/// the sheet showed it as picked. The subtitle track next to it
+/// already had the nil-guard; audio did not.
+final class VodSettingsAudioTrackDefaultTests: XCTestCase {
+    private let suiteName = "sweep-video-audio-track-default"
+
+    private func freshDefaults() -> UserDefaults {
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        return defaults
+    }
+
+    func testAudioTrackDefaultsToMinusOneWhenNeverSet() {
+        let state = VodSettingsState.load(defaults: freshDefaults())
+        XCTAssertEqual(state.audioTrackIndex, -1)
+        XCTAssertEqual(state.subtitleTrackIndex, -1)
+    }
+
+    func testStoredAudioTrackZeroIsKeptAsExplicitPick() {
+        let defaults = freshDefaults()
+        defaults.set(0, forKey: "hao_vod_audio_track")
+        XCTAssertEqual(VodSettingsState.load(defaults: defaults).audioTrackIndex, 0)
+    }
+}
+
 // MARK: - Build 36, item 14: format support (G-E / G-F / G-G / G-H / G-J)
 
 /// Driver tests for the "play everything" round: mid-play engine

@@ -62,7 +62,15 @@ struct VodSettingsState: Equatable {
         }
         let opacity = defaults.double(forKey: "hao_vod_danmaku_opacity")
         if opacity > 0 { state.danmakuOpacity = min(1.0, max(0.3, opacity)) }
-        state.audioTrackIndex = defaults.integer(forKey: "hao_vod_audio_track")
+        // The stored -1 default is "never picked": UserDefaults
+        // returns 0 for a missing key, and 0 is a real track
+        // position — reading it raw forced track 0 on every fresh
+        // install, overriding the backend's auto/default pick and
+        // showing track 0 as picked in the sheet before the user
+        // ever touched it. Same nil-guard as the subtitle track
+        // below it.
+        state.audioTrackIndex = defaults.object(forKey: "hao_vod_audio_track") == nil
+            ? -1 : defaults.integer(forKey: "hao_vod_audio_track")
         state.subtitleTrackIndex = defaults.object(forKey: "hao_vod_subtitle_track") == nil
             ? -1 : defaults.integer(forKey: "hao_vod_subtitle_track")
         state.dialogueBoostEnabled = defaults.bool(forKey: "hao_vod_dialogue_boost")
