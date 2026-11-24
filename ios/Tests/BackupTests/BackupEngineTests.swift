@@ -18,13 +18,16 @@
 // before BackupTests compiles. The tests are written, not run:
 // this VM has no Swift toolchain.
 //
-// Count check: testRoundTripOneHundredItems seeds exactly 101
+// Count check: testRoundTripOneHundredItems seeds exactly 102
 // items (every covered defaults key + 5 collection files) and
 // verifies each one after a wipe + import. If the key catalogue
 // grows, the test fails loudly on the count — update the number,
 // do not lower the bar. (100 at S6; 102 after the settings-wiring
 // work added two covered keys; 101 after chen 2026-11-24 removed
-// the profile nickname key with the profile/membership deletion.)
+// the profile nickname key with the profile/membership deletion;
+// 102 after build-36 item 11 added the VOD danmaku API address
+// key `hao_vod_danmaku_api_url` — the token stays excluded from
+// the backup whitelist, see ignoredImportKeys.)
 
 import Foundation
 import XCTest
@@ -261,7 +264,7 @@ final class BackupEngineTests: XCTestCase {
         let seededKeys = seedSampleDefaults(into: defaults)
         let seededCollections = seedCollectionFiles(into: docs)
         let total = seededKeys.count + seededCollections.count
-        XCTAssertEqual(total, 101, "seed catalogue changed: expected 101 items")
+        XCTAssertEqual(total, 102, "seed catalogue changed: expected 102 items")
         guard let zipURL = exportZip(using: engine) else { return }
         wipe(docs: docs, defaults: defaults)
         guard let result = importZip(zipURL, using: engine) else {
@@ -272,7 +275,7 @@ final class BackupEngineTests: XCTestCase {
             XCTFail("import failed: \(error.localizedDescription)")
         case .success(let report):
             XCTAssertFalse(report.rolledBack)
-            XCTAssertEqual(report.importedCount, 101)
+            XCTAssertEqual(report.importedCount, 102)
             XCTAssertTrue(report.skippedKeys.isEmpty)
             XCTAssertFalse(report.embyCredentialsMissing)
         }
