@@ -289,4 +289,136 @@ final class CmsParsingTests: XCTestCase {
         }
         waitForExpectations(timeout: 5)
     }
+
+    // MARK: - Play-page second-level fetch (b38 item 7 §4)
+
+    /// Recorded play-page bodies (live probe 2026-11-24): id 1
+    /// embeds an absolute .m3u8, id 14 a root-relative one. The
+    /// embedded URLs were verified to return real #EXTM3U
+    /// playlists the same day.
+    private var hongniuPage: String {
+        """
+        <head><script src="https://s2.pstatp.com/cdn/expire-1-M/hls.js/1.1.5/hls.min.js"></script></head>
+        <body><div id="dplayer"></div><script>
+        const vid = 'https://hn.bfvvs.com/play/epY9nPma/index.m3u8';
+        </script></body>
+        """
+    }
+
+    private var changzhangPage: String {
+        """
+        <!DOCTYPE html><html><head>
+        <script nonce="x">
+        const vid = "305/e1";
+        const url = "/play/305/e1/index.m3u8";
+        </script></head><body></body></html>
+        """
+    }
+
+    func testExtractEmbeddedStreamURLAbsolute() {
+        let page = URL(string: "https://hn.bfvvs.com/play/epY9nPma")!
+        XCTAssertEqual(
+            CmsClient.extractEmbeddedStreamURL(html: hongniuPage, pageURL: page)?.absoluteString,
+            "https://hn.bfvvs.com/play/epY9nPma/index.m3u8")
+    }
+
+    func testExtractEmbeddedStreamURLRootRelative() {
+        let page = URL(string: "https://svip.czzyplay.com/share/305/e1")!
+        XCTAssertEqual(
+            CmsClient.extractEmbeddedStreamURL(html: changzhangPage, pageURL: page)?.absoluteString,
+            "https://svip.czzyplay.com/play/305/e1/index.m3u8")
+    }
+
+    func testExtractEmbeddedStreamURLNilWhenNoStream() {
+        let page = URL(string: "https://x/play/abc")!
+        XCTAssertNil(CmsClient.extractEmbeddedStreamURL(html: "<html><body>error</body></html>", pageURL: page))
+        XCTAssertNil(CmsClient.extractEmbeddedStreamURL(html: "", pageURL: page))
+    }
+
+    func testIsDirectStreamURL() {
+        XCTAssertTrue(CmsClient.isDirectStreamURL(URL(string: "https://x/a.m3u8")!))
+        XCTAssertTrue(CmsClient.isDirectStreamURL(URL(string: "https://x/a.MP4?token=1")!))
+        XCTAssertTrue(CmsClient.isDirectStreamURL(URL(string: "https://x/a.flv")!))
+        XCTAssertFalse(CmsClient.isDirectStreamURL(URL(string: "https://x/play/abc")!))
+        XCTAssertFalse(CmsClient.isDirectStreamURL(URL(string: "https://x/share/305/e1")!))
+        XCTAssertFalse(CmsClient.isDirectStreamURL(URL(string: "https://x/play/abc.html")!))
+    }
+
+    private func playDetail(episodes: [PlayEpisode], lineName: String = "线路1") -> (VideoDetail, PlayLine) {
+        let line = PlayLine(name: lineName, episodes: episodes)
+        let detail = VideoDetail(
+            item: VideoItem(id: "1", title: "片", coverURL: nil, year: nil, typeName: nil, remarks: nil, sourceId: 1),
+            lines: [line], meta: nil)
+        return (detail, line)
+    }
+
+    func testResolvePlayURLPassesDirectStreamWithoutFetching() {
+        var fetched: [URL] = []
+        let textStub: VideoTextFetcher = { url, _, _, completion in
+            fetched.append(url)
+            completion(200, "<html></html>")
+        }
+        let client = CmsClient(sources: [source()], fetcher: { _, _, completion in completion(nil) }, textFetcher: textStub)
+        let episode = PlayEpisode(name: "第01集", url: URL(string: "https://x/a.m3u8"), index: 0)
+        let (detail, line) = playDetail(episodes: [episode])
+        let done = expectation(description: "direct resolves")
+        client.resolvePlayURL(detail: detail, episode: episode, line: line, excluding: []) { url in
+            XCTAssertEqual(url?.absoluteString, "https://x/a.m3u8")
+            XCTAssertTrue(fetched.isEmpty, "direct streams must not trigger a page fetch")
+            done.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+    }
+
+    func testResolvePlayURLFetchesPageAndExtractsStream() {
+        let textStub: VideoTextFetcher = { _, _, _, completion in
+            completion(200, self.hongniuPage)
+        }
+        let client = CmsClient(sources: [source()], fetcher: { _, _, completion in completion(nil) }, textFetcher: textStub)
+        let episode = PlayEpisode(name: "第01集", url: URL(string: "https://hn.bfvvs.com/play/epY9nPma"), index: 0)
+        let (detail, line) = playDetail(episodes: [episode])
+        let done = expectation(description: "page resolves to embedded m3u8")
+        client.resolvePlayURL(detail: detail, episode: episode, line: line, excluding: []) { url in
+            XCTAssertEqual(url?.absoluteString, "https://hn.bfvvs.com/play/epY9nPma/index.m3u8")
+            done.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+    }
+
+    func testResolvePlayURLFallsThroughWhenPageHasNoStream() {
+        let textStub: VideoTextFetcher = { _, _, _, completion in
+            completion(200, "<html><body>gone</body></html>")
+        }
+        let client = CmsClient(sources: [source()], fetcher: { _, _, completion in completion(nil) }, textFetcher: textStub)
+        let pageEpisode = PlayEpisode(name: "第01集", url: URL(string: "https://x/play/dead"), index: 0)
+        let directEpisode = PlayEpisode(name: "第01集", url: URL(string: "https://y/b.m3u8"), index: 0)
+        let line1 = PlayLine(name: "线路1", episodes: [pageEpisode])
+        let line2 = PlayLine(name: "线路2", episodes: [directEpisode])
+        let detail = VideoDetail(
+            item: VideoItem(id: "1", title: "片", coverURL: nil, year: nil, typeName: nil, remarks: nil, sourceId: 1),
+            lines: [line1, line2], meta: nil)
+        let done = expectation(description: "falls through to the direct line")
+        client.resolvePlayURL(detail: detail, episode: pageEpisode, line: line1, excluding: []) { url in
+            XCTAssertEqual(url?.absoluteString, "https://y/b.m3u8")
+            done.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+    }
+
+    func testResolvePlayURLNilWhenNothingResolves() {
+        let textStub: VideoTextFetcher = { _, _, _, completion in
+            completion(nil, nil)
+        }
+        let client = CmsClient(sources: [source()], fetcher: { _, _, completion in completion(nil) }, textFetcher: textStub)
+        let episode = PlayEpisode(name: "第01集", url: URL(string: "https://x/play/dead"), index: 0)
+        let (detail, line) = playDetail(episodes: [episode])
+        let done = expectation(description: "nil when nothing resolves")
+        client.resolvePlayURL(detail: detail, episode: episode, line: line, excluding: []) { url in
+            // The HTML page itself is never handed out: a native
+            // player cannot play text/html.
+            XCTAssertNil(url)
+            done.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+    }
 }
