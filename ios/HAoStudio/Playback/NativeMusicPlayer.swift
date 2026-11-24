@@ -1442,6 +1442,12 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             self.actualQuality = nil
             self.position = 0
             self.duration = 0
+            // #9 hygiene: cancel a pending Now Playing artwork
+            // retry — its guard (currentTrack == nil after this
+            // stop) already made it a no-op, but a cancelled work
+            // item never fires at all.
+            self.nowPlayingArtworkRetryWork?.cancel()
+            self.nowPlayingArtworkRetryWork = nil
             self.recomputePlayingState()
             self.teardownNowPlaying()
         }

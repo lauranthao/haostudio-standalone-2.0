@@ -706,12 +706,25 @@ final class VideoPlayerViewModel: ObservableObject {
         // (and speed) behind for the next play — the view model
         // is app-level and outlives the player view.
         isDoubleSpeed = false
-        saveCurrentPosition()
+        // #9: the breakpoint save lives in the driver now
+        // (saveBreakpoint via engine.stop() / coordinator.stop()):
+        // the VM's own saveCurrentPosition() wrote the same history
+        // row a second time. Keep only the throttling bookkeeping
+        // here. A second stop()'s save is already a no-op — the
+        // first clears currentEpisode, which saveBreakpoint guards
+        // on — so the row is written exactly once per close.
+        lastSavedPosition = position
         danmaku.clear()
         if let engine = engine {
             engine.stop()
         }
         coordinator.stop()
+        // #9: release the driver so the episode context (detail /
+        // line) and the failure state (lastOpenFailed /
+        // lastFailure) do not survive until the next open. Its
+        // saveBreakpoint is a no-op here — stop() above already
+        // cleared currentEpisode.
+        (coordinator.vodDriver as? VideoDriver)?.release {}
         isPlaying = false
     }
 
@@ -1254,6 +1267,13 @@ struct VideoPlayerView: View {
             showControlsTemporarily()
         }
         .onDisappear {
+            // #9: leaving the player stops it — previously only
+            // the X button called close(), so any future dismiss
+            // path (or a dismiss that bypasses the button) would
+            // leave VOD playing with no stop. close() is safe to
+            // run twice (X-tap then disappear): every step is
+            // idempotent and the second save is a no-op.
+            videoPlayer.close()
             autoHideWork?.cancel()
             // A hold abandoned by dismissing mid-press must not
             // leave the 2x badge (or 2x speed) behind: the view

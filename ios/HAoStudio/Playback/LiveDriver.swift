@@ -1182,6 +1182,9 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             self.fpsSampler.stop()
             self.playRequested = false
             self.stallFailed = false
+            // #9: release() must clear the stall warning too —
+            // stop() does, release() did not.
+            self.stallWarning = false
             self.pendingItem = nil
             self.backend?.pause()
             self.backend?.shutdown()

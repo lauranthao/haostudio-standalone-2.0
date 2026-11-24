@@ -1457,6 +1457,14 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             self.position = 0
             self.duration = 0
             self.isLoading = false
+            // #9: the failure state must not survive the exit —
+            // the next open would show the previous episode's
+            // failure card before its own resolve answers.
+            self.lastOpenFailed = false
+            self.lastFailure = nil
+            // #9: release() must clear the stall warning too —
+            // stop() does, release() did not.
+            self.stallWarning = false
             self.fellBackForSoftwareDecode = false
             self.midPlayFallbackUsed = false
             self.preparedSeenForEpisode = false
