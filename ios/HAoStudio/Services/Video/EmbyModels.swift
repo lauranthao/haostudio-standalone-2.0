@@ -461,6 +461,20 @@ struct EmbySkipMarkers: Equatable {
 /// the URL itself has no suffix for the kernel to read. Only the
 /// DEFAULT audio track's codec is kept — an optional TrueHD track
 /// next to an AAC default still plays on every engine.
+///
+/// (Build 36, item 14, G-B) Subtitle / multi-audio facts are
+/// parsed too: ASS subtitles and multi-audio force MPV-first
+/// routing, and external subtitle streams ride as `hao_extsub`
+/// so the driver can `sub-add` them on MPV (G-G).
+struct EmbySubtitleStream: Equatable {
+    /// `MediaStreams[].Index` — the value for the Subtitles URL.
+    let index: Int
+    let codec: String?
+    let language: String?
+    let isExternal: Bool
+    let isDefault: Bool
+}
+
 struct EmbyStreamFacts: Equatable {
     var container: String?
     var videoCodec: String?
@@ -473,11 +487,29 @@ struct EmbyStreamFacts: Equatable {
     var bitRate: Int?
     var size: Int?
     var sourcePath: String?
+    /// ASS/SSA subtitles are present (embedded or external).
+    var hasAssSubtitles: Bool
+    /// Any subtitle track is present.
+    var hasSubtitleTracks: Bool
+    /// Two or more audio tracks are present.
+    var hasMultipleAudioTracks: Bool
+    /// Audio-track count (for the `hao_atracks` marker).
+    var audioTrackCount: Int
+    /// Codec of the first subtitle track (for the `hao_sub`
+    /// marker when it is not ASS).
+    var subtitleCodec: String?
+    /// Server-external subtitle streams (to `sub-add` on MPV).
+    var externalSubtitles: [EmbySubtitleStream]
+    /// `MediaSources[0].Id` — needed to build the subtitle URL.
+    var mediaSourceId: String?
 
     init(container: String? = nil, videoCodec: String? = nil, audioCodec: String? = nil,
          dolbyVision: Bool = false, dvProfile: Int? = nil, dvCompatId: Int? = nil,
          width: Int? = nil, height: Int? = nil, bitRate: Int? = nil, size: Int? = nil,
-         sourcePath: String? = nil) {
+         sourcePath: String? = nil, hasAssSubtitles: Bool = false,
+         hasSubtitleTracks: Bool = false, hasMultipleAudioTracks: Bool = false,
+         audioTrackCount: Int = 0, subtitleCodec: String? = nil,
+         externalSubtitles: [EmbySubtitleStream] = [], mediaSourceId: String? = nil) {
         self.container = container
         self.videoCodec = videoCodec
         self.audioCodec = audioCodec
@@ -489,6 +521,13 @@ struct EmbyStreamFacts: Equatable {
         self.bitRate = bitRate
         self.size = size
         self.sourcePath = sourcePath
+        self.hasAssSubtitles = hasAssSubtitles
+        self.hasSubtitleTracks = hasSubtitleTracks
+        self.hasMultipleAudioTracks = hasMultipleAudioTracks
+        self.audioTrackCount = audioTrackCount
+        self.subtitleCodec = subtitleCodec
+        self.externalSubtitles = externalSubtitles
+        self.mediaSourceId = mediaSourceId
     }
 
     /// Parse the first media source of an item detail document.
@@ -547,6 +586,32 @@ struct EmbyStreamFacts: Equatable {
             isDv(video?["ExtendedVideoType"] as? String) ||
             isDv(video?["VideoRange"] as? String) ||
             isDv(video?["VideoRangeType"] as? String)
+        // (Build 36, item 14, G-B) Subtitle / multi-audio facts.
+        // `Type == "Subtitle"` streams were skipped entirely
+        // before this: an MP4+ASS file went AVPlayer-first and
+        // played video with NO subtitles — silently wrong, not
+        // an error. ASS/SSA forces MPV-first routing; external
+        // streams are described so the driver can `sub-add` them.
+        let subtitleStreams = streams.filter { VideoJSON.asString($0["Type"]) == "Subtitle" }
+        var hasAssSubtitles = false
+        var subtitleCodec: String?
+        var externalSubtitles: [EmbySubtitleStream] = []
+        for stream in subtitleStreams {
+            let codec = VideoJSON.asString(stream["Codec"]).lowercased()
+            if codec == "ass" || codec == "ssa" { hasAssSubtitles = true }
+            if subtitleCodec == nil && !codec.isEmpty { subtitleCodec = codec }
+            let isExternal = (stream["IsExternal"] as? Bool) ?? false
+            if isExternal {
+                let language = VideoJSON.asString(stream["Language"])
+                externalSubtitles.append(EmbySubtitleStream(
+                    index: VideoJSON.asIntOrNil(stream["Index"]) ?? 0,
+                    codec: codec.isEmpty ? nil : codec,
+                    language: language.isEmpty ? nil : language,
+                    isExternal: true,
+                    isDefault: (stream["IsDefault"] as? Bool) ?? false
+                ))
+            }
+        }
         return EmbyStreamFacts(
             container: container,
             videoCodec: {
@@ -567,6 +632,16 @@ struct EmbyStreamFacts: Equatable {
             sourcePath: {
                 let p = VideoJSON.asString(source["Path"])
                 return p.isEmpty ? nil : p
+            }(),
+            hasAssSubtitles: hasAssSubtitles,
+            hasSubtitleTracks: !subtitleStreams.isEmpty,
+            hasMultipleAudioTracks: audioStreams.count >= 2,
+            audioTrackCount: audioStreams.count,
+            subtitleCodec: subtitleCodec,
+            externalSubtitles: externalSubtitles,
+            mediaSourceId: {
+                let id = VideoJSON.asString(source["Id"])
+                return id.isEmpty ? nil : id
             }()
         )
     }
@@ -574,7 +649,10 @@ struct EmbyStreamFacts: Equatable {
     var isEmpty: Bool {
         container == nil && videoCodec == nil && audioCodec == nil &&
             !dolbyVision && dvProfile == nil && width == nil &&
-            height == nil && bitRate == nil && size == nil
+            height == nil && bitRate == nil && size == nil &&
+            !hasAssSubtitles && !hasSubtitleTracks &&
+            !hasMultipleAudioTracks && externalSubtitles.isEmpty &&
+            mediaSourceId == nil
     }
 
     /// `hao_*` query markers for the stream URL. Empty when there
@@ -593,6 +671,28 @@ struct EmbyStreamFacts: Equatable {
         if let height = height { params["hao_height"] = "\(height)" }
         if let bitRate = bitRate { params["hao_bitrate"] = "\(bitRate)" }
         if let size = size { params["hao_size"] = "\(size)" }
+        // (Build 36, item 14, G-B) Subtitle / track markers on the
+        // same established `hao_*` channel; Emby ignores unknown
+        // query params. `hao_sub` is the subtitle codec (`ass` /
+        // `srt` / `vtt` / `pgs`); `hao_atracks` the audio-track
+        // count; `hao_extsub` the external subtitle list
+        // (`index:codec:language`, comma-joined) with `hao_msrc`
+        // the media-source id for the subtitle URL.
+        if hasAssSubtitles {
+            params["hao_sub"] = "ass"
+        } else if let subtitleCodec = subtitleCodec, !subtitleCodec.isEmpty {
+            params["hao_sub"] = subtitleCodec
+        }
+        if audioTrackCount > 0 { params["hao_atracks"] = "\(audioTrackCount)" }
+        if !externalSubtitles.isEmpty {
+            let list = externalSubtitles.map { sub in
+                "\(sub.index):\(sub.codec ?? ""):\(sub.language ?? "")"
+            }.joined(separator: ",")
+            params["hao_extsub"] = list
+            if let mediaSourceId = mediaSourceId, !mediaSourceId.isEmpty {
+                params["hao_msrc"] = mediaSourceId
+            }
+        }
         return params
     }
 }

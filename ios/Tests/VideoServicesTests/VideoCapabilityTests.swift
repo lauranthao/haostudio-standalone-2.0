@@ -276,4 +276,199 @@ final class VideoCapabilityTests: XCTestCase {
         XCTAssertFalse(videoNeedsHardwareDecode(facts: h2644k))
         XCTAssertFalse(videoNeedsHardwareDecode(facts: nil))
     }
+
+    // MARK: - Build 36, item 14: format recognition (G-A)
+
+    func testNewContainerSuffixes() {
+        let cases: [(String, VideoStreamFormat)] = [
+            ("https://a.b/c.avi", .avi),
+            ("https://a.b/c.wmv", .wmv),
+            ("https://a.b/c.asf", .wmv),
+            ("https://a.b/c.rm", .rmvb),
+            ("https://a.b/c.rmvb", .rmvb),
+            ("https://a.b/c.ts", .ts),
+            ("https://a.b/c.m2ts", .ts),
+            ("https://a.b/c.mts", .ts),
+            ("https://a.b/c.webm", .webm),
+            ("https://a.b/c.mpg", .mpg),
+            ("https://a.b/c.mpeg", .mpg),
+            ("https://a.b/c.vob", .mpg),
+            ("https://a.b/c.mpd", .dash),
+            ("https://a.b/c.3gp", .mp4),
+            ("https://a.b/c.3g2", .mp4),
+        ]
+        for (raw, expected) in cases {
+            XCTAssertEqual(videoFormatOf(url: URL(string: raw)!, declaredFormat: nil), expected, raw)
+        }
+    }
+
+    func testHaoContainerNormalisation() {
+        // Emby reports `matroska` for MKV and `mpegts` for TS.
+        let mkv = URL(string: "https://emby.invalid/Videos/1/stream?hao_container=matroska")!
+        XCTAssertEqual(videoFormatOf(url: mkv, declaredFormat: nil), .mkv)
+        let ts = URL(string: "https://emby.invalid/Videos/1/stream?hao_container=mpegts")!
+        XCTAssertEqual(videoFormatOf(url: ts, declaredFormat: nil), .ts)
+        let asf = URL(string: "https://emby.invalid/Videos/1/stream?hao_container=asf")!
+        XCTAssertEqual(videoFormatOf(url: asf, declaredFormat: nil), .wmv)
+        let webm = URL(string: "https://emby.invalid/Videos/1/stream?hao_container=webm")!
+        XCTAssertEqual(videoFormatOf(url: webm, declaredFormat: nil), .webm)
+    }
+
+    func testAVPlayerExcludedForNewFormats() {
+        for format in [VideoStreamFormat.avi, .wmv, .rmvb, .ts, .webm, .mpg, .dash] {
+            XCTAssertFalse(videoEngineCanPlay(.avplayer, format: format), "\(format)")
+            XCTAssertTrue(videoEngineCanPlay(.mpv, format: format), "\(format)")
+            XCTAssertTrue(videoEngineCanPlay(.ijk, format: format), "\(format)")
+        }
+        // New containers route MPV-first with AVPlayer absent.
+        XCTAssertEqual(videoCandidatesFor(url: URL(string: "https://a.b/c.avi")!), [.mpv, .ijk])
+        XCTAssertEqual(videoCandidatesFor(url: URL(string: "https://a.b/c.webm")!), [.mpv, .ijk])
+        XCTAssertEqual(videoCandidatesFor(url: URL(string: "https://a.b/c.mpd")!), [.mpv, .ijk])
+        XCTAssertEqual(videoPreferredEngine(format: .avi, facts: nil), .mpv)
+        XCTAssertEqual(videoPreferredEngine(format: .dash, facts: nil), .mpv)
+    }
+
+    // MARK: - Build 36, item 14: codec gates (G-C / G-D)
+
+    func testFactsGateExcludesIjkForAv1() {
+        // FFmpeg 4.0 has no AV1 decoder: IJK is excluded, MPV
+        // (dav1d) is the only engine left.
+        let av1 = VideoStreamFacts(container: "mp4", videoCodec: "av1", audioCodec: "aac", dolbyVision: false, dvProfile: nil, width: nil, height: nil, bitRate: nil, size: nil)
+        XCTAssertFalse(videoEngineCanPlayFacts(.ijk, facts: av1))
+        XCTAssertTrue(videoEngineCanPlayFacts(.mpv, facts: av1))
+        XCTAssertFalse(videoEngineCanPlayFacts(.avplayer, facts: av1))
+        let av01 = VideoStreamFacts(container: "mp4", videoCodec: "av01", audioCodec: "aac", dolbyVision: false, dvProfile: nil, width: nil, height: nil, bitRate: nil, size: nil)
+        XCTAssertFalse(videoEngineCanPlayFacts(.ijk, facts: av01))
+        let url = URL(string: "https://emby.invalid/Videos/1/stream?hao_container=mp4&hao_vcodec=av1")!
+        XCTAssertEqual(videoCandidatesFor(url: url), [.mpv])
+    }
+
+    func testFactsGateRejectsVp9Vp8ApeOpusVorbisForAVPlayer() {
+        for vcodec in ["vp9", "vp8"] {
+            let facts = VideoStreamFacts(container: "mp4", videoCodec: vcodec, audioCodec: "aac", dolbyVision: false, dvProfile: nil, width: nil, height: nil, bitRate: nil, size: nil)
+            XCTAssertFalse(videoEngineCanPlayFacts(.avplayer, facts: facts), vcodec)
+            XCTAssertTrue(videoEngineCanPlayFacts(.mpv, facts: facts), vcodec)
+            XCTAssertTrue(videoEngineCanPlayFacts(.ijk, facts: facts), vcodec)
+        }
+        for acodec in ["ape", "opus", "vorbis"] {
+            let facts = VideoStreamFacts(container: "mp4", videoCodec: "h264", audioCodec: acodec, dolbyVision: false, dvProfile: nil, width: nil, height: nil, bitRate: nil, size: nil)
+            XCTAssertFalse(videoEngineCanPlayFacts(.avplayer, facts: facts), acodec)
+            XCTAssertTrue(videoEngineCanPlayFacts(.mpv, facts: facts), acodec)
+        }
+    }
+
+    func testFactsGateExcludesAllEnginesForVvc() {
+        // Honest limit (G-N): VVC / H.266 has no decoder in any
+        // bundled kernel — the candidate list comes back empty so
+        // the driver fails with the named reason.
+        let vvc = VideoStreamFacts(container: "mkv", videoCodec: "vvc", audioCodec: "aac", dolbyVision: false, dvProfile: nil, width: nil, height: nil, bitRate: nil, size: nil)
+        for engine in VideoEngine.allCases {
+            XCTAssertFalse(videoEngineCanPlayFacts(engine, facts: vvc), "\(engine)")
+        }
+        let url = URL(string: "https://emby.invalid/Videos/1/stream?hao_container=mkv&hao_vcodec=vvc")!
+        XCTAssertTrue(videoCandidatesFor(url: url).isEmpty)
+    }
+
+    // MARK: - Build 36, item 14: subtitle / track flags (G-B)
+
+    func testFactsParseSubtitleMarkers() {
+        let url = URL(string: "https://emby.invalid/Videos/1/stream?hao_container=mp4&hao_sub=ass&hao_atracks=3&hao_extsub=0:srt:en,1:ass:zho&hao_msrc=ms1")!
+        let facts = VideoStreamFacts.parse(url: url)
+        XCTAssertNotNil(facts)
+        XCTAssertEqual(facts?.hasAssSubtitles, true)
+        XCTAssertEqual(facts?.hasSubtitleTracks, true)
+        XCTAssertEqual(facts?.hasMultipleAudioTracks, true)
+        XCTAssertEqual(facts?.hasExternalSubtitles, true)
+        XCTAssertEqual(facts?.mediaSourceId, "ms1")
+        XCTAssertEqual(facts?.externalSubtitles.count, 2)
+        XCTAssertEqual(facts?.externalSubtitles.first, ExternalSubtitleRef(index: 0, codec: "srt", language: "en"))
+        XCTAssertEqual(facts?.externalSubtitles.last, ExternalSubtitleRef(index: 1, codec: "ass", language: "zho"))
+    }
+
+    func testFactsParseSrtMarkerIsNotAss() {
+        let url = URL(string: "https://emby.invalid/Videos/1/stream?hao_container=mp4&hao_sub=srt&hao_atracks=1")!
+        let facts = VideoStreamFacts.parse(url: url)
+        XCTAssertEqual(facts?.hasAssSubtitles, false)
+        XCTAssertEqual(facts?.hasSubtitleTracks, true)
+        XCTAssertEqual(facts?.hasMultipleAudioTracks, false)
+        XCTAssertEqual(facts?.hasExternalSubtitles, false)
+    }
+
+    func testCandidatesForMp4WithAssExcludeAVPlayer() {
+        // MP4+ASS: MPV first, AVPlayer excluded (it would play
+        // the video with no subtitles — silently wrong).
+        let url = URL(string: "https://emby.invalid/Videos/1/stream?hao_container=mp4&hao_sub=ass")!
+        XCTAssertEqual(videoCandidatesFor(url: url).first, .mpv)
+        XCTAssertFalse(videoCandidatesFor(url: url).contains(.avplayer))
+    }
+
+    func testCandidatesForExternalSubtitlesGoMpvFirst() {
+        let url = URL(string: "https://emby.invalid/Videos/1/stream?hao_container=mp4&hao_extsub=0:srt:en&hao_msrc=ms1")!
+        XCTAssertEqual(videoCandidatesFor(url: url).first, .mpv)
+        XCTAssertFalse(videoCandidatesFor(url: url).contains(.avplayer))
+    }
+
+    func testCandidatesExcludingEngines() {
+        // G-E: the mid-play retry never loops back to the engine
+        // that just failed.
+        let url = URL(string: "https://a.b/movie.mp4")!
+        XCTAssertEqual(videoCandidatesFor(url: url, excluding: [.avplayer]), [.mpv, .ijk])
+        XCTAssertEqual(videoCandidatesFor(url: url, excluding: [.avplayer, .mpv]), [.ijk])
+        XCTAssertTrue(videoCandidatesFor(url: url, excluding: [.mpv, .ijk, .avplayer]).isEmpty)
+    }
+
+    // MARK: - Build 36, item 14: failure reason (G-K)
+
+    func testFailureReasonMapping() {
+        XCTAssertEqual(
+            VideoPlaybackFailure.reason(candidatesWereEmpty: false, timedOut: false, hadURL: false, formatDescription: ""),
+            .noPlayableURL)
+        XCTAssertEqual(
+            VideoPlaybackFailure.reason(candidatesWereEmpty: false, timedOut: true, hadURL: true, formatDescription: "MKV"),
+            .networkOrTimeout)
+        XCTAssertEqual(
+            VideoPlaybackFailure.reason(candidatesWereEmpty: true, timedOut: false, hadURL: true, formatDescription: "MKV · VVC"),
+            .unsupportedFormat(details: "MKV · VVC"))
+        XCTAssertEqual(
+            VideoPlaybackFailure.reason(candidatesWereEmpty: false, timedOut: false, hadURL: true, formatDescription: "MKV"),
+            .allEnginesFailed)
+    }
+
+    func testFailureDisplayLines() {
+        let vvc = VideoPlaybackFailure(reason: .unsupportedFormat(details: "MKV · VVC"), attemptedEngines: [], formatDescription: "MKV · VVC")
+        XCTAssertEqual(vvc.displayLine, "此格式暂不支持：MKV · VVC")
+        let failed = VideoPlaybackFailure(reason: .allEnginesFailed, attemptedEngines: [.mpv, .ijk], formatDescription: "MKV · TrueHD")
+        XCTAssertTrue(failed.displayLine.contains("MKV · TrueHD"))
+        let timeout = VideoPlaybackFailure(reason: .networkOrTimeout, attemptedEngines: [.avplayer], formatDescription: "")
+        XCTAssertTrue(timeout.displayLine.contains("超时"))
+        let noURL = VideoPlaybackFailure(reason: .noPlayableURL, attemptedEngines: [], formatDescription: "")
+        XCTAssertTrue(noURL.displayLine.contains("没有可播放的线路"))
+    }
+
+    // MARK: - Build 36, item 14: mpv track-list parsing (G-F)
+
+    func testTrackListParse() {
+        let json = """
+        [{"id":0,"type":"video","codec":"h264"},
+         {"id":1,"type":"audio","codec":"aac","lang":"eng","title":"English","default":true,"selected":true},
+         {"id":2,"type":"audio","codec":"ac3","lang":"zho","title":"国语"},
+         {"id":3,"type":"sub","codec":"ass","lang":"zho","title":"简体中文"},
+         {"id":4,"type":"sub","codec":"srt","lang":"eng","external":true}]
+        """
+        let (audio, subtitles) = VodTrackList.parse(json: json)
+        XCTAssertEqual(audio.count, 2)
+        XCTAssertEqual(audio[0], VodTrackInfo(index: 1, displayName: "English", language: "eng", isDefault: true, isExternal: false))
+        XCTAssertEqual(audio[1].displayName, "国语")
+        XCTAssertEqual(audio[1].language, "zho")
+        XCTAssertEqual(subtitles.count, 2)
+        XCTAssertEqual(subtitles[0].displayName, "简体中文")
+        XCTAssertEqual(subtitles[1].isExternal, true)
+        XCTAssertEqual(subtitles[1].displayName, "ENG")
+    }
+
+    func testTrackListParseMalformed() {
+        XCTAssertEqual(VodTrackList.parse(json: "not json").0.count, 0)
+        XCTAssertEqual(VodTrackList.parse(json: "{}").0.count, 0)
+        XCTAssertEqual(VodTrackList.parse(json: "[]").0.count, 0)
+    }
 }

@@ -52,11 +52,23 @@ private final class MpvVideoView: UIView {
     var displayLayer: AVSampleBufferDisplayLayer? { layer as? AVSampleBufferDisplayLayer }
 }
 
-final class MpvPlayerBackend: NSObject, VideoPlayerBackend, LiveAudioOnlyCapable, VodSubtitleAppearanceCapable, VodEnhancementCapable, DialogueBoostCapable {
+final class MpvPlayerBackend: NSObject, VideoPlayerBackend, LiveAudioOnlyCapable, VodSubtitleAppearanceCapable, VodEnhancementCapable, DialogueBoostCapable, VodTrackListCapable, VodExternalSubtitleCapable {
     var onEvent: ((VideoBackendEvent) -> Void)?
     var onVideoSize: ((CGSize) -> Void)?
 
     let engine: VideoEngine = .mpv
+
+    /// Audio / subtitle tracks from the last `track-list` read
+    /// (build 36, item 14, G-F). Published through
+    /// `onTracksChanged` after the file loads and after an
+    /// external subtitle is added; the driver mirrors them into
+    /// the settings sheet pickers.
+    private var cachedAudioTracks: [VodTrackInfo] = []
+    private var cachedSubtitleTracks: [VodTrackInfo] = []
+    var onTracksChanged: (([VodTrackInfo], [VodTrackInfo]) -> Void)?
+
+    var audioTracks: [VodTrackInfo] { cachedAudioTracks }
+    var subtitleTracks: [VodTrackInfo] { cachedSubtitleTracks }
 
     private let containerView = MpvVideoView()
     private var rate: Double = 1
@@ -184,6 +196,8 @@ final class MpvPlayerBackend: NSObject, VideoPlayerBackend, LiveAudioOnlyCapable
         videoSize = .zero
         rejectedOptionNames = []
         hardwareDecode = .unknown
+        cachedAudioTracks = []
+        cachedSubtitleTracks = []
         openCompletion = completion
         guard let handle = mpv_create() else {
             finishOpen(false)
@@ -415,6 +429,49 @@ final class MpvPlayerBackend: NSObject, VideoPlayerBackend, LiveAudioOnlyCapable
         setRuntimeProperty("af", Self.dialogueBoostFilter)
     }
 
+    // MARK: - Audio / subtitle tracks + external subtitles (build 36, item 14, G-F/G-G)
+
+    /// Read `track-list` and publish it. Called after the file
+    /// loads and after an external subtitle is added. The JSON
+    /// parses through the pure `VodTrackList.parse` (a top-level
+    /// array — the one legal shape for `JSONSerialization`).
+    private func refreshTrackList() {
+        guard let handle = mpvHandle, !isShutdown else { return }
+        guard let raw = mpv_get_property_string(handle, "track-list") else { return }
+        defer { mpv_free(raw) }
+        let json = String(cString: raw)
+        let (audio, subtitles) = VodTrackList.parse(json: json)
+        cachedAudioTracks = audio
+        cachedSubtitleTracks = subtitles
+        onTracksChanged?(audio, subtitles)
+    }
+
+    /// Switch the audio track: `aid` takes the mpv track id from
+    /// `VodTrackInfo.index` (-1 = auto/default).
+    func selectAudioTrack(index: Int) {
+        setRuntimeProperty("aid", index < 0 ? "auto" : String(index))
+    }
+
+    /// Switch the subtitle track: `sid` takes the mpv track id
+    /// (-1 = no subtitles).
+    func selectSubtitleTrack(index: Int) {
+        setRuntimeProperty("sid", index < 0 ? "no" : String(index))
+    }
+
+    /// Load an external subtitle file (`sub-add`, "auto" flag so
+    /// mpv selects it by language). The track list is re-read
+    /// shortly after, so the new track appears in the picker.
+    /// No-op before open (no handle yet).
+    func addSubtitle(url: URL, language: String?) {
+        guard mpvHandle != nil else { return }
+        runCommand(["sub-add", url.absoluteString, "auto"])
+        eventQueue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                self?.refreshTrackList()
+            }
+        }
+    }
+
     func seek(to seconds: Double, completion: @escaping (Bool) -> Void) {
         guard let handle = mpvHandle else {
             completion(false)
@@ -613,6 +670,9 @@ final class MpvPlayerBackend: NSObject, VideoPlayerBackend, LiveAudioOnlyCapable
         switch event.pointee.event_id {
         case MPV_EVENT_FILE_LOADED:
             verifyHardwareDecode()
+            DispatchQueue.main.async { [weak self] in
+                self?.refreshTrackList()
+            }
             if !didEmitPrepared {
                 didEmitPrepared = true
                 emit(.prepared)

@@ -317,4 +317,95 @@ final class EmbyClientTests: XCTestCase {
         XCTAssertEqual(page.items.count, 1)
         XCTAssertEqual(page.items[0].title, "731")
     }
+    // MARK: - Build 36, item 14: subtitle / track facts (G-B)
+
+    func testEmbyFactsParseSubtitleStreams() {
+        let mediaSources: [[String: Any]] = [[
+            "Id": "ms1",
+            "Container": "mkv",
+            "MediaStreams": [
+                ["Type": "Video", "Codec": "hevc", "Width": 3840, "Height": 2160],
+                ["Type": "Audio", "Codec": "aac", "IsDefault": true],
+                ["Type": "Audio", "Codec": "ac3"],
+                ["Type": "Subtitle", "Codec": "ass", "Language": "zho", "IsDefault": true],
+                ["Type": "Subtitle", "Codec": "srt", "Language": "eng", "IsExternal": true, "Index": 2],
+            ],
+        ]]
+        let facts = EmbyStreamFacts.fromMediaSources(mediaSources)
+        XCTAssertTrue(facts.hasAssSubtitles)
+        XCTAssertTrue(facts.hasSubtitleTracks)
+        XCTAssertTrue(facts.hasMultipleAudioTracks)
+        XCTAssertEqual(facts.audioTrackCount, 2)
+        XCTAssertEqual(facts.externalSubtitles.count, 1)
+        XCTAssertEqual(facts.externalSubtitles.first?.index, 2)
+        XCTAssertEqual(facts.externalSubtitles.first?.codec, "srt")
+        XCTAssertEqual(facts.mediaSourceId, "ms1")
+        let params = facts.toQueryParams()
+        XCTAssertEqual(params["hao_sub"], "ass")
+        XCTAssertEqual(params["hao_atracks"], "2")
+        XCTAssertEqual(params["hao_extsub"], "2:srt:eng")
+        XCTAssertEqual(params["hao_msrc"], "ms1")
+    }
+
+    func testEmbyFactsWithoutSubtitlesHasNoMarkers() {
+        let mediaSources: [[String: Any]] = [[
+            "Container": "mp4",
+            "MediaStreams": [
+                ["Type": "Video", "Codec": "h264"],
+                ["Type": "Audio", "Codec": "aac", "IsDefault": true],
+            ],
+        ]]
+        let facts = EmbyStreamFacts.fromMediaSources(mediaSources)
+        XCTAssertFalse(facts.hasAssSubtitles)
+        XCTAssertFalse(facts.hasSubtitleTracks)
+        XCTAssertFalse(facts.hasMultipleAudioTracks)
+        XCTAssertNil(facts.toQueryParams()["hao_sub"])
+        // One audio track still rides the marker (count 1); only
+        // >= 2 sets hasMultipleAudioTracks.
+        XCTAssertEqual(facts.toQueryParams()["hao_atracks"], "1")
+    }
+
+    func testStreamUrlCarriesSubtitleMarkers() {
+        let mediaSources: [[String: Any]] = [[
+            "Id": "ms1",
+            "Container": "mp4",
+            "MediaStreams": [
+                ["Type": "Video", "Codec": "h264"],
+                ["Type": "Audio", "Codec": "aac", "IsDefault": true],
+                ["Type": "Audio", "Codec": "ac3"],
+                ["Type": "Subtitle", "Codec": "ass", "Language": "zho"],
+            ],
+        ]]
+        let facts = EmbyStreamFacts.fromMediaSources(mediaSources)
+        let config = EmbyServerConfig(baseUrl: baseUrl, apiKey: "k", userId: "u1")
+        let client = EmbyClient(config: config)
+        let url = client.streamUrl(itemId: "x", facts: facts)
+        XCTAssertTrue(url.contains("hao_sub=ass"), url)
+        XCTAssertTrue(url.contains("hao_atracks=2"), url)
+    }
+
+    // MARK: - Build 36, item 14: subtitle + transcode URLs (G-G / G-H)
+
+    func testSubtitleUrlBuilder() {
+        let config = EmbyServerConfig(baseUrl: baseUrl, apiKey: "k", userId: "u1", useEmbyPrefix: true)
+        let client = EmbyClient(config: config)
+        XCTAssertEqual(
+            client.subtitleUrl(itemId: "abc", mediaSourceId: "ms1", index: 2),
+            "http://emby.local:8096/emby/Videos/abc/ms1/Subtitles/2?api_key=k")
+        XCTAssertEqual(
+            client.transcodedHlsUrl(itemId: "abc"),
+            "http://emby.local:8096/emby/Videos/abc/master.m3u8?static=true&api_key=k")
+    }
+
+    func testStaticSubtitleAndTranscodeUrlsFromStreamUrl() {
+        let stream = "http://emby.local:8096/emby/Videos/abc/stream?static=true&api_key=k&hao_container=mkv"
+        XCTAssertEqual(
+            EmbyClient.subtitleUrl(fromStreamUrl: stream, mediaSourceId: "ms1", index: 2)?.absoluteString,
+            "http://emby.local:8096/emby/Videos/abc/ms1/Subtitles/2?api_key=k")
+        XCTAssertEqual(
+            EmbyClient.transcodedHlsUrl(fromStreamUrl: stream)?.absoluteString,
+            "http://emby.local:8096/emby/Videos/abc/master.m3u8?static=true&api_key=k")
+        XCTAssertNil(EmbyClient.transcodedHlsUrl(fromStreamUrl: "https://a.b/movie.mp4"))
+        XCTAssertNil(EmbyClient.subtitleUrl(fromStreamUrl: "https://a.b/movie.mp4", mediaSourceId: "ms1", index: 0))
+    }
 }

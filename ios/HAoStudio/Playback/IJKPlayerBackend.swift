@@ -1,11 +1,26 @@
 // HAo Studio 2.0 — IJK backend (S3, leg A).
 //
 // ijkplayer (FFmpeg) behind the VideoPlayerBackend protocol. This
-// is the third-choice engine: it plays everything the ffmpeg
-// kernels play (FLV / MKV / HLS / MP4), but it is never first —
-// the capability split sends HEVC / Dolby Vision / HLS / MP4 to
-// AVPlayer and FLV / MKV / ASS / multi-track to MPV, and IJK
-// covers whatever is left.
+// is the third-choice engine: it plays the ffmpeg-kernel set
+// (FLV / MKV / HLS / MP4 / AVI / WMV / RMVB / TS / WebM / MPG /
+// DASH), but it is never first — the capability split sends HEVC /
+// Dolby Vision / HLS / MP4 to AVPlayer and FLV / MKV / ASS /
+// multi-track to MPV, and IJK covers whatever is left.
+//
+// Honest limits (build 36, item 14):
+// - NOT "plays everything": ijkplayer is FFmpeg 4.0, which
+//   predates AV1 entirely (no native decoder, no dav1d) — the
+//   facts gate excludes IJK for AV1 (G-C), MPV covers it.
+// - DTS / TrueHD decode in this build is UNVERIFIED (G-I):
+//   ijkplayer's module-lite FFmpeg 4.0 may strip the `dca` /
+//   `truehd` decoders. Do not claim support until D8/D9 pass on
+//   a real iPhone; MPV is tried before IJK, so a missing decoder
+//   here only costs one failed attempt.
+// - No track API and no subtitle rendering at all (G-F/G-G):
+//   this backend deliberately does NOT conform to
+//   `VodTrackListCapable` / `VodExternalSubtitleCapable` —
+//   the driver no-ops through the `as?` cast and the track
+//   picker rows stay hidden while IJK is the running engine.
 //
 // Hard decode (plan §四 4.2): `videotoolbox=1` is set explicitly
 // (the old Flutter side only set `mediacodec=1`, an Android

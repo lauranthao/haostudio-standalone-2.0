@@ -109,6 +109,14 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
 
     static let openTimeout: TimeInterval = 10
 
+    /// Overall open cap factor (build 36, item 14, G-J — the same
+    /// edit as VideoDriver): the whole open is capped at 2.5x
+    /// the per-attempt budget (25 s in production), while each
+    /// ladder attempt gets its own `openTimeoutInterval`. Live
+    /// routing, quality selection and recovery are otherwise
+    /// untouched by this item.
+    static let openTotalTimeoutFactor: Double = 2.5
+
     /// Test seam: open timeout seconds. Production is 10; tests set
     /// a short value so the timeout path runs without waiting.
     var openTimeoutInterval: TimeInterval = LiveDriver.openTimeout
@@ -143,6 +151,11 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     private var fpsSampler = VideoFpsSampler()
     private var lastFps: Double = 0
     private var lastDroppedFrames: Int = 0
+    /// (Build 36, item 14, G-J) Whether any ladder attempt of the
+    /// open in flight timed out on its own budget, and the engines
+    /// the ladder attempted (recorded into diagnostics).
+    private var openAttemptTimedOut = false
+    private var lastAttemptedEngines: [VideoEngine] = []
 
     /// Settings storage for the cellular-downgrade switch (test
     /// seam: tests point this at an isolated suite; production is
@@ -221,7 +234,8 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             fps: lastFps,
             droppedFrames: lastDroppedFrames,
             facts: currentURLFacts(),
-            fellBackForSoftwareDecode: fellBackForSoftwareDecode
+            fellBackForSoftwareDecode: fellBackForSoftwareDecode,
+            attemptedEngines: lastAttemptedEngines
         )
     }
 
@@ -414,6 +428,7 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         self.stopBackendForNewRequest()
         self.pendingItem = item
         self.stallFailed = false
+        self.lastAttemptedEngines = []
         self.isLoading = true
         // B36 item 5: the resolve answers later, on another
         // callback — capture the attempt token now and require
@@ -538,8 +553,10 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
 
     /// Open a URL on the first capable engine, falling down the
     /// ladder (capability order from PlayerKernel) on failure.
-    /// 10 s open timeout (P0-04): a timeout is a stream error, the
-    /// load is dropped and the driver falls to the next candidate.
+    /// (Build 36, item 14, G-J) Timeouts are per attempt now, not
+    /// per open — the same edit as VideoDriver: each ladder
+    /// attempt gets its own `openTimeoutInterval` budget, the
+    /// whole open is capped at 2.5x that (25 s in production).
     /// Ladder exhausted + live + fresh rounds left: the fresh-URL
     /// path (held plan first, then a live re-parse), never a
     /// dead-end error on the same URL. Bounded by `freshRounds`.
@@ -583,14 +600,57 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                 finish(.failure(.timeout))
             }
             self.openTimeoutWork = timeoutWork
-            DispatchQueue.main.asyncAfter(deadline: .now() + self.openTimeoutInterval, execute: timeoutWork)
+            DispatchQueue.main.asyncAfter(deadline: .now() + self.openTimeoutInterval * LiveDriver.openTotalTimeoutFactor, execute: timeoutWork)
             let engines = PlayerKernel.candidatesFor(url: url, declaredFormat: self.declaredFormat(for: url))
+            // Accumulate across the opens of one room (original
+            // open + fresh rounds), so the diagnostics name every
+            // engine that was tried. (Same discipline as
+            // VideoDriver's per-episode accumulation.)
+            for engine in engines where !self.lastAttemptedEngines.contains(engine) {
+                self.lastAttemptedEngines.append(engine)
+            }
+            self.openAttemptTimedOut = false
             let ladder = VideoRecoveryLadder(engines: engines, urls: [url], attempt: { [weak self] engine, attemptURL, attemptCompletion in
                 guard let self = self else {
                     attemptCompletion(false)
                     return
                 }
-                self.openOnEngine(engine, url: attemptURL, gen: gen, completion: attemptCompletion)
+                // (G-J) Per-attempt timeout, same shape as
+                // VideoDriver: a hanging attempt fails like a
+                // stream error after its own budget, and the
+                // ladder moves to the next engine. The `settled`
+                // guard makes the completion fire exactly once.
+                var settled = false
+                var attemptBackend: VideoPlayerBackend?
+                let attemptTimeout = DispatchWorkItem { [weak self] in
+                    guard let self = self else { return }
+                    self.ensureMain {
+                        guard !settled else { return }
+                        settled = true
+                        self.openAttemptTimedOut = true
+                        if let current = self.backend, current.engine == engine {
+                            current.shutdown()
+                            if self.backend === current { self.backend = nil }
+                        }
+                        attemptCompletion(false)
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + self.openTimeoutInterval, execute: attemptTimeout)
+                self.openOnEngine(engine, url: attemptURL, gen: gen) { [weak self] ok in
+                    guard let self = self else { return }
+                    self.ensureMain {
+                        guard !settled else {
+                            if let attemptBackend = attemptBackend, self.backend !== attemptBackend {
+                                attemptBackend.shutdown()
+                            }
+                            return
+                        }
+                        settled = true
+                        attemptTimeout.cancel()
+                        attemptCompletion(ok)
+                    }
+                }
+                attemptBackend = self.backend
             }, onAttempt: { [weak self] engine, _ in
                 self?.currentEngine = engine
             })
@@ -616,6 +676,16 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                         self.playRequested = false
                         self.isLoading = false
                         self.recomputePlayingState()
+                        // (G-J) The ladder exhausted because every
+                        // attempt timed out on its own budget (a
+                        // hanging backend): report a timeout, like
+                        // the overall cap — and do NOT spend fresh
+                        // rounds re-parsing a line whose engines
+                        // all hang.
+                        if self.openAttemptTimedOut {
+                            finish(.failure(.timeout))
+                            return
+                        }
                         if freshRounds > 0 {
                             self.openFresh(item: item, failedURL: url, freshRounds: freshRounds, finish: finish)
                             return

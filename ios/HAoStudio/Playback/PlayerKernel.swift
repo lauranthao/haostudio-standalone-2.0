@@ -162,6 +162,38 @@ protocol DialogueBoostCapable: AnyObject {
     func setDialogueBoost(_ enabled: Bool)
 }
 
+/// Runtime audio / subtitle track list (build 36, item 14, G-F).
+/// MPV reads `track-list` and switches with `aid` / `sid`;
+/// AVPlayer reads its media-selection groups and switches with
+/// `select(_:in:)`. IJK does NOT conform — it has no track API,
+/// so the driver no-ops through the `as?` cast and the picker
+/// rows stay hidden on IJK (consistent with today: the sheet
+/// only shows rows when the lists are non-empty).
+/// `selectAudioTrack` / `selectSubtitleTrack` take the
+/// engine-native id from `VodTrackInfo.index` (-1 = default/auto
+/// for audio, -1 = off for subtitles). The backend publishes a
+/// fresh list through `onTracksChanged` whenever the file's
+/// tracks are known (after load, and after an external subtitle
+/// is added).
+protocol VodTrackListCapable: AnyObject {
+    var audioTracks: [VodTrackInfo] { get }
+    var subtitleTracks: [VodTrackInfo] { get }
+    var onTracksChanged: (([VodTrackInfo], [VodTrackInfo]) -> Void)? { get set }
+    func selectAudioTrack(index: Int)
+    func selectSubtitleTrack(index: Int)
+}
+
+/// Runtime external subtitles (build 36, item 14, G-G). MPV only:
+/// `sub-add` loads a sidecar file (Emby external stream, local
+/// `.srt` / `.ass` / `.vtt` next to the video). AVPlayer has no
+/// sidecar-loading API and IJK has no subtitle rendering at all,
+/// so neither conforms — external subtitles route to MPV (see the
+/// `hasExternalSubtitles` routing flag), and the honest limit is
+/// written in the capability comment, not faked.
+protocol VodExternalSubtitleCapable: AnyObject {
+    func addSubtitle(url: URL, language: String?)
+}
+
 // MARK: - Kernel
 
 enum PlayerKernel {
@@ -204,19 +236,25 @@ enum PlayerKernel {
     /// admitted to AVPlayer and stays on the ffmpeg kernels. The
     /// driver passes the live setting at every open; callers that
     /// do not pass it keep the default-on behaviour.
+    /// `excluding` removes engines that already failed for this
+    /// episode (build 36, item 14, G-E mid-play fallback).
     static func candidatesFor(
         url: URL,
         declaredFormat: String? = nil,
         hasAssSubtitles: Bool = false,
         hasMultipleAudioTracks: Bool = false,
-        dvDowngradeToHdr: Bool = true
+        hasExternalSubtitles: Bool = false,
+        dvDowngradeToHdr: Bool = true,
+        excluding: [VideoEngine] = []
     ) -> [VideoEngine] {
         return videoCandidatesFor(
             url: url, declaredFormat: declaredFormat,
             preferred: nil,
             hasAssSubtitles: hasAssSubtitles,
             hasMultipleAudioTracks: hasMultipleAudioTracks,
-            dvDowngradeToHdr: dvDowngradeToHdr
+            hasExternalSubtitles: hasExternalSubtitles,
+            dvDowngradeToHdr: dvDowngradeToHdr,
+            excluding: excluding
         )
     }
 

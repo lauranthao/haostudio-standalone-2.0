@@ -743,7 +743,11 @@ final class VideoDriverTests: XCTestCase {
 /// capabilities (the MPV shape): records subtitle appearance,
 /// enhancement branch, dialogue boost and audio-only calls so
 /// the driver tests can assert forwarding without a real engine.
-final class CapableFakeBackend: VideoPlayerBackend, VodSubtitleAppearanceCapable, VodEnhancementCapable, DialogueBoostCapable, LiveAudioOnlyCapable {
+/// (Build 36, item 14, G-F/G-G) Also stands in for the track
+/// list + external subtitles: it publishes the configured track
+/// lists on open and records `aid` / `sid` selections and
+/// `sub-add` calls.
+final class CapableFakeBackend: VideoPlayerBackend, VodSubtitleAppearanceCapable, VodEnhancementCapable, DialogueBoostCapable, LiveAudioOnlyCapable, VodTrackListCapable, VodExternalSubtitleCapable {
     let engine: VideoEngine
     var onEvent: ((VideoBackendEvent) -> Void)?
     var onVideoSize: ((CGSize) -> Void)?
@@ -760,6 +764,15 @@ final class CapableFakeBackend: VideoPlayerBackend, VodSubtitleAppearanceCapable
     var enhancementCalls: [VodEnhancementBranch?] = []
     var dialogueBoostCalls: [Bool] = []
     var audioOnlyCalls: [Bool] = []
+    var audioTracksToPublish: [VodTrackInfo] = []
+    var subtitleTracksToPublish: [VodTrackInfo] = []
+    var onTracksChanged: (([VodTrackInfo], [VodTrackInfo]) -> Void)?
+    var selectAudioCalls: [Int] = []
+    var selectSubtitleCalls: [Int] = []
+    var addedSubtitles: [URL] = []
+
+    var audioTracks: [VodTrackInfo] { audioTracksToPublish }
+    var subtitleTracks: [VodTrackInfo] { subtitleTracksToPublish }
 
     init(engine: VideoEngine) {
         self.engine = engine
@@ -773,6 +786,7 @@ final class CapableFakeBackend: VideoPlayerBackend, VodSubtitleAppearanceCapable
         isPrepared = true
         isPlaying = true
         onEvent?(.prepared)
+        onTracksChanged?(audioTracksToPublish, subtitleTracksToPublish)
         completion(true)
     }
 
@@ -803,6 +817,18 @@ final class CapableFakeBackend: VideoPlayerBackend, VodSubtitleAppearanceCapable
 
     func setAudioOnly(_ audioOnly: Bool) {
         audioOnlyCalls.append(audioOnly)
+    }
+
+    func selectAudioTrack(index: Int) {
+        selectAudioCalls.append(index)
+    }
+
+    func selectSubtitleTrack(index: Int) {
+        selectSubtitleCalls.append(index)
+    }
+
+    func addSubtitle(url: URL, language: String?) {
+        addedSubtitles.append(url)
     }
 }
 
@@ -1111,15 +1137,22 @@ final class FakePlayerEngine: VideoPlayerEngine {
     var isPlaying: Bool = false
     var isLoading: Bool = false
     var lastOpenFailed: Bool = false
+    var lastFailure: VideoPlaybackFailure? = nil
+    var audioTracks: [VodTrackInfo] = []
+    var subtitleTracks: [VodTrackInfo] = []
     var videoView: UIView? = nil
     var currentEngine: VideoEngine? = .avplayer
     var diagnostics: VideoPlaybackDiagnostics = .empty
     var speeds: [Double] = []
+    var selectedAudioTrack: Int?
+    var selectedSubtitleTrack: Int?
 
     func play(detail: VideoDetail, lineIndex: Int, episodeIndex: Int, startPositionSeconds: Double) {}
     func playEpisode(lineIndex: Int, episodeIndex: Int, startPositionSeconds: Double) {}
     func setSpeed(_ speed: Double) { speeds.append(speed) }
     func setVideoFit(_ fit: VideoFit) {}
+    func selectAudioTrack(index: Int) { selectedAudioTrack = index }
+    func selectSubtitleTrack(index: Int) { selectedSubtitleTrack = index }
     func seek(to seconds: Double, completion: @escaping (Bool) -> Void) { completion(true) }
     func pause() { isPlaying = false }
     func resume() { isPlaying = true }
@@ -1156,5 +1189,247 @@ final class VideoPlayerSpeedTests: XCTestCase {
         let viewModel = VideoPlayerViewModel(coordinator: PlaybackCoordinator())
         viewModel.setDoubleSpeed(true)
         XCTAssertFalse(viewModel.isDoubleSpeed)
+    }
+}
+
+// MARK: - Build 36, item 14: format support (G-E / G-F / G-G / G-H / G-J)
+
+/// Driver tests for the "play everything" round: mid-play engine
+/// fallback, track pickers, external subtitles, the Emby
+/// transcode last resort, and the per-attempt timeout. Same fake
+/// seams as the classes above (fake backends + fake resolver, no
+/// real engines, no network).
+final class VideoDriverItem14Tests: XCTestCase {
+    private func makeDriver(
+        factory: FakeBackendFactory,
+        resolver: FakeVideoResolver
+    ) -> VideoDriver {
+        let driver = VideoDriver()
+        driver.makeBackend = { factory.makeBackend(engine: $0) }
+        driver.playURLResolver = resolver
+        driver.openTimeoutInterval = 5
+        return driver
+    }
+
+    private func mp4URL() -> URL {
+        URL(string: "https://a.b/movie.mp4")!
+    }
+
+    func testMidPlayErrorRetriesNextEngineAtSamePosition() {
+        // MP4: AVPlayer first. It plays, then fails mid-play — the
+        // driver must try MPV once at the same position instead of
+        // failing outright (live already recovers this way).
+        let (detail, line, episode) = makeTestDetail()
+        let factory = FakeBackendFactory()
+        let avFake = FakeVideoBackend(engine: .avplayer)
+        avFake.currentTime = 42
+        let mpvFake = FakeVideoBackend(engine: .mpv)
+        factory.fakes = [.avplayer: [avFake], .mpv: [mpvFake]]
+        let resolver = FakeVideoResolver()
+        resolver.urlsToReturn = [mp4URL()]
+        let driver = makeDriver(factory: factory, resolver: resolver)
+        let started = expectation(description: "episode started on AVPlayer")
+        driver.onEpisodeStarted = { _ in started.fulfill() }
+        driver.playEpisode(detail: detail, line: line, episode: episode)
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(driver.currentEngine, .avplayer)
+        // Let the position timer publish the playhead once.
+        let positioned = expectation(description: "position published")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { positioned.fulfill() }
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(driver.position, 42, accuracy: 0.01)
+        let restarted = expectation(description: "episode restarted on MPV")
+        driver.onEpisodeStarted = { _ in restarted.fulfill() }
+        avFake.onEvent?(.finished(.error))
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(driver.currentEngine, .mpv)
+        XCTAssertEqual(mpvFake.openCount, 1)
+        XCTAssertEqual(mpvFake.openedURLs, [mp4URL()])
+        // Resume at the saved position, not from 0.
+        XCTAssertEqual(mpvFake.seekCalls.first, 42)
+        XCTAssertFalse(driver.lastOpenFailed)
+        XCTAssertNil(driver.lastFailure)
+    }
+
+    func testMidPlayErrorWithAllEnginesExcludedFailsWithReason() {
+        // MKV: MPV first, IJK second. MPV plays, then fails
+        // mid-play; the retry on IJK fails its open — the episode
+        // fails with the specific reason, and MPV is never
+        // re-attempted for this episode.
+        let (detail, line, episode) = makeTestDetail()
+        let factory = FakeBackendFactory()
+        let mpvFake = FakeVideoBackend(engine: .mpv)
+        let ijkFake = FakeVideoBackend(engine: .ijk)
+        ijkFake.openResults = [false]
+        factory.fakes = [.mpv: [mpvFake], .ijk: [ijkFake]]
+        let resolver = FakeVideoResolver()
+        resolver.urlsToReturn = [URL(string: "https://a.b/movie.mkv")!]
+        let driver = makeDriver(factory: factory, resolver: resolver)
+        let started = expectation(description: "episode started on MPV")
+        driver.onEpisodeStarted = { _ in started.fulfill() }
+        driver.playEpisode(detail: detail, line: line, episode: episode)
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(driver.currentEngine, .mpv)
+        let failed = expectation(description: "episode failed")
+        var failure: MusicPlayerError?
+        driver.onEpisodeFailed = { _, error in
+            failure = error
+            failed.fulfill()
+        }
+        mpvFake.onEvent?(.finished(.error))
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(failure, .loadFailed)
+        XCTAssertTrue(driver.lastOpenFailed)
+        XCTAssertEqual(driver.lastFailure?.reason, .allEnginesFailed)
+        XCTAssertTrue(driver.lastFailure?.formatDescription.contains("MKV") ?? false)
+        XCTAssertEqual(mpvFake.openCount, 1)
+        XCTAssertEqual(ijkFake.openCount, 1)
+    }
+
+    func testMidPlayRetryUsedAtMostOncePerEpisode() {
+        // MP4: AVPlayer fails mid-play -> MPV; MPV fails mid-play
+        // too -> the retry is spent, so IJK is never attempted and
+        // the episode fails.
+        let (detail, line, episode) = makeTestDetail()
+        let factory = FakeBackendFactory()
+        let avFake = FakeVideoBackend(engine: .avplayer)
+        let mpvFake = FakeVideoBackend(engine: .mpv)
+        let ijkFake = FakeVideoBackend(engine: .ijk)
+        factory.fakes = [.avplayer: [avFake], .mpv: [mpvFake], .ijk: [ijkFake]]
+        let resolver = FakeVideoResolver()
+        resolver.urlsToReturn = [mp4URL()]
+        let driver = makeDriver(factory: factory, resolver: resolver)
+        let started = expectation(description: "episode started on AVPlayer")
+        driver.onEpisodeStarted = { _ in started.fulfill() }
+        driver.playEpisode(detail: detail, line: line, episode: episode)
+        waitForExpectations(timeout: 2)
+        let restarted = expectation(description: "episode restarted on MPV")
+        driver.onEpisodeStarted = { _ in restarted.fulfill() }
+        avFake.onEvent?(.finished(.error))
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(driver.currentEngine, .mpv)
+        let failed = expectation(description: "episode failed")
+        driver.onEpisodeFailed = { _, _ in failed.fulfill() }
+        mpvFake.onEvent?(.finished(.error))
+        waitForExpectations(timeout: 2)
+        XCTAssertTrue(driver.lastOpenFailed)
+        XCTAssertEqual(ijkFake.openCount, 0)
+        XCTAssertEqual(mpvFake.openCount, 1)
+    }
+
+    func testTrackPicksAppliedAtOpenAndLive() {
+        // A capable (MPV-shape) backend publishes 3 audio tracks
+        // and 1 subtitle track on open. A pick stored before the
+        // backend existed lands at open (translated to the native
+        // track id); a live pick forwards at once.
+        let (detail, line, episode) = makeTestDetail()
+        let backend = CapableFakeBackend(engine: .mpv)
+        backend.audioTracksToPublish = [
+            VodTrackInfo(index: 11, displayName: "English", language: "eng", isDefault: true, isExternal: false),
+            VodTrackInfo(index: 12, displayName: "国语", language: "zho", isDefault: false, isExternal: false),
+            VodTrackInfo(index: 13, displayName: "粤语", language: "yue", isDefault: false, isExternal: false),
+        ]
+        backend.subtitleTracksToPublish = [
+            VodTrackInfo(index: 21, displayName: "简体中文", language: "zho", isDefault: false, isExternal: false),
+        ]
+        let driver = VideoDriver()
+        driver.makeBackend = { _ in backend }
+        let resolver = FakeVideoResolver()
+        resolver.urlsToReturn = [URL(string: "https://a.b/movie.mkv")!]
+        driver.playURLResolver = resolver
+        driver.openTimeoutInterval = 5
+        driver.selectAudioTrack(index: 1)
+        XCTAssertEqual(driver.currentAudioTrackIndex, 1)
+        let started = expectation(description: "episode started")
+        driver.onEpisodeStarted = { _ in started.fulfill() }
+        driver.playEpisode(detail: detail, line: line, episode: episode)
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(driver.audioTracks.count, 3)
+        XCTAssertEqual(driver.subtitleTracks.count, 1)
+        // Stored pick (list position 1) -> native id 12, once.
+        XCTAssertEqual(backend.selectAudioCalls, [12])
+        // Live pick: subtitle list position 0 -> native id 21.
+        driver.selectSubtitleTrack(index: 0)
+        XCTAssertEqual(backend.selectSubtitleCalls, [21])
+        // Explicit "off" forwards -1.
+        driver.selectSubtitleTrack(index: -1)
+        XCTAssertEqual(backend.selectSubtitleCalls, [21, -1])
+    }
+
+    func testExternalSubtitleAddedOnMpvOpen() {
+        // Emby MKV with one external subtitle stream: the driver
+        // builds its URL from the stream URL and sub-adds it on
+        // the MPV-shape backend at open.
+        let (detail, line, episode) = makeTestDetail()
+        let backend = CapableFakeBackend(engine: .mpv)
+        let driver = VideoDriver()
+        driver.makeBackend = { _ in backend }
+        let resolver = FakeVideoResolver()
+        resolver.urlsToReturn = [URL(string: "https://emby.local:8096/emby/Videos/abc/stream?static=true&api_key=k&hao_container=mkv&hao_extsub=2:srt:en&hao_msrc=ms1")!]
+        driver.playURLResolver = resolver
+        driver.openTimeoutInterval = 5
+        let started = expectation(description: "episode started")
+        driver.onEpisodeStarted = { _ in started.fulfill() }
+        driver.playEpisode(detail: detail, line: line, episode: episode)
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(backend.addedSubtitles, [URL(string: "https://emby.local:8096/emby/Videos/abc/ms1/Subtitles/2?api_key=k")!])
+    }
+
+    func testTranscodeFallbackPlaysEmbyWhenDirectFails() {
+        // Emby MKV: the direct URL fails on every ffmpeg engine
+        // and there is no second line — the driver tries the
+        // server HLS transcode once, and it plays on AVPlayer.
+        let (detail, line, episode) = makeTestDetail()
+        let factory = FakeBackendFactory()
+        let mpvFake = FakeVideoBackend(engine: .mpv)
+        mpvFake.openResults = [false]
+        let ijkFake = FakeVideoBackend(engine: .ijk)
+        ijkFake.openResults = [false]
+        let avFake = FakeVideoBackend(engine: .avplayer)
+        factory.fakes = [.mpv: [mpvFake], .ijk: [ijkFake], .avplayer: [avFake]]
+        let resolver = FakeVideoResolver()
+        resolver.urlsToReturn = [URL(string: "https://emby.local:8096/emby/Videos/abc/stream?static=true&api_key=k&hao_container=mkv")!]
+        let driver = makeDriver(factory: factory, resolver: resolver)
+        let started = expectation(description: "episode started on transcode")
+        driver.onEpisodeStarted = { _ in started.fulfill() }
+        driver.playEpisode(detail: detail, line: line, episode: episode)
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(driver.currentEngine, .avplayer)
+        XCTAssertEqual(avFake.openedURLs, [URL(string: "https://emby.local:8096/emby/Videos/abc/master.m3u8?static=true&api_key=k")!])
+        XCTAssertFalse(driver.lastOpenFailed)
+    }
+
+    func testPerAttemptTimeoutLetsNextEngineRun() {
+        // MP4: AVPlayer hangs (never answers) — the per-attempt
+        // timeout must fail that attempt after its own budget and
+        // let MPV run, instead of the whole open hanging until
+        // the overall cap.
+        let (detail, line, episode) = makeTestDetail()
+        let factory = FakeBackendFactory()
+        let hangingAV = FakeVideoBackend(engine: .avplayer)
+        hangingAV.deferOpenCompletion = true
+        let goodMPV = FakeVideoBackend(engine: .mpv)
+        factory.fakes = [.avplayer: [hangingAV], .mpv: [goodMPV]]
+        let resolver = FakeVideoResolver()
+        resolver.urlsToReturn = [mp4URL()]
+        let driver = makeDriver(factory: factory, resolver: resolver)
+        driver.openTimeoutInterval = 0.2
+        let started = expectation(description: "episode started on MPV")
+        driver.onEpisodeStarted = { _ in started.fulfill() }
+        driver.playEpisode(detail: detail, line: line, episode: episode)
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(driver.currentEngine, .mpv)
+        XCTAssertEqual(goodMPV.openCount, 1)
+        // The hanging backend was shut down by the attempt timeout.
+        XCTAssertEqual(hangingAV.shutdownCount, 1)
+        // A late answer from it must not resurrect it.
+        hangingAV.deferredOpenCompletion?(true)
+        let checked = expectation(description: "late answer handled")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            XCTAssertFalse(hangingAV.isPlaying)
+            XCTAssertEqual(driver.currentEngine, .mpv)
+            checked.fulfill()
+        }
+        waitForExpectations(timeout: 2)
     }
 }
