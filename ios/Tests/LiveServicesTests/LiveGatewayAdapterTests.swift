@@ -213,7 +213,7 @@ final class LiveGatewayAdapterTests: XCTestCase {
     // MARK: - Unknown platform
 
     func testAdapterUnknownPlatformReturnsEmpty() {
-        let adapter = LiveDataGatewayAdapter(fetcher: stubFetcher(jsonData("{}"), 200))
+        let adapter = LiveDataGatewayAdapter(fetcher: stubFetcher(data: jsonData("{}"), status: 200))
         let recommend = self.expectation(description: "adapter unknown recommend")
         adapter.fetchRecommended(platform: "nope", area: nil, page: 0) { page in
             XCTAssertEqual(page.rooms.count, 0)
