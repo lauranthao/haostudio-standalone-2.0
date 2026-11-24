@@ -63,8 +63,21 @@ struct LiveRoomCard: View {
 
     private var coverView: some View {
         ZStack(alignment: .topLeading) {
+            // .fit, not .fill (fix 2026-11-24, build 35): in a
+            // LazyVGrid row the height proposal is unbounded, so
+            // .fill lets the downloaded image's intrinsic size
+            // drive the cell — a portrait cover drew at portrait
+            // proportions, several times the 16:10 height,
+            // overlapping the rows below it and burying the
+            // titles. .fit derives the height from the
+            // grid-proposed width (cell / 16:10,
+            // LiveGridLayout.coverHeight), the same pattern
+            // VideoPosterCard uses in its grid; the inner
+            // scaledToFill image is cropped to that box by
+            // .clipped() below. The follow/history cards keep
+            // .fill — they pin an explicit .frame(width: 140).
             coverImage
-                .aspectRatio(CGFloat(LiveGridLayout.coverAspectRatio), contentMode: .fill)
+                .aspectRatio(CGFloat(LiveGridLayout.coverAspectRatio), contentMode: .fit)
                 .frame(maxWidth: .infinity)
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
