@@ -66,6 +66,34 @@ final class EmbyPlaybackReporterTests: XCTestCase {
         XCTAssertNil(EmbyClient.episodeIdFromStreamUrl("https://remote.invalid/movie.mkv"))
     }
 
+    func testEpisodeIdFromEmbyPlaybackUrl() {
+        // Direct stream: same id as episodeIdFromStreamUrl.
+        XCTAssertEqual(
+            EmbyClient.episodeIdFromEmbyPlaybackUrl("http://emby.local:8096/emby/Videos/abc123/stream?static=true&api_key=k&hao_dv=1"),
+            "abc123")
+        // Transcode master playlist (R1): the URL the driver
+        // holds after the transcode last resort opens.
+        XCTAssertEqual(
+            EmbyClient.episodeIdFromEmbyPlaybackUrl("http://emby.local:8096/emby/Videos/abc123/master.m3u8?static=true&api_key=k"),
+            "abc123")
+        // No /emby prefix, hyphen/underscore id, no query.
+        XCTAssertEqual(
+            EmbyClient.episodeIdFromEmbyPlaybackUrl("http://emby.local:8096/Videos/xyz-1_2/master.m3u8"),
+            "xyz-1_2")
+        // Non-Emby addresses, empty id, subtitle URL: nil.
+        XCTAssertNil(EmbyClient.episodeIdFromEmbyPlaybackUrl("https://cms.invalid/play/1.m3u8"))
+        XCTAssertNil(EmbyClient.episodeIdFromEmbyPlaybackUrl("https://remote.invalid/movie.mkv"))
+        XCTAssertNil(EmbyClient.episodeIdFromEmbyPlaybackUrl(""))
+        XCTAssertNil(EmbyClient.episodeIdFromEmbyPlaybackUrl("http://emby.local:8096/emby/Videos//stream?static=true&api_key=k"))
+        XCTAssertNil(EmbyClient.episodeIdFromEmbyPlaybackUrl("http://emby.local:8096/emby/Videos/abc123/ms1/Subtitles/0?api_key=k"))
+        // Direct-stream behaviour is unchanged: the old
+        // function still answers the same for these.
+        XCTAssertEqual(
+            EmbyClient.episodeIdFromStreamUrl("http://emby.local:8096/emby/Videos/abc123/stream?static=true&api_key=k"),
+            "abc123")
+        XCTAssertNil(EmbyClient.episodeIdFromStreamUrl("http://emby.local:8096/emby/Videos/abc123/master.m3u8?static=true&api_key=k"))
+    }
+
     // MARK: - Start
 
     func testStartReportsPositionTicks() {

@@ -153,6 +153,27 @@ final class EmbyClient {
         return id.removingPercentEncoding ?? id
     }
 
+    /// The episode/item id inside one of our own Emby playback
+    /// URLs — the direct stream (`.../Videos/<id>/stream?...`)
+    /// or the HLS transcode master playlist
+    /// (`.../Videos/<id>/master.m3u8?...`) — or nil when the URL
+    /// is not one of ours. Used ONLY by the driver's
+    /// `currentEmbyItemId()`: after the transcode last resort
+    /// opens, the current URL is the master playlist, and the
+    /// direct-only `episodeIdFromStreamUrl` cannot see an id in
+    /// it, so the reporting session would never start. Never
+    /// throws.
+    static func episodeIdFromEmbyPlaybackUrl(_ url: String) -> String? {
+        guard let parsed = URL(string: url) else { return nil }
+        let path = parsed.path
+        guard let re = try? NSRegularExpression(pattern: "/Videos/([^/]+)/(?:stream|master\\.m3u8)", options: []),
+              let m = re.firstMatch(in: path, options: [], range: NSRange(path.startIndex..., in: path)),
+              m.numberOfRanges > 1, let r = Range(m.range(at: 1), in: path) else { return nil }
+        let id = String(path[r])
+        if id.isEmpty { return nil }
+        return id.removingPercentEncoding ?? id
+    }
+
     /// Fields requested on item queries. MediaSources is
     /// deliberately absent: the v1 stream URL is built directly
     /// (static=true), and list payloads stay small without it.

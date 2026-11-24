@@ -448,13 +448,14 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     }
 
     /// The Emby item id for the stream now playing, or nil when
-    /// the URL is not an Emby direct stream (CMS lines,
-    /// strm-direct remotes). The id comes from the stream URL
-    /// itself, so no source flag has to travel through the
-    /// player — and a non-Emby URL can never report by accident.
+    /// the URL is not an Emby playback URL — direct stream or
+    /// transcode master playlist (CMS lines, strm-direct
+    /// remotes). The id comes from the stream URL itself, so no
+    /// source flag has to travel through the player — and a
+    /// non-Emby URL can never report by accident.
     private func currentEmbyItemId() -> String? {
         guard let url = currentURL else { return nil }
-        return EmbyClient.episodeIdFromStreamUrl(url.absoluteString)
+        return EmbyClient.episodeIdFromEmbyPlaybackUrl(url.absoluteString)
     }
 
     /// The video surface for the player page to embed. Nil until
