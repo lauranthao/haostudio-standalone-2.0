@@ -209,8 +209,12 @@ struct VideoDetailView: View {
 
     init(item: VideoItem, source: VideoDetailSource? = nil) {
         self.item = item
-        self.source = source ?? item.detailSource
-        _viewModel = StateObject(wrappedValue: VideoDetailViewModel(item: item, source: self.source))
+        // StateObject's wrappedValue is an escaping autoclosure:
+        // it must not capture self — bind the resolved source to
+        // a local first, then hand the local to both assignments.
+        let resolvedSource = source ?? item.detailSource
+        self.source = resolvedSource
+        _viewModel = StateObject(wrappedValue: VideoDetailViewModel(item: item, source: resolvedSource))
     }
 
     var body: some View {

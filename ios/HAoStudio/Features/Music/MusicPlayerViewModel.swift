@@ -165,9 +165,13 @@ final class MusicPlayerViewModel: ObservableObject {
         // it into the player (the player also reads the key at
         // init, so this is a no-op repeat on a fresh launch — but
         // the view model is recreated per app launch too, and the
-        // slider must show the stored value, not 1.0).
-        self.volume = MusicLibraryStore.musicVolume()
-        player.setUserVolume(volume)
+        // slider must show the stored value, not 1.0). Read the
+        // stored value into a local: `self.volume` cannot be read
+        // here yet — not all stored properties (sleepTimer below)
+        // are initialized at this point.
+        let storedVolume = MusicLibraryStore.musicVolume()
+        self.volume = storedVolume
+        player.setUserVolume(storedVolume)
         // Handlers are attached AFTER the timer exists: capturing
         // self inside its own initializer is a compile error
         // (self.sleepTimer is not initialized yet at that point).
