@@ -14,7 +14,6 @@ workflows:
     meta:
       bitrise.io:
         stack: osx-xcode-26.2.x
-        machine_type_id: g2.mac.medium
     steps:
     - activate-ssh-key@4:
         run_if: '{{getenv "SSH_RSA_PRIVATE_KEY" | ne ""}}'
