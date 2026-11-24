@@ -140,6 +140,13 @@ struct HAoStudioApp: App {
             .environmentObject(settingsStore)
             .environmentObject(coordinator)
             .environmentObject(musicPlayer)
+            // build 36, item 10, leg 3: the same instance, also as
+            // a plain environment value — MusicSongMenuHost reads
+            // it via @Environment(\.musicPlayerVM), which does NOT
+            // subscribe to the 0.5 s position tick (unlike the
+            // @EnvironmentObject above, which the player / mini
+            // bar / list pages keep). Same object, no new state.
+            .environment(\.musicPlayerVM, musicPlayer)
             .environmentObject(videoPlayer)
             .environmentObject(livePlayer)
             .environmentObject(immersiveChrome)

@@ -8,6 +8,31 @@
 
 import SwiftUI
 
+// MARK: - Player view model, non-subscribing read path
+//
+// build 36, item 10, leg 3 (tick de-subscription): the shared
+// MusicPlayerViewModel is injected as an .environmentObject at the
+// app root (HAoStudioApp) so the player / mini bar / list pages can
+// subscribe to it — but a row must NOT subscribe. Its `position`
+// publishes every 0.5 s while playing, and an @EnvironmentObject
+// subscription makes every visible row re-evaluate body on each
+// tick. Reading the same instance through @Environment instead
+// does NOT subscribe to objectWillChange (only @EnvironmentObject
+// / @ObservedObject do), so a row can still call playNext /
+// download on demand without paying for the tick. The value is
+// the same instance for the app's lifetime, so it never changes
+// and never invalidates a reader.
+private struct MusicPlayerViewModelKey: EnvironmentKey {
+    static let defaultValue: MusicPlayerViewModel? = nil
+}
+
+extension EnvironmentValues {
+    var musicPlayerVM: MusicPlayerViewModel? {
+        get { self[MusicPlayerViewModelKey.self] }
+        set { self[MusicPlayerViewModelKey.self] = newValue }
+    }
+}
+
 /// Cover art with a themed placeholder. AsyncImage handles the fetch;
 /// a missing/empty URL shows the note placeholder, never a grey block.
 /// The URL is upgraded http -> https at this choke point (ATS blocks
@@ -81,6 +106,15 @@ struct MusicSongRow: View {
     var onToggleFav: (() -> Void)? = nil
     /// Queue-only extra menu item ("不喜欢"): nil everywhere else.
     var onDislike: (() -> Void)? = nil
+    /// Menu-action injection (build 36, item 10, leg 3): when a
+    /// caller already holds the player view model it may pass its
+    /// play-next / download actions here. Nil everywhere else —
+    /// the host then resolves the same actions on demand from the
+    /// non-subscribing environment read (see MusicSongMenuHost),
+    /// so no caller has to change and the row still never
+    /// subscribes to the player's 0.5 s position tick.
+    var onPlayNext: ((MusicSong) -> Void)? = nil
+    var onDownload: ((MusicSong) -> Void)? = nil
 
     @Environment(\.haoTheme) private var theme
 
@@ -88,7 +122,7 @@ struct MusicSongRow: View {
         // The "…" button is a SIBLING of the play button, never
         // nested inside it (nested buttons double-fire — build 35
         // search-history / MiniPlayerBar fix).
-        MusicSongMenuHost(song: song, onFavToggled: onToggleFav, onDislike: onDislike) { menu in
+        MusicSongMenuHost(song: song, onFavToggled: onToggleFav, onDislike: onDislike, onPlayNext: onPlayNext, onDownload: onDownload) { menu in
             HStack(spacing: 8) {
                 Button(action: onTap) {
                     HStack(spacing: 12) {
@@ -224,13 +258,22 @@ struct MusicSongMenuContent: View {
     }
 }
 
-/// One song's menu wiring: the song, the player, and the host's
-/// state bindings. The host builds one handle per body evaluation,
-/// so the "…" Menu and the long-press context menu read the same
-/// favourite flag and open the same sheets.
+/// One song's menu wiring: the song, the host's state bindings,
+/// and the two player actions as plain closures. The host builds
+/// one handle per body evaluation, so the "…" Menu and the
+/// long-press context menu read the same favourite flag and open
+/// the same sheets.
+///
+/// build 36, item 10, leg 3: the handle used to hold the whole
+/// MusicPlayerViewModel, which made every row subscribe to the
+/// player's 0.5 s position tick through the host's
+/// @EnvironmentObject. It now holds only the two closures the
+/// menu actually calls (play-next / download); the view model
+/// itself never enters a row.
 struct MusicSongMenuHandle {
     var song: MusicSong
-    var playerVM: MusicPlayerViewModel
+    var onPlayNext: (MusicSong) -> Void
+    var onDownload: (MusicSong) -> Void
     var isFav: Binding<Bool>
     var showAddToPlaylist: Binding<Bool>
     var showAlbum: Binding<Bool>
@@ -249,8 +292,8 @@ struct MusicSongMenuHandle {
                 onFavToggled?()
             },
             onAddToPlaylist: { showAddToPlaylist.wrappedValue = true },
-            onPlayNext: { playerVM.playNext(song: song) },
-            onDownload: { playerVM.download(song: song) },
+            onPlayNext: { onPlayNext(song) },
+            onDownload: { onDownload(song) },
             onShowArtist: { showArtist.wrappedValue = true },
             onShowAlbum: { showAlbum.wrappedValue = true },
             onDislike: onDislike
@@ -296,9 +339,24 @@ struct MusicSongMenuHost<Content: View>: View {
     var showDownload: Bool = true
     var onFavToggled: (() -> Void)? = nil
     var onDislike: (() -> Void)? = nil
+    /// Caller-injected player actions (build 36, item 10, leg 3).
+    /// Nil by default: the host then resolves them on demand from
+    /// the non-subscribing environment read below, so existing
+    /// call sites need no change.
+    var onPlayNext: ((MusicSong) -> Void)? = nil
+    var onDownload: ((MusicSong) -> Void)? = nil
     @ViewBuilder var content: (MusicSongMenuHandle) -> Content
 
-    @EnvironmentObject private var playerVM: MusicPlayerViewModel
+    /// Non-subscribing read of the shared player view model (see
+    /// the EnvironmentKey above): @Environment does NOT subscribe
+    /// to objectWillChange, so this host — and every row / card
+    /// that embeds it — no longer re-evaluates body on the
+    /// player's 0.5 s position tick. The model is only touched
+    /// when the user actually taps 下一首播放 / 下载, through the
+    /// closures built in `handle`. Deliberately NOT
+    /// @EnvironmentObject: that was the subscription this leg
+    /// removes.
+    @Environment(\.musicPlayerVM) private var playerVM
     @State private var isFav = false
     @State private var showAddToPlaylist = false
     @State private var showAlbum = false
@@ -333,9 +391,20 @@ struct MusicSongMenuHost<Content: View>: View {
     }
 
     private var handle: MusicSongMenuHandle {
-        MusicSongMenuHandle(
+        // Injected closures win; otherwise resolve the player
+        // actions on demand from the non-subscribing environment
+        // read. Same calls as before (MusicPlayerViewModel
+        // .playNext / .download, with their toasts), only the
+        // subscription is gone — no behaviour change. A nil model
+        // (host used outside the app root) makes the two actions
+        // no-ops instead of crashing on a missing environment
+        // object; the rest of the menu still works.
+        let playNext = onPlayNext ?? { [playerVM] song in playerVM?.playNext(song: song) }
+        let download = onDownload ?? { [playerVM] song in playerVM?.download(song: song) }
+        return MusicSongMenuHandle(
             song: song,
-            playerVM: playerVM,
+            onPlayNext: playNext,
+            onDownload: download,
             isFav: $isFav,
             showAddToPlaylist: $showAddToPlaylist,
             showAlbum: $showAlbum,
