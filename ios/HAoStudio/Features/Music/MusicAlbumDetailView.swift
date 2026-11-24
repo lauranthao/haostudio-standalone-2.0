@@ -114,6 +114,7 @@ struct MusicAlbumDetailView: View {
                             MusicSongRow(
                                 song: song,
                                 isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
+                                trackNumber: index + 1,
                                 onTap: {
                                     playerVM.play(song: song, in: viewModel.songs, startAt: index)
                                 },
@@ -135,52 +136,73 @@ struct MusicAlbumDetailView: View {
         .background(theme.scaffoldBackground)
         .navigationTitle(album.name)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                MusicCapsuleButton(icon: "play.fill", label: "播放全部", enabled: !viewModel.songs.isEmpty) {
-                    playerVM.playAll(viewModel.songs)
-                }
-            }
-        }
         .onAppear { viewModel.load() }
     }
 
-    private var albumHeader: some View {
-        HStack(alignment: .top, spacing: 14) {
-            MusicCoverView(urlString: viewModel.detail.pic, size: 120, cornerRadius: 12)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(viewModel.detail.name.isEmpty ? album.name : viewModel.detail.name)
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(theme.textPrimary)
-                    .lineLimit(2)
-                Text(viewModel.detail.artist.isEmpty ? album.artist : viewModel.detail.artist)
-                    .font(.system(size: 14))
-                    .foregroundStyle(theme.textSecondary)
-                    .lineLimit(1)
-                HStack(spacing: 8) {
-                    if !viewModel.yearText.isEmpty {
-                        Text(viewModel.yearText)
-                            .font(.system(size: 13))
-                            .foregroundStyle(theme.textMuted)
-                    }
-                    if viewModel.detail.songs.count > 0 {
-                        Text("共 \(viewModel.detail.songs.count) 首")
-                            .font(.system(size: 13))
-                            .foregroundStyle(theme.textMuted)
-                    }
-                    Text(album.platform.badgeName)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(theme.textSecondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .strokeBorder(theme.hairline, lineWidth: 0.5)
-                        }
-                }
+    /// Apple Music's big filled play capsule, under the header.
+    /// The toolbar capsule is gone — one play control, in the
+    /// header, where Apple Music puts it. Same playAll, no new
+    /// function.
+    private var playAllButton: some View {
+        Button(action: { playerVM.playAll(viewModel.songs) }) {
+            HStack(spacing: 8) {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                Text("播放")
+                    .font(.system(size: 16, weight: .semibold))
             }
-            Spacer()
+            .foregroundStyle(theme.onAccent)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 13)
+            .background(theme.accent, in: Capsule())
         }
+        .buttonStyle(MusicPressScaleStyle())
+        .disabled(viewModel.songs.isEmpty)
+        .accessibilityLabel("播放全部")
+    }
+
+    private var albumHeader: some View {
+        // Apple Music album page: big centred cover, title below
+        // it, artist in the accent, year / count / platform in
+        // muted grey — not a small cover on the left with text
+        // squeezed beside it.
+        VStack(spacing: 12) {
+            MusicCoverView(urlString: viewModel.detail.pic, size: 200, cornerRadius: 16)
+                .shadow(color: .black.opacity(0.25), radius: 16, y: 8)
+            Text(viewModel.detail.name.isEmpty ? album.name : viewModel.detail.name)
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(theme.textPrimary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+            Text(viewModel.detail.artist.isEmpty ? album.artist : viewModel.detail.artist)
+                .font(.system(size: 16))
+                .foregroundStyle(theme.accent)
+                .lineLimit(1)
+            HStack(spacing: 8) {
+                if !viewModel.yearText.isEmpty {
+                    Text(viewModel.yearText)
+                        .font(.system(size: 13))
+                        .foregroundStyle(theme.textMuted)
+                }
+                if viewModel.detail.songs.count > 0 {
+                    Text("共 \(viewModel.detail.songs.count) 首")
+                        .font(.system(size: 13))
+                        .foregroundStyle(theme.textMuted)
+                }
+                Text(album.platform.badgeName)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(theme.textSecondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .strokeBorder(theme.hairline, lineWidth: 0.5)
+                    }
+            }
+            playAllButton
+                .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
     }
 }

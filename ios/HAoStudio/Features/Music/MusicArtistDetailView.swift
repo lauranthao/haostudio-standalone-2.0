@@ -90,14 +90,28 @@ struct MusicArtistDetailView: View {
         .background(theme.scaffoldBackground)
         .navigationTitle(artist.name)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                MusicCapsuleButton(icon: "play.fill", label: "播放全部", enabled: !viewModel.songs.isEmpty) {
-                    playerVM.playAll(viewModel.songs)
-                }
-            }
-        }
         .onAppear { viewModel.load() }
+    }
+
+    /// Same big filled play capsule as the album header — one
+    /// play control, under the header. The toolbar capsule is
+    /// gone (see MusicAlbumDetailView).
+    private var playAllButton: some View {
+        Button(action: { playerVM.playAll(viewModel.songs) }) {
+            HStack(spacing: 8) {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                Text("播放")
+                    .font(.system(size: 16, weight: .semibold))
+            }
+            .foregroundStyle(theme.onAccent)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 13)
+            .background(theme.accent, in: Capsule())
+        }
+        .buttonStyle(MusicPressScaleStyle())
+        .disabled(viewModel.songs.isEmpty)
+        .accessibilityLabel("播放全部")
     }
 
     private var contentList: some View {
@@ -113,6 +127,7 @@ struct MusicArtistDetailView: View {
                         MusicSongRow(
                             song: song,
                             isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
+                            trackNumber: index + 1,
                             onTap: {
                                 playerVM.play(song: song, in: viewModel.songs, startAt: index)
                             },
@@ -128,9 +143,35 @@ struct MusicArtistDetailView: View {
             }
             if !viewModel.detail.albums.isEmpty {
                 Section("专辑") {
-                    ForEach(viewModel.detail.albums) { album in
-                        albumRow(album)
+                    // Apple Music artist page: albums are a
+                    // horizontal shelf of square cards, not a
+                    // vertical list of small rows.
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 16) {
+                            ForEach(viewModel.detail.albums) { album in
+                                NavigationLink(destination: MusicAlbumDetailView(album: album)) {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        MusicCoverView(urlString: album.cover, size: 120, cornerRadius: 10)
+                                        Text(album.name)
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundStyle(theme.textPrimary)
+                                            .lineLimit(2)
+                                            .frame(width: 120, alignment: .leading)
+                                        Text(albumRowSubtitle(album))
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(theme.textSecondary)
+                                            .lineLimit(1)
+                                            .frame(width: 120, alignment: .leading)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.vertical, 4)
                     }
+                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 0))
+                    .listRowBackground(theme.scaffoldBackground)
+                    .listRowSeparator(.hidden)
                 }
             }
         }
@@ -139,56 +180,42 @@ struct MusicArtistDetailView: View {
         .scrollContentBackground(.hidden)
     }
 
-    private func albumRow(_ album: AlbumSummary) -> some View {
-        NavigationLink(destination: MusicAlbumDetailView(album: album)) {
-            HStack(spacing: 12) {
-                MusicCoverView(urlString: album.cover, size: 48)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(album.name)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(theme.textPrimary)
-                        .lineLimit(1)
-                    Text(albumRowSubtitle(album))
-                        .font(.system(size: 13))
-                        .foregroundStyle(theme.textSecondary)
-                        .lineLimit(1)
-                }
-                Spacer()
-            }
-        }
-        .listRowBackground(theme.scaffoldBackground)
-        .listRowSeparatorTint(theme.hairline)
-    }
-
     private var artistHeader: some View {
-        HStack(alignment: .top, spacing: 14) {
-            MusicCoverView(urlString: viewModel.detail.pic, size: 96, cornerRadius: 48)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(viewModel.detail.name.isEmpty ? artist.name : viewModel.detail.name)
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(theme.textPrimary)
-                    .lineLimit(2)
-                if !artist.alias.isEmpty {
-                    Text("又名 \(artist.alias)")
-                        .font(.system(size: 13))
-                        .foregroundStyle(theme.textSecondary)
-                        .lineLimit(1)
-                }
+        // Apple Music artist page: big centred portrait, name
+        // below it, counts in muted grey — not a small circle on
+        // the left with text squeezed beside it.
+        VStack(spacing: 12) {
+            MusicCoverView(urlString: viewModel.detail.pic, size: 160, cornerRadius: 80)
+                .shadow(color: .black.opacity(0.25), radius: 16, y: 8)
+            Text(viewModel.detail.name.isEmpty ? artist.name : viewModel.detail.name)
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(theme.textPrimary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+            if !artist.alias.isEmpty {
+                Text("又名 \(artist.alias)")
+                    .font(.system(size: 14))
+                    .foregroundStyle(theme.textSecondary)
+                    .lineLimit(1)
+            }
+            if !countsText.isEmpty {
                 Text(countsText)
                     .font(.system(size: 13))
                     .foregroundStyle(theme.textMuted)
-                Text(artist.platform.badgeName)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(theme.textSecondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .strokeBorder(theme.hairline, lineWidth: 0.5)
-                    }
             }
-            Spacer()
+            Text(artist.platform.badgeName)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(theme.textSecondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .strokeBorder(theme.hairline, lineWidth: 0.5)
+                }
+            playAllButton
+                .padding(.top, 4)
         }
+        .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
     }
 

@@ -101,7 +101,7 @@ struct MusicPlazaView: View {
                 }
             }
             .pickerStyle(.segmented)
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 20)
             .padding(.top, 12)
             plazaContent
         }
@@ -148,14 +148,14 @@ struct MusicPlazaView: View {
 
     private func plazaRow(_ summary: PlaylistSummary) -> some View {
         HStack(spacing: 12) {
-            MusicCoverView(urlString: summary.cover, size: 48)
+            MusicCoverView(urlString: summary.cover, size: 56, cornerRadius: 10)
             VStack(alignment: .leading, spacing: 2) {
                 Text(summary.name)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1)
                 Text(plazaSubtitle(summary))
-                    .font(.system(size: 13))
+                    .font(.system(size: 14))
                     .foregroundStyle(theme.textSecondary)
                     .lineLimit(1)
             }
@@ -266,6 +266,7 @@ struct MusicPlazaDetailView: View {
                             MusicSongRow(
                                 song: song,
                                 isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
+                                trackNumber: index + 1,
                                 onTap: {
                                     playerVM.play(song: song, in: viewModel.tracks, startAt: index)
                                 },
@@ -321,7 +322,7 @@ struct MusicListenReportView: View {
                 topPlatformsSection
                 perDaySection
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 20)
             .padding(.vertical, 16)
         }
         .haoBottomChromePadding()
@@ -363,7 +364,7 @@ struct MusicListenReportView: View {
     private var topSongsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("最常听")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(theme.textPrimary)
             if discoveryVM.report.topSongs.isEmpty {
                 Text("这段时间还没有收听记录。")
@@ -399,7 +400,7 @@ struct MusicListenReportView: View {
     private var topArtistsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("最常听的歌手")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(theme.textPrimary)
             if discoveryVM.report.topArtists.isEmpty {
                 Text("这段时间还没有收听记录。")
@@ -425,7 +426,7 @@ struct MusicListenReportView: View {
     private var topPlatformsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("来源平台")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(theme.textPrimary)
             if discoveryVM.report.topPlatforms.isEmpty {
                 Text("这段时间还没有收听记录。")
@@ -451,7 +452,7 @@ struct MusicListenReportView: View {
     private var perDaySection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(discoveryVM.reportRange == .all ? "按月" : "按天")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(theme.textPrimary)
             if discoveryVM.report.perDay.isEmpty {
                 Text("这段时间还没有收听记录。")

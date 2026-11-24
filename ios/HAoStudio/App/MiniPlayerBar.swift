@@ -134,12 +134,16 @@ struct MiniPlayerBar: View {
                             urlString: item.coverURL?.absoluteString ?? "",
                             size: HaoLayout.miniCoverSize, cornerRadius: 7)
                         VStack(alignment: .leading, spacing: 2) {
+                            // Apple Music mini: title 15 / artist 13
+                            // in the 64pt bar. This strip is 50pt, so
+                            // 14 / 12 — one step up from the old
+                            // 12 / 10, still fitting the 36 cover.
                             Text(item.title)
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(theme.textPrimary)
                                 .lineLimit(1)
                             Text(item.subtitle)
-                                .font(.system(size: 10))
+                                .font(.system(size: 12))
                                 .foregroundStyle(theme.textSecondary)
                                 .lineLimit(1)
                         }
@@ -186,6 +190,23 @@ struct MiniPlayerBar: View {
             // the same shape as the tab bar (chen's Apple Music
             // reference, 2026-11-24): NOT a capsule.
             .haoGlassRoundedRect()
+            // Apple Music mini's thin progress line along the
+            // strip's bottom edge. Overlay only — no height or
+            // layout change; haoGlassRoundedRect already clips to
+            // the rounded shape, so the line never pokes past the
+            // corners. Inline form has no line (no room, and Apple
+            // drops it in the narrowed tray too).
+            .overlay(alignment: .bottom) {
+                GeometryReader { geo in
+                    let ratio = musicPlayer.duration > 0
+                        ? min(max(musicPlayer.position / musicPlayer.duration, 0), 1) : 0
+                    Capsule()
+                        .fill(theme.accent)
+                        .frame(width: max(0, geo.size.width * ratio), height: 2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: 2)
+            }
             .accessibilityLabel("迷你播放器：\(item.title)，点按打开全屏播放器")
         }
 }

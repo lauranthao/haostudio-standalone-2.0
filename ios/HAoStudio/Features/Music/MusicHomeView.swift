@@ -51,7 +51,7 @@ struct MusicHomeView: View {
                         .padding(.top, 12)
                     Spacer(minLength: 16)
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 20)
             }
             .haoBottomChromePadding()
             .haoChromeScrollTracking()
@@ -108,9 +108,9 @@ struct MusicHomeView: View {
             }
             .padding(16)
             .frame(width: 148, height: 128, alignment: .leading)
-            .background(theme.accentSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(theme.accentSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(theme.hairline, lineWidth: 0.5)
             }
         }
@@ -141,9 +141,9 @@ struct MusicHomeView: View {
             .padding(.horizontal, 16)
             .frame(maxWidth: .infinity)
             .frame(height: 96)
-            .background(theme.surfaceStrong, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(theme.surfaceStrong, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(theme.hairline, lineWidth: 0.5)
             }
         }
@@ -278,24 +278,55 @@ struct MusicHomeView: View {
                 if homeVM.recent.isEmpty {
                     MusicEmptyState(icon: "clock", title: "还没有播放记录", note: "播过的歌会出现在这里。")
                 } else {
-                    VStack(spacing: 0) {
-                        ForEach(Array(homeVM.recent.prefix(20).enumerated()), id: \.element.id) { index, song in
-                            MusicSongRow(
-                                song: song,
-                                isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
-                                onTap: {
-                                    playerVM.play(song: song, in: homeVM.recent, startAt: index)
-                                },
-                                onToggleFav: {
-                                    _ = MusicLibraryStore.toggleFav(song)
-                                    homeVM.reload()
-                                },
-                                onAddToPlaylist: nil
-                            )
-                            .padding(.vertical, 6)
+                    // Apple Music home: recent plays are a horizontal
+                    // shelf of square album cards (cover on top,
+                    // title + artist below), not a vertical song
+                    // list. Same songs, same tap-to-play, same
+                    // 播放全部 — only the layout follows Apple.
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 16) {
+                            ForEach(Array(homeVM.recent.prefix(20).enumerated()), id: \.element.id) { index, song in
+                                recentCard(
+                                    song: song,
+                                    index: index,
+                                    isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying
+                                )
+                            }
                         }
+                        .padding(.vertical, 6)
                     }
                 }
+            }
+        }
+    }
+
+    /// One recent-play card on the horizontal shelf: square cover
+    /// (148, radius 12), title 15 semibold + artist 13 below —
+    /// Apple Music's 最近播放 card. The playing song's title takes
+    /// the accent; the favourite action survives as a context menu
+    /// (the old row's context menu did the same job).
+    private func recentCard(song: MusicSong, index: Int, isPlaying: Bool) -> some View {
+        Button(action: {
+            playerVM.play(song: song, in: homeVM.recent, startAt: index)
+        }) {
+            VStack(alignment: .leading, spacing: 6) {
+                MusicCoverView(urlString: song.cover, size: 148, cornerRadius: 12)
+                Text(song.title.isEmpty ? "未知歌曲" : song.title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(isPlaying ? theme.accent : theme.textPrimary)
+                    .lineLimit(1)
+                Text(song.artist.isEmpty ? "未知艺人" : song.artist)
+                    .font(.system(size: 13))
+                    .foregroundStyle(theme.textSecondary)
+                    .lineLimit(1)
+            }
+            .frame(width: 148, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("收藏 / 取消收藏") {
+                _ = MusicLibraryStore.toggleFav(song)
+                homeVM.reload()
             }
         }
     }

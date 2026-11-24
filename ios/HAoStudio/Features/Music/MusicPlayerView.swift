@@ -311,8 +311,10 @@ struct MusicPlayerView: View {
         let cover = MusicCoverView(
             urlString: playerVM.currentSong?.cover ?? "",
             size: size,
-            // Beans PlayerView: min(24, size * 0.08) — 24 at 340.
-            cornerRadius: min(24, size * 0.08)
+            // Apple Music Now Playing: 16pt at 340 (was Beans'
+            // min(24, size * 0.08) — 24 read squarer than Apple's
+            // near-square large cover).
+            cornerRadius: min(16, size * 0.05)
         )
         if let namespace = coverMorphNamespace {
             cover.matchedGeometryEffect(id: HaoLayout.playerCoverMorphID, in: namespace)
@@ -356,8 +358,14 @@ struct MusicPlayerView: View {
                                 // under its line, smaller and dimmer.
                                 VStack(spacing: 2) {
                                     Text(line.text.isEmpty ? " " : line.text)
+                                        // Apple Music lyrics: the
+                                        // current line grows and
+                                        // brightens (22 -> 28pt in
+                                        // the full lyrics view); in
+                                        // this cover slot the step is
+                                        // 16 -> 22, eased over 0.3s.
                                         .font(.system(
-                                            size: index == playerVM.activeLyricIndex ? 18 : 15,
+                                            size: index == playerVM.activeLyricIndex ? 22 : 16,
                                             weight: index == playerVM.activeLyricIndex ? .bold : .regular
                                         ))
                                         .foregroundStyle(.white.opacity(
@@ -367,7 +375,7 @@ struct MusicPlayerView: View {
                                        let translation = line.translation, !translation.isEmpty {
                                         Text(translation)
                                             .font(.system(
-                                                size: index == playerVM.activeLyricIndex ? 14 : 13
+                                                size: index == playerVM.activeLyricIndex ? 15 : 13
                                             ))
                                             .foregroundStyle(.white.opacity(
                                                 index == playerVM.activeLyricIndex ? 0.85 : 0.4
@@ -376,7 +384,7 @@ struct MusicPlayerView: View {
                                 }
                                 .multilineTextAlignment(.center)
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 9)
+                                .padding(.vertical, 10)
                             }
                             .buttonStyle(.plain)
                             .id(index)
@@ -388,6 +396,9 @@ struct MusicPlayerView: View {
                         .contentShape(Rectangle())
                         .onTapGesture { playerVM.toggleLyrics() }
                 }
+                // The active line's size step eases over 0.3s
+                // (Apple Music lyrics transition), it does not snap.
+                .animation(.easeInOut(duration: 0.3), value: playerVM.activeLyricIndex)
                 .frame(minHeight: height)
             }
             .frame(height: height)
@@ -440,7 +451,7 @@ struct MusicPlayerView: View {
                     .foregroundStyle(.white)
                     .lineLimit(1)
                 Text(playerVM.currentSong?.artist ?? "")
-                    .font(.system(size: 15))
+                    .font(.system(size: 16))
                     .foregroundStyle(.white.opacity(0.72))
                     .lineLimit(1)
             }
@@ -505,6 +516,14 @@ struct MusicPlayerView: View {
                 Capsule()
                     .fill(.white)
                     .frame(width: max(0, width * ratio), height: 4)
+                // Apple Music's scrubber knob: a small white dot
+                // at the fill end, so the bar reads as draggable
+                // even at 0 progress. Clamped inside the track.
+                Circle()
+                    .fill(.white)
+                    .frame(width: 10, height: 10)
+                    .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+                    .offset(x: min(max(width * ratio - 5, 0), max(0, width - 10)))
             }
             .contentShape(Rectangle())
             .gesture(
@@ -539,7 +558,7 @@ struct MusicPlayerView: View {
                     .font(.system(size: 40, weight: .regular))
                     .foregroundStyle(.white)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(MusicPressScaleStyle())
             .accessibilityLabel("上一首")
             Spacer()
             Button(action: { playerVM.togglePlayPause() }) {
@@ -547,7 +566,7 @@ struct MusicPlayerView: View {
                     .font(.system(size: 52, weight: .regular))
                     .foregroundStyle(.white)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(MusicPressScaleStyle())
             .accessibilityLabel(playerVM.isPlaying ? "暂停" : "播放")
             Spacer()
             Button(action: { playerVM.next() }) {
@@ -555,7 +574,7 @@ struct MusicPlayerView: View {
                     .font(.system(size: 40, weight: .regular))
                     .foregroundStyle(.white)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(MusicPressScaleStyle())
             .accessibilityLabel("下一首")
             Spacer()
         }
@@ -639,7 +658,7 @@ struct MusicPlayerView: View {
                     .font(.system(size: 22, weight: .regular))
                     .foregroundStyle(.white.opacity(0.9))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(MusicPressScaleStyle())
             .accessibilityLabel("歌词")
             Spacer()
             MusicAirPlayButton()
@@ -649,7 +668,7 @@ struct MusicPlayerView: View {
                     .font(.system(size: 22, weight: .regular))
                     .foregroundStyle(.white.opacity(0.9))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(MusicPressScaleStyle())
             .accessibilityLabel("播放队列")
             Spacer()
         }
