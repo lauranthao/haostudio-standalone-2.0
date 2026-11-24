@@ -6,10 +6,12 @@
 // page is the shared VideoDetailContentView with an Emby loader
 // (VideoDetailSource.emby). No second layout is kept.
 //
-// Server-side actions (mark played, server favourite, playback
-// reporting) need B-leg EmbyClient mutation APIs and are NOT
-// faked here: the local favourite / resume in the shared detail
-// view are the only actions until those APIs land.
+// Server-side actions: the favourite toggle mirrors to the
+// server (VideoDetailViewModel.toggleFavourite); playback
+// reporting + played marking run in the VOD driver
+// (EmbyPlaybackReporter). The local favourite / resume in the
+// shared detail view remain the UI source of truth — nothing
+// here is faked from the server.
 
 import SwiftUI
 

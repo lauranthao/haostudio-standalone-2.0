@@ -28,8 +28,11 @@
 //   SDR→HDR). Only the first passing branch is ever applied, so a
 //   phone GPU never runs two of them at once.
 // - dvP8Downgrade: routing only — when on, Dolby Vision profile 8
-//   in an Apple container is admitted to AVPlayer; when off, DV
-//   goes to the ffmpeg kernels only. It changes no MPV decode
+//   in an Apple container is admitted to AVPlayer; when off, P8
+//   goes to the ffmpeg kernels only. Profile 5 is NOT governed by
+//   this switch (build 36, item 13): it has no HDR base layer, so
+//   it is always admitted to AVPlayer in an Apple container —
+//   the ffmpeg kernels render it green. It changes no MPV decode
 //   parameter. The gate itself lives in VideoCapability
 //   (`videoEngineCanPlayFacts`); this file owns nothing for it.
 // - hideSynopsis/blurUnwatchedPosters: detail-page spoiler guards.
