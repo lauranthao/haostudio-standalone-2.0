@@ -42,6 +42,19 @@ final class MusicPlayerViewModel: ObservableObject {
     @Published private(set) var queue = MusicQueue(tracks: [], index: 0)
     @Published private(set) var currentSong: MusicSong?
 
+    /// The music song the mini player falls back to when the
+    /// coordinator has no current item. The full player keeps
+    /// showing the loaded song after its URL failed to resolve or
+    /// playback was stopped (handleCurrentItemChanged ignores a nil
+    /// currentItem, so currentSong survives); the mini must show
+    /// the same song, or the two disagree about "what is playing".
+    /// Only music songs qualify — a VOD episode / live room that
+    /// flowed through currentSong must never surface in the mini
+    /// as a song (wrong transport buttons, wrong full player).
+    /// Nil exactly when the queue is truly empty (clearQueue /
+    /// the last track removed) or another kind took over.
+    @Published private(set) var miniFallbackSong: MusicSong?
+
     // MARK: - Playback state (mirrored from the player)
 
     @Published private(set) var isPlaying = false
@@ -151,6 +164,7 @@ final class MusicPlayerViewModel: ObservableObject {
         if !saved.songs.isEmpty {
             queue = MusicQueue.fromQueueData(saved)
             currentSong = queue.current
+            miniFallbackSong = queue.current
             if let song = currentSong {
                 isCurrentFav = MusicLibraryStore.isFav(song)
                 loadLyrics(for: song, fetchIfMissing: false)
@@ -301,6 +315,10 @@ final class MusicPlayerViewModel: ObservableObject {
                                  cover: item.coverURL?.absoluteString ?? "")
             setCurrentSong(song)
         }
+        // The mini player's fallback follows the same song — but
+        // only for music. A VOD / live item must never become a
+        // mini "song" (see miniFallbackSong).
+        miniFallbackSong = item.kind == .music ? currentSong : nil
     }
 
     private func setCurrentSong(_ song: MusicSong) {
@@ -387,6 +405,7 @@ final class MusicPlayerViewModel: ObservableObject {
         player.setQueue(queue.toPlaybackItems(), startAt: queue.index)
         coordinator.requestPlay(current.toPlaybackItem())
         setCurrentSong(current)
+        miniFallbackSong = current
         MusicLibraryStore.addRecent(current)
         MusicLibraryStore.saveQueue(queue.toQueueData())
     }
@@ -459,11 +478,51 @@ final class MusicPlayerViewModel: ObservableObject {
         hapticTick()
     }
 
+    /// Mini-player play/pause. While playing this is a plain pause;
+    /// paused with the song loaded in the engine it is a plain
+    /// resume. But when the engine never loaded the current song —
+    /// its URL failed to resolve, or playback was stopped —
+    /// toggle() is a no-op (resume() guards on an engine item that
+    /// does not exist), so a tap re-requests the song instead of
+    /// leaving a dead button. The retry goes through the same
+    /// startPlayback / play path as a fresh tap, so it re-resolves
+    /// serially, fastest first, like any other play request.
+    func togglePlayPauseOrRetry() {
+        if isPlaying {
+            togglePlayPause()
+            return
+        }
+        if let song = currentSong,
+           let track = player.currentTrack,
+           track.id == song.identityKey || track.id == song.songId {
+            togglePlayPause()
+            return
+        }
+        guard let song = currentSong else { return }
+        if queue.isCurrentTrack(song) {
+            expectedItemId = song.identityKey
+            startPlayback()
+        } else {
+            play(song: song)
+        }
+        hapticTick()
+    }
+
     func next() {
         let nextIndex = queue.nextIndex(mode: playMode, auto: false)
         if nextIndex >= 0 {
             let nextSong = queue.tracks[nextIndex]
             expectedItemId = nextSong.identityKey
+            // The engine never loaded a track (the first song failed
+            // to resolve): player.next() guards on currentTrack and
+            // would no-op, leaving a dead button. Drive the next
+            // queue song directly; the normal path below is
+            // untouched.
+            if player.currentTrack == nil {
+                playFromQueue(at: nextIndex)
+                hapticTick()
+                return
+            }
         }
         player.next()
         hapticTick()
@@ -734,6 +793,7 @@ final class MusicPlayerViewModel: ObservableObject {
             player.pause()
             coordinator.stop()
             currentSong = queue.current
+            miniFallbackSong = queue.current
         }
     }
 
@@ -743,6 +803,7 @@ final class MusicPlayerViewModel: ObservableObject {
         player.pause()
         coordinator.stop()
         currentSong = nil
+        miniFallbackSong = nil
     }
 
     // MARK: - Haptics

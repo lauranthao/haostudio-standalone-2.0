@@ -2,7 +2,12 @@
 //
 // The mini player is a floating glass strip ABOVE the tab bar. Tapping it
 // opens the full player. S2-C wiring:
-// - The strip appears when the PlaybackCoordinator has a current item.
+// - The strip shows the coordinator's current item; when that is nil
+//   but a music song is still loaded (MusicPlayerViewModel
+//   .miniFallbackSong — a failed / stopped track the full player
+//   keeps showing), it shows that song instead. Only a truly empty
+//   queue hides the strip, so the mini and the full player never
+//   disagree about "what is playing".
 // - For MUSIC items it shows a real play/pause button bound to
 //   NativeMusicPlayer (via the shared MusicPlayerViewModel); for VOD /
 //   live items it shows no transport button (their players are other
@@ -23,8 +28,22 @@ struct MiniPlayerBar: View {
     /// Opens the full player for the current item.
     var onTapFullPlayer: () -> Void
 
+    /// The item the strip shows. The coordinator's current item
+    /// wins (music / VOD / live, as before). When it is nil but a
+    /// music song is still loaded — its URL failed to resolve, or
+    /// playback was stopped — the strip keeps showing that song,
+    /// exactly like the full player does (MusicPlayerViewModel
+    /// .currentSong survives a nil currentItem; see
+    /// miniFallbackSong). Only a truly empty queue hides the strip.
+    /// A VOD episode / live room never lands here as a fallback
+    /// song: miniFallbackSong is music-only by construction.
+    private var displayItem: PlaybackItem? {
+        if let item = coordinator.currentItem { return item }
+        return musicPlayer.miniFallbackSong?.toPlaybackItem()
+    }
+
     var body: some View {
-        if let item = coordinator.currentItem {
+        if let item = displayItem {
             // No nested Buttons: the strip tap area, the play/pause
             // button and the chevron are SIBLING buttons. A play/pause
             // Button nested inside the strip Button would also fire
@@ -53,7 +72,7 @@ struct MiniPlayerBar: View {
                 }
                 .buttonStyle(.plain)
                 if item.kind == .music {
-                    Button(action: { musicPlayer.togglePlayPause() }) {
+                    Button(action: { musicPlayer.togglePlayPauseOrRetry() }) {
                         Image(systemName: musicPlayer.isPlaying ? "pause.fill" : "play.fill")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(theme.textPrimary)
@@ -61,6 +80,17 @@ struct MiniPlayerBar: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(musicPlayer.isPlaying ? "暂停" : "播放")
+                    // Apple Music's mini has a next button next to
+                    // play/pause; ours wires the same next() as the
+                    // full player (MusicPlayerViewModel.next()).
+                    Button(action: { musicPlayer.next() }) {
+                        Image(systemName: "forward.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(theme.textPrimary)
+                            .frame(width: 32, height: 32)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("下一曲")
                 }
                 Button(action: onTapFullPlayer) {
                     Image(systemName: "chevron.up")
@@ -70,12 +100,15 @@ struct MiniPlayerBar: View {
                 }
                 .buttonStyle(.plain)
             }
-            // Beans dock: leading 10 / trailing 6 (was 16 both
-            // sides — the strip read wider than the tab bar).
-            .padding(.leading, 10)
-            .padding(.trailing, 6)
+            // Symmetric content padding (was leading 10 / trailing
+            // 6 — the strip read lopsided). Same 12pt step as the
+            // tab bar's side margins (HaoLayout).
+            .padding(.horizontal, HaoLayout.miniPlayerContentPadding)
             .frame(height: HaoLayout.miniPlayerHeight)
-            .haoGlassCapsule()
+            // Rounded rectangle at the shared floating-chrome radius,
+            // the same shape as the tab bar (chen's Apple Music
+            // reference, 2026-11-24): NOT a capsule.
+            .haoGlassRoundedRect()
             .accessibilityLabel("迷你播放器：\(item.title)，点按打开全屏播放器")
         }
     }
