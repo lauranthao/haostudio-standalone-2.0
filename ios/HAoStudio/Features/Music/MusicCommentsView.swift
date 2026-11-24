@@ -95,7 +95,12 @@ struct MusicCommentsView: View {
                     MusicEmptyState(
                         icon: "text.bubble",
                         title: "评论加载失败",
-                        note: "各平台都没有返回评论，稍后再试。"
+                        note: "各平台都没有返回评论，稍后再试。",
+                        onRetry: {
+                            if let song = playerVM.currentSong {
+                                viewModel.load(song: song)
+                            }
+                        }
                     )
                 } else if viewModel.hot.isEmpty && viewModel.latest.isEmpty {
                     MusicEmptyState(

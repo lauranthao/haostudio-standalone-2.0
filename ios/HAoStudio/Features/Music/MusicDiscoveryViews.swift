@@ -120,7 +120,8 @@ struct MusicPlazaView: View {
             } else if discoveryVM.plazaFailed {
                 MusicEmptyState(
                     icon: "square.grid.2x2", title: "暂无推荐",
-                    note: "\(discoveryVM.plazaPlatform.displayName)没有返回歌单，稍后再试或换个平台。"
+                    note: "\(discoveryVM.plazaPlatform.displayName)没有返回歌单，稍后再试或换个平台。",
+                    onRetry: { discoveryVM.loadPlaza() }
                 )
                 Spacer()
             } else {
@@ -247,7 +248,8 @@ struct MusicPlazaDetailView: View {
                 MusicEmptyState(
                     icon: "music.note.list",
                     title: "歌单曲目加载失败",
-                    note: viewModel.note.isEmpty ? "该歌单没有返回曲目，稍后再试。" : viewModel.note
+                    note: viewModel.note.isEmpty ? "该歌单没有返回曲目，稍后再试。" : viewModel.note,
+                    onRetry: { viewModel.load() }
                 )
             } else {
                 List {

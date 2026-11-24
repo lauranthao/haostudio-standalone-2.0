@@ -448,16 +448,6 @@ struct MusicQueueData {
     }
 }
 
-/// `M月d日 星期X` date line for the music home (Flutter homeDateText).
-func musicHomeDateText(_ now: Date) -> String {
-    let calendar = Calendar.current
-    let weekdays = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"]
-    let weekday = calendar.component(.weekday, from: now)
-    let month = calendar.component(.month, from: now)
-    let day = calendar.component(.day, from: now)
-    return "\(month)月\(day)日 \(weekdays[(weekday - 1) % 7])"
-}
-
 /// Day key `YYYY-MM-DD` (Flutter dayKeyOf).
 func musicDayKey(of date: Date) -> String {
     let calendar = Calendar.current

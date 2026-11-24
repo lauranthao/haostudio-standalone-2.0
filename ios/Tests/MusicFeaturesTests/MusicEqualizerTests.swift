@@ -73,4 +73,38 @@ final class MusicEqualizerTests: XCTestCase {
             XCTAssertEqual(preset.gains.count, 10, "\(preset.name) must have 10 bands")
         }
     }
+
+    // MARK: Preset display name (build 36, item 8, E1)
+
+    func testDisplayPresetNameShowsBuiltinPreset() {
+        XCTAssertEqual(
+            MusicEqualizerViewModel.displayPresetName(
+                isCustom: false, customName: "", autoEqName: "", preset: .rock),
+            MusicEqualizerPreset.rock.displayName)
+    }
+
+    func testDisplayPresetNameShowsNamedCustomPreset() {
+        XCTAssertEqual(
+            MusicEqualizerViewModel.displayPresetName(
+                isCustom: true, customName: "我的低音", autoEqName: "", preset: .rock),
+            "我的低音")
+    }
+
+    func testDisplayPresetNameShowsCustomWhenUnnamed() {
+        // A hand-tuned band after a preset must not keep showing
+        // the preset it started from.
+        XCTAssertEqual(
+            MusicEqualizerViewModel.displayPresetName(
+                isCustom: true, customName: "", autoEqName: "", preset: .rock),
+            "自定义")
+    }
+
+    func testDisplayPresetNamePrefersAutoEq() {
+        // An applied AutoEq preset wins over the built-in preset
+        // (and over a custom name — it is what is sounding).
+        XCTAssertEqual(
+            MusicEqualizerViewModel.displayPresetName(
+                isCustom: false, customName: "", autoEqName: "HD 600", preset: .flat),
+            "HD 600")
+    }
 }

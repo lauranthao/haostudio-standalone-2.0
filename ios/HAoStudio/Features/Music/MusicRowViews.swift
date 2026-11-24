@@ -270,7 +270,7 @@ struct MusicSongMenuButton: View {
     var body: some View {
         Menu { handle.menuContent() } label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.haoSubheadStrong)
                 .foregroundStyle(theme.textSecondary)
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
@@ -429,10 +429,15 @@ struct MusicSectionHeader: View {
 
 /// Empty state: icon + title + optional note. Used everywhere a list
 /// is empty so an empty page always explains itself.
+/// `onRetry` (build 36, item 8): load-failure states pass a retry
+/// action, so "稍后再试" is never a dead end the user can only
+/// escape by leaving the page and coming back. Honest empties
+/// (no favourites yet, empty queue, …) leave it nil.
 struct MusicEmptyState: View {
     var icon: String
     var title: String
     var note: String?
+    var onRetry: (() -> Void)? = nil
 
     @Environment(\.haoTheme) private var theme
 
@@ -449,6 +454,10 @@ struct MusicEmptyState: View {
                     .font(.haoFootnote)
                     .foregroundStyle(theme.textSecondary)
                     .multilineTextAlignment(.center)
+            }
+            if let onRetry = onRetry {
+                MusicCapsuleButton(icon: "arrow.clockwise", label: "重试", action: onRetry)
+                    .padding(.top, 6)
             }
         }
         .frame(maxWidth: .infinity)

@@ -180,7 +180,7 @@ struct MusicDownloadsView: View {
                                         MusicCoverView(urlString: download.song.cover, size: 56, cornerRadius: 10)
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(download.song.title.isEmpty ? "未知歌曲" : download.song.title)
-                                                .font(.haoSubheadStrong)
+                                                .font(.haoCalloutStrong)
                                                 .foregroundStyle(theme.textPrimary)
                                                 .lineLimit(1)
                                             HStack(spacing: 6) {

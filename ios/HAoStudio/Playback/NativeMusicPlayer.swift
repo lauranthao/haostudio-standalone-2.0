@@ -1015,6 +1015,28 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         return failedTrackIds.contains(id)
     }
 
+    /// Manual play requests that failed to resolve/open, published
+    /// so the UI leg can say so (build 36, item 8, F1): a tap that
+    /// silently does nothing is a dead button with no feedback.
+    /// A counter, not just the id — the same song can fail twice
+    /// in a row and each failure must surface (a bare id would not
+    /// re-emit). Auto-advance skips never touch this: they are not
+    /// user taps, and the next song starting is their feedback.
+    @Published private(set) var failedRequestCount = 0
+    /// Id of the most recent failed manual play request.
+    @Published private(set) var lastFailedRequestId: String?
+
+    /// Report a manual play-request failure: publish it for the UI
+    /// leg and forward to the coordinator's onTrackFailed (which
+    /// clears the recorded current item). Only the manual paths
+    /// (play / attemptOpen) call this — recovery and auto-advance
+    /// failures go through recoverFromFailure / advanceAuto.
+    private func reportFailedRequest(_ item: PlaybackItem, _ error: MusicPlayerError) {
+        lastFailedRequestId = item.id
+        failedRequestCount += 1
+        onTrackFailed?(item, error)
+    }
+
     private var nowPlayingActive: Bool = false
     private var nowPlayingArtwork: MPMediaItemArtwork?
     /// Artwork fetch attempts for the current track (reset on a
@@ -1183,7 +1205,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                     guard self.pendingItem?.id == item.id else { return }
                     guard let url = url else {
                         self.pendingItem = nil
-                        self.onTrackFailed?(item, .noPlayableURL)
+                        self.reportFailedRequest(item, .noPlayableURL)
                         return
                     }
                     self.actualQuality = tier
@@ -1192,7 +1214,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             }
             if self.resolveURL == nil {
                 self.pendingItem = nil
-                self.onTrackFailed?(item, .noPlayableURL)
+                self.reportFailedRequest(item, .noPlayableURL)
             }
         }
     }
@@ -1210,7 +1232,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             case .failure(let error):
                 guard tried.count < 2 else {
                     self.pendingItem = nil
-                    self.onTrackFailed?(item, error)
+                    self.reportFailedRequest(item, error)
                     return
                 }
                 self.resolveURL?(item, tried) { [weak self] nextURL, tier in
@@ -1219,7 +1241,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                         guard self.pendingItem?.id == item.id else { return }
                         guard let nextURL = nextURL else {
                             self.pendingItem = nil
-                            self.onTrackFailed?(item, error)
+                            self.reportFailedRequest(item, error)
                             return
                         }
                         self.actualQuality = tier
@@ -1228,7 +1250,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                 }
                 if self.resolveURL == nil {
                     self.pendingItem = nil
-                    self.onTrackFailed?(item, error)
+                    self.reportFailedRequest(item, error)
                 }
             }
         }

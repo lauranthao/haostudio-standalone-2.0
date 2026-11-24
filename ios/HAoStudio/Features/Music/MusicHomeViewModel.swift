@@ -20,9 +20,6 @@ final class MusicHomeViewModel: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
 
-    /// Today's date line (Flutter homeDateText).
-    var dateText: String { musicHomeDateText(Date()) }
-
     init() {
         playlistsExpanded = MusicLibraryStore.playlistsExpanded()
         recentExpanded = MusicLibraryStore.recentExpanded()
