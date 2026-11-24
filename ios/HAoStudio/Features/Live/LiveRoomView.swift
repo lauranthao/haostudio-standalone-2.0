@@ -636,6 +636,51 @@ struct LiveRoomView: View {
     private var videoArea: some View {
         ZStack {
             videoBackground
+            // "No picture yet" placeholder — a SIBLING of the
+            // background, not inside it (S5): the card's 重试
+            // button lives here, above videoBackground's
+            // simultaneous tap gesture, so a tap on it fires
+            // only the button. Inside the background the tap
+            // also fired the gesture, which toggled play/pause
+            // 0.28 s later — and with an open failure that
+            // re-ran retryCurrentRoom, a second resolve per
+            // tap. Same sibling discipline as the buttons the
+            // doc comment above already lists. Position is
+            // unchanged: videoArea's size is fixed by the
+            // 16:9 aspect ratio at the call site, so this
+            // centred VStack lands exactly where it did.
+            if livePlayer.videoView == nil {
+                // While the open is still in flight (resolving /
+                // opening — Huya/Douyu serial resolves take
+                // seconds), say so: the old text called the room
+                // "not live" before the resolve had even answered.
+                // The failure card only shows once the driver
+                // reports a failure (openFailure != nil).
+                if livePlayer.isLoading && livePlayer.openFailure == nil {
+                    VStack(spacing: 8) {
+                        ProgressView()
+                            .tint(.white)
+                        Text("加载中…")
+                            .font(.haoCalloutStrong)
+                            .foregroundStyle(.white.opacity(0.9))
+                    }
+                } else {
+                    // Pure Live's error widget, same two lines:
+                    // what happened, then why.
+                    VStack(spacing: 8) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .font(.system(size: 28))
+                            .foregroundStyle(.white.opacity(0.6))
+                        Text("暂无画面")
+                            .font(.haoCalloutStrong)
+                            .foregroundStyle(.white.opacity(0.9))
+                        Text("房间未开播或暂时无法观看")
+                            .font(.haoFootnote)
+                            .foregroundStyle(.white.opacity(0.7))
+                        liveFailureCard
+                    }
+                }
+            }
             if danmakuEnabledForRoom {
                 LiveDanmakuOverlayView(
                     messages: livePlayer.messages,
@@ -721,38 +766,11 @@ struct LiveRoomView: View {
                     EmptyView()
                 }
             }
-            if livePlayer.videoView == nil {
-                // While the open is still in flight (resolving /
-                // opening — Huya/Douyu serial resolves take
-                // seconds), say so: the old text called the room
-                // "not live" before the resolve had even answered.
-                // The failure card only shows once the driver
-                // reports a failure (openFailure != nil).
-                if livePlayer.isLoading && livePlayer.openFailure == nil {
-                    VStack(spacing: 8) {
-                        ProgressView()
-                            .tint(.white)
-                        Text("加载中…")
-                            .font(.haoCalloutStrong)
-                            .foregroundStyle(.white.opacity(0.9))
-                    }
-                } else {
-                    // Pure Live's error widget, same two lines:
-                    // what happened, then why.
-                    VStack(spacing: 8) {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
-                            .font(.system(size: 28))
-                            .foregroundStyle(.white.opacity(0.6))
-                        Text("暂无画面")
-                            .font(.haoCalloutStrong)
-                            .foregroundStyle(.white.opacity(0.9))
-                        Text("房间未开播或暂时无法观看")
-                            .font(.haoFootnote)
-                            .foregroundStyle(.white.opacity(0.7))
-                        liveFailureCard
-                    }
-                }
-            }
+            // The "no picture yet" placeholder lives in
+            // videoArea as a sibling above this background
+            // (S5) — see the note there. It is NOT here: a
+            // button inside this view would double-fire with
+            // the simultaneous tap gesture below.
             if !livePlayer.isPlaying && livePlayer.videoView != nil {
                 Image(systemName: "play.fill")
                     .font(.system(size: 34))
