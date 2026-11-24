@@ -276,6 +276,157 @@ final class HomeAggregationTests: XCTestCase {
         XCTAssertTrue(first.contains { $0.songId == "2" })
     }
 
+    func testDailyPicksRankedByPlaysNotShuffled() {
+        // 12 plays beats 1 play by score (130 vs 15), and the list
+        // does NOT change just because the day rolled over — only
+        // the data moves it (freshness is 0 for these 1970 events
+        // on either day key).
+        var log: [ListenEvent] = []
+        for _ in 0..<12 { log.append(event(songId: "1", artist: "甲")) }
+        log.append(event(songId: "9", artist: "乙"))
+        let day23 = HomeViewModel.computeDailyPicks(
+            listenLog: log, favourites: [], recent: [], dayKey: "2026-11-23")
+        let day24 = HomeViewModel.computeDailyPicks(
+            listenLog: log, favourites: [], recent: [], dayKey: "2026-11-24")
+        XCTAssertEqual(day23.map { $0.songId }, ["1", "9"])
+        XCTAssertEqual(day23, day24)
+    }
+
+    func testDailyPicksChangeWhenHistoryChanges() {
+        // Same inputs, then one more song overtakes the leader.
+        let base = [
+            event(songId: "a", artist: "甲", at: 1000),
+            event(songId: "a", artist: "甲", at: 1001),
+            event(songId: "a", artist: "甲", at: 1002),
+            event(songId: "b", artist: "乙", at: 1003),
+        ]
+        let before = HomeViewModel.computeDailyPicks(
+            listenLog: base, favourites: [], recent: [], dayKey: "2026-11-23")
+        XCTAssertEqual(before.first?.songId, "a")
+        let grown = base + [
+            event(songId: "b", artist: "乙", at: 1004),
+            event(songId: "b", artist: "乙", at: 1005),
+            event(songId: "b", artist: "乙", at: 1006),
+        ]
+        let after = HomeViewModel.computeDailyPicks(
+            listenLog: grown, favourites: [], recent: [], dayKey: "2026-11-23")
+        XCTAssertEqual(after.first?.songId, "b")
+        XCTAssertNotEqual(before, after)
+    }
+
+    func testDailyPicksLikesOutrankFewPlays() {
+        // Liked (30) beats a single full play (10 + 5 heard) and a
+        // newest-recent bonus (15); the 1-play song beats the
+        // recent-only song on the plays tie-break.
+        let log = [event(songId: "p1", artist: "甲", at: 1000)]
+        let picks = HomeViewModel.computeDailyPicks(
+            listenLog: log,
+            favourites: [song(songId: "f1", artist: "乙")],
+            recent: [song(songId: "r1", artist: "丙")],
+            dayKey: "2026-11-23")
+        XCTAssertEqual(picks.map { $0.songId }, ["f1", "p1", "r1"])
+    }
+
+    func testDailyPicksDiscoveryRankedFromTopArtist() {
+        // Second half is ranked, not shuffled: artist 甲's other
+        // songs come in play-count order, then the most recently
+        // played 1-play songs (乙's 7 before 6, 甲's 5 last).
+        // Scores: 1:60, 2:50, 3:40, 4:30, 5/6/7:15.
+        var log: [ListenEvent] = []
+        for index in 0..<5 { log.append(event(songId: "1", artist: "甲", at: 1000 + index)) }
+        for index in 0..<4 { log.append(event(songId: "2", artist: "甲", at: 1010 + index)) }
+        for index in 0..<3 { log.append(event(songId: "3", artist: "甲", at: 1020 + index)) }
+        for index in 0..<2 { log.append(event(songId: "4", artist: "甲", at: 1030 + index)) }
+        log.append(event(songId: "5", artist: "甲", at: 1040))
+        log.append(event(songId: "6", artist: "乙", at: 1050))
+        log.append(event(songId: "7", artist: "乙", at: 1060))
+        let picks = MusicRadio.dailyPicks(
+            listenLog: log, favourites: [], recent: [],
+            dayKey: "2026-11-23", total: 6)
+        XCTAssertEqual(picks.map { $0.songId }, ["1", "2", "3", "4", "7", "6"])
+    }
+
+    func testDailyPicksSameAlbumFillsSecondHalf() {
+        // B is played twice AND liked with album 专辑X (the album
+        // merges from the favourite copy onto the log song), so it
+        // leads (60); F shares B's album and fills the second
+        // half before the unrelated liked song H.
+        let log = [
+            event(songId: "a", artist: "甲", at: 1000),
+            event(songId: "a", artist: "甲", at: 1001),
+            event(songId: "a", artist: "甲", at: 1002),
+            event(songId: "b", artist: "乙", at: 1010),
+            event(songId: "b", artist: "乙", at: 1011),
+        ]
+        let favB = MusicSong(
+            songId: "b", title: "歌", artist: "乙", album: "专辑X",
+            cover: "", platform: .wy, dur: 300)
+        let favF = MusicSong(
+            songId: "f", title: "歌", artist: "丙", album: "专辑X",
+            cover: "", platform: .wy, dur: 300)
+        let favH = MusicSong(
+            songId: "h", title: "歌", artist: "戊", album: "专辑Y",
+            cover: "", platform: .wy, dur: 300)
+        let picks = MusicRadio.dailyPicks(
+            listenLog: log, favourites: [favB, favF, favH], recent: [],
+            dayKey: "2026-11-23", total: 4)
+        XCTAssertEqual(picks.map { $0.songId }, ["b", "a", "f", "h"])
+        XCTAssertEqual(picks.first?.album, "专辑X")
+    }
+
+    func testDailyPicksSecondHalfCapsOneArtist() {
+        // 31 songs by 甲, 1 by 乙: without a cap the single 乙
+        // song (played once, long ago) would fall out of the 20.
+        // The second-half cap lets it in while the list still
+        // fills to 20 from ranked songs.
+        var log: [ListenEvent] = []
+        for _ in 0..<12 { log.append(event(songId: "1", artist: "甲")) }
+        log.append(event(songId: "9", artist: "乙"))
+        for index in 0..<30 {
+            log.append(event(songId: "f\(index)", artist: "甲", at: 2000 + index))
+        }
+        let picks = HomeViewModel.computeDailyPicks(
+            listenLog: log, favourites: [], recent: [], dayKey: "2026-11-23")
+        XCTAssertEqual(picks.count, 20)
+        XCTAssertEqual(picks.first?.songId, "1")
+        XCTAssertTrue(picks.contains { $0.songId == "9" })
+    }
+
+    func testDailyPicksExcludesDisliked() {
+        // Both dislike forms work (identityKey and bare songId);
+        // a song that is not disliked still picks normally.
+        let picks = HomeViewModel.computeDailyPicks(
+            listenLog: [event(songId: "a", artist: "甲", at: 1000)],
+            favourites: [song(songId: "x", artist: "乙"), song(songId: "y", artist: "丙")],
+            recent: [],
+            dayKey: "2026-11-23",
+            dislikedIds: ["wy|x", "y"])
+        XCTAssertEqual(picks.map { $0.songId }, ["a"])
+    }
+
+    func testDailyPicksFreshnessBonus() {
+        // Same play count (1 full play = 15 each); the song played
+        // yesterday gets +10 freshness, the one from 40 days ago
+        // gets nothing — so the recent one leads.
+        let ref = MusicRadio.dayReferenceMs(for: "2026-11-23") ?? 0
+        let log = [
+            event(songId: "old", artist: "甲", at: ref - 40 * 86_400_000),
+            event(songId: "new", artist: "乙", at: ref - 86_400_000),
+        ]
+        let picks = HomeViewModel.computeDailyPicks(
+            listenLog: log, favourites: [], recent: [], dayKey: "2026-11-23")
+        XCTAssertEqual(picks.map { $0.songId }, ["new", "old"])
+    }
+
+    func testDailyPicksPlaylistTracksAreCandidates() {
+        // A song that only exists in a user playlist (never played
+        // or liked) is still a real, playable candidate.
+        let picks = HomeViewModel.computeDailyPicks(
+            listenLog: [], favourites: [], recent: [], dayKey: "2026-11-23",
+            playlistTracks: [song(songId: "p", artist: "甲")])
+        XCTAssertEqual(picks.map { $0.songId }, ["p"])
+    }
+
     func testDailyPicksEmptyWhenNoData() {
         let picks = HomeViewModel.computeDailyPicks(
             listenLog: [], favourites: [], recent: [], dayKey: "2026-11-23")

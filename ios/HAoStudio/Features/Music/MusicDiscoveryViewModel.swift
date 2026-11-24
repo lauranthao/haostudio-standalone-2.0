@@ -7,7 +7,8 @@
 // artists / platforms, per-day counts.
 //
 // Daily picks are cached per day (hao_daily.json); a missing day is
-// built from local data (most-played + top artists, seeded by day).
+// built from local data (listen log + favourites + recent +
+// playlists, ranked — no shuffle, no seed).
 // Plaza (S7-A): the platform APIs ARE in the music API leg —
 // MusicPlaylistImportAPI.plaza(platform:) (S3) serves wy / tx /
 // kg / kw from the real platform endpoints, never a fallback
@@ -106,24 +107,13 @@ final class MusicDiscoveryViewModel: ObservableObject {
             dailyTracks = cached
             return
         }
-        let top = MusicRadio.mostPlayedSongs(from: listenLog, limit: 10)
-        let artists = MusicRadio.topArtists(from: listenLog, limit: 5)
-        var byArtist: [String: [MusicSong]] = [:]
-        for event in listenLog {
-            let artist = event.artist.isEmpty ? "—" : event.artist
-            let song = MusicSong(
-                songId: event.songId, title: event.title, artist: event.artist,
-                cover: event.cover, platform: event.platform, dur: event.totalDur
-            )
-            byArtist[artist, default: []].append(song)
-        }
         let picks = MusicRadio.dailyPicks(
-            listenTop: top,
-            byArtist: byArtist,
-            topArtists: artists,
+            listenLog: listenLog,
             favourites: MusicLibraryStore.favSongs(),
             recent: MusicLibraryStore.getRecent(),
-            seed: dayKey
+            playlistTracks: MusicLibraryStore.getLists().flatMap { $0.tracks },
+            dislikedIds: MusicLibraryStore.fmDislikedIds(),
+            dayKey: dayKey
         )
         dailyTracks = picks
         if !picks.isEmpty {
