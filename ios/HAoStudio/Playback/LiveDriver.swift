@@ -856,8 +856,16 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             return
         }
         let backend = makeBackend(engine)
-        backend.onEvent = { [weak self] event in
-            self?.handleBackendEvent(event)
+        // #4: a stale backend's event must not act on the current
+        // room — AVPlayer/MPV emit to main async, so an event
+        // queued before a shutdown/switch can land after the new
+        // backend is installed. Capture the backend weakly (a
+        // strong capture would cycle: backend retains onEvent,
+        // onEvent would retain backend) and check identity before
+        // handling, same as VideoDriver's track-list handler.
+        backend.onEvent = { [weak self, weak backend] event in
+            guard let self = self, let backend = backend, self.backend === backend else { return }
+            self.handleBackendEvent(event)
         }
         backend.onVideoSize = { [weak self] _ in
             self?.updateDiagnostics()
@@ -933,8 +941,12 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         backend?.shutdown()
         backend = nil
         let avBackend = makeBackend(.avplayer)
-        avBackend.onEvent = { [weak self] event in
-            self?.handleBackendEvent(event)
+        // #4: same identity check as openOnEngine above — a stale
+        // AVPlayer backend's event must not stop/fail the room
+        // that replaced it.
+        avBackend.onEvent = { [weak self, weak avBackend] event in
+            guard let self = self, let avBackend = avBackend, self.backend === avBackend else { return }
+            self.handleBackendEvent(event)
         }
         avBackend.onVideoSize = { [weak self] _ in
             self?.updateDiagnostics()
