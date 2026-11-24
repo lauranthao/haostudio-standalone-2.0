@@ -707,19 +707,59 @@ final class DownloadEngine: NSObject {
     private func completeLocked(_ record: TaskRecord) {
         let request = record.info.request
         let fileName = DownloadEngine.sanitisedFileName(request.fileName, fallbackKey: request.key)
-        let final = downloadsDirectory().appendingPathComponent(fileName)
         let part = partURL(for: request)
+        // Verify the part on disk before moving: its size must equal
+        // what we believe we downloaded (and the expected total when
+        // known) — a short/failed write must never complete (§2.1 D).
+        let partSize = (try? FileManager.default.attributesOfItem(atPath: part.path)[.size] as? NSNumber)?.int64Value ?? -1
+        guard partSize >= 0, partSize == record.info.downloadedBytes,
+              record.expectedTotal < 0 || partSize == record.expectedTotal else {
+            finishLocked(record, state: .failed, errorMessage: "下载不完整，请重试")
+            return
+        }
+        // Never clobber another task's completed file: the same
+        // "title - artist.ext" from two platforms/keys used to map
+        // to one filename, and the second completion deleted the
+        // first task's file while it still reported .completed.
+        let finalName = uniqueFinalName(for: fileName, excludingKey: request.key)
+        let final = downloadsDirectory().appendingPathComponent(finalName)
+        // Move to a temp name in the same dir, then atomic replace.
+        let temp = downloadsDirectory().appendingPathComponent(UUID().uuidString + ".tmp")
         do {
+            try FileManager.default.moveItem(at: part, to: temp)
             if FileManager.default.fileExists(atPath: final.path) {
-                try FileManager.default.removeItem(at: final)
+                try FileManager.default.replaceItem(at: final, withItemAt: temp, backupItemName: nil, options: [], resultingItemURL: nil)
+            } else {
+                try FileManager.default.moveItem(at: temp, to: final)
             }
-            try FileManager.default.moveItem(at: part, to: final)
         } catch {
+            // Try to put the part back so the task stays resumable.
+            try? FileManager.default.moveItem(at: temp, to: part)
             finishLocked(record, state: .failed, errorMessage: "无法保存下载文件")
             return
         }
-        record.info.localRelativePath = DownloadEngine.relativePath(for: fileName)
+        record.info.localRelativePath = DownloadEngine.relativePath(for: finalName)
         finishLocked(record, state: .completed, errorMessage: nil)
+    }
+
+    /// If another task already owns `fileName` as its completed file,
+    /// return `name (2).ext`, `name (3).ext`, … instead of deleting
+    /// that task's file.
+    private func uniqueFinalName(for fileName: String, excludingKey key: String) -> String {
+        let ownedByOther = records.values.contains { other in
+            other.info.request.key != key
+                && other.info.localRelativePath == DownloadEngine.relativePath(for: fileName)
+        }
+        guard ownedByOther else { return fileName }
+        let base = (fileName as NSString).deletingPathExtension
+        let ext = (fileName as NSString).pathExtension
+        var n = 2
+        while true {
+            let candidate = ext.isEmpty ? "\(base) (\(n))" : "\(base) (\(n)).\(ext)"
+            let taken = records.values.contains { $0.info.localRelativePath == DownloadEngine.relativePath(for: candidate) }
+            if !taken { return candidate }
+            n += 1
+        }
     }
 
     private func closeHandleLocked(_ record: TaskRecord) {
