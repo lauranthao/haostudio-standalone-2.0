@@ -128,6 +128,18 @@ final class LiveRecovery {
         get { locked { _quality } }
         set { locked { _quality = newValue } }
     }
+    /// Whether the most recent `fetchFromResolver` fetch failed
+    /// with a definitive `LiveError.offline` — the room is not
+    /// live. Set on EVERY fetch (see `finish`), so the driver can
+    /// tell an off-air room ("房间未开播") from a generic resolve
+    /// failure ("没有可播放的地址"). b39: chen 2026-11-25 saw the
+    /// generic text on cxy0714 while the room was simply off air.
+    /// Locked accessor (same pattern as `quality`).
+    private var _lastResolveWasOffline = false
+    var lastResolveWasOffline: Bool {
+        get { locked { _lastResolveWasOffline } }
+        set { locked { _lastResolveWasOffline = newValue } }
+    }
 
     /// Injectable clock. Production uses the wall clock; tests drive it.
     var now: () -> Date = { Date() }
@@ -574,6 +586,7 @@ final class LiveRecovery {
     /// a timeout is a stream error, exactly like a failed parse.
     private func fetchFromResolver(completion: @escaping (LivePlayUrlResolution?) -> Void) {
         guard let resolver = resolver else {
+            lastResolveWasOffline = false
             completion(nil)
             return
         }
@@ -581,11 +594,15 @@ final class LiveRecovery {
         // callback (URLSession background) and the timeout work
         // item (main) — so exactly-once needs a lock, not a bare
         // Bool. The lock guards only the flag; the completion
-        // itself runs outside it.
+        // itself runs outside it. `finish` also records whether
+        // this fetch failed with a definitive offline (b39): the
+        // flag is set by the winning finish only, before the
+        // completion runs, so the driver can read it when the
+        // resolve returns nothing.
         let finishLock = NSLock()
         var completed = false
         var timeoutWork: DispatchWorkItem?
-        let finish: (LivePlayUrlResolution?) -> Void = { result in
+        let finish: (LivePlayUrlResolution?, Bool) -> Void = { [weak self] result, wasOffline in
             let shouldRun: Bool = {
                 finishLock.lock()
                 defer { finishLock.unlock() }
@@ -596,11 +613,12 @@ final class LiveRecovery {
             guard shouldRun else {
                 return
             }
+            self?.lastResolveWasOffline = wasOffline
             timeoutWork?.cancel()
             completion(result)
         }
         timeoutWork = DispatchWorkItem {
-            finish(nil)
+            finish(nil, false)
         }
         if let work = timeoutWork {
             DispatchQueue.main.asyncAfter(deadline: .now() + timeoutInterval, execute: work)
@@ -612,7 +630,7 @@ final class LiveRecovery {
         resolver.resolve(roomId: roomId, quality: requestedQuality) { [weak self] result in
             switch result {
             case .success(let resolution):
-                finish(resolution)
+                finish(resolution, false)
             case .failure(let error):
                 // A definitive offline stays a failure: stale list
                 // URLs must never resurrect an ended room. Any
@@ -622,17 +640,17 @@ final class LiveRecovery {
                 // the first playable source plays instead of the
                 // failure card.
                 if let liveError = error as? LiveError, case .offline = liveError {
-                    finish(nil)
+                    finish(nil, true)
                     return
                 }
                 if let self = self,
                    let room = self.sourceRoom,
                    let fallback = resolver.resolutionFromRoom(room, quality: requestedQuality),
                    !fallback.appliedUrls.isEmpty {
-                    finish(fallback)
+                    finish(fallback, false)
                     return
                 }
-                finish(nil)
+                finish(nil, false)
             }
         }
     }
@@ -814,6 +832,15 @@ final class LiveRoomSession {
             _state = .loading
         }
         stallWatchdog.reset()
+    }
+
+    /// Whether the room's last resolve failed because the room is
+    /// not live (forwards to the recovery's flag; false when there
+    /// is no recovery yet). The driver reads this when the initial
+    /// resolve returns nothing, to show "房间未开播" instead of
+    /// "没有可播放的地址" (b39).
+    var lastResolveWasOffline: Bool {
+        recovery?.lastResolveWasOffline ?? false
     }
 
     /// The initial resolve for the room (not throttled — the happy

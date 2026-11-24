@@ -498,11 +498,18 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                     return
                 }
                 guard let resolution = resolution, let url = resolution.appliedUrls.compactMap({ URL(string: $0) }).first else {
+                    // b39: an off-air room is not a missing address —
+                    // the room page said so (LiveError.offline), so
+                    // say "房间未开播" instead of "没有可播放的地址"
+                    // (chen 2026-11-25: cxy0714 was off air and the
+                    // generic text misled him). Retry stays: the room
+                    // may go live.
+                    let failure: MusicPlayerError = self.session.lastResolveWasOffline ? .offline : .noPlayableURL
                     self.isLoading = false
                     self.pendingItem = nil
-                    self.openFailure = .noPlayableURL
+                    self.openFailure = failure
                     self.lastFailedItem = item
-                    self.onRoomFailed?(item, .noPlayableURL)
+                    self.onRoomFailed?(item, failure)
                     return
                 }
                 // Cellular downgrade (wiring leg B; Flutter

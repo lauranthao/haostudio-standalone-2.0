@@ -181,6 +181,34 @@ final class LiveRecoveryThrottleTests: XCTestCase {
         XCTAssertNil(fetchValue)
         recovery.dispose()
     }
+
+    /// b39: a resolve that fails with a definitive offline records
+    /// it — the driver shows "房间未开播" for that room instead of
+    /// the generic "没有可播放的地址" (chen 2026-11-25: cxy0714
+    /// was off air).
+    func testResolveInitialOfflineSetsFlag() {
+        let resolver = FakeLiveSiteResolver()
+        resolver.resolveError = LiveError.offline
+        let recovery = LiveRecovery(roomId: "123", resolver: resolver)
+        var initialValue: LivePlayUrlResolution?
+        recovery.resolveInitial { value in initialValue = value }
+        XCTAssertNil(initialValue)
+        XCTAssertTrue(recovery.lastResolveWasOffline)
+        recovery.dispose()
+    }
+
+    /// The flag is per-fetch, not sticky: a generic failure
+    /// (empty response here) leaves it false, so a room that
+    /// fails for another reason still gets the generic text.
+    func testResolveInitialGenericFailureClearsFlag() {
+        let resolver = FakeLiveSiteResolver()
+        let recovery = LiveRecovery(roomId: "123", resolver: resolver)
+        var initialValue: LivePlayUrlResolution?
+        recovery.resolveInitial { value in initialValue = value }
+        XCTAssertNil(initialValue)
+        XCTAssertFalse(recovery.lastResolveWasOffline)
+        recovery.dispose()
+    }
 }
 
 // MARK: - Recovery: held plan + prefetch + expiry
