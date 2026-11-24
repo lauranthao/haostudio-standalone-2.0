@@ -113,6 +113,12 @@ final class DownloadEngine: NSObject {
         /// not write progress, bytes, or a terminal state for the
         /// new attempt — it checks this every iteration and on exit.
         var attempt: Int = 0
+        /// Set when a 416 response restarts the download from 0;
+        /// httpDidComplete re-issues the request when it sees the
+        /// cancelled task. Guarded by `restartedAfter416` so a
+        /// server that always 416s fails instead of looping.
+        var restartAfter416Pending = false
+        var restartedAfter416 = false
 
         init(info: DownloadTaskInfo) {
             self.info = info
@@ -196,6 +202,67 @@ final class DownloadEngine: NSObject {
     /// Relative name for the index (`music_downloads/<file>`).
     static func relativePath(for fileName: String) -> String {
         "\(downloadSubdir)/\(fileName)"
+    }
+
+    // MARK: - Resume validation (§2.1 Problem B)
+
+    /// Parsed `Content-Range: bytes <start>-<end>/<total>`; total is
+    /// nil for `*` (unknown total).
+    struct ContentRange {
+        let start: Int64
+        let end: Int64
+        let total: Int64?
+    }
+
+    /// Pure parser, unit-tested (DownloadEngineTests).
+    static func parseContentRange(_ value: String) -> ContentRange? {
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("bytes ") else { return nil }
+        let rest = String(trimmed.dropFirst("bytes ".count))
+        let parts = rest.split(separator: "/", maxSplits: 1)
+        guard parts.count == 2 else { return nil }
+        let rangeParts = parts[0].split(separator: "-")
+        guard rangeParts.count == 2,
+              let start = Int64(rangeParts[0]),
+              let end = Int64(rangeParts[1]) else { return nil }
+        let total: Int64?
+        if parts[1] == "*" {
+            total = nil
+        } else {
+            guard let parsed = Int64(parts[1]) else { return nil }
+            total = parsed
+        }
+        guard start >= 0, end >= start else { return nil }
+        return ContentRange(start: start, end: end, total: total)
+    }
+
+    /// Outcome of validating a 206 resume response against the part
+    /// on disk. The engine always requests an open-ended range
+    /// (`bytes=<base>-`), so a well-formed 206 must start at
+    /// baseOffset and run to the end of the file.
+    enum ResumeResponseValidation {
+        case valid(expectedTotal: Int64)
+        case invalid(reason: String)
+    }
+
+    /// Pure decision function, unit-tested (DownloadEngineTests).
+    static func validateResumeResponse(contentRange: String?, contentLength: Int64?, baseOffset: Int64) -> ResumeResponseValidation {
+        guard let rangeString = contentRange,
+              let range = parseContentRange(rangeString) else {
+            return .invalid(reason: "服务器返回的分段信息无效")
+        }
+        guard range.start == baseOffset else {
+            return .invalid(reason: "服务器返回的分段起始位置不符")
+        }
+        let segmentLength = range.end - range.start + 1
+        if let length = contentLength, length != segmentLength {
+            return .invalid(reason: "服务器返回的分段长度不符")
+        }
+        let expectedTotal = baseOffset + segmentLength
+        if let total = range.total, total != expectedTotal {
+            return .invalid(reason: "服务器返回的文件总长度不符")
+        }
+        return .valid(expectedTotal: expectedTotal)
     }
 
     // MARK: Public API
@@ -347,7 +414,14 @@ final class DownloadEngine: NSObject {
         let part = partURL(for: request)
         let existing = (try? FileManager.default.attributesOfItem(atPath: part.path)[.size] as? NSNumber)?.int64Value ?? 0
         record.baseOffset = existing
+        // Finding E: the part size on disk is the truth — reconcile
+        // downloadedBytes with it, or a kill-and-restore resume
+        // restarts the count from the stale persisted value and a
+        // byte-complete file is marked failed.
+        record.info.downloadedBytes = existing
         record.expectedTotal = -1
+        record.restartAfter416Pending = false
+        record.restartedAfter416 = false
         var urlRequest = URLRequest(url: request.sourceURL, timeoutInterval: 60)
         if existing > 0 {
             urlRequest.setValue("bytes=\(existing)-", forHTTPHeaderField: "Range")
@@ -382,10 +456,26 @@ final class DownloadEngine: NSObject {
             guard let record = self.record(forSessionTask: task) else { return }
             if record.stopRequested { return }
             if response.statusCode == 206 {
-                // Server honours Range: append after the part file.
-                if let length = response.value(forHTTPHeaderField: "Content-Length").flatMap({ Int64($0) }), length >= 0 {
-                    record.expectedTotal = record.baseOffset + length
-                    record.info.totalBytes = record.expectedTotal
+                // Server honours Range: validate the segment before
+                // appending anything (§2.1 Problem B). A wrong
+                // segment must never pollute the .part file.
+                let contentLength = response.value(forHTTPHeaderField: "Content-Length").flatMap({ Int64($0) })
+                switch DownloadEngine.validateResumeResponse(
+                    contentRange: response.value(forHTTPHeaderField: "Content-Range"),
+                    contentLength: contentLength,
+                    baseOffset: record.baseOffset) {
+                case .valid(let expectedTotal):
+                    record.expectedTotal = expectedTotal
+                    record.info.totalBytes = expectedTotal
+                    // Finding E: reconcile with the part on disk.
+                    record.info.downloadedBytes = record.baseOffset
+                case .invalid(let reason):
+                    // Discard the part so a later resume restarts
+                    // from 0 instead of appending to bad bytes.
+                    self.closeHandleLocked(record)
+                    try? FileManager.default.removeItem(at: self.partURL(for: record.info.request))
+                    self.finishLocked(record, state: .failed, errorMessage: reason)
+                    return
                 }
             } else if response.statusCode == 200 {
                 // Server ignores Range: restart from 0.
@@ -395,11 +485,35 @@ final class DownloadEngine: NSObject {
                 let part = self.partURL(for: record.info.request)
                 try? FileManager.default.removeItem(at: part)
                 FileManager.default.createFile(atPath: part.path, contents: nil)
-                record.fileHandle = try? FileHandle(forWritingTo: part)
+                guard let handle = try? FileHandle(forWritingTo: part) else {
+                    // §2.1 Problem C: a nil replacement handle used
+                    // to silently drop all data and, with no
+                    // Content-Length, complete an empty file.
+                    self.finishLocked(record, state: .failed, errorMessage: "无法创建下载文件")
+                    return
+                }
+                record.fileHandle = handle
                 if let length = response.value(forHTTPHeaderField: "Content-Length").flatMap({ Int64($0) }), length >= 0 {
                     record.expectedTotal = length
                     record.info.totalBytes = length
                 }
+            } else if response.statusCode == 416 {
+                // Range no longer satisfiable (part past EOF after a
+                // server-side change): restart from 0 once. A second
+                // 416 means the server will never serve this URL.
+                if record.restartedAfter416 {
+                    self.finishLocked(record, state: .failed, errorMessage: "服务器返回了错误（416）")
+                    return
+                }
+                record.restartedAfter416 = true
+                record.restartAfter416Pending = true
+                self.closeHandleLocked(record)
+                try? FileManager.default.removeItem(at: self.partURL(for: record.info.request))
+                record.baseOffset = 0
+                record.info.downloadedBytes = 0
+                record.expectedTotal = -1
+                task.cancel()
+                return
             } else {
                 record.stopRequested = true
                 task.cancel()
@@ -416,7 +530,27 @@ final class DownloadEngine: NSObject {
             guard let record = self.record(forSessionTask: task) else { return }
             if record.stopRequested { return }
             guard let handle = record.fileHandle else { return }
+            // Over-long segment: the part cannot be trusted, discard
+            // it so a later resume restarts from 0 (§2.1 Problem B).
+            if record.expectedTotal >= 0 && record.info.downloadedBytes + Int64(data.count) > record.expectedTotal {
+                record.stopRequested = true
+                task.cancel()
+                self.closeHandleLocked(record)
+                try? FileManager.default.removeItem(at: self.partURL(for: record.info.request))
+                self.finishLocked(record, state: .failed, errorMessage: "服务器返回了过长的数据")
+                return
+            }
+            // A failed write (disk full) is silent with the
+            // non-throwing API — verify the offset advanced (§2.1 C).
+            let offsetBefore = handle.offsetInFile
             handle.write(data)
+            if handle.offsetInFile != offsetBefore + UInt64(data.count) {
+                record.stopRequested = true
+                task.cancel()
+                self.closeHandleLocked(record)
+                self.finishLocked(record, state: .failed, errorMessage: "写入下载文件失败")
+                return
+            }
             record.info.downloadedBytes += Int64(data.count)
             let downloaded = record.info.downloadedBytes
             let total = record.info.totalBytes
@@ -446,12 +580,17 @@ final class DownloadEngine: NSObject {
             if let error = error {
                 let nsError = error as NSError
                 if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
+                    // 416 restart: re-issue from 0 (§2.1 Problem C).
+                    if record.restartAfter416Pending {
+                        record.restartAfter416Pending = false
+                        self.startHTTPDownloadLocked(record)
+                    }
                     return
                 }
                 self.finishLocked(record, state: .failed, errorMessage: error.localizedDescription)
                 return
             }
-            if record.expectedTotal >= 0 && record.info.downloadedBytes < record.expectedTotal {
+            if record.expectedTotal >= 0 && record.info.downloadedBytes != record.expectedTotal {
                 self.finishLocked(record, state: .failed, errorMessage: "下载不完整，请重试")
                 return
             }
@@ -517,7 +656,19 @@ final class DownloadEngine: NSObject {
                 if stop || stale { break }
                 let chunk = reader.readData(ofLength: 64 * 1024)
                 if chunk.isEmpty { break }
+                let offsetBefore = writer.offsetInFile
                 writer.write(chunk)
+                if writer.offsetInFile != offsetBefore + UInt64(chunk.count) {
+                    // Silent write failure (disk full) — fail instead
+                    // of completing a short file (§2.1 Problem C).
+                    reader.closeFile()
+                    writer.closeFile()
+                    self.syncQueue.async {
+                        guard record.attempt == attempt else { return }
+                        self.finishLocked(record, state: .failed, errorMessage: "写入下载文件失败")
+                    }
+                    return
+                }
                 downloaded += Int64(chunk.count)
                 let (progress, current) = self.syncQueue.sync { (record.progress, record.attempt == attempt) }
                 let total = sourceSize
