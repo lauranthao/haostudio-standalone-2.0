@@ -211,15 +211,17 @@ private struct LiveHistoryListRow: View {
     private var rowCover: some View {
         Group {
             if let url = URL(string: entry.cover), !entry.cover.isEmpty {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    case .failure, .empty:
-                        rowCoverPlaceholder
-                    @unknown default:
-                        rowCoverPlaceholder
-                    }
+                // Shared loader (build 36 item 10 leg 6): 96x54
+                // row thumb — the old AsyncImage decoded the full
+                // original for a 96pt thumb.
+                HaoCachedImage(
+                    urlString: entry.cover,
+                    targetWidth: 96,
+                    targetHeight: 54
+                ) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    rowCoverPlaceholder
                 }
             } else {
                 rowCoverPlaceholder

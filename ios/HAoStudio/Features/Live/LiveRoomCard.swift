@@ -104,15 +104,18 @@ struct LiveRoomCard: View {
     @ViewBuilder
     private var coverImage: some View {
         if let url = liveCoverURL(for: room) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().scaledToFill()
-                case .failure, .empty:
-                    coverPlaceholder
-                @unknown default:
-                    coverPlaceholder
-                }
+            // Shared loader (build 36 item 10 leg 6): 2-column
+            // grid cell is ~173pt wide on a 390pt phone, so
+            // 180x101 covers it — the old AsyncImage decoded the
+            // full platform original.
+            HaoCachedImage(
+                urlString: url.absoluteString,
+                targetWidth: 180,
+                targetHeight: 101
+            ) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                coverPlaceholder
             }
         } else {
             coverPlaceholder
@@ -192,15 +195,17 @@ struct LiveRoomRow: View {
     private var rowCover: some View {
         Group {
             if let url = liveCoverURL(for: room) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    case .failure, .empty:
-                        rowCoverPlaceholder
-                    @unknown default:
-                        rowCoverPlaceholder
-                    }
+                // Shared loader (build 36 item 10 leg 6): 96x54
+                // row thumb — the old AsyncImage decoded the full
+                // original for a 96pt thumb.
+                HaoCachedImage(
+                    urlString: url.absoluteString,
+                    targetWidth: 96,
+                    targetHeight: 54
+                ) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    rowCoverPlaceholder
                 }
             } else {
                 rowCoverPlaceholder

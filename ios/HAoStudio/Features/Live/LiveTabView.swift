@@ -562,15 +562,16 @@ struct LiveFollowCard: View {
     @ViewBuilder
     private var followCover: some View {
         if let url = URL(string: follow.cover), !follow.cover.isEmpty {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().scaledToFill()
-                case .failure, .empty:
-                    followCoverPlaceholder
-                @unknown default:
-                    followCoverPlaceholder
-                }
+            // Shared loader (build 36 item 10 leg 6): 140pt-wide
+            // 16:9 card — decode 140x79, not the original.
+            HaoCachedImage(
+                urlString: follow.cover,
+                targetWidth: 140,
+                targetHeight: 79
+            ) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                followCoverPlaceholder
             }
         } else {
             followCoverPlaceholder
@@ -622,15 +623,16 @@ struct LiveHistoryCard: View {
     @ViewBuilder
     private var historyCover: some View {
         if let url = URL(string: entry.cover), !entry.cover.isEmpty {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().scaledToFill()
-                case .failure, .empty:
-                    historyCoverPlaceholder
-                @unknown default:
-                    historyCoverPlaceholder
-                }
+            // Shared loader (build 36 item 10 leg 6): 140pt-wide
+            // 16:9 card — decode 140x79, not the original.
+            HaoCachedImage(
+                urlString: entry.cover,
+                targetWidth: 140,
+                targetHeight: 79
+            ) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                historyCoverPlaceholder
             }
         } else {
             historyCoverPlaceholder

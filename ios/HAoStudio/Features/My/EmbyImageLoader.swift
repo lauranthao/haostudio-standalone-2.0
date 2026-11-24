@@ -10,10 +10,19 @@
 //
 // - Memory cache only (NSCache, 200 images): disk caching of
 //   authenticated images would need the token on read-back, so
-//   there is none — a cold start re-fetches posters.
+//   there is none — a cold start re-fetches posters. Disk
+//   caching waits on verifying the Emby image response headers
+//   (Cache-Control / ETag) — build 36 item 10 leg 6 follow-up,
+//   not this file.
 // - 401 / any failure / bad data → completion(nil), no retry loop.
 //   A dead poster is a placeholder, never a spinner that retries
 //   forever.
+// - Cost-bounded (build 36 item 10 leg 6): the old count-only
+//   cap (200, no cost) theoretically allowed ~190MB (400x600
+//   posters decode to ~0.96MB each). totalCostLimit is now
+//   50MB (HaoImagePolicy: ~54 posters resident); each image is
+//   stored with its decoded-byte cost, countLimit 200 stays as
+//   a backstop.
 // - No `EmbyClient.shared` exists (the client is built per
 //   config), so each load builds a short-lived client from the
 //   stored config to read its `imageHeaders` — same credential
@@ -29,6 +38,7 @@ final class EmbyImageLoader {
 
     init() {
         cache.countLimit = 200
+        cache.totalCostLimit = HaoImagePolicy.embyMemoryCacheTotalCostLimit
     }
 
     /// Load one Emby image. `config` overrides the stored config
@@ -81,10 +91,25 @@ final class EmbyImageLoader {
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
-            self.cache.setObject(image, forKey: clean as NSString)
+            self.cache.setObject(image, forKey: clean as NSString, cost: Self.decodedCost(of: image))
             DispatchQueue.main.async { completion(image) }
         }
         task.resume()
+    }
+
+    /// Decoded RGBA8 bytes for the cost budget: from the backing
+    /// bitmap when there is one, else estimated from the point
+    /// size x scale (a cost of 0 would let an image bypass the
+    /// totalCostLimit entirely).
+    private static func decodedCost(of image: UIImage) -> Int {
+        if let cgImage = image.cgImage {
+            return HaoImagePolicy.decodedBytes(
+                widthPixels: cgImage.width, heightPixels: cgImage.height
+            )
+        }
+        let widthPixels = Int((image.size.width * image.scale).rounded())
+        let heightPixels = Int((image.size.height * image.scale).rounded())
+        return HaoImagePolicy.decodedBytes(widthPixels: widthPixels, heightPixels: heightPixels)
     }
 
     /// Drop the memory cache (Settings "清理缓存" also clears this;

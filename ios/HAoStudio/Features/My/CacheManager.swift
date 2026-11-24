@@ -8,12 +8,13 @@
 //   a `.part` file is the resume state of a paused / interrupted
 //   download — see Services/DownloadEngine/DownloadEngine.swift).
 //
-// Deliberately NOT counted: the Emby image memory cache
-// (NSCache in EmbyImageLoader — RAM, not disk), the music / video
-// JSON collections (user data, not cache), and completed downloads
-// (user files). Clearing removes the HTTP cache and the `.part`
-// files only; completed downloads are never deleted by a cache
-// clear.
+// Deliberately NOT counted: the music / video JSON collections
+// (user data, not cache), and completed downloads (user files).
+// Clearing removes the HTTP cache, the image memory caches
+// (HaoImageLoader + EmbyImageLoader — RAM, not disk; the Emby
+// one was previously defined but never called from anywhere),
+// and the `.part` files only; completed downloads are never
+// deleted by a cache clear.
 
 import Foundation
 
@@ -32,14 +33,17 @@ enum CacheManager {
         }
     }
 
-    /// Delete the HTTP cache and all `.part` files. Completion
-    /// fires on the main queue, after the deletes.
+    /// Delete the HTTP cache, the image memory caches, and all
+    /// `.part` files. Completion fires on the main queue, after
+    /// the deletes.
     static func clearAll(
         documentsURL: URL? = nil,
         completion: @escaping () -> Void
     ) {
         DispatchQueue.global(qos: .utility).async {
             URLCache.shared.removeAllCachedResponses()
+            HaoImageLoader.shared.clearMemoryCache()
+            EmbyImageLoader.shared.clearCache()
             let docs = documentsURL ?? LocalStore.documentsDirectory()
             let dir = docs.appendingPathComponent(DownloadEngine.downloadSubdir)
             let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []

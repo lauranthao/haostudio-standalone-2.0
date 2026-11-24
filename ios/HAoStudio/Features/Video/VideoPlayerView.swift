@@ -1668,11 +1668,20 @@ struct VideoPlayerSurface: View {
             if let videoView = videoPlayer.engine?.videoView {
                 VideoDriverSurfaceView(view: videoView)
             } else if let url = videoPlayer.detail?.item.coverURL {
-                AsyncImage(url: url) { phase in
-                    if case .success(let image) = phase {
-                        image.resizable().scaledToFill()
-                            .opacity(0.35)
-                    }
+                // Shared loader (build 36 item 10 leg 6): the same
+                // poster the detail page already loaded, downsampled
+                // to screen size. Failure shows nothing here — the
+                // "暂无画面" block below explains the state.
+                let target = HaoImageLoader.fullScreenTargetPoints
+                HaoCachedImage(
+                    urlString: url.absoluteString,
+                    targetWidth: CGFloat(target.width),
+                    targetHeight: CGFloat(target.height)
+                ) { image in
+                    image.resizable().scaledToFill()
+                        .opacity(0.35)
+                } placeholder: {
+                    EmptyView()
                 }
             }
             if !videoPlayer.isEngineAttached {

@@ -297,16 +297,25 @@ struct MusicPlayerView: View {
 
     private var playerBackground: some View {
         ZStack {
-            if let cover = playerVM.currentSong?.cover,
-               let url = URL(string: cover), !cover.isEmpty {
-                AsyncImage(url: url) { phase in
-                    if case .success(let image) = phase {
-                        image.resizable().scaledToFill()
-                            .blur(radius: 60)
-                            .scaleEffect(1.2)
-                    } else {
-                        Color.black
-                    }
+            if let cover = playerVM.currentSong?.cover, !cover.isEmpty {
+                // Shared loader (build 36 item 10 leg 6): the same
+                // cover the main cover view loads, downsampled to
+                // screen size — one download for both, via the
+                // disk cache, instead of two independent full-size
+                // fetches. The loader also upgrades http -> https,
+                // which this path never did (an http cover silently
+                // stayed black here while the main cover loaded).
+                let target = HaoImageLoader.fullScreenTargetPoints
+                HaoCachedImage(
+                    urlString: cover,
+                    targetWidth: CGFloat(target.width),
+                    targetHeight: CGFloat(target.height)
+                ) { image in
+                    image.resizable().scaledToFill()
+                        .blur(radius: 60)
+                        .scaleEffect(1.2)
+                } placeholder: {
+                    Color.black
                 }
             } else {
                 Color.black

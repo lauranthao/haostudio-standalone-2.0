@@ -386,15 +386,18 @@ struct VideoDetailContentView: View {
                 if viewModel.source == .emby {
                     EmbyPosterImage(urlString: viewModel.item.coverURL?.absoluteString ?? "", cornerRadius: 0)
                 } else if let url = viewModel.item.coverURL {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image.resizable().scaledToFill()
-                        case .failure, .empty:
-                            coverPlaceholder
-                        @unknown default:
-                            coverPlaceholder
-                        }
+                    // Shared loader (build 36 item 10 leg 6):
+                    // full-width x 264pt header, downsampled to
+                    // screen width — the old AsyncImage decoded
+                    // the full original.
+                    HaoCachedImage(
+                        urlString: url.absoluteString,
+                        targetWidth: UIScreen.main.bounds.width,
+                        targetHeight: 264
+                    ) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        coverPlaceholder
                     }
                 } else {
                     coverPlaceholder
