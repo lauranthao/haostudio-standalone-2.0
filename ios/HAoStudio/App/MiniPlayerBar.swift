@@ -132,7 +132,7 @@ struct MiniPlayerBar: View {
                         size: HaoLayout.miniCoverSize, cornerRadius: 7)
                     VStack(alignment: .leading, spacing: 2) {
                         // Apple Music mini: title 15 / artist 13
-                        // in the 64pt bar. This strip is 50pt, so
+                        // in the 64pt bar. This strip is 44pt, so
                         // 14 / 12 — one step up from the old
                         // 12 / 10, still fitting the 36 cover.
                         Text(item.title)
