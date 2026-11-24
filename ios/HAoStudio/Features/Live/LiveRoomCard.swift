@@ -90,6 +90,10 @@ struct LiveRoomCard: View {
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             if room.isLive {
+                // O-D3: async confirmation flips isLive false ->
+                // true; the badge fades in (0.2s ease-out) instead
+                // of popping. Removal stays instant (.identity):
+                // disappearance behaviour is unchanged.
                 Text("LIVE")
                     .font(.haoBadge)
                     .foregroundStyle(.white)
@@ -97,8 +101,10 @@ struct LiveRoomCard: View {
                     .padding(.vertical, 3)
                     .background(theme.liveRed, in: Capsule())
                     .padding(6)
+                    .transition(.asymmetric(insertion: .opacity, removal: .identity))
             }
         }
+        .animation(.easeOut(duration: 0.2), value: room.isLive)
     }
 
     @ViewBuilder
@@ -152,18 +158,22 @@ struct LiveRoomRow: View {
                         .lineLimit(1)
                     HStack(spacing: 6) {
                         if room.isLive {
+                            // O-D3: fade in on async confirmation
+                            // (0.2s ease-out); removal stays instant.
                             Text("LIVE")
                                 .font(.haoBadge)
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3)
                                 .background(theme.liveRed, in: Capsule())
+                                .transition(.asymmetric(insertion: .opacity, removal: .identity))
                         }
                         Text(room.streamer.isEmpty ? room.platform.displayName : room.streamer)
                             .font(.haoFootnote)
                             .foregroundStyle(theme.textSecondary)
                             .lineLimit(1)
                     }
+                    .animation(.easeOut(duration: 0.2), value: room.isLive)
                     if !liveWatchingText(room.onlineCount).isEmpty {
                         HStack(spacing: 4) {
                             Image(systemName: "flame.fill")

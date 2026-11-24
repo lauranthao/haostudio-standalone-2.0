@@ -380,7 +380,11 @@ struct SettingsGroupsView: View {
     private var glassIntensityRow: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("液态玻璃强度")
+                // Chrome O3: the slider only tunes card / sheet
+                // surfaces — the tab bar and mini player keep the
+                // system glass strength, so the label must not
+                // promise whole-app glass.
+                Text("卡片玻璃强度")
                     .font(.haoBody)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
@@ -400,6 +404,9 @@ struct SettingsGroupsView: View {
                 in: 0.3...1.0
             )
             .tint(theme.accent)
+            Text("仅调整卡片、浮层等表面的玻璃效果；底栏与迷你播放器保持系统玻璃强度不变。")
+                .font(.haoFootnote)
+                .foregroundStyle(theme.textSecondary)
         }
     }
 

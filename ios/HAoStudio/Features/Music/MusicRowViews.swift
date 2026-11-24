@@ -520,7 +520,9 @@ struct MusicEmptyState: View {
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: icon)
-                .font(.system(size: 28, weight: .regular))
+                // .title is 28pt regular: pixel-identical to the
+                // old literal, same fix as D7 (EmbyPosterImage).
+                .font(.title)
                 .foregroundStyle(theme.textMuted)
             Text(title)
                 .font(.haoSubheadStrong)
