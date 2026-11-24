@@ -117,14 +117,22 @@ final class LXScriptFileStore {
     /// only pass ids the user has not deleted (LXEngine skips
     /// `deletedBundledIds`). Returns the file URL when the file
     /// exists afterwards, nil when there is no bundled code to
-    /// seed from and no file yet. When `bundleCode` is nil the id
-    /// no longer ships: return nil even if an orphan file exists
+    /// seed from and no file yet. When `bundleCode` is nil AND the
+    /// id is a removed bundled id (`LxBundledScript.removedBundledIDs`,
+    /// e.g. `tang`): return nil even if an orphan file exists
     /// — the orphan must never be treated as a seeded script
     /// (LXEngine would load it) — and leave the file untouched;
-    /// deleting it is `removeOrphanBundledFile`'s job.
+    /// deleting it is `removeOrphanBundledFile`'s job. A nil bundle
+    /// code for any other id (non-bundled user/test script, e.g.
+    /// `fake1`) is NOT a removal: it falls through to the decision
+    /// below, so its existing on-disk file still loads.
     @discardableResult
     func seedOrRefresh(id: String, bundleCode: String?) -> URL? {
-        guard bundleCode != nil else { return nil }
+        // Removed bundled id only: a nil bundle code alone does
+        // not mean "removed" — non-bundled ids (user scripts, test
+        // fakes like `fake1`) load their on-disk file through this
+        // same path, so only a removed bundled id returns nil here.
+        if bundleCode == nil && LxBundledScript.removedBundledIDs.contains(id) { return nil }
         let url = fileURL(forScriptID: id)
         let existing = try? String(contentsOf: url, encoding: .utf8)
         let storedHash = recordedSeedHash(for: id)
