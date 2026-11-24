@@ -112,7 +112,7 @@ struct EmbyTabView: View {
                     )
                     Spacer()
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 16)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
@@ -135,12 +135,12 @@ struct EmbyTabView: View {
                                 title: "媒体库是空的",
                                 note: "该媒体库下没有影片。"
                             )
-                            .padding(.horizontal, 24)
+                            .padding(.horizontal, 16)
                         } else {
                             VideoPosterGrid(items: viewModel.items, isEmby: true) { item in
                                 onSelect(item)
                             }
-                            .padding(.horizontal, 24)
+                            .padding(.horizontal, 16)
                             .padding(.top, 12)
                             if viewModel.hasMore {
                                 ProgressView()
@@ -168,7 +168,7 @@ struct EmbyTabView: View {
                     libraryChip(id: library.id, name: library.name)
                 }
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 16)
         }
     }
 
@@ -192,9 +192,9 @@ struct EmbyTabView: View {
     private var genreStrip: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("分类")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(theme.textPrimary)
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 16)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(viewModel.genres, id: \.self) { genre in
@@ -212,7 +212,7 @@ struct EmbyTabView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 16)
             }
         }
     }

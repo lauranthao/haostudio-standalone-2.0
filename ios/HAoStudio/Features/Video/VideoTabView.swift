@@ -84,7 +84,7 @@ struct VideoTabView: View {
                     Text("Emby").tag("emby")
                 }
                 .pickerStyle(.segmented)
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 16)
                 .padding(.top, 8)
                 .onChange(of: mode) { newMode in
                     VideoLibraryStore.setTabMode(newMode)
@@ -132,12 +132,12 @@ struct VideoTabView: View {
                 // link): drives minimize / restore as this tab scrolls.
                 HaoChromeScrollAnchor()
                 searchEntry
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, 16)
                     .padding(.top, 12)
                 categoryStrip
                     .padding(.top, 12)
                 libraryRow
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, 16)
                     .padding(.top, 12)
                 if !viewModel.continueWatching.isEmpty {
                     continueSection
@@ -210,7 +210,7 @@ struct VideoTabView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 16)
         }
     }
 
@@ -239,17 +239,17 @@ struct VideoTabView: View {
     }
 
     private var continueSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("继续观看")
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 Button("全部") { path.append(.history) }
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(theme.accent)
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 16)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(viewModel.continueWatching) { entry in
@@ -258,20 +258,20 @@ struct VideoTabView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 16)
             }
         }
     }
 
     private func homeRowSection(_ row: VideoHomeRow) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(row.title)
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 16)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(row.items) { item in
@@ -280,10 +280,10 @@ struct VideoTabView: View {
                         )) {
                             path.append(.detail(item))
                         }
-                        .frame(width: 110)
+                        .frame(width: 120)
                     }
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 16)
             }
         }
     }
@@ -303,7 +303,7 @@ struct VideoContinueCard: View {
                 VideoPosterCardImage(item: entry.item, size: 64)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(entry.item.title)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(theme.textPrimary)
                         .lineLimit(1)
                     Text(entry.episodeName.isEmpty ? "正片" : entry.episodeName)
@@ -329,11 +329,11 @@ struct VideoContinueCard: View {
                 }
                 Spacer()
             }
-            .padding(10)
+            .padding(12)
             .frame(width: 260, alignment: .leading)
-            .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .strokeBorder(theme.hairline, lineWidth: 0.5)
             }
         }
@@ -368,11 +368,11 @@ struct VideoPosterCardImage: View {
             }
         }
         .frame(width: size * 2 / 3, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var placeholder: some View {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
             .fill(theme.surfaceStrong)
             .overlay {
                 Image(systemName: "film")

@@ -1000,7 +1000,7 @@ struct VideoPlayerView: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 40, height: 40)
                     .background(Color.black.opacity(0.45), in: Circle())
             }
             .buttonStyle(.plain)
@@ -1024,7 +1024,7 @@ struct VideoPlayerView: View {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 40, height: 40)
                     .background(Color.black.opacity(0.45), in: Circle())
             }
             .buttonStyle(.plain)
@@ -1077,7 +1077,7 @@ struct VideoPlayerView: View {
                     }
                 }
             )
-            HStack(spacing: 20) {
+            HStack(spacing: 24) {
                 Text(videoTimeText(seconds: videoPlayer.dragPosition ?? videoPlayer.position))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white)
@@ -1095,18 +1095,18 @@ struct VideoPlayerView: View {
                 }
                 Button(action: { videoPlayer.togglePlayPause() }) {
                     Image(systemName: videoPlayer.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(.system(size: 24, weight: .semibold))
                         .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 48, height: 48)
                 }
                 .buttonStyle(.plain)
                 Button(action: { isLandscape.toggle() }) {
                     Image(systemName: isLandscape
                           ? "arrow.down.right.and.arrow.up.left"
                           : "arrow.up.left.and.arrow.down.right")
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(.system(size: 24, weight: .semibold))
                         .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 48, height: 48)
                 }
                 .buttonStyle(.plain)
             }
@@ -1187,8 +1187,8 @@ struct VideoSeekBar: View {
                     .frame(width: fill, height: dragging ? 6 : 4)
                 Circle()
                     .fill(Color.white)
-                    .frame(width: dragging ? 16 : 14, height: dragging ? 16 : 14)
-                    .offset(x: max(0, fill - (dragging ? 8 : 7)))
+                    .frame(width: dragging ? 18 : 16, height: dragging ? 18 : 16)
+                    .offset(x: max(0, fill - (dragging ? 9 : 8)))
             }
             .frame(height: 44)
             .contentShape(Rectangle())

@@ -27,7 +27,7 @@ struct VideoHistoryView: View {
                     ForEach(entries) { entry in
                         Button(action: { selectedItem = entry.item }) {
                             HStack(spacing: 12) {
-                                VideoPosterCardImage(item: entry.item, size: 72)
+                                VideoPosterCardImage(item: entry.item, size: 80)
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(entry.item.title)
                                         .font(.system(size: 15, weight: .semibold))

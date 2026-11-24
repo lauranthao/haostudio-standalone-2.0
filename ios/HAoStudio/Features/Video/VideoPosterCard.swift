@@ -34,7 +34,7 @@ struct VideoPosterCard: View {
 
     var body: some View {
         Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 posterImage
                     .overlay(alignment: .topLeading) {
                         if isWatched {
@@ -59,11 +59,11 @@ struct VideoPosterCard: View {
                         }
                     }
                 Text(item.title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1)
                 Text(metaLine)
-                    .font(.system(size: 12))
+                    .font(.system(size: 13))
                     .foregroundStyle(theme.textMuted)
                     .lineLimit(1)
             }
@@ -102,15 +102,15 @@ struct VideoPosterCard: View {
             }
         }
         .aspectRatio(2.0 / 3.0, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(theme.hairline, lineWidth: 0.5)
         }
     }
 
     private var placeholder: some View {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
             .fill(theme.surfaceStrong)
             .overlay {
                 Image(systemName: "film")
@@ -136,7 +136,7 @@ struct VideoPosterGrid: View {
     ]
 
     var body: some View {
-        LazyVGrid(columns: columns, spacing: 16) {
+        LazyVGrid(columns: columns, spacing: 20) {
             ForEach(items) { item in
                 VideoPosterCard(
                     item: item,

@@ -89,12 +89,12 @@ struct EmbyCategoryView: View {
                     title: "这个分类下没有内容",
                     note: "Emby 没有返回该分类的影片。"
                 )
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 16)
             } else {
                 VideoPosterGrid(items: viewModel.items, isEmby: true) { item in
                     onSelect(item)
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 16)
                 .padding(.top, 12)
                 if viewModel.hasMore {
                     ProgressView()
