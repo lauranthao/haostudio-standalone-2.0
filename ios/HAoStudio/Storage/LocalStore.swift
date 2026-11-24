@@ -52,10 +52,20 @@ enum LocalStore {
     }
 
     /// Save a Codable collection atomically.
-    static func saveCollection<T: Encodable>(named name: String, value: T) {
+    /// Returns false when the encode or the write failed (callers
+    /// that keep a second copy — e.g. EmbyConfigStore, whose
+    /// credential lives in the Keychain — must know the JSON did
+    /// not land). @discardableResult: most callers ignore it.
+    @discardableResult
+    static func saveCollection<T: Encodable>(named name: String, value: T) -> Bool {
         let url = collectionURL(named: name)
-        guard let data = try? JSONEncoder().encode(value) else { return }
-        try? data.write(to: url, options: [.atomic])
+        guard let data = try? JSONEncoder().encode(value) else { return false }
+        do {
+            try data.write(to: url, options: [.atomic])
+            return true
+        } catch {
+            return false
+        }
     }
 }
 

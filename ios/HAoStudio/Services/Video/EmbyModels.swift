@@ -800,10 +800,28 @@ enum EmbyConfigStore {
     @discardableResult
     static func save(_ config: EmbyServerConfig) -> Bool {
         let credential = config.authToken
+        // JSON first, Keychain second: the old order wrote the
+        // credential to the Keychain and then the JSON, so a
+        // failed JSON write left a live credential for a config
+        // the file never recorded — and a failed Keychain write
+        // after a JSON write left the file claiming a credential
+        // the Keychain does not hold. Either way the two stores
+        // disagree. Now a failed JSON write returns before the
+        // Keychain is touched, and a failed Keychain write
+        // restores the previous JSON (or an empty config when
+        // there was none) before returning false.
+        let previous = load()
+        guard LocalStore.saveCollection(named: collectionName, value: config.withoutCredentials()) else { return false }
         if !credential.isEmpty {
-            guard KeychainStore.saveEmbyApiKey(credential) else { return false }
+            guard KeychainStore.saveEmbyApiKey(credential) else {
+                if let previous = previous {
+                    LocalStore.saveCollection(named: collectionName, value: previous.withoutCredentials())
+                } else {
+                    LocalStore.saveCollection(named: collectionName, value: EmbyServerConfig())
+                }
+                return false
+            }
         }
-        LocalStore.saveCollection(named: collectionName, value: config.withoutCredentials())
         return true
     }
 
