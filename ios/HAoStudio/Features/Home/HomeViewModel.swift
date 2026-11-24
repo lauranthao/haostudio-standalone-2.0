@@ -30,8 +30,10 @@
 // implementation in this checkout (the protocol has no conformer;
 // the live tab's gateway is nil), so the gateway's fetchRoomDetail
 // cannot be used. One reload checks at most the 10 merged rooms,
-// each with an 8 s timeout; a failure or timeout leaves isLive
-// false (unknown), never blocks reload, never throws to the UI.
+// each with an 8 s timeout; a failure or timeout leaves the
+// previous badge value alone (unknown), never blocks reload, never
+// throws to the UI — only a successful "off air" answer clears a
+// badge.
 //
 // The stores are plain value-access layers (not ObservableObject):
 // this view model owns the published state and reload() reads them.
@@ -52,8 +54,11 @@ struct HomeLiveItem: Equatable, Identifiable {
     var nick: String
     var cover: String
     /// True only when a room-info check confirmed the room is on
-    /// air. False also means "unknown" — never show a LIVE badge
-    /// for an unconfirmed room.
+    /// air. False means "not confirmed live" — off air, or the
+    /// check never ran / failed. A confirmed-true value survives a
+    /// reload until a later check positively reports the room off
+    /// air (see HomeLiveStatus), so the badge does not flicker off
+    /// on every reload while the check is still in flight.
     var isLive: Bool
 
     init(
@@ -86,11 +91,22 @@ struct HomeLiveItem: Equatable, Identifiable {
     }
 }
 
+/// Live-status answer for one room. The old Bool conflated
+/// "room-info succeeded and the room is off air" with "the check
+/// failed / timed out", so a failed check and a real switch-off
+/// looked identical — the view model could only ever clear the
+/// badge by rebuilding the list, which flickered every reload.
+/// Tri-state now: `.live` sets the badge, `.offline` clears it,
+/// `.unknown` keeps whatever the UI already shows.
+enum HomeLiveStatus {
+    case live
+    case offline
+    case unknown
+}
+
 /// Live-status check: given one home live item, answer whether the
-/// room is on air right now. The completion may fire on any queue;
-/// false also covers "unknown / check failed". The view model only
-/// ever applies `true` — an unconfirmed room keeps isLive false.
-typealias HomeLiveStatusChecker = (HomeLiveItem, @escaping (Bool) -> Void) -> Void
+/// room is on air right now. The completion may fire on any queue.
+typealias HomeLiveStatusChecker = (HomeLiveItem, @escaping (HomeLiveStatus) -> Void) -> Void
 
 /// One-shot gate so a room-info answer and its timeout cannot both
 /// report for the same room.
@@ -115,6 +131,11 @@ final class HomeViewModel: ObservableObject {
     @Published private(set) var hotLive: [HomeLiveItem] = []
     @Published private(set) var daily: [MusicSong] = []
     @Published private(set) var recentPlays: [MusicSong] = []
+    /// The full recent list (up to MusicLibraryStore.maxRecent),
+    /// for the "全部" page. `recentPlays` stays capped at the
+    /// section limit for the home section itself — the two used to
+    /// be the same array, so "全部" showed the same 10 rows.
+    @Published private(set) var allRecentPlays: [MusicSong] = []
 
     /// Per-section cap for every home section.
     static let sectionLimit = 10
@@ -134,8 +155,10 @@ final class HomeViewModel: ObservableObject {
     }
 
     /// Synchronous local reads for all five sections. Live-status
-    /// confirmation runs after, through the injected checker, and
-    /// only ever flips isLive to true.
+    /// confirmation runs after, through the injected checker: a
+    /// confirmed-live room keeps its badge across the rebuild, a
+    /// positively-offline answer clears it, and a failed / timed-out
+    /// check leaves the previous value alone.
     func reload() {
         let videoHistory = VideoLibraryStore.history()
         let recent = MusicLibraryStore.getRecent()
@@ -165,12 +188,24 @@ final class HomeViewModel: ObservableObject {
     ) {
         continueWatching = Self.continueWatchingEntries(from: videoHistory)
         recentPlays = Array(recent.prefix(Self.sectionLimit))
+        allRecentPlays = recent
         if let song = Self.resumeSong(recent: recent, listenLog: listenLog, resumeMap: resumeMap) {
             continueListening = [song]
         } else {
             continueListening = Array(recent.prefix(1))
         }
+        // Carry a confirmed-live badge across the rebuild: the
+        // merged list is rebuilt fresh on every reload, and
+        // resetting isLive to false here made every LIVE badge
+        // blink off until the room-info answers came back (up to
+        // 8 s per room — visible on every tab switch and every
+        // favourite tap). A room that went off air loses the badge
+        // when its fresh check answers `.offline` below, not here.
+        let previouslyLive = Set(hotLive.filter { $0.isLive }.map { $0.id })
         hotLive = Self.hotLiveItems(follows: follows, history: liveHistory)
+        for index in hotLive.indices where previouslyLive.contains(hotLive[index].id) {
+            hotLive[index].isLive = true
+        }
         daily = Array(dailyPicks.prefix(Self.sectionLimit))
         refreshLiveStatus()
     }
@@ -310,19 +345,20 @@ final class HomeViewModel: ObservableObject {
 
     /// Confirm live status for the rooms in hotLive (at most 10),
     /// through the injected checker. A late answer (older reload)
-    /// is dropped; `false` (unknown / failed) changes nothing.
+    /// is dropped; `.unknown` (failed / timed out) changes nothing,
+    /// so a transient network failure never blinks a good badge off.
     private func refreshLiveStatus() {
         guard let checker = liveStatusChecker, !hotLive.isEmpty else { return }
         liveStatusGeneration += 1
         let generation = liveStatusGeneration
         for item in hotLive {
-            checker(item) { [weak self] isLive in
-                guard isLive else { return }
+            checker(item) { [weak self] status in
+                guard status != .unknown else { return }
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
                     guard self.liveStatusGeneration == generation else { return }
                     if let index = self.hotLive.firstIndex(where: { $0.id == item.id }) {
-                        self.hotLive[index].isLive = true
+                        self.hotLive[index].isLive = (status == .live)
                     }
                 }
             }
@@ -332,19 +368,22 @@ final class HomeViewModel: ObservableObject {
     /// Default checker: the existing per-platform room-info call
     /// (LiveSites.resolver(for:) + roomInfo), one call per room,
     /// 8 s timeout. Unknown platform strings never hit the
-    /// network; failures and timeouts answer false (unknown).
+    /// network; failures and timeouts answer `.unknown`. A
+    /// successful room-info answer reports the room's real state
+    /// (`.live` / `.offline`) — only that positively clears a
+    /// badge, never a failed check.
     static func defaultLiveStatusChecker(
         item: HomeLiveItem,
-        completion: @escaping (Bool) -> Void
+        completion: @escaping (HomeLiveStatus) -> Void
     ) {
         guard let platform = LivePlatform(rawValue: item.platform) else {
-            completion(false)
+            completion(.unknown)
             return
         }
         let resolver = LiveSites.resolver(for: platform)
         let gate = HomeLiveStatusGate()
         let timeout = DispatchWorkItem {
-            if gate.claim() { completion(false) }
+            if gate.claim() { completion(.unknown) }
         }
         DispatchQueue.main.asyncAfter(
             deadline: .now() + liveStatusTimeoutSeconds, execute: timeout)
@@ -353,9 +392,9 @@ final class HomeViewModel: ObservableObject {
             guard gate.claim() else { return }
             switch result {
             case .success(let room):
-                completion(room.isLive)
+                completion(room.isLive ? .live : .offline)
             case .failure:
-                completion(false)
+                completion(.unknown)
             }
         }
     }
