@@ -129,6 +129,7 @@ enum MyBackgroundColor {
 
 struct MyView: View {
     @Environment(\.haoTheme) private var theme
+    @EnvironmentObject private var settings: SettingsStore
 
     @State private var counts = MyEntryCounts()
     @State private var selectedLiveRoom: LiveRoom?
@@ -158,30 +159,32 @@ struct MyView: View {
     // MARK: - My entries
 
     private var entriesSection: some View {
-        Section("我的") {
-            NavigationLink(destination: MyPlaylistsView()) {
-                entryRow(title: "我的歌单", count: counts.playlists)
-            }
-            NavigationLink(destination: MusicFavouritesView()) {
-                entryRow(title: "音乐收藏", count: counts.favourites)
-            }
-            NavigationLink(destination: MyRecentPlaysView()) {
-                entryRow(title: "最近播放", count: counts.recent)
-            }
-            NavigationLink(destination: MusicDownloadsView()) {
-                entryRow(title: "我的下载", count: counts.downloads)
-            }
-            NavigationLink(destination: VideoFavsView()) {
-                entryRow(title: "影视收藏", count: counts.videoFavourites)
-            }
-            NavigationLink(destination: VideoHistoryView()) {
-                entryRow(title: "影视历史", count: counts.videoHistory)
-            }
-            NavigationLink(destination: LiveFollowsView(onSelect: openLiveRoom)) {
-                entryRow(title: "我的关注", count: counts.liveFollows)
-            }
-            NavigationLink(destination: LiveHistoryView(onSelect: openLiveRoom)) {
-                entryRow(title: "直播历史", count: counts.liveHistory)
+        Section(header: SettingsSectionHeader(section: .my)) {
+            if settings.sectionExpanded(SettingsSection.my.rawValue) {
+                NavigationLink(destination: MyPlaylistsView()) {
+                    entryRow(title: "我的歌单", count: counts.playlists)
+                }
+                NavigationLink(destination: MusicFavouritesView()) {
+                    entryRow(title: "音乐收藏", count: counts.favourites)
+                }
+                NavigationLink(destination: MyRecentPlaysView()) {
+                    entryRow(title: "最近播放", count: counts.recent)
+                }
+                NavigationLink(destination: MusicDownloadsView()) {
+                    entryRow(title: "我的下载", count: counts.downloads)
+                }
+                NavigationLink(destination: VideoFavsView()) {
+                    entryRow(title: "影视收藏", count: counts.videoFavourites)
+                }
+                NavigationLink(destination: VideoHistoryView()) {
+                    entryRow(title: "影视历史", count: counts.videoHistory)
+                }
+                NavigationLink(destination: LiveFollowsView(onSelect: openLiveRoom)) {
+                    entryRow(title: "我的关注", count: counts.liveFollows)
+                }
+                NavigationLink(destination: LiveHistoryView(onSelect: openLiveRoom)) {
+                    entryRow(title: "直播历史", count: counts.liveHistory)
+                }
             }
         }
     }
