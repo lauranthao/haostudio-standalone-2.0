@@ -72,7 +72,7 @@ final class MusicSearchAPI {
                 guard let cover = coverByKey[key], let url = URL(string: cover) else { return track }
                 return MusicTrack(id: track.id, title: track.title, artist: track.artist,
                                   album: track.album, coverURL: url, duration: track.duration,
-                                  sourceID: track.sourceID)
+                                  sourceID: track.sourceID, trialOnly: track.trialOnly)
             }
             // Stable wy+tx-first order (arrival order within a group).
             let groupOrder: [String: Int] = ["wy": 0, "tx": 1, "kg": 2, "kw": 3, "mg": 4]
@@ -156,6 +156,30 @@ final class MusicSearchAPI {
         }
     }
 
+    /// Trial-only flag for one NetEase cloudsearch song map (build
+    /// 36 item 3, pure for tests): `fee` (0 = free, 1 = VIP, 4 =
+    /// paid album, 8 = VIP-only per the build-35 search audit) and
+    /// `privilege.dlLevel` / `plLevel` (`none` = no full playback
+    /// for a no-login client). A missing field never flags.
+    static func wyTrialOnly(_ song: [String: Any]) -> Bool {
+        let privilege = MusicAPIJSON.asMap(song["privilege"])
+        return PreviewAudioClassifier.isTrialOnlyTrack(
+            fee: (song["fee"] as? NSNumber)?.intValue,
+            dlLevel: privilege.map { MusicAPIJSON.asString($0["dlLevel"]) },
+            plLevel: privilege.map { MusicAPIJSON.asString($0["plLevel"]) },
+            payPlay: nil)
+    }
+
+    /// Trial-only flag for one QQ search song map (build 36 item 3,
+    /// pure for tests): `pay.payplay` == 1 means pay-to-play, i.e.
+    /// trial-only for a no-login client.
+    static func txTrialOnly(_ song: [String: Any]) -> Bool {
+        let pay = MusicAPIJSON.asMap(song["pay"])
+        return PreviewAudioClassifier.isTrialOnlyTrack(
+            fee: nil, dlLevel: nil, plLevel: nil,
+            payPlay: pay.map { MusicAPIJSON.asInt($0["payplay"]) == 1 })
+    }
+
     /// NetEase: POST music.163.com/api/cloudsearch/pc, type=1.
     func searchWy(_ query: String, limit: Int, token: LXCancelToken? = nil, completion: @escaping ([MusicTrack]) -> Void) {
         client.postFormJson(
@@ -171,6 +195,9 @@ final class MusicSearchAPI {
                 let artists = MusicAPIJSON.asList(x["ar"])
                 let album = MusicAPIJSON.asMap(x["al"])
                 let cover = MusicText.coverHi(MusicAPIJSON.asString(album?["picUrl"]), platform: "wy")
+                // Build 36 item 3: NetEase marks paywalled tracks in
+                // the search payload itself (see `wyTrialOnly`).
+                let trialOnly = MusicSearchAPI.wyTrialOnly(x)
                 return MusicTrack(
                     id: MusicAPIJSON.asString(x["id"]),
                     title: MusicAPIJSON.asString(x["name"]),
@@ -178,7 +205,8 @@ final class MusicSearchAPI {
                     album: MusicAPIJSON.asString(album?["name"]),
                     coverURL: URL(string: cover),
                     duration: (Double(durMs) / 1000.0).rounded(),
-                    sourceID: "wy")
+                    sourceID: "wy",
+                    trialOnly: trialOnly)
             })
         }
     }
@@ -207,6 +235,9 @@ final class MusicSearchAPI {
                 let albummid = MusicAPIJSON.asString(x["albummid"])
                 let cover = albummid.isEmpty ? "" : MusicText.coverHi(
                     "https://y.gtimg.cn/music/photo_new/T002R300x300M000\(albummid).jpg", platform: "tx")
+                // Build 36 item 3: QQ marks pay-to-play tracks with
+                // `pay.payplay` == 1 (see `txTrialOnly`).
+                let trialOnly = MusicSearchAPI.txTrialOnly(x)
                 return MusicTrack(
                     id: MusicAPIJSON.asString(x["songmid"]),
                     title: MusicAPIJSON.asString(x["songname"]),
@@ -214,7 +245,8 @@ final class MusicSearchAPI {
                     album: MusicAPIJSON.asString(x["albumname"]),
                     coverURL: URL(string: cover),
                     duration: TimeInterval(MusicAPIJSON.asInt(x["interval"])),
-                    sourceID: "tx")
+                    sourceID: "tx",
+                    trialOnly: trialOnly)
             })
         }
     }

@@ -156,7 +156,7 @@ final class FakeSourceResolver: SourceResolver {
         self.urls = urls
     }
 
-    func resolveFirstPlayable(for item: PlaybackItem, targetQuality: AudioQuality?, completion: @escaping (URL?) -> Void) {
+    func resolveFirstPlayable(for item: PlaybackItem, targetQuality: AudioQuality?, excluding: [URL] = [], completion: @escaping (URL?) -> Void) {
         calls += 1
         let url = index < urls.count ? urls[index] : nil
         index += 1

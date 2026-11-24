@@ -36,6 +36,16 @@
 //   `quality_fallback`; LX scripts keep Master only when they return
 //   a `{url, quality: 'master'}` map; every other resolver caps at
 //   hires (see `MusicQualityGate`).
+// - 30 s preview (build 36 item 3): a trial/preview URL is NEVER a
+//   successful resolve. Resolver JSON is checked for trial flags
+//   (`freeTrialInfo` et al) and every returned URL passes
+//   `PreviewAudioClassifier.isPreviewURL` (QQ `RS0` trial files,
+//   NetEase outer URL on trial-only tracks); a preview falls
+//   through to the next source exactly like an empty answer, the
+//   job is skipped at the lower tiers of the same resolve, and it
+//   is never cached. A fallback re-resolve can also pass
+//   `excluding` URLs (failed at playback, or proved to be previews
+//   by asset duration) that no job may return again.
 // - Kugou signing: the Kugou signature secret was removed from
 //   source (P0-15); there is no `kugouSign` here and no hardcoded
 //   secret anywhere. Kugou shared-playlist import (the only place
@@ -157,6 +167,7 @@ final class LXSourceResolver: SourceResolver {
     func resolveFirstPlayable(
         for item: PlaybackItem,
         targetQuality: AudioQuality?,
+        excluding: [URL] = [],
         completion: @escaping (URL?) -> Void
     ) {
         // A fresh resolve starts with no tier; finishResolve sets it
@@ -176,7 +187,9 @@ final class LXSourceResolver: SourceResolver {
             platform: platform,
             title: item.title,
             artist: item.artist ?? "",
-            quality: targetQuality ?? .hiRes
+            quality: targetQuality ?? .hiRes,
+            trialOnly: item.trialOnly,
+            excluding: excluding
         ) { result in
             completion(result.flatMap { URL(string: $0.url) })
         }
@@ -197,7 +210,8 @@ final class LXSourceResolver: SourceResolver {
             platform: platform,
             title: track.title,
             artist: track.artist,
-            quality: targetQuality ?? .hiRes
+            quality: targetQuality ?? .hiRes,
+            trialOnly: track.trialOnly
         ) { result in
             completion(result.flatMap { URL(string: $0.url) })
         }
@@ -219,14 +233,30 @@ final class LXSourceResolver: SourceResolver {
         var passIndex = 0
         var truncated = false
         let skipTimedOut = NSMutableSet()
+        /// Jobs that answered this song with a 30 s preview (build
+        /// 36 item 3): a trial at one tier is a trial at every tier,
+        /// so later tier passes in this resolve skip them instead of
+        /// burning budget re-asking for the same clip.
+        let skipPreviewed = NSMutableSet()
+        /// Search-time VIP-only flag for this track (drives the
+        /// preview-URL check: a NetEase outer URL is only a trial
+        /// when the track is paywalled).
+        let trialOnly: Bool
+        /// URLs already failed — or proved to be previews — for this
+        /// request (player fallback `excluding`): never served again
+        /// in this resolve, from cache or from any job.
+        let excluding: Set<String>
         let totalDeadline: Date
         let background: Bool
 
-        init(tiers: [AudioQuality], requestedQuality: AudioQuality, totalDeadline: Date, background: Bool) {
+        init(tiers: [AudioQuality], requestedQuality: AudioQuality, totalDeadline: Date, background: Bool,
+             trialOnly: Bool = false, excluding: Set<String> = []) {
             self.tiers = tiers
             self.requestedQuality = requestedQuality
             self.totalDeadline = totalDeadline
             self.background = background
+            self.trialOnly = trialOnly
+            self.excluding = excluding
         }
     }
 
@@ -237,6 +267,8 @@ final class LXSourceResolver: SourceResolver {
         artist: String,
         quality: AudioQuality,
         background: Bool = false,
+        trialOnly: Bool = false,
+        excluding: [URL] = [],
         completion: @escaping (PlayUrlResult?) -> Void
     ) {
         workQueue.async {
@@ -244,8 +276,9 @@ final class LXSourceResolver: SourceResolver {
                 self.finishResolve(result: nil, truncated: false, completion: completion)
                 return
             }
+            let excludedURLs = Set(excluding.map { $0.absoluteString })
             let cacheKey = PlayURLCache.key(songId: songId, platform: platform.rawValue, quality: quality)
-            if let cached = self.cache.get(cacheKey) {
+            if let cached = self.cache.get(cacheKey), !excludedURLs.contains(cached.url) {
                 let result = PlayUrlResult(url: cached.url, quality: cached.tier, via: "cache")
                 self.finishResolve(result: result, truncated: false, completion: completion)
                 return
@@ -263,7 +296,9 @@ final class LXSourceResolver: SourceResolver {
                 tiers: AudioQuality.chain(from: quality),
                 requestedQuality: quality,
                 totalDeadline: Date().addingTimeInterval(self.totalBudget),
-                background: background)
+                background: background,
+                trialOnly: trialOnly,
+                excluding: excludedURLs)
             self.runTierPasses(
                 state: state, songId: songId, platform: platform,
                 title: title, artist: artist, completion: completion)
@@ -316,7 +351,8 @@ final class LXSourceResolver: SourceResolver {
         state.passIndex += 1
         runPass(
             tier: tier, songId: songId, platform: platform, title: title, artist: artist,
-            budget: budget, skipTimedOut: state.skipTimedOut, background: state.background
+            budget: budget, skipTimedOut: state.skipTimedOut, skipPreviewed: state.skipPreviewed,
+            trialOnly: state.trialOnly, excluding: state.excluding, background: state.background
         ) { [weak self] passResult, incomplete in
             guard let self = self else { return }
             state.truncated = state.truncated || incomplete
@@ -348,8 +384,10 @@ extension LXSourceResolver {
     /// `(nil, false)` when every available job was tried. Jobs that
     /// time out are added to `skipTimedOut` so later tiers in the
     /// same resolve don't waste budget re-asking a source that
-    /// doesn't answer; a definitive empty answer is retried at lower
-    /// tiers, which may serve the song.
+    /// doesn't answer; jobs that answered with a 30 s preview are
+    /// added to `skipPreviewed` for the same reason (a trial at one
+    /// tier is a trial at every tier); a definitive empty answer is
+    /// retried at lower tiers, which may serve the song.
     private func runPass(
         tier: AudioQuality,
         songId: String,
@@ -358,6 +396,9 @@ extension LXSourceResolver {
         artist: String,
         budget: TimeInterval,
         skipTimedOut: NSMutableSet,
+        skipPreviewed: NSMutableSet,
+        trialOnly: Bool,
+        excluding: Set<String>,
         background: Bool,
         completion: @escaping (PlayUrlResult?, Bool) -> Void
     ) {
@@ -370,7 +411,9 @@ extension LXSourceResolver {
         runJobAt(
             jobs: jobs, index: 0, tier: tier, songId: songId, platform: platform,
             title: title, artist: artist, deadline: deadline,
-            skipTimedOut: skipTimedOut, background: background, completion: completion)
+            skipTimedOut: skipTimedOut, skipPreviewed: skipPreviewed,
+            trialOnly: trialOnly, excluding: excluding,
+            background: background, completion: completion)
     }
 
     private func runJobAt(
@@ -383,6 +426,9 @@ extension LXSourceResolver {
         artist: String,
         deadline: Date,
         skipTimedOut: NSMutableSet,
+        skipPreviewed: NSMutableSet,
+        trialOnly: Bool,
+        excluding: Set<String>,
         background: Bool,
         completion: @escaping (PlayUrlResult?, Bool) -> Void
     ) {
@@ -391,15 +437,17 @@ extension LXSourceResolver {
             return
         }
         let job = jobs[index]
-        // Jobs still untried from `index` on (skipped-by-timeout jobs
-        // do not count: they were attempted).
+        // Jobs still untried from `index` on (skipped-by-timeout and
+        // previewed jobs do not count: they were attempted).
         func untriedFrom(_ i: Int) -> Bool {
-            jobs[i...].contains { !skipTimedOut.contains($0.key) }
+            jobs[i...].contains { !skipTimedOut.contains($0.key) && !skipPreviewed.contains($0.key) }
         }
-        if skipTimedOut.contains(job.key) {
+        if skipTimedOut.contains(job.key) || skipPreviewed.contains(job.key) {
             runJobAt(jobs: jobs, index: index + 1, tier: tier, songId: songId,
                      platform: platform, title: title, artist: artist,
                      deadline: deadline, skipTimedOut: skipTimedOut,
+                     skipPreviewed: skipPreviewed, trialOnly: trialOnly,
+                     excluding: excluding,
                      background: background, completion: completion)
             return
         }
@@ -423,6 +471,8 @@ extension LXSourceResolver {
                     self.runJobAt(jobs: jobs, index: index + 1, tier: tier, songId: songId,
                                   platform: platform, title: title, artist: artist,
                                   deadline: deadline, skipTimedOut: skipTimedOut,
+                                  skipPreviewed: skipPreviewed, trialOnly: trialOnly,
+                                  excluding: excluding,
                                   background: background, completion: completion)
                 }
             }
@@ -436,6 +486,8 @@ extension LXSourceResolver {
                         job: job, jobs: jobs, index: index, tier: tier, songId: songId,
                         platform: platform, title: title, artist: artist,
                         deadline: deadline, skipTimedOut: skipTimedOut,
+                        skipPreviewed: skipPreviewed, trialOnly: trialOnly,
+                        excluding: excluding,
                         background: background, completion: completion)
                 }
             }
@@ -445,6 +497,8 @@ extension LXSourceResolver {
             job: job, jobs: jobs, index: index, tier: tier, songId: songId,
             platform: platform, title: title, artist: artist,
             deadline: deadline, skipTimedOut: skipTimedOut,
+            skipPreviewed: skipPreviewed, trialOnly: trialOnly,
+            excluding: excluding,
             background: background, completion: completion)
     }
 
@@ -459,12 +513,15 @@ extension LXSourceResolver {
         artist: String,
         deadline: Date,
         skipTimedOut: NSMutableSet,
+        skipPreviewed: NSMutableSet,
+        trialOnly: Bool,
+        excluding: Set<String>,
         background: Bool,
         completion: @escaping (PlayUrlResult?, Bool) -> Void
     ) {
         let remaining = deadline.timeIntervalSince(Date())
         guard remaining > 0 else {
-            let untried = jobs[index...].contains { !skipTimedOut.contains($0.key) }
+            let untried = jobs[index...].contains { !skipTimedOut.contains($0.key) && !skipPreviewed.contains($0.key) }
             completion(nil, untried)
             return
         }
@@ -485,6 +542,8 @@ extension LXSourceResolver {
                 self.runJobAt(jobs: jobs, index: index + 1, tier: tier, songId: songId,
                               platform: platform, title: title, artist: artist,
                               deadline: deadline, skipTimedOut: skipTimedOut,
+                              skipPreviewed: skipPreviewed, trialOnly: trialOnly,
+                              excluding: excluding,
                               background: background, completion: completion)
             }
         }
@@ -504,6 +563,8 @@ extension LXSourceResolver {
                     self.runJobAt(jobs: jobs, index: index + 1, tier: tier, songId: songId,
                                   platform: platform, title: title, artist: artist,
                                   deadline: deadline, skipTimedOut: skipTimedOut,
+                                  skipPreviewed: skipPreviewed, trialOnly: trialOnly,
+                                  excluding: excluding,
                                   background: background, completion: completion)
                 case .error:
                     if !background {
@@ -512,6 +573,8 @@ extension LXSourceResolver {
                     self.runJobAt(jobs: jobs, index: index + 1, tier: tier, songId: songId,
                                   platform: platform, title: title, artist: artist,
                                   deadline: deadline, skipTimedOut: skipTimedOut,
+                                  skipPreviewed: skipPreviewed, trialOnly: trialOnly,
+                                  excluding: excluding,
                                   background: background, completion: completion)
                 case .url(let rawUrl, let servedTier):
                     let url = MusicText.toHttps(rawUrl)
@@ -525,6 +588,48 @@ extension LXSourceResolver {
                         self.runJobAt(jobs: jobs, index: index + 1, tier: tier, songId: songId,
                                       platform: platform, title: title, artist: artist,
                                       deadline: deadline, skipTimedOut: skipTimedOut,
+                                      skipPreviewed: skipPreviewed, trialOnly: trialOnly,
+                                      excluding: excluding,
+                                      background: background, completion: completion)
+                        return
+                    }
+                    // Build 36 item 3: a 30 s trial/preview URL is
+                    // NEVER a successful resolve. It falls through
+                    // to the next source exactly like an empty
+                    // answer — no cooldown (the job is healthy;
+                    // this song is just trial-only there), and the
+                    // job is skipped at the lower tiers of this
+                    // resolve too. This is the single choke point
+                    // for every job, built-in and LX script alike.
+                    if PreviewAudioClassifier.isPreviewURL(url, trialOnly: trialOnly) {
+                        if !background {
+                            self.cooldown.record(job.key, outcome: .empty, milliseconds: elapsedMs)
+                        }
+                        skipPreviewed.add(job.key)
+                        self.runJobAt(jobs: jobs, index: index + 1, tier: tier, songId: songId,
+                                      platform: platform, title: title, artist: artist,
+                                      deadline: deadline, skipTimedOut: skipTimedOut,
+                                      skipPreviewed: skipPreviewed, trialOnly: trialOnly,
+                                      excluding: excluding,
+                                      background: background, completion: completion)
+                        return
+                    }
+                    // An explicitly excluded URL (already failed, or
+                    // proved to be a preview at playback) is skipped
+                    // the same way: the fallback resolve must hand
+                    // out the NEXT candidate, never the same URL
+                    // again — two aggregators can return the
+                    // identical trial URL, so the job is not
+                    // skipped, only this URL.
+                    if excluding.contains(url) {
+                        if !background {
+                            self.cooldown.record(job.key, outcome: .empty, milliseconds: elapsedMs)
+                        }
+                        self.runJobAt(jobs: jobs, index: index + 1, tier: tier, songId: songId,
+                                      platform: platform, title: title, artist: artist,
+                                      deadline: deadline, skipTimedOut: skipTimedOut,
+                                      skipPreviewed: skipPreviewed, trialOnly: trialOnly,
+                                      excluding: excluding,
                                       background: background, completion: completion)
                         return
                     }
@@ -675,7 +780,8 @@ extension LXSourceResolver {
             BuiltInResolver(key: "zddyr", name: "zddyr", order: 25, platforms: [.wy]) { resolver, songId, _, tier, _, _, token, done in
                 let urlString = "https://yy.zddyr.top/lx/api/?source=wy&songmid=\(resolver.urlEncode(songId))&quality=\(tier.lxCode)"
                 resolver.fetchJson(urlString, headers: ["User-Agent": Self.musicUserAgent], cancelToken: token) { json in
-                    guard let json = json, (json["code"] as? Int) == 200 else {
+                    guard let json = json, (json["code"] as? Int) == 200,
+                          !PreviewAudioClassifier.isPreviewResponse(json) else {
                         done(.empty)
                         return
                     }
@@ -696,6 +802,12 @@ extension LXSourceResolver {
                 }
                 let urlString = "https://music-api.gdstudio.xyz/api.php?types=url&id=\(resolver.urlEncode(songId))&source=netease&br=\(br)"
                 resolver.fetchJson(urlString, headers: ["User-Agent": Self.musicUserAgent], cancelToken: token) { json in
+                    // Build 36 item 3: a response that marks the
+                    // audio as a trial is an empty answer, not a URL.
+                    if let json = json, PreviewAudioClassifier.isPreviewResponse(json) {
+                        done(.empty)
+                        return
+                    }
                     let url = (json?["url"] as? String) ?? ""
                     done(url.isEmpty ? .empty : .url(url, nil))
                 }
@@ -720,7 +832,8 @@ extension LXSourceResolver {
                         "X-Client": "XingHaiMusicSource/v3.2.19 (Linux)",
                         "X-Token": tk,
                     ], cancelToken: token) { json in
-                        guard let json = json, (json["code"] as? Int) == 200 else {
+                        guard let json = json, (json["code"] as? Int) == 200,
+                              !PreviewAudioClassifier.isPreviewResponse(json) else {
                             done(.empty)
                             return
                         }
@@ -733,7 +846,8 @@ extension LXSourceResolver {
             BuiltInResolver(key: "oiapi_wy", name: "oiapi-网易", order: 60, platforms: [.wy]) { resolver, songId, _, _, _, _, token, done in
                 let urlString = "https://oiapi.net/api/Music_163?id=\(resolver.urlEncode(songId))"
                 resolver.fetchJson(urlString, headers: ["User-Agent": Self.musicUserAgent], cancelToken: token) { json in
-                    guard let json = json, (json["code"] as? Int) == 0 else {
+                    guard let json = json, (json["code"] as? Int) == 0,
+                          !PreviewAudioClassifier.isPreviewResponse(json) else {
                         done(.empty)
                         return
                     }
@@ -771,7 +885,8 @@ extension LXSourceResolver {
                     body: body?.data(using: .utf8),
                     cancelToken: token
                 ) { json in
-                    guard let json = json, (json["code"] as? Int) == 200 else {
+                    guard let json = json, (json["code"] as? Int) == 200,
+                          !PreviewAudioClassifier.isPreviewResponse(json) else {
                         done(.empty)
                         return
                     }
@@ -786,7 +901,8 @@ extension LXSourceResolver {
                 guard tier == .high320 || tier == .standard128 else { done(.empty); return }
                 let urlString = "https://yy.zddyr.top/lx/api/?source=kw&name=\(resolver.urlEncode(title))&singer=&songmid=\(resolver.urlEncode(songId))&interval=&albumName=&quality=\(tier.lxCode)"
                 resolver.fetchJson(urlString, headers: ["User-Agent": Self.musicUserAgent], cancelToken: token) { json in
-                    guard let json = json, (json["code"] as? Int) == 200 else {
+                    guard let json = json, (json["code"] as? Int) == 200,
+                          !PreviewAudioClassifier.isPreviewResponse(json) else {
                         done(.empty)
                         return
                     }

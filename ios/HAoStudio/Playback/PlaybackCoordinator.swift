@@ -94,10 +94,23 @@ struct PlaybackItem: Identifiable, Equatable {
     /// default so existing constructions keep compiling.
     let album: String?
 
+    /// Expected full length in seconds, from search metadata
+    /// (build 36 item 3). Nil when unknown (local files, restored
+    /// queue items): the preview-duration check never fires without
+    /// an expectation to compare against.
+    let duration: TimeInterval?
+
+    /// Search-time VIP-only flag (build 36 item 3): NetEase
+    /// `fee != 0` / `privilege` `none`, QQ `pay.payplay` — the
+    /// track is trial-only for a no-login client. Only ever
+    /// tightens preview detection; never skips a source by itself.
+    let trialOnly: Bool
+
     var subtitle: String { artist ?? kindSubtitle }
 
     init(id: String, kind: PlaybackKind, title: String, artist: String?,
-         coverURL: URL? = nil, localFileURL: URL? = nil, album: String? = nil) {
+         coverURL: URL? = nil, localFileURL: URL? = nil, album: String? = nil,
+         duration: TimeInterval? = nil, trialOnly: Bool = false) {
         self.id = id
         self.kind = kind
         self.title = title
@@ -105,6 +118,8 @@ struct PlaybackItem: Identifiable, Equatable {
         self.coverURL = coverURL
         self.localFileURL = localFileURL
         self.album = album
+        self.duration = duration
+        self.trialOnly = trialOnly
     }
 
     private var kindSubtitle: String {
@@ -120,13 +135,16 @@ struct PlaybackItem: Identifiable, Equatable {
 /// ask sources one by one, fastest first, and call `completion` with the
 /// FIRST playable URL — never collect all candidates, never hold playback
 /// for a higher tier. `completion(nil)` only when every source returned
-/// nothing. Completion-handler style (not async/await): the project
-/// keeps SWIFT_VERSION = 5.0 from the old project, and concurrency
-/// needs Swift 5.5+.
+/// nothing. `excluding` lists URLs that already failed for this request
+/// — or proved to be 30 s previews (build 36 item 3) — so the resolver
+/// hands out the next candidate instead of repeating one. Completion-handler
+/// style (not async/await): the project keeps SWIFT_VERSION = 5.0 from
+/// the old project, and concurrency needs Swift 5.5+.
 protocol SourceResolver {
     func resolveFirstPlayable(
         for item: PlaybackItem,
         targetQuality: AudioQuality?,
+        excluding: [URL],
         completion: @escaping (URL?) -> Void
     )
 }
@@ -309,7 +327,7 @@ final class PlaybackCoordinator: ObservableObject {
                             }
                         }
                     }
-                    resolver.resolveFirstPlayable(for: item, targetQuality: self.targetQuality) { url in
+                    resolver.resolveFirstPlayable(for: item, targetQuality: self.targetQuality, excluding: excluding) { url in
                         let tier = (resolver as? TierReportingResolver)?.lastResolvedTier
                         DispatchQueue.main.async { completion(url, tier) }
                     }

@@ -71,6 +71,7 @@
 		000000000000000000000085 /* MusicHTTP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000086 /* MusicHTTP.swift */; };
 		000000000000000000000087 /* MusicQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000088 /* MusicQuality.swift */; };
 		000000000000000000000089 /* MusicTrack.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000008A /* MusicTrack.swift */; };
+		000000000000000000000200 /* PreviewAudioClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000201 /* PreviewAudioClassifier.swift */; };
 		0000000000000000000000E6 /* VideoModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000E7 /* VideoModels.swift */; };
 		0000000000000000000000E8 /* VideoServiceContracts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000E9 /* VideoServiceContracts.swift */; };
 		00000000000000000000008B /* ResolverPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000008C /* ResolverPolicy.swift */; };
@@ -279,6 +280,7 @@
 		000000000000000000000086 /* MusicHTTP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicHTTP.swift; sourceTree = "<group>"; };
 		000000000000000000000088 /* MusicQuality.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicQuality.swift; sourceTree = "<group>"; };
 		00000000000000000000008A /* MusicTrack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicTrack.swift; sourceTree = "<group>"; };
+		000000000000000000000201 /* PreviewAudioClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewAudioClassifier.swift; sourceTree = "<group>"; };
 		0000000000000000000000E7 /* VideoModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoModels.swift; sourceTree = "<group>"; };
 		0000000000000000000000E9 /* VideoServiceContracts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoServiceContracts.swift; sourceTree = "<group>"; };
 		00000000000000000000008C /* ResolverPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolverPolicy.swift; sourceTree = "<group>"; };
@@ -607,6 +609,7 @@
 				000000000000000000000086 /* MusicHTTP.swift */,
 				000000000000000000000088 /* MusicQuality.swift */,
 				00000000000000000000008A /* MusicTrack.swift */,
+				000000000000000000000201 /* PreviewAudioClassifier.swift */,
 				00000000000000000000008C /* ResolverPolicy.swift */,
 			); path = MusicResolvers; sourceTree = "<group>"; };
 		000000000000000000000072 /* MusicAPI */ = {isa = PBXGroup; children = (
@@ -934,6 +937,7 @@
 				000000000000000000000075 /* NativeMusicPlayer.swift in Sources */,
 				000000000000000000000011 /* PlaybackCoordinator.swift in Sources */,
 				00000000000000000000010B /* PlayerKernel.swift in Sources */,
+				000000000000000000000200 /* PreviewAudioClassifier.swift in Sources */,
 				00000000000000000000008B /* ResolverPolicy.swift in Sources */,
 				000000000000000000000015 /* SplashView.swift in Sources */,
 				000000000000000000000005 /* ThemeStore.swift in Sources */,

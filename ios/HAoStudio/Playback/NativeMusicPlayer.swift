@@ -953,6 +953,15 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     private var queueIndex: Int = 0
     private var generation: Int = 0
     private var pendingItem: PlaybackItem?
+    /// URL currently loaded on the active engine (build 36 item 3):
+    /// the fallback re-resolve excludes exactly this URL, so a
+    /// failed — or preview — URL is never handed out twice.
+    private var currentURL: URL?
+    /// Track id whose loaded asset already passed the preview
+    /// check (build 36 item 3): the late check in `handleTimeUpdate`
+    /// only runs once per track, when the duration first becomes
+    /// known after load.
+    private var previewCheckedTrackID: String?
     private var playRequested: Bool = false
     private var stallFailed: Bool = false
 
@@ -1204,6 +1213,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             let gen = self.nextGeneration()
             self.stopCrossfadeTimer()
             self.pendingItem = item
+            self.currentURL = url
             self.openTimeoutWork?.cancel()
             self.openTimeoutWork = nil
             let engine = self.activeEngine
@@ -1230,6 +1240,24 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                 self.ensureMain {
                     guard gen == self.generation, !completed else { return }
                     guard ok, engine.hasItem else {
+                        self.playRequested = false
+                        self.recomputePlayingState()
+                        finish(.failure(.loadFailed))
+                        return
+                    }
+                    // Build 36 item 3: the loaded asset IS the
+                    // verdict for aggregators that return a bare URL
+                    // with no trial metadata — a ~30 s asset for a
+                    // minutes-long song is a preview, never a
+                    // playable track. Caught here, before the engine
+                    // plays a single sample, it is a load failure:
+                    // the caller's fallback re-resolves with this
+                    // URL excluded and tries the next source.
+                    if PreviewAudioClassifier.isPreviewAsset(
+                        actualDuration: engine.durationSeconds,
+                        expectedDuration: item.duration,
+                        trialOnly: item.trialOnly) {
+                        engine.unload()
                         self.playRequested = false
                         self.recomputePlayingState()
                         finish(.failure(.loadFailed))
@@ -1262,6 +1290,11 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         pendingItem = nil
         position = 0
         duration = engine.durationSeconds
+        // Build 36 item 3: the load-time preview check already ran
+        // with this duration — but only when the duration was known
+        // at load. When it was still 0/unknown, the late check in
+        // `handleTimeUpdate` still has to run for this track.
+        if engine.durationSeconds > 0 { previewCheckedTrackID = item.id }
         watchdog.resetForNewTrack()
         startWatchdogTimerIfNeeded()
         setupNowPlaying()
@@ -1363,6 +1396,8 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             self.standbyEngine.pause()
             self.standbyEngine.unload()
             self.currentTrack = nil
+            self.currentURL = nil
+            self.previewCheckedTrackID = nil
             self.actualQuality = nil
             self.position = 0
             self.duration = 0
@@ -1496,7 +1531,10 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             // advances, so the advance is not counted as a natural
             // completion by the view model.
             self.failedTrackIds.insert(item.id)
-            self.recoverFromFailure(item: item)
+            // Build 36 item 3: exclude the failed URL so the
+            // fallback resolve hands out the next candidate,
+            // never the same URL again.
+            self.recoverFromFailure(item: item, excluding: self.currentURL.map { [$0] } ?? [])
         }
     }
 
@@ -1564,7 +1602,16 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                     if incoming === self.standbyEngine { incoming.pause() }
                     return
                 }
-                guard ok, incoming.hasItem else {
+                guard ok, incoming.hasItem,
+                      !PreviewAudioClassifier.isPreviewAsset(
+                        actualDuration: incoming.durationSeconds,
+                        expectedDuration: item.duration,
+                        trialOnly: item.trialOnly) else {
+                    // Build 36 item 3: same as a load failure — a
+                    // ~30 s asset for a minutes-long song is a
+                    // preview, and the fallback below re-resolves
+                    // with this URL in `tried`, so the next source
+                    // is tried instead of the same clip.
                     if tried.count < 2 {
                         self.resolveURL?(item, tried) { [weak self] nextURL, tier in
                             guard let self = self else { return }
@@ -1594,6 +1641,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                 }
                 self.playRequested = true
                 self.stallFailed = false
+                self.currentURL = url
                 if outgoingDone {
                     incoming.volume = target
                     incoming.play()
@@ -1650,6 +1698,10 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         pendingItem = nil
         position = activeEngine.currentTimeSeconds
         duration = activeEngine.durationSeconds
+        // Build 36 item 3: the load-time preview check already ran
+        // with this duration — but only when the duration was known
+        // at load; otherwise the late check still has to run.
+        if activeEngine.durationSeconds > 0 { previewCheckedTrackID = item.id }
         watchdog.resetForNewTrack()
         startWatchdogTimerIfNeeded()
         setupNowPlaying()
@@ -1704,6 +1756,26 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             self.position = pos
             self.duration = dur
             self.recomputePlayingState()
+            // Build 36 item 3, late check: when the asset duration
+            // was still unknown at load, it arrives here instead.
+            // Once per track, the first known duration is judged —
+            // a ~30 s asset for a minutes-long song is a preview,
+            // and recovery re-resolves with this URL excluded so
+            // the next source is tried instead of the same clip.
+            // The load-time check already cleared tracks whose
+            // duration was known at load (`previewCheckedTrackID`).
+            if let track = self.currentTrack,
+               self.previewCheckedTrackID != track.id, dur > 0 {
+                self.previewCheckedTrackID = track.id
+                if PreviewAudioClassifier.isPreviewAsset(
+                    actualDuration: dur,
+                    expectedDuration: track.duration,
+                    trialOnly: track.trialOnly) {
+                    self.recoverFromFailure(
+                        item: track,
+                        excluding: self.currentURL.map { [$0] } ?? [])
+                }
+            }
             if Date().timeIntervalSince(self.lastNowPlayingElapsedUpdate) >= 1.0 {
                 self.updateNowPlayingInfo()
             }
@@ -1764,7 +1836,9 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                 userInfo: [MusicNotificationKeys.trackId: currentTrack?.id ?? ""]
             )
             if let item = currentTrack {
-                recoverFromFailure(item: item)
+                // Build 36 item 3: exclude the stalled URL, same as
+                // the engine-failure path above.
+                recoverFromFailure(item: item, excluding: currentURL.map { [$0] } ?? [])
             }
         }
     }
@@ -1773,10 +1847,14 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     /// same track, reopened at the last known position; if that
     /// fails, auto-advance to the next track per the play mode.
     /// Never loops: one re-resolve, then advance or stop.
-    private func recoverFromFailure(item: PlaybackItem) {
+    /// `excluding` lists URLs that must not come back (build 36
+    /// item 3: a URL that failed, or proved to be a 30 s preview,
+    /// is never handed out twice — the resolver skips it and the
+    /// coordinator evicts it from cache first).
+    private func recoverFromFailure(item: PlaybackItem, excluding: [URL] = []) {
         let resumePosition = position
         let gen = nextGeneration()
-        resolveURL?(item, []) { [weak self] url, tier in
+        resolveURL?(item, excluding) { [weak self] url, tier in
             guard let self = self else { return }
             self.ensureMain {
                 guard gen == self.generation, self.currentTrack?.id == item.id else { return }
