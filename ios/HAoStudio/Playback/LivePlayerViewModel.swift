@@ -108,11 +108,83 @@ final class LivePlayerViewModel: ObservableObject {
     var videoView: UIView? { driver.videoView }
 
     /// Append one received danmaku message (B-leg transports call
-    /// this; the room page only reads `messages`).
+    /// this; the room page only reads `messages`). Main thread
+    /// only — the batch flush below is the only caller on the
+    /// transport path.
     func appendDanmaku(_ message: DanmakuMessage) {
-        messages.append(message)
+        appendDanmakuBatch([message])
+    }
+
+    /// Append a whole batch in ONE `@Published` write (b36
+    /// item 10 D-2): one zlib packet's N messages used to cost N
+    /// main dispatches + N `@Published` writes. `danmakuSequence`
+    /// grows by the batch size, not by 1 — the views derive the
+    /// fresh suffix from the sequence delta (`suffix(appended)`),
+    /// so a +1 here would make them ingest only the last message
+    /// of each batch. Main thread only.
+    func appendDanmakuBatch(_ batch: [DanmakuMessage]) {
+        guard !batch.isEmpty else { return }
+        messages.append(contentsOf: batch)
         if messages.count > 200 { messages.removeFirst(messages.count - 200) }
-        danmakuSequence += 1
+        danmakuSequence += batch.count
+    }
+
+    /// Batch window (b36 item 10 D-2, audit open choice B):
+    /// 0.15 s — short enough that the delay is below what a
+    /// viewer can perceive as danmaku lag, long enough that one
+    /// zlib packet's burst (tens of messages in one tick) lands
+    /// as a single main-thread flush. Only messages arriving
+    /// inside the same window are merged; a steady 5/s stream
+    /// (0.2 s apart) still flushes one by one, no worse than
+    /// before.
+    static let danmakuBatchWindowSeconds: TimeInterval = 0.15
+    /// Messages received since the last flush, waiting out the
+    /// batch window. Written from the transport (background)
+    /// thread, drained on the main thread — guarded by
+    /// `danmakuBatchLock`, never touched bare.
+    private var pendingDanmaku: [DanmakuMessage] = []
+    private let danmakuBatchLock = NSLock()
+    /// The scheduled flush, if any; cancelled + cleared by
+    /// `stopDanmaku` so no stale batch lands after a room switch
+    /// or exit.
+    private var danmakuFlushWork: DispatchWorkItem?
+    private var danmakuFlushScheduled = false
+
+    /// Enqueue one transport message for batched delivery (any
+    /// thread — called directly from the transport's
+    /// `onMessage`, no per-message main hop any more). The first
+    /// message in a window schedules one flush 0.15 s out;
+    /// later arrivals in the same window join that flush.
+    func enqueueDanmaku(_ message: DanmakuMessage, generation: Int) {
+        danmakuBatchLock.lock()
+        pendingDanmaku.append(message)
+        let shouldSchedule = !danmakuFlushScheduled
+        if shouldSchedule { danmakuFlushScheduled = true }
+        danmakuBatchLock.unlock()
+        guard shouldSchedule else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.flushDanmakuBatch(generation: generation)
+        }
+        danmakuBatchLock.lock()
+        danmakuFlushWork = work
+        danmakuBatchLock.unlock()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.danmakuBatchWindowSeconds, execute: work)
+    }
+
+    /// Drain the pending batch in one `@Published` write (main
+    /// thread — scheduled by `enqueueDanmaku`). A flush from a
+    /// superseded generation (room switched / exited while the
+    /// window was open) drops its batch instead of appending to
+    /// the new room's list.
+    private func flushDanmakuBatch(generation: Int) {
+        danmakuBatchLock.lock()
+        let batch = pendingDanmaku
+        pendingDanmaku = []
+        danmakuFlushScheduled = false
+        danmakuFlushWork = nil
+        danmakuBatchLock.unlock()
+        guard !batch.isEmpty, generation == danmakuGeneration else { return }
+        appendDanmakuBatch(batch)
     }
 
     /// Receive-only danmaku transport for the current room (B leg).
@@ -120,8 +192,9 @@ final class LivePlayerViewModel: ObservableObject {
     /// when the room closes (or when switching rooms — start stops
     /// the old transport first). The room page never owns a
     /// transport directly: this view model owns it, so the
-    /// background-queue transport callbacks can be forwarded to
-    /// `appendDanmaku` on the main queue.
+    /// background-queue transport callbacks can be batched into
+    /// `enqueueDanmaku` and flushed to `appendDanmakuBatch` on
+    /// the main queue (b36 item 10 D-2).
     private var danmakuTransport: LiveDanmakuTransport?
     /// Danmaku start generation (build 35 D1): bumped by every
     /// start/stop, so a late `roomInfo` callback from a previous
@@ -200,6 +273,17 @@ final class LivePlayerViewModel: ObservableObject {
         danmakuWasStopped = true
         danmakuTransport?.stop()
         danmakuTransport = nil
+        // Drop any batch still inside its 0.15 s window and
+        // cancel its flush: without this a burst that arrived
+        // just before the exit would land on the next room's
+        // (cleared) list after `startDanmaku` ran.
+        danmakuBatchLock.lock()
+        pendingDanmaku = []
+        danmakuFlushScheduled = false
+        let flushWork = danmakuFlushWork
+        danmakuFlushWork = nil
+        danmakuBatchLock.unlock()
+        flushWork?.cancel()
     }
 
     private func startTransport(with data: [String: Any], resolver: LiveSiteResolver) {
@@ -217,10 +301,12 @@ final class LivePlayerViewModel: ObservableObject {
         let generation = danmakuGeneration
         let transport = resolver.makeDanmakuTransport()
         transport.onMessage = { [weak self] message in
-            DispatchQueue.main.async {
-                guard let self = self, generation == self.danmakuGeneration else { return }
-                self.appendDanmaku(message)
-            }
+            // Batched (b36 item 10 D-2): no per-message main hop
+            // any more — the message joins the 0.15 s window and
+            // the flush appends the whole batch in one write.
+            // The generation guard lives in the flush, so a
+            // batch from a superseded start is dropped there.
+            self?.enqueueDanmaku(message, generation: generation)
         }
         danmakuTransport = transport
         transport.start(danmakuData: data)
@@ -315,6 +401,7 @@ final class LivePlayerViewModel: ObservableObject {
 
     deinit {
         autoHideWork?.cancel()
+        danmakuFlushWork?.cancel()
     }
 
     // MARK: - Transport

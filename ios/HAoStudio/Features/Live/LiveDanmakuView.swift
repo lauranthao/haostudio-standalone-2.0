@@ -228,6 +228,15 @@ struct LiveDanmakuListView: View {
     /// + trim leaves the count unchanged and the scroll would
     /// freeze, the same trap D2 fixed for `messages.count`.
     @State private var shownVersion = 0
+    /// Last auto-scroll time + one coalesced delayed scroll (b36
+    /// item 10 D-9): a burst used to fire one 0.2 s scroll
+    /// animation per message, each interrupting the last. Scrolls
+    /// at most once per `scrollThrottleSeconds`; a scroll skipped
+    /// by the throttle is rescheduled once, so the list still
+    /// lands at the bottom when the burst ends.
+    @State private var lastScrollAt = Date.distantPast
+    @State private var pendingScrollWork: DispatchWorkItem?
+    static let scrollThrottleSeconds: TimeInterval = 0.3
 
     private var isEnabled: Bool {
         settings.enabled[platform] ?? true
@@ -257,6 +266,10 @@ struct LiveDanmakuListView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { ingestNewMessages() }
+        .onDisappear {
+            pendingScrollWork?.cancel()
+            pendingScrollWork = nil
+        }
         .onChange(of: messages.count) { _, _ in ingestNewMessages() }
         .onChange(of: sequence) { _, _ in ingestNewMessages() }
         .onChange(of: settings.enabled[platform] ?? true) { _, _ in
@@ -293,21 +306,53 @@ struct LiveDanmakuListView: View {
                     alignment: .leading,
                     spacing: liveDanmakuRowPadding(settings.listSpacing)
                 ) {
-                    ForEach(Array(shown.enumerated()), id: \.offset) { index, message in
+                    // Stable row identity (b36 item 10 D-3): rows
+                    // are keyed by the message's own id, never by
+                    // position — head-trim used to shift every
+                    // remaining row's `offset` and SwiftUI rebuilt
+                    // the whole list on each trim. The old
+                    // `.id(index)` modifier is gone for the same
+                    // reason: it re-keyed rows by position too.
+                    ForEach(shown, id: \.id) { message in
                         danmakuRow(message)
-                            .id(index)
                     }
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 8)
             }
             .onChange(of: shownVersion) { _, _ in
-                guard shown.count > 0 else { return }
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo(shown.count - 1, anchor: .bottom)
-                }
+                scrollToBottom(proxy: proxy)
             }
         }
+    }
+
+    /// Auto-scroll to the newest row, throttled (b36 item 10
+    /// D-9): at most one scroll per 0.3 s; a skipped scroll is
+    /// coalesced into a single delayed one so a burst still ends
+    /// at the bottom. Scrolls to the last message's stable id —
+    /// the old `shown.count - 1` target only worked because rows
+    /// were (wrongly) keyed by index.
+    private func scrollToBottom(proxy: ScrollViewProxy) {
+        guard let lastId = shown.last?.id else { return }
+        let now = Date()
+        if now.timeIntervalSince(lastScrollAt) >= Self.scrollThrottleSeconds {
+            lastScrollAt = now
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(lastId, anchor: .bottom)
+            }
+            return
+        }
+        pendingScrollWork?.cancel()
+        let delay = Self.scrollThrottleSeconds - now.timeIntervalSince(lastScrollAt)
+        let work = DispatchWorkItem {
+            guard let lastId = shown.last?.id else { return }
+            lastScrollAt = Date()
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(lastId, anchor: .bottom)
+            }
+        }
+        pendingScrollWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     @ViewBuilder
@@ -481,7 +526,9 @@ struct LiveDanmakuOverlayView: View {
     /// Pending per-row removal work (b36 item 5): each flying
     /// row schedules its own removal one crossing time after
     /// arrival (`settings.flyingDuration` — the same duration
-    /// its animation uses). The work items are cancelled on
+    /// its animation uses). A fired item removes itself from
+    /// this array (b36 item 10 D-4), so it only ever holds rows
+    /// still in flight. The work items are cancelled on
     /// disappear, so a back-out leaves no work behind that
     /// mutates this view's state after the room is gone.
     @State private var removalWorkItems: [DispatchWorkItem] = []
@@ -567,7 +614,19 @@ struct LiveDanmakuOverlayView: View {
             recentTexts.insert(message.text, at: 0)
             recentTexts = Array(recentTexts.prefix(20))
             let itemId = item.id
-            let removal = DispatchWorkItem { flying.removeAll { $0.id == itemId } }
+            // Self-cleaning removal (b36 item 10 D-4): the work
+            // item removes itself from `removalWorkItems` when it
+            // fires, so the array only ever holds rows still in
+            // flight — before this, every fired item stayed
+            // retained until `onDisappear` (~3000 stale items in
+            // a busy 10-minute room). `var` + IUO is the
+            // self-reference: the closure captures the variable,
+            // not the not-yet-created value.
+            var removal: DispatchWorkItem!
+            removal = DispatchWorkItem {
+                flying.removeAll { $0.id == itemId }
+                removalWorkItems.removeAll { $0 === removal }
+            }
             removalWorkItems.append(removal)
             DispatchQueue.main.asyncAfter(deadline: .now() + settings.flyingDuration, execute: removal)
         }

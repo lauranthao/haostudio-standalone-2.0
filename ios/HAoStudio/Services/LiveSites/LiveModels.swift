@@ -297,7 +297,15 @@ struct LivePlayUrlResolution {
 /// One received danmaku line. Receive-only: the app never sends
 /// danmaku. `colorArgb` is 0xAARRGGBB (white when the platform
 /// sent no colour). `time` is the receive time.
-struct DanmakuMessage {
+/// `id` is assigned once at construction and survives copies
+/// (value copies keep the same UUID), so a row's identity is
+/// stable across the list's head-trim: the portrait list keys
+/// its rows by this id, never by position. It is a `let` with a
+/// default value, so it is NOT a memberwise-init parameter —
+/// every existing `DanmakuMessage(...)` call site is unaffected.
+struct DanmakuMessage: Identifiable {
+    let id = UUID()
+
     enum Kind {
         case scroll
         case top
