@@ -149,8 +149,11 @@ enum LiveGridLayout {
     static let interItemSpacing: Double = 12
     /// Gap between grid rows (points).
     static let rowSpacing: Double = 14
-    /// Cover aspect ratio (width / height), 16:10.
-    static let coverAspectRatio: Double = 16.0 / 10.0
+    /// Cover aspect ratio (width / height), 16:9 — the video
+    /// frame ratio (Pure Live: the player is 16:9 and the covers
+    /// are video frames, so the card cover matches it instead of
+    /// cropping a 16:9 cover into 16:10).
+    static let coverAspectRatio: Double = 16.0 / 9.0
 
     /// Width of one cell inside a container of the given width:
     /// margins and the inter-column gap come off first, the rest
@@ -160,7 +163,7 @@ enum LiveGridLayout {
         return max(0, usable / Double(columns))
     }
 
-    /// Cover height for a cell of the given width (16:10).
+    /// Cover height for a cell of the given width (16:9).
     static func coverHeight(cellWidth: Double) -> Double {
         cellWidth / coverAspectRatio
     }
