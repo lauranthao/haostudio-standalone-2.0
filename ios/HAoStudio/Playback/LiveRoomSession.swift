@@ -111,6 +111,11 @@ final class LiveRecovery {
 
     let roomId: String
     var resolver: LiveSiteResolver?
+    /// The room the session entered with (the list-feed room):
+    /// its `data` may already hold signed stream URLs, which the
+    /// resolver can use when the network re-parse fails (see
+    /// `fetchFromResolver`). Nil for sessions built without a room.
+    var sourceRoom: LiveRoom?
     /// The quality the current lines were resolved for. Mutable on
     /// purpose: every fresh re-parse (prefetch / recovery / manual
     /// retry) must use the CURRENT quality.
@@ -434,11 +439,33 @@ final class LiveRecovery {
         if let work = timeoutWork {
             DispatchQueue.main.asyncAfter(deadline: .now() + timeoutInterval, execute: work)
         }
-        resolver.resolve(roomId: roomId, quality: quality) { result in
+        // The quality in force for this fetch, read once: the
+        // fallback below must ask for the same tier the network
+        // resolve was asked for.
+        let requestedQuality = quality
+        resolver.resolve(roomId: roomId, quality: requestedQuality) { [weak self] result in
             switch result {
             case .success(let resolution):
                 finish(resolution)
-            case .failure:
+            case .failure(let error):
+                // A definitive offline stays a failure: stale list
+                // URLs must never resurrect an ended room. Any
+                // other failure (rate-limit, network, parse) falls
+                // back to stream URLs the app already holds from
+                // the list feed, when the resolver offers them —
+                // the first playable source plays instead of the
+                // failure card.
+                if let liveError = error as? LiveError, case .offline = liveError {
+                    finish(nil)
+                    return
+                }
+                if let self = self,
+                   let room = self.sourceRoom,
+                   let fallback = resolver.resolutionFromRoom(room, quality: requestedQuality),
+                   !fallback.appliedUrls.isEmpty {
+                    finish(fallback)
+                    return
+                }
                 finish(nil)
             }
         }
@@ -571,6 +598,7 @@ final class LiveRoomSession {
         self.pendingQuality = nil
         self.previousQuality = nil
         let recovery = LiveRecovery(roomId: room.roomId, resolver: resolver, quality: nil, now: now)
+        recovery.sourceRoom = room
         self.recovery = recovery
         stallWatchdog.reset()
         state = .loading

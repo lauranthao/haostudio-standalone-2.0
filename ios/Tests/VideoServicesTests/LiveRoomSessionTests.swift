@@ -50,6 +50,11 @@ final class FakeDanmakuTransport: LiveDanmakuTransport {
 final class FakeLiveSiteResolver: LiveSiteResolver {
     var platform: LivePlatform { .huya }
     var resolutionsToReturn: [LivePlayUrlResolution?] = []
+    /// Resolution offered through `resolutionFromRoom` (list-feed
+    /// fallback), when set.
+    var roomResolutionToReturn: LivePlayUrlResolution?
+    /// Error `resolve` fails with when `resolutionsToReturn` is empty.
+    var resolveError: Error = LiveError.emptyResponse
     var resolveCount = 0
     var receivedRoomIds: [String] = []
     var receivedQualities: [LiveQuality?] = []
@@ -66,8 +71,12 @@ final class FakeLiveSiteResolver: LiveSiteResolver {
         if let resolution = resolution {
             completion(.success(resolution))
         } else {
-            completion(.failure(LiveError.emptyResponse))
+            completion(.failure(resolveError))
         }
+    }
+
+    func resolutionFromRoom(_ room: LiveRoom, quality: LiveQuality?) -> LivePlayUrlResolution? {
+        roomResolutionToReturn
     }
 
     func makeDanmakuTransport() -> LiveDanmakuTransport {
@@ -350,6 +359,34 @@ final class LiveRoomSessionTests: XCTestCase {
         XCTAssertEqual(LiveRoomSession.autoRecoveryBudget(lineCount: 2), 1)
         XCTAssertEqual(LiveRoomSession.autoRecoveryBudget(lineCount: 3), 2)
         XCTAssertEqual(LiveRoomSession.autoRecoveryBudget(lineCount: 0), 0)
+    }
+
+    /// When the network resolve fails with a non-offline error
+    /// (e.g. Kuaishou's room page rate-limited), the initial
+    /// resolve falls back to the list-feed URLs the entered room
+    /// already carries instead of failing the room.
+    func testResolveInitialFallsBackToListRoomUrlsWhenResolveFails() {
+        let session = LiveRoomSession()
+        let resolver = FakeLiveSiteResolver()
+        resolver.roomResolutionToReturn = makeResolution(urls: [flvURL()])
+        session.enterRoom(room: makeRoom(), resolver: resolver)
+        var adopted: LivePlayUrlResolution?
+        session.resolveInitial { adopted = $0 }
+        XCTAssertNotNil(adopted)
+        XCTAssertEqual(adopted?.appliedUrls, [flvURL().absoluteString])
+    }
+
+    /// …but a definitive offline never falls back: stale list URLs
+    /// must not resurrect an ended room.
+    func testResolveInitialDoesNotFallBackWhenRoomIsOffline() {
+        let session = LiveRoomSession()
+        let resolver = FakeLiveSiteResolver()
+        resolver.resolveError = LiveError.offline
+        resolver.roomResolutionToReturn = makeResolution(urls: [flvURL()])
+        session.enterRoom(room: makeRoom(), resolver: resolver)
+        var adopted: LivePlayUrlResolution?
+        session.resolveInitial { adopted = $0 }
+        XCTAssertNil(adopted)
     }
 
     func testSingleLineRoomGetsTwoRecoveriesThenFails() {
