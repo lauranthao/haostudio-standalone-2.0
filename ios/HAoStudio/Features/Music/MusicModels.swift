@@ -100,6 +100,11 @@ struct MusicSong: Equatable, Identifiable {
     /// wy for ordering/identity, which would lie on the badge for
     /// a script result (S3-C badge fix).
     var sourceID: String
+    /// Search-time VIP-only flag (build 36 item 3): the track is
+    /// trial-only for a no-login client. Threaded from MusicTrack
+    /// into the playback item; only ever tightens preview
+    /// detection, never skips a source by itself.
+    var trialOnly: Bool
 
     var id: String { identityKey }
 
@@ -126,7 +131,8 @@ struct MusicSong: Equatable, Identifiable {
         reasonKey: String = "",
         reasonArg: String = "",
         localPath: String = "",
-        sourceID: String = ""
+        sourceID: String = "",
+        trialOnly: Bool = false
     ) {
         self.songId = songId
         self.title = title
@@ -140,6 +146,7 @@ struct MusicSong: Equatable, Identifiable {
         self.reasonArg = reasonArg
         self.localPath = localPath
         self.sourceID = sourceID
+        self.trialOnly = trialOnly
     }
 
     init(json: [String: Any]) {
@@ -159,7 +166,8 @@ struct MusicSong: Equatable, Identifiable {
             reasonArg: MusicDict.string(json, "reasonArg"),
             localPath: MusicDict.string(json, "localPath"),
             sourceID: storedSourceID.isEmpty
-                ? MusicDict.string(json, "platform") : storedSourceID
+                ? MusicDict.string(json, "platform") : storedSourceID,
+            trialOnly: MusicDict.bool(json, "trialOnly", default: false)
         )
     }
 
@@ -178,6 +186,7 @@ struct MusicSong: Equatable, Identifiable {
             "sourceID": sourceID,
         ]
         if !localPath.isEmpty { dict["localPath"] = localPath }
+        if trialOnly { dict["trialOnly"] = true }
         return dict
     }
 
@@ -216,7 +225,8 @@ struct MusicSong: Equatable, Identifiable {
             cover: MusicText.toHttps(track.coverURL?.absoluteString ?? ""),
             platform: MusicPlatform.fromSourceID(track.sourceID),
             dur: track.duration.map { Int($0) } ?? 0,
-            sourceID: track.sourceID
+            sourceID: track.sourceID,
+            trialOnly: track.trialOnly
         )
     }
 
@@ -232,7 +242,12 @@ struct MusicSong: Equatable, Identifiable {
                      localFileURL: localPath.isEmpty ? nil : URL(fileURLWithPath: localPath),
                      // E4/B2: carry the album so Now Playing shows
                      // it instead of the constant "HAo Studio".
-                     album: album.isEmpty ? nil : album)
+                     album: album.isEmpty ? nil : album,
+                     // Build 36 item 3: carry the expected length
+                     // and the trial-only flag so the player can
+                     // tell a 30 s preview from the real song.
+                     duration: dur > 0 ? TimeInterval(dur) : nil,
+                     trialOnly: trialOnly)
     }
 }
 

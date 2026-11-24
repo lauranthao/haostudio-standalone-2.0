@@ -709,7 +709,7 @@ final class MusicPlayerViewModel: ObservableObject {
             return
         }
         let target = coordinator.targetQuality
-        resolver.resolveFirstPlayable(for: song.toPlaybackItem(), targetQuality: target) { [weak self] url in
+        resolver.resolveFirstPlayable(for: song.toPlaybackItem(), targetQuality: target, excluding: []) { [weak self] url in
             // Read the resolved tier HERE (this closure is plain
             // @escaping): `resolver` is a bare SourceResolver
             // existential, not Sendable, so it must not be captured

@@ -103,6 +103,11 @@ struct MusicTrack: Equatable {
     let duration: TimeInterval?
     /// Platform code: `wy` / `tx` / `kg` / `kw` / `mg`.
     let sourceID: String
+    /// Search-time VIP-only flag (build 36 item 3): NetEase
+    /// `fee != 0` / `privilege` `none`, QQ `pay.payplay` — the
+    /// track is trial-only for a no-login client. Only ever
+    /// tightens preview detection; never skips a source by itself.
+    let trialOnly: Bool
 
     var platform: MusicPlatform? { MusicPlatform(code: sourceID) }
 
@@ -132,7 +137,7 @@ struct MusicTrack: Equatable {
 
     init(id: String, title: String, artist: String, album: String = "",
          coverURL: URL? = nil, duration: TimeInterval? = nil,
-         sourceID: String) {
+         sourceID: String, trialOnly: Bool = false) {
         self.id = id
         self.title = title
         self.artist = artist
@@ -140,5 +145,6 @@ struct MusicTrack: Equatable {
         self.coverURL = coverURL
         self.duration = duration
         self.sourceID = sourceID
+        self.trialOnly = trialOnly
     }
 }
