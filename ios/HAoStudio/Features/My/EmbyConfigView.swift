@@ -43,7 +43,7 @@ struct EmbyConfigView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     Text("免密直连用，有账号登录时不用填。")
-                        .font(.system(size: 12))
+                        .font(.system(size: 13))
                         .foregroundStyle(theme.textMuted)
                 }
             }
@@ -53,7 +53,7 @@ struct EmbyConfigView: View {
                     viewModel.testConnection { _ in
                     }
                 }
-                .font(.system(size: 15))
+                .font(.system(size: 17))
                 .disabled(viewModel.status == .testing)
                 Button("保存") {
                     if viewModel.save() {
@@ -62,12 +62,12 @@ struct EmbyConfigView: View {
                         showingSaveFailedAlert = true
                     }
                 }
-                .font(.system(size: 15))
+                .font(.system(size: 17))
                 .disabled(viewModel.status == .testing)
                 Button("清除配置", role: .destructive) {
                     showingClearAlert = true
                 }
-                .font(.system(size: 15))
+                .font(.system(size: 17))
             }
         }
         .haoBottomChromePadding()
@@ -96,11 +96,11 @@ struct EmbyConfigView: View {
     private var statusRow: some View {
         HStack {
             Text("状态")
-                .font(.system(size: 15))
+                .font(.system(size: 17))
                 .foregroundStyle(theme.textPrimary)
             Spacer()
             Text(statusText)
-                .font(.system(size: 14))
+                .font(.system(size: 17))
                 .foregroundStyle(theme.textSecondary)
                 .multilineTextAlignment(.trailing)
         }
