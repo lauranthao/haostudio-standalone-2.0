@@ -204,9 +204,27 @@ struct LiveDanmakuListView: View {
     @State private var recentTexts: [String] = []
     @State private var lastSeenCount = 0
     @State private var lastSeenSequence = 0
+    /// Bumps whenever `shown` changes (build 35 sweep S8): the
+    /// auto-scroll trigger. `shown.count` cannot be the trigger
+    /// any more — once the list is capped at `maxCount`, an append
+    /// + trim leaves the count unchanged and the scroll would
+    /// freeze, the same trap D2 fixed for `messages.count`.
+    @State private var shownVersion = 0
 
     private var isEnabled: Bool {
         settings.enabled[platform] ?? true
+    }
+
+    /// Cap the visible chat list at `maxCount` (build 35 sweep
+    /// S8): `shown` was append-only, so a long session in a busy
+    /// room grew it without bound — and every append re-ran
+    /// `Array(shown.enumerated())` + ForEach diffing over the
+    /// whole list. The view-model window (200) does not bound
+    /// this array. Oldest first out. Pure, so tests can drive it
+    /// without a view.
+    static func capped(_ shown: [DanmakuMessage], to maxCount: Int) -> [DanmakuMessage] {
+        guard shown.count > maxCount else { return shown }
+        return Array(shown.suffix(maxCount))
     }
 
     var body: some View {
@@ -265,10 +283,10 @@ struct LiveDanmakuListView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 8)
             }
-            .onChange(of: shown.count) { _, count in
-                guard count > 0 else { return }
+            .onChange(of: shownVersion) { _, _ in
+                guard shown.count > 0 else { return }
                 withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo(count - 1, anchor: .bottom)
+                    proxy.scrollTo(shown.count - 1, anchor: .bottom)
                 }
             }
         }
@@ -313,7 +331,11 @@ struct LiveDanmakuListView: View {
     /// oldest).
     private func ingestNewMessages() {
         guard isEnabled else { return }
+        var changed = false
         if messages.count < lastSeenCount {
+            if !shown.isEmpty {
+                changed = true
+            }
             shown = []
             recentTexts = []
             lastSeenCount = 0
@@ -326,6 +348,9 @@ struct LiveDanmakuListView: View {
         } else if appended > 0, !messages.isEmpty {
             fresh = messages.suffix(min(appended, messages.count))
         } else {
+            if changed {
+                shownVersion += 1
+            }
             return
         }
         lastSeenCount = messages.count
@@ -334,8 +359,19 @@ struct LiveDanmakuListView: View {
                 message: message, settings: settings, recentTexts: recentTexts
             ) else { continue }
             shown.append(message)
+            changed = true
             recentTexts.insert(message.text, at: 0)
             recentTexts = Array(recentTexts.prefix(20))
+        }
+        // Build 35 sweep S8: cap the visible list at the
+        // `maxCount` setting (this finally wires that setting —
+        // until now nothing read it). The count-based scroll
+        // trigger above is replaced by `shownVersion`, so the
+        // scroll keeps working once the cap holds the count
+        // steady.
+        if changed {
+            shown = Self.capped(shown, to: settings.maxCount)
+            shownVersion += 1
         }
     }
 }
@@ -476,6 +512,14 @@ struct LiveDanmakuOverlayView: View {
             let item = LiveFlyingItem(message: message, lane: nextLane)
             nextLane = (nextLane + 1) % LiveDanmakuOverlayView.laneCount
             flying.append(item)
+            // Build 35 sweep S8: cap the in-flight rows at the
+            // pool ceiling (`maxCount`, at most 72 — this finally
+            // wires `flyingMaxVisibleCount`). The 8 s expiry alone
+            // does not bound a burst: a busy room could hold
+            // hundreds of animating rows at once.
+            if flying.count > settings.flyingMaxVisibleCount {
+                flying.removeFirst(flying.count - settings.flyingMaxVisibleCount)
+            }
             recentTexts.insert(message.text, at: 0)
             recentTexts = Array(recentTexts.prefix(20))
             let itemId = item.id

@@ -68,13 +68,12 @@ struct LiveRoomView: View {
     @State private var isFullscreen = false
     @State private var controlsVisible = true
     @State private var isFollowing = false
-    @State private var selectedQualityIndex = 0
-    @State private var selectedLineIndex = 0
     @State private var showQualitySheet = false
     @State private var showDanmakuSettings = false
     @State private var showBrightnessVolume = false
     @State private var danmakuSettings = LiveDanmakuSettings.load()
     @State private var autoHideWork: DispatchWorkItem?
+    @State private var toastWork: DispatchWorkItem?
 
     init(room: LiveRoom, playlist: [LiveRoom]) {
         self.room = room
@@ -129,10 +128,19 @@ struct LiveRoomView: View {
             // The room is gone: the shell bottom chrome comes back.
             immersiveChrome.exitImmersive()
             autoHideWork?.cancel()
+            toastWork?.cancel()
             VideoOrientation.unlockPortrait()
             livePlayer.stopDanmaku()
             livePlayer.disarmBrightness()
             coordinator.stop()
+            // Build 35 sweep S3: `stop()` only shuts the backend
+            // — the session (room + prefetch timer + resolver)
+            // lives on until the next room's `enterRoom` replaces
+            // it, so the exited room's lease prefetch kept
+            // re-parsing on its timer after exit. `release()` is
+            // the documented exit path (it also exits the
+            // session); the room page never called it.
+            livePlayer.driver.release {}
         }
         .onChange(of: isFullscreen) { _, fullscreen in
             if fullscreen {
@@ -151,8 +159,16 @@ struct LiveRoomView: View {
             LiveQualityLineSheet(
                 qualities: livePlayer.qualities,
                 lines: livePlayer.lines,
-                selectedQualityIndex: $selectedQualityIndex,
-                selectedLineIndex: $selectedLineIndex,
+                // Build 35 sweep S5: the highlight is derived from
+                // the driver's acked state, never from local state
+                // — the old local indices went stale whenever the
+                // driver acked a different tier (cellular
+                // downgrade caps the entry tier; a fallback opens
+                // another line), so the sheet highlighted a tier
+                // that was not playing and tapping that row was a
+                // dead no-op.
+                selectedQualityIndex: livePlayer.qualities.firstIndex(where: { $0.id == livePlayer.currentQuality?.id }) ?? 0,
+                selectedLineIndex: livePlayer.currentLineIndex,
                 currentQualityLabel: livePlayer.currentQuality?.name,
                 onSelectQuality: { index in switchQuality(to: index) },
                 onSelectLine: { index in switchLine(to: index) }
@@ -175,6 +191,38 @@ struct LiveRoomView: View {
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
         .statusBarHidden(isFullscreen)
+        // Build 35 sweep S6: the view model has always set a toast
+        // on a line switch and on a failed quality switch, but no
+        // view ever read it — a failed switch closed the sheet and
+        // said nothing. Show it above the bottom bar and clear it
+        // after 2.5 s (hit-test transparent: it must never eat the
+        // tap-to-play underneath).
+        .overlay(alignment: .bottom) {
+            if let toast = livePlayer.toast {
+                Text(toast)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Color.black.opacity(0.7), in: Capsule())
+                    .padding(.bottom, 96)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onChange(of: livePlayer.toast) { _, toast in
+            toastWork?.cancel()
+            guard toast != nil else { return }
+            let work = DispatchWorkItem { livePlayer.clearToast() }
+            toastWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
+        }
+    }
+
+    /// Live status for the badges: the view model's refreshed
+    /// value wins when room info has answered (build 35 sweep
+    /// S7); until then the card's stored value stands.
+    private var isLiveNow: Bool {
+        livePlayer.roomIsLive ?? currentRoom.isLive
     }
 
     // MARK: - Open / switch
@@ -191,8 +239,6 @@ struct LiveRoomView: View {
             platform: room.platform.rawValue, roomId: room.roomId,
             title: room.title, nick: room.streamer, cover: room.cover)
         isFollowing = LiveLibraryStore.isFollowed(platform: room.platform.rawValue, roomId: room.roomId)
-        selectedQualityIndex = 0
-        selectedLineIndex = 0
         let resolver = LiveSites.resolver(for: room.platform)
         livePlayer.driver.configure(room: room, resolver: resolver)
         coordinator.requestLivePlay(LiveDriver.playbackItem(room: room))
@@ -205,22 +251,24 @@ struct LiveRoomView: View {
         openCurrentRoom()
     }
 
-    /// Same quality = no-op (Flutter §2.8). The driver's ack may
-    /// differ from the request; the button label reads the
-    /// driver's currentQuality, so the UI follows the ack.
+    /// Same quality = no-op (Flutter §2.8). Compared against the
+    /// driver's acked quality, not a local index (build 35 sweep
+    /// S5): the ack can differ from the last request (cellular
+    /// downgrade, server cap), and the old local comparison made
+    /// the highlighted row untappable even when it was not the
+    /// tier playing.
     private func switchQuality(to index: Int) {
         guard livePlayer.qualities.indices.contains(index) else { return }
-        guard index != selectedQualityIndex else { return }
-        selectedQualityIndex = index
+        guard livePlayer.qualities[index].id != livePlayer.currentQuality?.id else { return }
         livePlayer.switchQuality(to: livePlayer.qualities[index])
     }
 
-    /// Same line = no-op. The line switch keeps the room and
-    /// resumes at the live edge (the driver owns the resume).
+    /// Same line = no-op, compared against the driver's line
+    /// index (build 35 sweep S5 — the local index went stale on
+    /// a fallback open, same as quality above).
     private func switchLine(to index: Int) {
         guard livePlayer.lines.indices.contains(index) else { return }
-        guard index != selectedLineIndex else { return }
-        selectedLineIndex = index
+        guard index != livePlayer.currentLineIndex else { return }
         livePlayer.switchLine(to: index)
     }
 
@@ -423,7 +471,7 @@ struct LiveRoomView: View {
                         .foregroundStyle(theme.textPrimary)
                         .lineLimit(2)
                     HStack(spacing: 6) {
-                        if currentRoom.isLive {
+                        if isLiveNow {
                             Text("LIVE")
                                 .font(.system(size: 10, weight: .bold))
                                 .foregroundStyle(.white)
@@ -675,7 +723,7 @@ struct LiveRoomView: View {
                     .lineLimit(1)
             }
             Spacer()
-            if currentRoom.isLive {
+            if isLiveNow {
                 Text("LIVE")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.white)
@@ -780,8 +828,12 @@ private struct LiveVideoSurfaceView: UIViewRepresentable {
 struct LiveQualityLineSheet: View {
     var qualities: [LiveQuality]
     var lines: [LiveLine]
-    @Binding var selectedQualityIndex: Int
-    @Binding var selectedLineIndex: Int
+    /// Highlight indices, derived from the driver's acked state
+    /// by the caller (build 35 sweep S5) — plain values, not
+    /// bindings: the sheet only reads them, and a binding would
+    /// invite a second, stale source of truth.
+    var selectedQualityIndex: Int
+    var selectedLineIndex: Int
     var currentQualityLabel: String?
     var onSelectQuality: (Int) -> Void
     var onSelectLine: (Int) -> Void
