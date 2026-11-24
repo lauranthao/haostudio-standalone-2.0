@@ -96,6 +96,10 @@ final class EmbyTabViewModel: ObservableObject {
 struct EmbyTabView: View {
     var onSelect: (VideoItem) -> Void
     var onSelectGenre: (String) -> Void
+    /// Opens the dedicated Emby search page (build 36, item 17).
+    /// Handed in like onSelect: the tab owns the NavigationStack
+    /// path and never pushes on its own.
+    var onSearch: () -> Void
 
     @StateObject private var viewModel = EmbyTabViewModel()
 
@@ -119,6 +123,9 @@ struct EmbyTabView: View {
                         // Scroll anchor for the bottom chrome (b35 tab-bar
                         // link): drives minimize / restore as this tab scrolls.
                         HaoChromeScrollAnchor()
+                        searchEntry
+                            .padding(.horizontal, 16)
+                            .padding(.top, 12)
                         libraryStrip
                             .padding(.top, 12)
                         if !viewModel.genres.isEmpty {
@@ -158,6 +165,35 @@ struct EmbyTabView: View {
             }
         }
         .onAppear { viewModel.reload() }
+    }
+
+    /// Search entry (build 36, item 17): visually identical to
+    /// the CMS `searchEntry` in VideoTabView (40pt,
+    /// RoundedRectangle(cornerRadius: 12), magnifyingglass +
+    /// placeholder) so the two modes feel consistent — but it
+    /// opens the dedicated Emby search page, never CMS search.
+    /// Configured branch only: the not-configured branch shows
+    /// no button leading nowhere.
+    private var searchEntry: some View {
+        Button(action: onSearch) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.haoSubheadStrong)
+                    .foregroundStyle(theme.textMuted)
+                Text("搜索 Emby 影片、剧集")
+                    .font(.haoSubhead)
+                    .foregroundStyle(theme.textMuted)
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 40)
+            .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(theme.hairline, lineWidth: 0.5)
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private var libraryStrip: some View {

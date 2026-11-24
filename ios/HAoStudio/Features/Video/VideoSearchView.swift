@@ -50,9 +50,12 @@ final class VideoSearchViewModel: ObservableObject {
             self.isSearching = false
         }
         if gateway.embyConfigured {
-            gateway.searchEmby(keyword: query) { [weak self] items in
+            gateway.searchEmby(keyword: query) { [weak self] result in
                 guard let self = self, self.searchGeneration == generation else { return }
-                self.embyResults = items
+                if case .success(let items) = result { self.embyResults = items }
+                // Failure keeps the Emby section hidden (CMS results
+                // still show); the dedicated Emby search page is
+                // where the error is surfaced.
             }
         }
     }

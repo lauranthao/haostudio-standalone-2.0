@@ -82,8 +82,11 @@ protocol VideoDataGateway {
     /// with one "正片" episode; series get one line per season
     /// group with one episode per item.
     func fetchEmbyDetail(item: VideoItem, completion: @escaping (VideoDetail?) -> Void)
-    /// Emby library search.
-    func searchEmby(keyword: String, completion: @escaping ([VideoItem]) -> Void)
+    /// Emby library search. Failures surface as EmbyError (not
+    /// swallowed to []): the dedicated Emby search page shows an
+    /// honest offline error, while the CMS search page keeps the
+    /// Emby section hidden on failure.
+    func searchEmby(keyword: String, completion: @escaping (Result<[VideoItem], EmbyError>) -> Void)
 
     // MARK: - Download
 
@@ -371,20 +374,13 @@ final class RealVideoDataGateway: VideoDataGateway {
         }
     }
 
-    func searchEmby(keyword: String, completion: @escaping ([VideoItem]) -> Void) {
+    func searchEmby(keyword: String, completion: @escaping (Result<[VideoItem], EmbyError>) -> Void) {
         guard let client = embyClient() else {
-            DispatchQueue.main.async { completion([]) }
+            DispatchQueue.main.async { completion(.failure(.unreachable())) }
             return
         }
         client.search(query: keyword) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .failure:
-                    completion([])
-                case .success(let pageResult):
-                    completion(pageResult.items)
-                }
-            }
+            DispatchQueue.main.async { completion(result.map { $0.items }) }
         }
     }
 

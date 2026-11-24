@@ -51,7 +51,9 @@ private final class StubVideoGateway: VideoDataGateway {
         }
         completion(embyDetailResults.removeFirst())
     }
-    func searchEmby(keyword: String, completion: @escaping ([VideoItem]) -> Void) { completion([]) }
+    func searchEmby(keyword: String, completion: @escaping (Result<[VideoItem], EmbyError>) -> Void) {
+        completion(.success([]))
+    }
     func enqueueDownload(
         detail: VideoDetail, episode: PlayEpisode, line: PlayLine,
         completion: @escaping (Bool) -> Void
