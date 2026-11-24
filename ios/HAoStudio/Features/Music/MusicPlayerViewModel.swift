@@ -134,6 +134,12 @@ final class MusicPlayerViewModel: ObservableObject {
     private var toastTimer: Timer?
     private var expectedItemId: String?
     private var lastPosition: Double = 0
+    // D3: guards for the position-wrap heuristic below — a
+    // backward jump is only a natural completion when it lands
+    // near 0, no VM seek just fired, and the position belonged
+    // to this same track.
+    private var lastSeekAt = Date.distantPast
+    private var lastPositionTrackKey: String?
     private var wasPlaying = false
     private var lastCompletionKey = ""
     private var lastCompletionAt = Date.distantPast
@@ -266,12 +272,29 @@ final class MusicPlayerViewModel: ObservableObject {
             // deadline here so a timer never sleeps past its stop
             // time. checkFire is a no-op without a deadline.
             self.sleepTimer.checkFire()
-            // Position wrapped backwards by > 5 s on the same track:
-            // a natural completion (single-loop replay).
-            if value < self.lastPosition - 5 {
+            // Position wrapped backwards by > 5 s: a natural
+            // completion (single-loop replay) ONLY when all three
+            // guards hold — (a) the wrap lands near 0 (a backward
+            // seek lands mid-song); (b) no VM-issued seek just
+            // fired (lyric-line tap, progress-bar drag); (c) the
+            // position belonged to this same track (a 0-tick
+            // arriving after a track change is suppressed because
+            // handleCurrentItemChanged already counted the old
+            // track; one arriving before it counts the old track
+            // once, deduped by the 2 s window). Without the guards,
+            // tapping an earlier lyric line or dragging the bar
+            // back counted as "one song finished": the sleep timer
+            // could pause mid-song and the resume checkpoint was
+            // wiped. Residual: a remote skip-back (Control Center
+            // / lock screen, bypasses the VM) landing within 5 s
+            // of 0:00 still counts once — rare and harmless.
+            if value < 5 && value < self.lastPosition - 5
+                && Date().timeIntervalSince(self.lastSeekAt) > 1.5
+                && self.lastPositionTrackKey == self.currentSong?.identityKey {
                 if let song = self.currentSong { self.noteNaturalCompletion(completed: song) }
             }
             self.lastPosition = value
+            self.lastPositionTrackKey = self.currentSong?.identityKey
             // Auto-resume checkpoint: while playing, save the
             // position every 10 s. The gate in MusicResumeLogic
             // skips writes that have not moved, so the resume
@@ -728,6 +751,10 @@ final class MusicPlayerViewModel: ObservableObject {
         // resume seek: the user just chose where to listen.
         pendingResume = nil
         let scrubbed = scrubSeconds
+        // D3: stamp the seek so the position sink does not read
+        // the jump that follows as a natural completion (lyric
+        // taps and progress-bar drags both come through here).
+        lastSeekAt = Date()
         player.seek(to: target) { [weak self] ok in
             guard let self = self else { return }
             if self.scrubSeconds == scrubbed { self.scrubSeconds = nil }
