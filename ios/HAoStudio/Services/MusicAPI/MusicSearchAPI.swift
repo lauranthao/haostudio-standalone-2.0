@@ -370,7 +370,7 @@ final class MusicSearchAPI {
         let artist = MusicAPIJSON.asString(map["singer"] ?? map["artist"])
         let album = MusicAPIJSON.asString(map["albumName"] ?? map["album"])
         let cover = MusicAPIJSON.asString(map["pic"] ?? map["cover"] ?? map["albumpic"])
-        let duration = MusicAPIJSON.asDouble(map["duration"] ?? map["interval"])
+        let duration = scriptDurationSeconds(map)
         // The track carries the REAL platform: a per-item signal
         // in the script result wins (some scripts return items
         // from another platform than requested); otherwise the
@@ -383,8 +383,42 @@ final class MusicSearchAPI {
         return MusicTrack(
             id: id, title: title, artist: artist, album: album,
             coverURL: URL(string: MusicText.coverHi(cover, platform: resolved.rawValue)),
-            duration: duration > 0 ? duration : nil,
+            duration: duration,
             sourceID: resolved.rawValue)
+    }
+
+    /// Duration of an LX script search hit, in seconds. Scripts
+    /// carry it two ways: a numeric `duration` (seconds — kuliao),
+    /// or an `interval` string "mm:ss" (feichangdao, suyin — their
+    /// formatDuration helper). The old `asDouble(duration ??
+    /// interval)` turned "03:45" into 0, so the duration was nil
+    /// and the 30 s-preview asset check — which needs a non-nil
+    /// expected duration — went blind for script-found songs: a
+    /// trial clip could play as if it were the full song. A numeric
+    /// `interval` is seconds too (no script returns ms durations
+    /// in search results); "00:00" is nil, not 0.
+    static func scriptDurationSeconds(_ map: [String: Any]) -> TimeInterval? {
+        if let seconds = MusicAPIJSON.asDouble(map["duration"]), seconds > 0 {
+            return seconds
+        }
+        if let seconds = MusicAPIJSON.asDouble(map["interval"]), seconds > 0 {
+            return seconds
+        }
+        let interval = MusicAPIJSON.asString(map["interval"])
+        let rawParts = interval.split(separator: ":")
+        guard rawParts.count == 2 || rawParts.count == 3 else { return nil }
+        var parts: [Double] = []
+        for raw in rawParts {
+            guard let value = Double(raw) else { return nil }
+            parts.append(value)
+        }
+        let seconds: Double
+        if parts.count == 2 {
+            seconds = parts[0] * 60 + parts[1]
+        } else {
+            seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
+        }
+        return seconds > 0 ? seconds : nil
     }
 
     // MARK: - NetEase charts (排行榜)
