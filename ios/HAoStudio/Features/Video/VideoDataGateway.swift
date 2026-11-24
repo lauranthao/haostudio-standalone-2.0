@@ -54,7 +54,12 @@ protocol VideoDataGateway {
     /// Category names for the tab's category strip.
     func fetchTypeNames(completion: @escaping ([String]) -> Void)
     /// One category page (0-based). Empty page = end of list.
-    func fetchByType(_ type: String, page: Int, completion: @escaping (VideoItemPage) -> Void)
+    /// `area` / `year` / `by` are the CmsClient filter values
+    /// ("all" / "all" / "" = unfiltered, exactly what the old
+    /// two-argument call fetched). Swift forbids default arguments
+    /// in a protocol method, so the full signature is the
+    /// requirement and callers pass the three values explicitly.
+    func fetchByType(_ type: String, page: Int, area: String, year: String, by: String, completion: @escaping (VideoItemPage) -> Void)
     /// CMS search across enabled sources, fastest first.
     func search(keyword: String, completion: @escaping ([VideoItem]) -> Void)
     /// Full detail: CMS lines + Douban metadata merged. Nil when
@@ -177,8 +182,12 @@ final class RealVideoDataGateway: VideoDataGateway {
         }
     }
 
-    func fetchByType(_ type: String, page: Int, completion: @escaping (VideoItemPage) -> Void) {
-        cms.byType(typeName: type, page: page) { result in
+    func fetchByType(_ type: String, page: Int, area: String, year: String, by: String, completion: @escaping (VideoItemPage) -> Void) {
+        // The filtered byType overload (name:page:area:year:by:) —
+        // NOT the old byType(typeName:page:) overload, which has
+        // no filter parameters. Its `page` is 0-based like the
+        // gateway's (see the note on byLeafType / byParentType).
+        cms.byType(name: type, page: page, area: area, year: year, by: by) { result in
             DispatchQueue.main.async {
                 guard let result = result else {
                     completion(.empty)

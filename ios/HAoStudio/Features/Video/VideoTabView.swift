@@ -4,8 +4,9 @@
 // continue watching, with a CMS / Emby mode switch (persisted in
 // `hao_video_tab_mode`, Flutter parity). Mirrors Flutter
 // video_tab_page.dart (_CmsHomePage): cached rows first, then a
-// fresh fetch; pull to refresh; section headers with a "更多" link
-// into the category page.
+// fresh fetch; pull to refresh; section headers with a "全部"
+// button into the browse page, and a "浏览全部" chip first in the
+// category strip (build 36 item 18).
 //
 // The tab never invents rows: when the gateway answers empty
 // (placeholder, or no source reachable) the page says so honestly.
@@ -22,6 +23,11 @@ enum VideoDestination: Hashable {
     case detail(VideoItem)
     case embyDetail(VideoItem)
     case embyGenre(String)
+    /// Browse page (build 36 item 18). nil = no type pre-selected
+    /// (first visible category); non-nil = pre-selected type.
+    /// The "每日推荐" row passes nil: daily picks have no single
+    /// type, and no fake "daily" type is invented.
+    case browse(String?)
 }
 
 @MainActor
@@ -121,9 +127,22 @@ struct VideoTabView: View {
                     EmbyDetailView(item: item)
                 case .embyGenre(let genre):
                     EmbyCategoryView(genre: genre, onSelect: { path.append(.embyDetail($0)) })
+                case .browse(let type):
+                    VideoBrowseView(
+                        initialType: type,
+                        onSelectCMS: { path.append(.detail($0)) },
+                        onSelectEmby: { path.append(.embyDetail($0)) }
+                    )
                 }
             }
-            .onAppear { viewModel.reload() }
+            .onAppear {
+                // The browse page can change the persisted tab mode
+                // (its 影视/Emby switch writes hao_video_tab_mode);
+                // re-read it so popping back shows the mode the
+                // user actually left the browse page in.
+                mode = VideoLibraryStore.tabMode()
+                viewModel.reload()
+            }
         }
     }
 
@@ -199,6 +218,18 @@ struct VideoTabView: View {
     private var categoryStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
+                // First chip, never scrolled out of sight: the
+                // browse page (build 36 item 18), first visible
+                // category pre-selected.
+                Button(action: { path.append(.browse(type: nil)) }) {
+                    Label("浏览全部", systemImage: "square.grid.2x2")
+                        .font(.haoDenseBody)
+                        .foregroundStyle(theme.onAccent)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(theme.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
                 ForEach(viewModel.categories, id: \.self) { type in
                     Button(action: { path.append(.category(type)) }) {
                         Text(type)
@@ -274,6 +305,13 @@ struct VideoTabView: View {
                     .font(.haoSectionTitle)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
+                // Same 14pt medium accent style as the continue
+                // section's "全部". The daily row passes nil (first
+                // visible category); every other row passes its own
+                // type.
+                Button("全部") { path.append(.browse(type: row.id == "daily" ? nil : row.title)) }
+                    .font(.haoDenseBody)
+                    .foregroundStyle(theme.accent)
             }
             .padding(.horizontal, 16)
             ScrollView(.horizontal, showsIndicators: false) {

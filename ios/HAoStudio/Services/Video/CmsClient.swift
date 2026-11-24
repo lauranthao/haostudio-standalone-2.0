@@ -1024,57 +1024,6 @@ final class CmsClient: VideoPlayURLResolver {
         }
     }
 
-    /// One category page (`page` 0-based; CMS pages are 1-based,
-    /// so the fetch uses `page + 1`). Same candidate ladder as
-    /// homeRowOne: leaf → one type page on the primary source,
-    /// falling back to same-name candidates; parent → child pages
-    /// interleaved. Nil when no candidate returns a matching page.
-    func byType(typeName: String, page: Int, completion: @escaping (VideoByTypeResult?) -> Void) {
-        typeMap { map in
-            guard let entry = map[typeName] else {
-                completion(nil)
-                return
-            }
-            let attempts = [entry] + entry.candidates
-            let limited = Array(attempts.prefix(4))
-            var index = 0
-            func step() {
-                if index >= limited.count {
-                    completion(nil)
-                    return
-                }
-                let target = limited[index]
-                index += 1
-                guard let source = self.sourceById(target.source) else {
-                    step()
-                    return
-                }
-                if target.isParent {
-                    self.fetchChildPages(source: source, childTypeIds: target.childTypeIds, page: page + 1) { pages in
-                        let valid = pages.compactMap { $0 }
-                        if valid.isEmpty {
-                            step()
-                            return
-                        }
-                        let items = CmsClient.interleaveTypePages(valid.map { $0.rows.map { $0.item } })
-                        let total = valid.reduce(0) { $0 + $1.total }
-                        let pagecount = valid.map { $0.pagecount }.max() ?? 0
-                        completion(VideoByTypeResult(name: typeName, page: page, pagecount: pagecount, total: total, items: items))
-                    }
-                    return
-                }
-                self.fetchTypePage(source: source, typeId: target.typeId, page: page + 1) { result in
-                    guard let result = result, CmsClient.leafPageMatches(name: typeName, items: result.rows.map { $0.item }) else {
-                        step()
-                        return
-                    }
-                    completion(VideoByTypeResult(name: typeName, page: page, pagecount: result.pagecount, total: result.total, items: result.rows.map { $0.item }))
-                }
-            }
-            step()
-        }
-    }
-
     /// One home row: leaf → `?ac=videolist&t=<typeId>&pg=1` on the
     /// primary source, falling back to same-name candidates; parent
     /// → all child type_ids, merged. At most 4 attempts.
@@ -1263,10 +1212,14 @@ final class CmsClient: VideoPlayURLResolver {
         step()
     }
 
-    /// By-type page. Parent categories fan out to child type_ids
-    /// and merge; leaves query one source, falling back to
-    /// same-name candidates. Filtered (area/year) fetches a window
-    /// of 10 CMS pages for leaves, then client-side filters.
+    /// By-type page (`page` 0-based, the gateway contract; CMS
+    /// pages are 1-based, so the fetch uses `page + 1` — same as
+    /// the old byType(typeName:page:) overload this replaces).
+    /// Parent categories fan out to child type_ids and merge;
+    /// leaves query one source, falling back to same-name
+    /// candidates. Filtered (area/year) fetches a window of 10
+    /// CMS pages for leaves, then client-side filters: logical
+    /// page 0 covers CMS pages 1...10, page 1 covers 11...20.
     func byType(name: String, page: Int, area: String = "all", year: String = "all", by: String = "", completion: @escaping (VideoByTypeResult?) -> Void) {
         typeMap { map in
             guard let entry = map[name] else {
@@ -1303,7 +1256,13 @@ final class CmsClient: VideoPlayURLResolver {
                 step()
                 return
             }
-            let pagesToFetch = filtered ? (0..<window).map { (page - 1) * window + 1 + $0 } : [page]
+            // 0-based logical page: unfiltered fetches the one CMS
+            // page (page + 1); filtered fetches a 10-page window
+            // (page 0 → CMS pages 1...10). The previous math used
+            // `(page - 1) * window + 1`, which fetched CMS pages
+            // -9...0 for page 0 — this overload had no callers, so
+            // nothing ever caught it (build 36 item 18).
+            let pagesToFetch = filtered ? (0..<window).map { page * window + 1 + $0 } : [page + 1]
             var extraQuery = ""
             if area != "all" && area != "other" {
                 extraQuery += "&area=\((area.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? area))"
@@ -1358,6 +1317,11 @@ final class CmsClient: VideoPlayURLResolver {
     }
 
     private func byParentType(name: String, entry: CmsTypeEntry, page: Int, area: String, year: String, by: String, completion: @escaping (VideoByTypeResult?) -> Void) {
+        // No item cap here: the old byType(typeName:page:)
+        // overload returned the full interleave, and the gateway
+        // now routes the existing category page through this path
+        // — capping at 20 would silently drop items the old path
+        // showed.
         let filtered = area != "all" || year != "all"
         let attempts = Array(([entry] + entry.candidates).prefix(4))
         var anyOk = false
@@ -1379,7 +1343,7 @@ final class CmsClient: VideoPlayURLResolver {
                 return
             }
             if target.isParent {
-                fetchChildPages(source: source, childTypeIds: target.childTypeIds, page: page) { fetched in
+                fetchChildPages(source: source, childTypeIds: target.childTypeIds, page: page + 1) { fetched in
                     let pages = fetched.compactMap { $0 }
                     if pages.isEmpty {
                         step()
@@ -1394,14 +1358,13 @@ final class CmsClient: VideoPlayURLResolver {
                         step()
                         return
                     }
-                    var items = CmsClient.filterByTypeItems(rows, area: area, year: year, by: by)
-                    if !filtered && items.count > 20 { items = Array(items.prefix(20)) }
+                    let items = CmsClient.filterByTypeItems(rows, area: area, year: year, by: by)
                     let result = VideoByTypeResult(name: name, page: page, pagecount: pagecount, total: filtered ? items.count : total, items: items)
                     DispatchQueue.main.async { completion(result) }
                 }
                 return
             }
-            fetchTypePage(source: source, typeId: target.typeId, page: page) { result in
+            fetchTypePage(source: source, typeId: target.typeId, page: page + 1) { result in
                 guard let result = result else {
                     step()
                     return
@@ -1411,8 +1374,7 @@ final class CmsClient: VideoPlayURLResolver {
                     step()
                     return
                 }
-                var items = CmsClient.filterByTypeItems(result.rows, area: area, year: year, by: by)
-                if !filtered && items.count > 20 { items = Array(items.prefix(20)) }
+                let items = CmsClient.filterByTypeItems(result.rows, area: area, year: year, by: by)
                 let pageResult = VideoByTypeResult(name: name, page: page, pagecount: result.pagecount, total: filtered ? items.count : result.total, items: items)
                 DispatchQueue.main.async { completion(pageResult) }
             }
