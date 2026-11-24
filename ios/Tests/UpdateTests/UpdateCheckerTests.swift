@@ -586,6 +586,40 @@ final class UpdateCheckerTests: XCTestCase {
         XCTAssertNil(result.minOs)
     }
 
+    func testManifestRejectsNonHttpDownloadURL() {
+        // An update button that opens a non-http(s) URL (or a
+        // relative one) is never offered: the manifest is refused
+        // and the fallback runs instead.
+        fetcher.scripted = [
+            .respond(data: manifestData(ipaUrl: "ftp://example.invalid/app.ipa"), status: 200),
+            .respond(data: manifestData(), status: 200),
+        ]
+        let checker = makeChecker()
+        let result = checkForUpdate(checker)
+        assertNewer(result, version: "1.1.6", build: 32)
+        XCTAssertEqual(fetcher.requests.count, 2, "the bad-URL manifest must fall through to the fallback")
+    }
+
+    func testManifestBooleanBuildIsParseError() {
+        // `build: true` is a boolean, not build 1: the manifest
+        // must fail parsing (and the fallback runs), not offer a
+        // phantom build-1 release.
+        let root: [String: Any] = [
+            "version": "9.9.9",
+            "build": true,
+            "ipaUrl": "https://example.invalid/app.ipa",
+        ]
+        let badData = try! JSONSerialization.data(withJSONObject: root, options: [])
+        fetcher.scripted = [
+            .respond(data: badData, status: 200),
+            .respond(data: manifestData(), status: 200),
+        ]
+        let checker = makeChecker()
+        let result = checkForUpdate(checker)
+        assertNewer(result, version: "1.1.6", build: 32)
+        XCTAssertEqual(fetcher.requests.count, 2)
+    }
+
     func testChangelogLocalization() {
         let object = try! JSONSerialization.jsonObject(with: manifestData(), options: [])
         let parsed = UpdateManifestParser.parse(object)!

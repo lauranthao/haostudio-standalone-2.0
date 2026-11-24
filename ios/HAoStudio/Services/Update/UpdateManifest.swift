@@ -32,14 +32,17 @@ struct UpdateChangelog {
         let normalized = code.lowercased().replacingOccurrences(of: "_", with: "-")
         if normalized.hasPrefix("zh-hant") || normalized == "zh-tw"
             || normalized == "zh-hk" || normalized == "zh-mo" {
-            return tw ?? text
+            // A manifest that carries only the Simplified entry
+            // must still show notes to a Traditional user instead
+            // of none at all; same the other way round.
+            return tw ?? zh ?? text ?? en
         }
         if normalized.hasPrefix("zh-hans") || normalized == "zh-cn"
             || normalized == "zh-sg" || normalized == "zh" {
-            return zh ?? text
+            return zh ?? tw ?? text ?? en
         }
         if normalized == "en" || normalized.hasPrefix("en-") {
-            return en ?? text
+            return en ?? text ?? zh ?? tw
         }
         return text ?? zh ?? tw ?? en
     }
@@ -75,11 +78,24 @@ enum UpdateManifestParser {
         }
         guard let urlString = root["ipaUrl"] as? String,
               !urlString.isEmpty,
-              let downloadURL = URL(string: urlString)
+              let downloadURL = URL(string: urlString),
+              let scheme = downloadURL.scheme?.lowercased(),
+              scheme == "http" || scheme == "https"
         else {
             return nil
         }
-        let build = asInt(root["build"]) ?? 0
+        // A present-but-unparseable build (e.g. a JSON boolean,
+        // which asInt deliberately refuses) is a malformed
+        // manifest, not build 0. An absent build still defaults
+        // to 0; an explicit null is treated as absent.
+        let build: Int
+        if root["build"] == nil || root["build"] is NSNull {
+            build = 0
+        } else if let parsedBuild = asInt(root["build"]) {
+            build = parsedBuild
+        } else {
+            return nil
+        }
         let minOs = asString(root["minOs"])
         let size = asInt(root["size"])
         let changelog = parseChangelog(root["changelog"])
@@ -113,7 +129,11 @@ enum UpdateManifestParser {
     }
 
     static func asInt(_ value: Any?) -> Int? {
-        if let number = value as? NSNumber {
+        // A JSON boolean is an NSNumber too: `build: true`
+        // must not parse as build 1. numberValue excludes
+        // booleans, so it is the check, not a bare cast.
+        if let value = value,
+           let number = MigrationStore.numberValue(value) {
             return number.intValue
         }
         if let string = value as? String {

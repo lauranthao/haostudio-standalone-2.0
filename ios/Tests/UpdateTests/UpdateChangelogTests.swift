@@ -58,4 +58,15 @@ final class UpdateChangelogTests: XCTestCase {
         XCTAssertEqual(textOnly.localized(for: "zh-Hant-TW"), "plain")
         XCTAssertEqual(textOnly.localized(for: "en"), "plain")
     }
+
+    func testMissingEntryFallsBackAcrossLanguages() {
+        // A manifest that carries only the Simplified entry must
+        // still show notes to a Traditional user instead of none.
+        let zhOnly = UpdateChangelog(zh: "简体说明", tw: nil, en: nil, text: nil)
+        XCTAssertEqual(zhOnly.localized(for: "zh-Hant-TW"), "简体说明")
+        XCTAssertEqual(zhOnly.localized(for: "en"), "简体说明")
+        let twOnly = UpdateChangelog(zh: nil, tw: "繁體說明", en: nil, text: nil)
+        XCTAssertEqual(twOnly.localized(for: "zh-Hans-CN"), "繁體說明")
+        XCTAssertEqual(twOnly.localized(for: "en"), "繁體說明")
+    }
 }
