@@ -1045,6 +1045,10 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         positionTimer?.invalidate()
         positionTimer = nil
         fpsSampler.stop()
+        // #5: same as VideoDriver — a room switch must not keep
+        // reporting the OLD room as playing for the whole resolve
+        // + open.
+        self.recomputePlayingState()
     }
 
     // MARK: - Transport

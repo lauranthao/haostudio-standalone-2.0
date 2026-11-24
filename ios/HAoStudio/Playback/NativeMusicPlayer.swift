@@ -1552,6 +1552,12 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             }
             guard self.currentTrack != nil else { return }
             self.playRequested = false
+            // #5: the track ended — report not-playing now, before
+            // advanceAuto starts the next one. handleEngineFailed
+            // already recomputes; this path did not, so isPlaying
+            // kept the finished track's true through the whole
+            // crossfade setup.
+            self.recomputePlayingState()
             self.advanceAuto()
         }
     }

@@ -1145,6 +1145,12 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         positionTimer?.invalidate()
         positionTimer = nil
         fpsSampler.stop()
+        // #5: a switch/load must not keep reporting the OLD
+        // episode as playing for the whole resolve + open (up to
+        // 25 s): recompute now — backend is nil and playRequested
+        // is false, so isPlaying goes false within one runloop
+        // until the new item actually starts.
+        self.recomputePlayingState()
     }
 
     // MARK: - Transport
