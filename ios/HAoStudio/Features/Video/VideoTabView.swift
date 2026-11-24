@@ -313,7 +313,11 @@ struct VideoContinueCard: View {
                     if entry.durationSeconds > 0 {
                         ProgressView(value: entry.progress)
                             .tint(theme.accent)
-                            .frame(width: 120)
+                            // Full text-column width (was a fixed
+                            // 120pt, so the bar stopped well short
+                            // of the title above it and read as an
+                            // orphaned stub — build-35 polish).
+                            .frame(maxWidth: .infinity)
                         Text(videoTimeText(seconds: entry.positionSeconds))
                             .font(.system(size: 11))
                             .foregroundStyle(theme.textMuted)

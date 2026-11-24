@@ -174,7 +174,7 @@ struct LiveSearchView: View {
                     .foregroundStyle(theme.textMuted)
                     .padding(.horizontal, 24)
             } else {
-                FlexibleChips(
+                FlowChips(
                     items: viewModel.searchHistory,
                     onTap: { keyword in
                         query = keyword
@@ -218,39 +218,6 @@ struct LiveSearchView: View {
                     }
                     .padding(.horizontal, LiveGridLayout.gridEdgePadding)
                 }
-            }
-        }
-    }
-}
-
-/// Wrapping keyword chips (history). A fixed-height flow: rows of
-/// capsules that wrap to the next line.
-private struct FlexibleChips: View {
-    var items: [String]
-    var onTap: (String) -> Void
-
-    @Environment(\.haoTheme) private var theme
-
-    var body: some View {
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 80), spacing: 8)],
-            alignment: .leading,
-            spacing: 8
-        ) {
-            ForEach(items, id: \.self) { keyword in
-                Button(action: { onTap(keyword) }) {
-                    Text(keyword)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(theme.textPrimary)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(theme.surface, in: Capsule())
-                        .overlay {
-                            Capsule().strokeBorder(theme.hairline, lineWidth: 0.5)
-                        }
-                }
-                .buttonStyle(.plain)
             }
         }
     }

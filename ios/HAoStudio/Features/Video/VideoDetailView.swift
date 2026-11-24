@@ -5,7 +5,7 @@
 //   fade-in animation. There is NO centre play button on the
 //   cover — the old vodBigPlay is deleted, not hidden.
 // - Playback starts from the big play button BELOW the cover
-//   ("▶ 第01集", or "继续播放 · 第N集 · mm:ss" when a resume
+//   ("第01集" with a play.fill glyph, or "继续播放 · 第N集 · mm:ss" when a resume
 //   position exists) and from the episode grid.
 // - Cover + title appear instantly from the tapped item; play
 //   lines fill in when the detail fetch resolves.
@@ -89,7 +89,7 @@ final class VideoDetailViewModel: ObservableObject {
         if let resume = resume, resume.episodeName == episode.name {
             return "继续播放 · \(episode.name) · \(videoTimeText(seconds: resume.positionSeconds))"
         }
-        return "▶ \(episode.displayName)"
+        return episode.displayName
     }
 
     var canPlay: Bool { selectedEpisode != nil }
@@ -338,9 +338,14 @@ struct VideoDetailContentView: View {
                 }
             }
             if let rating = viewModel.detail?.meta?.rating {
-                Text("评分 \(String(format: "%.1f", rating))")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(theme.accent)
+                // VidHub-style rating: star + number, accent.
+                HStack(spacing: 4) {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("评分 \(String(format: "%.1f", rating))")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .foregroundStyle(theme.accent)
             }
         }
     }
@@ -353,6 +358,10 @@ struct VideoDetailContentView: View {
         }) {
             HStack(spacing: 8) {
                 Spacer()
+                // SF Symbol, not the "▶" text glyph (build-35
+                // polish: unicode glyphs are not an icon system).
+                Image(systemName: "play.fill")
+                    .font(.system(size: 15, weight: .semibold))
                 Text(viewModel.playButtonLabel)
                     .font(.system(size: 17, weight: .bold))
                 Spacer()
