@@ -24,6 +24,9 @@ import SwiftUI
 /// One poster cell: 2:3 artwork + title + `year · type` meta line.
 /// `isEmby` routes the artwork through EmbyPosterImage (token in
 /// the request header); CMS posters keep plain AsyncImage.
+/// The card also self-detects (an item with no CMS source id is
+/// Emby), so mixed grids — favourites, CMS search's Emby section
+/// — cannot forget the flag and show placeholder tiles.
 struct VideoPosterCard: View {
     var item: VideoItem
     var isWatched: Bool = false
@@ -89,7 +92,7 @@ struct VideoPosterCard: View {
 
     private var posterImage: some View {
         Group {
-            if isEmby {
+            if isEmby || item.detailSource == .emby {
                 EmbyPosterImage(urlString: item.coverURL?.absoluteString ?? "")
             } else if let url = item.coverURL {
                 AsyncImage(url: url) { phase in

@@ -45,7 +45,7 @@ struct VideoItem: Codable, Equatable, Identifiable, Hashable {
     let year: String?
     let typeName: String?
     let remarks: String?
-    /// CMS source this item came from (nil for Emby / Douban rows).
+    /// CMS source this item came from (nil for Emby items).
     let sourceId: Int?
 
     /// Which detail loader serves this item. CMS items always

@@ -39,9 +39,9 @@ private final class StubVideoGateway: VideoDataGateway {
     func fetchEmbyGenres(completion: @escaping ([String]) -> Void) { completion([]) }
     func fetchEmbyItems(
         libraryId: String?, genre: String?, page: Int,
-        completion: @escaping (VideoItemPage) -> Void
+        completion: @escaping (Result<VideoItemPage, EmbyError>) -> Void
     ) {
-        completion(.empty)
+        completion(.success(.empty))
     }
     func fetchEmbyDetail(item: VideoItem, completion: @escaping (VideoDetail?) -> Void) {
         fetchEmbyDetailCalls += 1

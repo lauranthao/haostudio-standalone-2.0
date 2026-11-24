@@ -397,7 +397,13 @@ struct VideoPosterCardImage: View {
 
     var body: some View {
         Group {
-            if let url = item.coverURL {
+            // Emby thumbs need the server token in the request
+            // header (EmbyPosterImage); plain AsyncImage sends
+            // none, so continue-watching cards and history rows
+            // showed placeholder tiles for every Emby title.
+            if item.detailSource == .emby {
+                EmbyPosterImage(urlString: item.coverURL?.absoluteString ?? "", cornerRadius: 8)
+            } else if let url = item.coverURL {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let image):
