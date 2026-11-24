@@ -797,14 +797,47 @@ final class DownloadEngine: NSObject {
     private func restorePersistedTasks() {
         let infos: [DownloadTaskInfo] = LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: [])
         for info in infos {
+            let key = info.request.key
+            // Dedupe: a crafted index can repeat a key; the second
+            // copy must not duplicate the snapshot.
+            guard records[key] == nil else { continue }
             var restored = info
             if restored.state == .downloading || restored.state == .queued {
                 restored.state = .paused
             }
             restored.errorMessage = restored.state == .failed ? restored.errorMessage : nil
+            // Re-sanitise the stored file name: a crafted/migrated
+            // index must not smuggle a traversal past the use-site
+            // sanitiser (the part/final URLs re-sanitise anyway).
+            let cleanName = DownloadEngine.sanitisedFileName(restored.request.fileName, fallbackKey: key)
+            if cleanName != restored.request.fileName {
+                restored.request = DownloadRequest(
+                    key: key,
+                    title: restored.request.title,
+                    sourceURL: restored.request.sourceURL,
+                    fileName: cleanName,
+                    kind: restored.request.kind,
+                    qualityCode: restored.request.qualityCode)
+            }
+            // A completed entry whose file is gone is a dangling
+            // path — drop it instead of reporting .completed.
+            if restored.state == .completed {
+                guard let relative = restored.localRelativePath,
+                      let url = LocalFileIndex.resolve(relative, subdir: DownloadEngine.downloadSubdir),
+                      FileManager.default.fileExists(atPath: url.path) else { continue }
+            } else {
+                // Clamp downloadedBytes to the part size on disk —
+                // the persisted count is stale after a kill (Finding E).
+                let part = partURL(for: restored.request)
+                let partSize = (try? FileManager.default.attributesOfItem(atPath: part.path)[.size] as? NSNumber)?.int64Value ?? 0
+                restored.downloadedBytes = partSize
+                if restored.totalBytes >= 0 && restored.downloadedBytes > restored.totalBytes {
+                    restored.totalBytes = restored.downloadedBytes
+                }
+            }
             let record = TaskRecord(info: restored)
-            records[restored.request.key] = record
-            order.append(restored.request.key)
+            records[key] = record
+            order.append(key)
         }
     }
 }
