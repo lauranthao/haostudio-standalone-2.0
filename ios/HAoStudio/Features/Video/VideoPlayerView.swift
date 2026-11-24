@@ -37,6 +37,7 @@
 // overlay (A-leg layer, B-leg client) and the settings sheet
 // (A-leg VodSettingsSheet) are wired in this file.
 
+import Combine
 import SwiftUI
 import MediaPlayer
 import UIKit
@@ -115,20 +116,20 @@ final class VideoPlayerViewModel: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var isDoubleSpeed = false
     @Published private(set) var seekFailed = false
-    /// Loading / failure state, synced from the engine on every
-    /// poll tick (the driver owns the truth; the page only mirrors
-    /// it). The page shows a spinner while loading and a retry
-    /// when the open failed — a failed open used to leave a black
-    /// frame with a dead play button and no way back.
+    /// Loading / failure state, mirrored from the driver (the
+    /// driver owns the truth; the page only mirrors it). The page
+    /// shows a spinner while loading and a retry when the open
+    /// failed — a failed open used to leave a black frame with a
+    /// dead play button and no way back.
     @Published private(set) var isLoading = false
     @Published private(set) var loadFailed = false
-    /// Specific failure line, synced from the engine on every poll
-    /// tick (build 36, item 14, G-K). Nil while nothing failed.
+    /// Specific failure line, mirrored from the driver (build 36,
+    /// item 14, G-K). Nil while nothing failed.
     @Published private(set) var failureDetail: String?
-    /// Track display names for the settings sheet pickers, synced
-    /// from the engine on every poll tick (G-F). Empty until the
-    /// backend publishes its track list; external subtitles carry
-    /// the "（外挂）" source mark (G-G).
+    /// Track display names for the settings sheet pickers,
+    /// mirrored from the driver on every track-list publish
+    /// (G-F). Empty until the backend publishes its track list;
+    /// external subtitles carry the "（外挂）" source mark (G-G).
     @Published private(set) var audioTrackNames: [String] = []
     @Published private(set) var subtitleTrackNames: [String] = []
     /// Last track picks pushed to the driver (change guard, G-F):
@@ -152,7 +153,16 @@ final class VideoPlayerViewModel: ObservableObject {
     weak var engine: VideoPlayerEngine?
 
     private let coordinator: PlaybackCoordinator
-    private var pollTimer: Timer?
+    /// Driver subscriptions (build 36, item 10, leg 7, scheme A):
+    /// the VM mirrors the driver through Combine sinks, like
+    /// LivePlayerViewModel — it runs no timer of its own. The
+    /// single 0.5 s position tick lives in the driver.
+    private var cancellables = Set<AnyCancellable>()
+    /// Driver the sinks are attached to (identity guard for the
+    /// idempotent re-subscribe in ensureDriverSubscription).
+    private weak var subscribedDriver: VideoDriver?
+    /// Coalescing flag for the deferred per-tick side effects.
+    private var tickWorkPending = false
     private var didAutoAdvance = false
     private var lastSavedPosition = 0.0
 
@@ -179,10 +189,7 @@ final class VideoPlayerViewModel: ObservableObject {
     init(coordinator: PlaybackCoordinator, settings: SettingsStore? = nil) {
         self.coordinator = coordinator
         self.appSettings = settings
-    }
-
-    deinit {
-        pollTimer?.invalidate()
+        ensureDriverSubscription()
     }
 
     var currentLine: PlayLine? {
@@ -424,7 +431,7 @@ final class VideoPlayerViewModel: ObservableObject {
             configureDriver(detail: detail, line: line, episode: episode, resumeFrom: startPosition)
             coordinator.requestVodPlay(playbackItem(for: detail, episode: episode))
         }
-        startPolling()
+        ensureDriverSubscription()
     }
 
     /// Re-fetch danmaku for the episode already playing, using
@@ -449,13 +456,14 @@ final class VideoPlayerViewModel: ObservableObject {
     }
 
     /// Attach the A-leg engine (called by the player view on
-    /// appear). Attaching never restarts playback — it only starts
-    /// the position poll.
+    /// appear). Attaching never restarts playback — it only
+    /// (re)attaches the driver subscription (the driver's own
+    /// 0.5 s tick drives the mirror from then on).
     func attachEngine(_ newEngine: VideoPlayerEngine?) {
         engine = newEngine
         if newEngine != nil {
             applySettings()
-            startPolling()
+            ensureDriverSubscription()
         }
     }
 
@@ -670,8 +678,6 @@ final class VideoPlayerViewModel: ObservableObject {
         isDoubleSpeed = false
         saveCurrentPosition()
         danmaku.clear()
-        pollTimer?.invalidate()
-        pollTimer = nil
         if let engine = engine {
             engine.stop()
         }
@@ -679,34 +685,108 @@ final class VideoPlayerViewModel: ObservableObject {
         isPlaying = false
     }
 
-    // MARK: - Position poll
+    // MARK: - Driver mirror (Combine sinks, live pattern)
 
-    private func startPolling() {
-        pollTimer?.invalidate()
-        // The timer is scheduled on the main runloop, so its block
-        // already runs on the main thread; the async hop keeps the
-        // @MainActor call explicit (no Swift 5.5+ Task anywhere).
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            DispatchQueue.main.async { [weak self] in
-                self?.pollTick()
-            }
+    /// Subscribe to the driver's @Published state (build 36,
+    /// item 10, leg 7 — scheme A). The driver owns the single
+    /// 0.5 s position tick; this VM mirrors it instead of
+    /// running a second poll timer, like LivePlayerViewModel
+    /// (Playback/LivePlayerViewModel.swift init). Idempotent and
+    /// keyed by driver identity: re-subscribing to the same
+    /// driver is a no-op, a different driver drops the old sinks
+    /// first. Called from init (the app wires the driver before
+    /// creating this VM), open() and attachEngine() (a test VM
+    /// may be built before its driver is installed).
+    /// `.dropFirst()` on every sink: Combine replays the
+    /// driver's current value on subscribe, and open() has
+    /// already set this VM's position / duration from the saved
+    /// resume — a replay of the driver's stale values would
+    /// clobber them until the driver's next publish.
+    private func ensureDriverSubscription() {
+        guard let driver = vodDriver, driver !== subscribedDriver else { return }
+        cancellables.removeAll()
+        subscribedDriver = driver
+        driver.$position.dropFirst().sink { [weak self] value in
+            guard let self = self else { return }
+            if value != self.position { self.position = value }
+            self.scheduleDriverTickEffects()
+        }.store(in: &cancellables)
+        driver.$duration.dropFirst().sink { [weak self] value in
+            guard let self = self else { return }
+            if value != self.duration { self.duration = value }
+        }.store(in: &cancellables)
+        driver.$isPlaying.dropFirst().sink { [weak self] value in
+            guard let self = self else { return }
+            if value != self.isPlaying { self.isPlaying = value }
+        }.store(in: &cancellables)
+        driver.$isLoading.dropFirst().sink { [weak self] value in
+            guard let self = self else { return }
+            if value != self.isLoading { self.isLoading = value }
+        }.store(in: &cancellables)
+        driver.$lastOpenFailed.dropFirst().sink { [weak self] value in
+            guard let self = self else { return }
+            if value != self.loadFailed { self.loadFailed = value }
+        }.store(in: &cancellables)
+        driver.$lastFailure.dropFirst().sink { [weak self] value in
+            guard let self = self else { return }
+            let line = value?.displayLine
+            if line != self.failureDetail { self.failureDetail = line }
+        }.store(in: &cancellables)
+        // Track names rebuild only when the driver publishes a
+        // new list — the driver assigns audioTracks /
+        // subtitleTracks only from the backend's onTracksChanged
+        // (never per tick) — and only when the mapped names
+        // actually differ from the ones already shown.
+        driver.$audioTracks.dropFirst().sink { [weak self] tracks in
+            guard let self = self else { return }
+            let names = tracks.map { $0.displayName + ($0.isExternal ? "（外挂）" : "") }
+            if names != self.audioTrackNames { self.audioTrackNames = names }
+        }.store(in: &cancellables)
+        driver.$subtitleTracks.dropFirst().sink { [weak self] tracks in
+            guard let self = self else { return }
+            let names = tracks.map { $0.displayName + ($0.isExternal ? "（外挂）" : "") }
+            if names != self.subtitleTrackNames { self.subtitleTrackNames = names }
+        }.store(in: &cancellables)
+    }
+
+    /// Schedule the per-tick side effects for the end of the
+    /// current main-queue turn, coalesced to at most one run per
+    /// turn. The $position sink fires synchronously inside the
+    /// driver's `position = pos` assignment — before the driver
+    /// has run recomputePlayingState() for that tick — so a
+    /// bundle run inline would read this VM's still-stale
+    /// isPlaying (one tick stale: pausing in the final second
+    /// could auto-advance). Deferring past the driver's whole
+    /// handleTimeUpdate keeps every mirror fresh, at the same
+    /// 0.5 s cadence.
+    private func scheduleDriverTickEffects() {
+        guard !tickWorkPending else { return }
+        tickWorkPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.tickWorkPending = false
+            self.onDriverPositionTick()
         }
     }
 
-    private func pollTick() {
-        guard let engine = engine else { return }
-        position = engine.positionSeconds
-        duration = engine.durationSeconds
-        isPlaying = engine.isPlaying
-        // Loading / failure mirror (see the published flags): the
-        // driver owns the truth, the page only shows it.
-        isLoading = engine.isLoading
-        loadFailed = engine.lastOpenFailed
-        // (Build 36, item 14, G-K/G-F) Specific failure line and
-        // track lists, mirrored from the engine on every tick.
-        failureDetail = engine.lastFailure?.displayLine
-        audioTrackNames = engine.audioTracks.map { $0.displayName + ($0.isExternal ? "（外挂）" : "") }
-        subtitleTrackNames = engine.subtitleTracks.map { $0.displayName + ($0.isExternal ? "（外挂）" : "") }
+    /// The per-tick side effects that used to live in pollTick,
+    /// now driven by the driver's position publish (one 0.5 s
+    /// tick, same cadence: the driver assigns `position` on
+    /// every tick, and @Published fires on every assignment,
+    /// even when the value is unchanged — so this still runs
+    /// while paused). Resume save (5 s / 15 s gate),
+    /// auto-advance (once per episode) and the skip-intro /
+    /// skip-credits check are all preserved, behaviour for
+    /// behaviour. No episode open in the driver (stopped /
+    /// released / natural end) means no tick effects — the
+    /// skip pills are cleared instead of being re-checked
+    /// against a dead position.
+    private func onDriverPositionTick() {
+        guard vodDriver?.currentEpisode != nil else {
+            skipIntroPill = nil
+            skipCreditsPill = false
+            return
+        }
         // Resume save: once the position crosses 5 s, then every
         // ~15 s of playback.
         if isPlaying && position >= VideoLibraryStore.minSaveSeconds
@@ -726,7 +806,7 @@ final class VideoPlayerViewModel: ObservableObject {
         checkSkipPoints()
     }
 
-    /// One skip check, driven by the position poll (every 0.5 s).
+    /// One skip check, driven by the driver's position publish (every 0.5 s).
     /// The mode is read live from SettingsStore, so a settings
     /// change applies to the episode already playing. The window
     /// resolves once per episode (Emby chapter markers, else the
