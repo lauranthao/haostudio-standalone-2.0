@@ -815,6 +815,20 @@ struct VideoPlayerView: View {
     /// A seek drag is in progress: the auto-hide timer is paused
     /// until release (the bar must not vanish mid-drag).
     @State private var isSeekDragging = false
+    /// Full-screen horizontal drag seek (build 36, item 9,
+    /// leg 3): the preview target while dragging, nil otherwise.
+    /// Non-nil = a drag seek is in progress — it also suppresses
+    /// the long-press 2x (a moving finger is not a hold) and,
+    /// through `isSeekDragging`, pauses the 3 s auto-hide.
+    @State private var dragSeekTarget: Double?
+    /// Playhead at the moment the drag activated — the anchor the
+    /// drag delta is measured from (the playhead keeps advancing
+    /// underneath while playing; the target must not drift with
+    /// it). Shown as the "from" time in the drag pill.
+    @State private var dragSeekAnchor: Double = 0
+    /// This touch moved mostly vertically: never a seek, even if
+    /// it later swings horizontal (a vertical swipe must not seek).
+    @State private var dragSeekRejected = false
     @State private var autoHideWork: DispatchWorkItem?
     /// Landscape state. Only the [ ] button changes it — turning
     /// the phone never does (live parity: LiveRoomView
@@ -844,6 +858,11 @@ struct VideoPlayerView: View {
                     }
                 }
                 .onLongPressGesture(minimumDuration: VodGestureConfig.longPressMinimumDuration, pressing: { pressing in
+                    // A drag seek in progress is a moving finger,
+                    // not a hold: ignore the press while dragging
+                    // (the drag start already cancelled any 2x the
+                    // hold had engaged — see below).
+                    guard dragSeekTarget == nil else { return }
                     videoPlayer.setDoubleSpeed(pressing)
                 }, perform: {})
                 // S7 wiring: double-tap seek (left third back,
@@ -862,6 +881,68 @@ struct VideoPlayerView: View {
                         )
                     }
                 )
+                // Full-screen horizontal drag seek (build 36,
+                // item 9, leg 3 — VOD ONLY). Simultaneous so it
+                // never blocks the tap / long-press / double-tap
+                // layer: a tap has no movement (the drag never
+                // activates), a hold has no movement (the long
+                // press wins), and only a real horizontal move
+                // past 10 pt becomes a seek. The gesture layer
+                // sits UNDER the chrome, so the top bar, bottom
+                // buttons and the seek bar (its own
+                // high-priority drag) keep their taps; the drag
+                // only ever starts on the bare picture. Dragging
+                // previews the target (progress bar follows via
+                // `dragPosition`, same as the seek bar); release
+                // seeks once, and a failed seek rolls back to the
+                // real position through the shared seekFailed
+                // path in `seek(to:)` — no second implementation.
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: VodGestureMath.dragSeekActivationDistance)
+                        .onChanged { value in
+                            guard videoPlayer.duration > 0, !dragSeekRejected else { return }
+                            // Mostly-vertical movement is not a
+                            // seek: reject the whole touch, so a
+                            // vertical swipe that later swings
+                            // sideways cannot turn into a seek.
+                            guard VodGestureMath.isHorizontalDrag(translation: value.translation) else {
+                                dragSeekRejected = true
+                                return
+                            }
+                            if dragSeekTarget == nil {
+                                // First horizontal move past the
+                                // threshold: anchor on the live
+                                // playhead, cancel any 2x the
+                                // hold had engaged, and hold the
+                                // controls up (same isSeekDragging
+                                // the seek bar uses).
+                                dragSeekAnchor = videoPlayer.position
+                                if videoPlayer.isDoubleSpeed {
+                                    videoPlayer.setDoubleSpeed(false)
+                                }
+                                isSeekDragging = true
+                                autoHideWork?.cancel()
+                                controlsVisible = true
+                            }
+                            let target = VodGestureMath.dragSeekTarget(
+                                anchor: dragSeekAnchor,
+                                translationX: value.translation.width,
+                                width: UIScreen.main.bounds.width,
+                                duration: videoPlayer.duration)
+                            dragSeekTarget = target
+                            videoPlayer.dragPosition = target
+                        }
+                        .onEnded { _ in
+                            defer {
+                                dragSeekTarget = nil
+                                dragSeekRejected = false
+                                isSeekDragging = false
+                                showControlsTemporarily()
+                            }
+                            guard let target = dragSeekTarget else { return }
+                            videoPlayer.seek(to: target)
+                        }
+                )
             if controlsVisible {
                 VStack(spacing: 0) {
                     topBar
@@ -873,6 +954,21 @@ struct VideoPlayerView: View {
                 Text("2x")
                     .font(.haoSubheadStrong)
                     .foregroundStyle(haoOnAccentFor(theme.accentOnVideo))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(theme.accentOnVideo, in: Capsule())
+            }
+            // Drag-seek preview (build 36, item 9, leg 3): the
+            // same accent-capsule pill as the 2x badge, no new
+            // style — anchor ("from") time → target time, while
+            // the progress bar follows the target below. Never
+            // shown together with the 2x pill: starting a drag
+            // cancels 2x.
+            if let target = dragSeekTarget {
+                Text("\(videoTimeText(seconds: dragSeekAnchor)) → \(videoTimeText(seconds: target))")
+                    .font(.haoSubheadStrong)
+                    .foregroundStyle(haoOnAccentFor(theme.accentOnVideo))
+                    .monospacedDigit()
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(theme.accentOnVideo, in: Capsule())

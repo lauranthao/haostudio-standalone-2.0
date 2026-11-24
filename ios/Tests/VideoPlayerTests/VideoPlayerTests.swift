@@ -271,6 +271,66 @@ final class VodGestureMathTests: XCTestCase {
         XCTAssertNil(VodGestureMath.longPressSpeed(isPressing: false, isVod: true))
     }
 
+    // MARK: - Full-screen drag seek (build 36, item 9, leg 3)
+
+    func testDragSeekSweepIsDurationOverEightClamped() {
+        // 2 h film: 7200 / 8 = 900, clamped to 300 s per sweep.
+        XCTAssertEqual(VodGestureMath.dragSeekSweepSeconds(duration: 7200), 300)
+        // 30 min episode: 1800 / 8 = 225 s.
+        XCTAssertEqual(VodGestureMath.dragSeekSweepSeconds(duration: 1800), 225)
+        // 3 min short: 180 / 8 = 22.5, clamped up to 60 s.
+        XCTAssertEqual(VodGestureMath.dragSeekSweepSeconds(duration: 180), 60)
+        // Unknown duration: the minimum, never NaN / 0.
+        XCTAssertEqual(VodGestureMath.dragSeekSweepSeconds(duration: 0), 60)
+    }
+
+    func testDragSeekTargetFollowsTranslation() {
+        // 30 min episode (sweep 225 s) on an 800 pt screen:
+        // half a screen right = +112.5 s from the anchor.
+        XCTAssertEqual(
+            VodGestureMath.dragSeekTarget(anchor: 600, translationX: 400, width: 800, duration: 1800),
+            712.5, accuracy: 0.001)
+        // Same distance left = back the same amount.
+        XCTAssertEqual(
+            VodGestureMath.dragSeekTarget(anchor: 600, translationX: -400, width: 800, duration: 1800),
+            487.5, accuracy: 0.001)
+        // No movement holds the anchor.
+        XCTAssertEqual(
+            VodGestureMath.dragSeekTarget(anchor: 600, translationX: 0, width: 800, duration: 1800),
+            600, accuracy: 0.001)
+    }
+
+    func testDragSeekTargetClampsToBounds() {
+        // Dragging far right past the end clamps to duration.
+        XCTAssertEqual(
+            VodGestureMath.dragSeekTarget(anchor: 1700, translationX: 800, width: 800, duration: 1800),
+            1800, accuracy: 0.001)
+        // Dragging far left past the start clamps to 0.
+        XCTAssertEqual(
+            VodGestureMath.dragSeekTarget(anchor: 100, translationX: -800, width: 800, duration: 1800),
+            0, accuracy: 0.001)
+        // An anchor outside the range is clamped, never NaN.
+        XCTAssertEqual(
+            VodGestureMath.dragSeekTarget(anchor: -50, translationX: 0, width: 800, duration: 1800),
+            0, accuracy: 0.001)
+        XCTAssertEqual(
+            VodGestureMath.dragSeekTarget(anchor: 9999, translationX: 0, width: 800, duration: 1800),
+            1800, accuracy: 0.001)
+        // Zero width / duration holds the (clamped) anchor.
+        XCTAssertEqual(
+            VodGestureMath.dragSeekTarget(anchor: 600, translationX: 400, width: 0, duration: 1800),
+            600, accuracy: 0.001)
+        XCTAssertEqual(
+            VodGestureMath.dragSeekTarget(anchor: 600, translationX: 400, width: 800, duration: 0),
+            0, accuracy: 0.001)
+    }
+
+    func testDragSeekIsHorizontalOnly() {
+        XCTAssertTrue(VodGestureMath.isHorizontalDrag(translation: CGSize(width: 30, height: 5)))
+        XCTAssertFalse(VodGestureMath.isHorizontalDrag(translation: CGSize(width: 5, height: 30)))
+        XCTAssertFalse(VodGestureMath.isHorizontalDrag(translation: CGSize(width: -5, height: -30)))
+    }
+
     func testGestureStateGatesLive() {
         let state = VodGestureState()
         state.isVod = false
