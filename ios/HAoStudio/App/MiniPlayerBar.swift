@@ -49,12 +49,53 @@ struct MiniPlayerBar: View {
     }
 
     var body: some View {
-        if let item = displayItem {
-            if bottomChrome.isMinimized {
-                inlineBody(item: item)
+        ZStack(alignment: .top) {
+            if let item = displayItem {
+                Group {
+                    if bottomChrome.isMinimized {
+                        inlineBody(item: item)
+                    } else {
+                        expandedBody(item: item)
+                    }
+                }
+                // Build 36, item 8 (item 12 follow-up): row actions
+                // (download / play-next) set playerVM.toast, but
+                // the toast was only rendered inside the full
+                // player — with the player closed there was no
+                // visible confirmation at all. The same pill
+                // floats above the strip here (same look as the
+                // full player's toast), so the confirmation is
+                // visible wherever the action was taken. It never
+                // intercepts taps, and it never changes the strip's
+                // geometry — it is an overlay, not a row.
+                .overlay(alignment: .top) {
+                    toastPill
+                        .offset(y: -58)
+                }
             } else {
-                expandedBody(item: item)
+                // No strip (empty queue): a download still toasts,
+                // so the pill renders on its own in the same slot
+                // instead of vanishing with the strip.
+                toastPill
             }
+        }
+        .animation(.easeInOut(duration: 0.25), value: musicPlayer.toast)
+    }
+
+    /// The shared toast pill (same text, style and 2 s lifetime
+    /// as the full player's toast — one `playerVM.toast`, rendered
+    /// wherever the user can see it). Empty when there is no toast.
+    @ViewBuilder
+    private var toastPill: some View {
+        if let toast = musicPlayer.toast {
+            Text(toast)
+                .font(.haoFootnoteMedium)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Color.black.opacity(0.7), in: Capsule())
+                .transition(.opacity)
+                .allowsHitTesting(false)
         }
     }
 

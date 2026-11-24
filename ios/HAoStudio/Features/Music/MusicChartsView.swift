@@ -92,7 +92,8 @@ struct MusicChartsView: View {
                     MusicEmptyState(
                         icon: "list.number",
                         title: "排行榜加载失败",
-                        note: "网易云没有返回榜单，稍后再试。"
+                        note: "网易云没有返回榜单，稍后再试。",
+                        onRetry: { viewModel.load() }
                     )
                     Spacer()
                 }
@@ -195,7 +196,8 @@ struct MusicChartDetailView: View {
                 MusicEmptyState(
                     icon: "list.number",
                     title: "榜单曲目加载失败",
-                    note: "该榜单没有返回曲目，稍后再试。"
+                    note: "该榜单没有返回曲目，稍后再试。",
+                    onRetry: { viewModel.load() }
                 )
             } else {
                 List {

@@ -50,8 +50,23 @@ final class MusicEqualizerViewModel: ObservableObject {
     /// Display name of the current preset (custom name wins, then the
     /// built-in display name — Flutter EqualizerStore.currentPresetName).
     var currentPresetName: String {
-        if isCustom && !selectedCustomName.isEmpty { return selectedCustomName }
-        return selectedPreset.displayName
+        Self.displayPresetName(
+            isCustom: isCustom, customName: selectedCustomName,
+            autoEqName: selectedAutoEqName, preset: selectedPreset)
+    }
+
+    /// Pure preset-name decision (unit-tested). A hand-tuned band
+    /// after a preset, or an AutoEq preset, used to keep showing
+    /// the old preset's name — the header lied about what was
+    /// sounding. AutoEq wins when one is applied; an unnamed
+    /// hand-tuned set is "自定义", never the preset it started from.
+    static func displayPresetName(
+        isCustom: Bool, customName: String, autoEqName: String,
+        preset: MusicEqualizerPreset
+    ) -> String {
+        if !autoEqName.isEmpty { return autoEqName }
+        if isCustom { return customName.isEmpty ? "自定义" : customName }
+        return preset.displayName
     }
 
     /// Preview curve = gains + preamp*0.35, clamped ±12.

@@ -369,6 +369,39 @@ final class MusicPlayerTests: XCTestCase {
         XCTAssertNil(player.currentTrack)
     }
 
+    // MARK: Manual play failure is published (build 36, item 8, F1)
+
+    func testManualPlayFailurePublishesFailedRequest() {
+        // No resolver wired: resolveURL is nil, so the manual play
+        // fails at once. The UI leg needs a published signal for
+        // its toast, not just the onTrackFailed callback.
+        let player = makePlayer(fakes: [FakeEngine()])
+        var reported: [(PlaybackItem, MusicPlayerError)] = []
+        player.onTrackFailed = { item, error in reported.append((item, error)) }
+        player.play(item: item("a"))
+        XCTAssertEqual(player.failedRequestCount, 1)
+        XCTAssertEqual(player.lastFailedRequestId, "a")
+        XCTAssertEqual(reported.count, 1)
+        XCTAssertEqual(reported.first?.1, .noPlayableURL)
+        // The same song failing again surfaces again: the counter
+        // (not the id) is what the UI observes.
+        player.play(item: item("a"))
+        XCTAssertEqual(player.failedRequestCount, 2)
+        XCTAssertEqual(player.lastFailedRequestId, "a")
+        XCTAssertEqual(reported.count, 2)
+    }
+
+    func testManualPlayFailureWhenResolverReturnsNothing() {
+        // Resolver answers nil (no playable URL anywhere): same
+        // published signal, still a manual failure.
+        let player = makePlayer(fakes: [FakeEngine()])
+        wire(player, FakeResolver(urls: [nil]))
+        player.play(item: item("a"))
+        XCTAssertEqual(player.failedRequestCount, 1)
+        XCTAssertEqual(player.lastFailedRequestId, "a")
+        XCTAssertNil(player.currentTrack)
+    }
+
     // MARK: Seek rollback (P0-05)
 
     func testSeekFailureRollsBackAndNotifies() {

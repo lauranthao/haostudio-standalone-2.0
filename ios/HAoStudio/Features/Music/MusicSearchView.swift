@@ -58,7 +58,7 @@ struct MusicSearchView: View {
                 .accessibilityLabel("清除搜索")
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(theme.surfaceStrong, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
@@ -208,10 +208,15 @@ struct MusicAddToPlaylistSheet: View {
                     HStack {
                         TextField("歌单名", text: $newListName)
                         Button("创建并加入") {
-                            guard !newListName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                            let list = MusicLibraryStore.createList(named: newListName)
+                            let trimmed = newListName.trimmingCharacters(in: .whitespaces)
+                            guard !trimmed.isEmpty else { return }
+                            let list = MusicLibraryStore.createList(named: trimmed)
                             _ = libraryVM.addToPlaylist([song], listId: list.id)
                             resultText = "已新建并加入「\(list.name)」"
+                            // Build 36, item 8: the name used to stay
+                            // in the field, so a second tap built a
+                            // duplicate list with the same name.
+                            newListName = ""
                             libraryVM.reload()
                         }
                         .foregroundStyle(theme.accent)

@@ -128,7 +128,9 @@ struct MusicPlayerView: View {
                             .padding(.vertical, 10)
                             .background(Color.black.opacity(0.7), in: Capsule())
                             .padding(.bottom, 90)
+                            .transition(.opacity)
                     }
+                    .animation(.easeInOut(duration: 0.25), value: playerVM.toast)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
@@ -699,11 +701,11 @@ struct MusicPlayerView: View {
     private var volumeRow: some View {
         HStack(spacing: 12) {
             Image(systemName: "speaker.fill")
-                .font(.system(size: 13, weight: .regular))
+                .font(.haoFootnote)
                 .foregroundStyle(.white.opacity(0.85))
             volumeSlider
             Image(systemName: "speaker.wave.3.fill")
-                .font(.system(size: 13, weight: .regular))
+                .font(.haoFootnote)
                 .foregroundStyle(.white.opacity(0.85))
         }
     }
@@ -768,8 +770,20 @@ struct MusicPlayerView: View {
             .accessibilityLabel("播放模式：\(playerVM.playMode.label)")
             Menu {
                 ForEach([0.6, 0.8, 1.0, 1.25, 1.5, 2.0], id: \.self) { speed in
-                    Button(String(format: "%.2fx", speed).replacingOccurrences(of: ".00", with: ".0")) {
+                    Button(action: {
                         playerVM.setSpeed(speed)
+                    }) {
+                        // Build 36, item 8: the menu used to show
+                        // six speeds with no mark on the active one
+                        // — the current speed was invisible. The
+                        // speeds come from this same literal list,
+                        // so == is exact here.
+                        HStack {
+                            Text(String(format: "%.2fx", speed).replacingOccurrences(of: ".00", with: ".0"))
+                            if speed == playerVM.playbackSpeed {
+                                Image(systemName: "checkmark")
+                            }
+                        }
                     }
                 }
             } label: {

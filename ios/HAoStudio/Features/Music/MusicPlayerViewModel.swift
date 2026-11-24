@@ -307,6 +307,19 @@ final class MusicPlayerViewModel: ObservableObject {
             self.actualQuality = value
             self.refreshLocalQualityBadge()
         }.store(in: &cancellables)
+        // F1 (build 36, item 8): a manual play request that fails
+        // to resolve/open used to do nothing visible — no toast, no
+        // advance, the song just sat there paused. The engine
+        // publishes each failure (counter, so the same song failing
+        // twice surfaces twice); when the failed id is the song
+        // showing now, say so instead of leaving a dead tap.
+        player.$failedRequestCount.sink { [weak self] _ in
+            guard let self = self else { return }
+            guard let id = self.player.lastFailedRequestId,
+                  let song = self.currentSong,
+                  id == song.identityKey || id == song.songId else { return }
+            self.showToast("无法播放：找不到可播放的地址")
+        }.store(in: &cancellables)
     }
 
     private func observeCoordinator() {
@@ -355,8 +368,16 @@ final class MusicPlayerViewModel: ObservableObject {
             // (another leg started it): show it, do not rewrite the
             // queue. The cover travels with the item: without it the
             // player page would show no artwork for an outside song.
-            let song = MusicSong(songId: item.id, title: item.title, artist: item.artist ?? "",
-                                 cover: item.coverURL?.absoluteString ?? "")
+            // item.id is the identityKey `platform|songId` — split
+            // it back, or the rebuilt song's identityKey comes out
+            // as `wy|wy|…` and corrupts favourites / resume keys.
+            let idParts = item.id.split(separator: "|", maxSplits: 1)
+            let song = MusicSong(
+                songId: idParts.count == 2 ? String(idParts[1]) : item.id,
+                title: item.title, artist: item.artist ?? "",
+                cover: item.coverURL?.absoluteString ?? "",
+                platform: idParts.count == 2
+                    ? MusicPlatform.fromCode(String(idParts[0])) : .wy)
             setCurrentSong(song)
         }
         // The mini player's fallback follows the same song — but
@@ -920,15 +941,22 @@ final class MusicPlayerViewModel: ObservableObject {
         queue.remove(at: index)
         MusicLibraryStore.saveQueue(queue.toQueueData())
         if wasCurrent {
-            player.pause()
-            coordinator.stop()
-            // A7: route through setCurrentSong (or a full clear) —
-            // assigning currentSong directly left the lyrics, the
-            // favourite star and the quality badge on the deleted
-            // song.
-            if let next = queue.current {
-                setCurrentSong(next)
+            // L1 (build 36, item 8): deleting the playing song
+            // used to stop playback and only DISPLAY the next song
+            // — the queue moved on but the music stopped. Play the
+            // song now at the index instead (after the removal the
+            // index points at the next song, or the previous one
+            // when the last song was deleted); only an emptied
+            // queue stops and clears the state.
+            if queue.current != nil {
+                playFromQueue(at: queue.index)
             } else {
+                player.pause()
+                coordinator.stop()
+                // A7: route through a full clear — assigning
+                // currentSong directly left the lyrics, the
+                // favourite star and the quality badge on the
+                // deleted song.
                 clearCurrentSongState()
             }
             miniFallbackSong = queue.current

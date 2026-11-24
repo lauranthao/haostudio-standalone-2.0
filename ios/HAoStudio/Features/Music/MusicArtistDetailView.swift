@@ -81,7 +81,8 @@ struct MusicArtistDetailView: View {
                 MusicEmptyState(
                     icon: "person",
                     title: "歌手内容加载失败",
-                    note: "该歌手没有返回歌曲或专辑，稍后再试。"
+                    note: "该歌手没有返回歌曲或专辑，稍后再试。",
+                    onRetry: { viewModel.load() }
                 )
             } else {
                 contentList

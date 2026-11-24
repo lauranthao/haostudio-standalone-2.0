@@ -100,7 +100,8 @@ struct MusicAlbumDetailView: View {
                 MusicEmptyState(
                     icon: "square.stack",
                     title: "专辑曲目加载失败",
-                    note: "该专辑没有返回曲目，稍后再试。"
+                    note: "该专辑没有返回曲目，稍后再试。",
+                    onRetry: { viewModel.load() }
                 )
             } else {
                 List {
