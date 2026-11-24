@@ -1436,7 +1436,8 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     // MARK: - Breakpoint
 
     /// Build the resume bookmark for the current episode and hand
-    /// it to `onBreakpointSaved`. No-op when nothing is playing
+    /// it to `onBreakpointSaved`, and write the local playback
+    /// record (b37 E1). No-op when nothing is playing
     /// (nothing to resume) or when the position is 0 and no
     /// episode was ever started.
     private func saveBreakpoint() {
@@ -1453,6 +1454,16 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             durationSeconds: duration,
             updatedAt: Date()
         )
+        // (b37 E1) The local playback record. The Emby reporter only
+        // syncs to the server, and this callback had no assignee in
+        // the app, so Emby watches left no local history at all.
+        // savePosition accepts any VideoItem (no source filter), so
+        // the same write covers CMS and Emby; it fires from stop()
+        // and release() — ✕-close, swipe-dismiss, natural end —
+        // and its own >= 5 s guard applies on top of this one.
+        VideoLibraryStore.savePosition(
+            item: detail.item, episodeName: episode.name, episodeIndex: currentEpisodeIndex,
+            lineName: line.name, positionSeconds: position, durationSeconds: duration)
         onBreakpointSaved?(info)
     }
 
