@@ -760,8 +760,24 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                 // in attemptOpen calls open() again, which takes a
                 // fresh generation, so this bump cannot strand it.
                 _ = self.nextGeneration()
+                // #1: kill the ladder BEFORE shutting the backend
+                // down — shutdown fires finishOpen(false)
+                // synchronously, and a live ladder would advance
+                // to the next engine, open backend2 (autoplay) and
+                // then have it orphaned by `self.backend = nil`
+                // below. Nil-ing activeLadder deallocates the
+                // ladder (its attempt completion holds it weakly),
+                // so the advance never happens. Mirrors
+                // stopBackendForNewRequest.
+                self.activeLadder = nil
                 self.backend?.shutdown()
                 self.backend = nil
+                // #1: stop the position timer too, so
+                // handleTimeUpdate cannot recompute isPlaying = true
+                // from the sounding orphan after the failure was
+                // already reported.
+                self.positionTimer?.invalidate()
+                self.positionTimer = nil
                 self.playRequested = false
                 self.isLoading = false
                 self.recomputePlayingState()
@@ -872,6 +888,15 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         gen: Int,
         completion: @escaping (Bool) -> Void
     ) {
+        // #1 belt-and-braces: an attempt that starts after its
+        // request was superseded (timeout / new open) must not
+        // install a backend at all — the open completion's gen
+        // guard would tear it down, but only after it was assigned
+        // and opened.
+        guard gen == generation else {
+            completion(false)
+            return
+        }
         let backend = makeBackend(engine)
         backend.onEvent = { [weak self] event in self?.handleBackendEvent(event) }
         backend.onVideoSize = { [weak self] _ in self?.updateDiagnostics() }

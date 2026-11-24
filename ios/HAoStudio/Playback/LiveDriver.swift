@@ -653,8 +653,29 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                 guard gen == self.generation, !completed else {
                     return
                 }
+                // #1: bump the generation (same as VideoDriver),
+                // kill the ladder BEFORE shutting the backend down,
+                // and stop the position timer. shutdown fires
+                // finishOpen(false) synchronously; a live ladder
+                // would advance to the next engine and open a second
+                // backend (autoplay), which `self.backend = nil`
+                // below would then orphan — for live it keeps
+                // playing its infinite stream forever, unstoppable
+                // by any later open. Nil-ing activeLadder
+                // deallocates the ladder (its attempt completion
+                // holds it weakly), so the advance never happens;
+                // the generation bump makes any late completion for
+                // this request see a stale gen and shut its backend
+                // down instead of playing. The timer stop keeps
+                // handleTimeUpdate from recomputing isPlaying = true
+                // from the sounding orphan after the failure was
+                // already reported.
+                _ = self.nextGeneration()
+                self.activeLadder = nil
                 self.backend?.shutdown()
                 self.backend = nil
+                self.positionTimer?.invalidate()
+                self.positionTimer = nil
                 self.playRequested = false
                 self.isLoading = false
                 self.recomputePlayingState()
@@ -807,6 +828,15 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         gen: Int,
         completion: @escaping (Bool) -> Void
     ) {
+        // #1 belt-and-braces: an attempt that starts after its
+        // request was superseded (timeout / new open) must not
+        // install a backend at all — the open completion's gen
+        // guard would tear it down, but only after it was assigned
+        // and opened.
+        guard gen == generation else {
+            completion(false)
+            return
+        }
         let backend = makeBackend(engine)
         backend.onEvent = { [weak self] event in
             self?.handleBackendEvent(event)
