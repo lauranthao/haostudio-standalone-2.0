@@ -130,7 +130,7 @@ struct EmbySearchView: View {
             }
             Button("搜索") { viewModel.search(query) }
                 .font(.haoSubheadStrong)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
                 .buttonStyle(.plain)
         }
         .padding(.horizontal, 14)

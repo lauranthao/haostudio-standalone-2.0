@@ -84,6 +84,22 @@ struct HaoThemePalette {
     /// On-video buttons use this; on-scaffold controls use `accent`.
     var accentOnVideo: Color { haoAccentOnBlack(accent) }
 
+    /// Accent as TEXT on scaffold / solid surfaces (build 36
+    /// follow-up D3): the accent itself, unless its WCAG contrast
+    /// vs the scaffold / solid background is below 4.5:1 — then a
+    /// darker (light mode) / lighter (dark mode) variant of the
+    /// same hue, just far enough to clear 4.5:1 (internal target
+    /// 4.6:1). Fills, capsules, progress bars, selected states,
+    /// control tints and `accentOnVideo` keep the original accent;
+    /// only `foregroundStyle` call sites use this. A custom pick
+    /// flows through `applying(accentOverride:)` automatically,
+    /// because this is computed from `accent`.
+    var accentText: Color {
+        haoAccentText(
+            for: accent, darkScheme: colorScheme == .dark,
+            backgrounds: [scaffoldBackground, surfaceSolid])
+    }
+
     /// S5-A: apply the settings-owned overrides on top of a resolved
     /// base palette, without touching the base values:
     /// - glassIntensity scales the glass: `surface` / `surfaceStrong`
@@ -120,7 +136,11 @@ struct HaoThemePalette {
 
     /// All four themes, each with light + dark. No purple anywhere.
     static func palette(for id: HaoThemeID, scheme: ColorScheme) -> HaoThemePalette {
-        let liveRed = Color(red: 0xE5 / 255, green: 0x48 / 255, blue: 0x4D / 255)
+        // D3: darkened from #E5484D (white LIVE text on it was
+        // 3.91:1) to #CE4145 so the white badge text clears WCAG
+        // 4.5:1 (4.70:1). Same hue, uniform RGB scale (0.90) — the
+        // badge stays visibly the same red, only slightly deeper.
+        let liveRed = Color(red: 0xCE / 255, green: 0x41 / 255, blue: 0x45 / 255)
         switch (id, scheme) {
         case (.appleGlass, .light):
             return HaoThemePalette(
@@ -315,6 +335,14 @@ func haoClampedAccentARGB(_ argb: UInt32) -> UInt32 {
     return alpha | (clamped.opaqueARGB & 0x00FFFFFF)
 }
 
+// MARK: - Pure contrast math (build 36 follow-up D3)
+//
+// BEGIN PURE-CONTRAST — the Linux harness extracts this block
+// verbatim (see ios/Tests/HAoStudioTests/HaoThemeAccentTests.swift
+// header and ~/workspace/.tmp/b36fix/d3_harness.py) and runs the
+// 8-combination assertions against it. Everything in here is pure
+// doubles: no Color, no UIColor, no SwiftUI.
+
 /// Relative luminance of an sRGB colour (linearised sRGB, WCAG
 /// weights) — the single source of truth for both helpers below.
 /// Pure doubles, no UIKit: testable without a view.
@@ -324,6 +352,55 @@ func haoRelativeLuminance(red: Double, green: Double, blue: Double) -> Double {
     }
     return 0.2126 * linearised(red) + 0.7152 * linearised(green) + 0.0722 * linearised(blue)
 }
+
+/// WCAG contrast ratio between two relative luminances.
+func haoContrastRatio(luminanceA: Double, luminanceB: Double) -> Double {
+    let hi = max(luminanceA, luminanceB)
+    let lo = min(luminanceA, luminanceB)
+    return (hi + 0.05) / (lo + 0.05)
+}
+
+/// RGB of an accent as TEXT on the given backgrounds (build 36
+/// follow-up D3). Returns the accent unchanged when it already
+/// clears 4.5:1 against every background; otherwise moves it just
+/// far enough — darker in light mode (uniform RGB scale-down,
+/// hue preserved), lighter in dark mode (lerp toward white) —
+/// to clear an internal 4.6:1 target (0.1 margin over WCAG AA
+/// 4.5:1, so 1/255 rounding in the Color round-trip cannot drop
+/// it below the bar). Falls back to black / white when no step
+/// in range clears it (near-white pick in light mode, near-black
+/// pick in dark mode). `backgroundLuminances` are the
+/// `haoRelativeLuminance` values of the opaque backgrounds the
+/// text sits on (scaffold + solid); glass surfaces over unknown
+/// content cannot be computed and are not passed in.
+func haoTextRGB(
+    red: Double, green: Double, blue: Double, darkScheme: Bool,
+    backgroundLuminances: [Double]
+) -> (red: Double, green: Double, blue: Double) {
+    let target = 4.6
+    func clears(_ r: Double, _ g: Double, _ b: Double) -> Bool {
+        let lum = haoRelativeLuminance(red: r, green: g, blue: b)
+        return backgroundLuminances.allSatisfy { haoContrastRatio(luminanceA: lum, luminanceB: $0) >= target }
+    }
+    if clears(red, green, blue) { return (red, green, blue) }
+    if darkScheme {
+        for step in 1...100 {
+            let t = Double(step) * 0.01
+            let r = red + (1 - red) * t
+            let g = green + (1 - green) * t
+            let b = blue + (1 - blue) * t
+            if clears(r, g, b) { return (r, g, b) }
+        }
+        return (1, 1, 1)
+    }
+    for step in 1...99 {
+        let f = 1.0 - Double(step) * 0.01
+        if clears(red * f, green * f, blue * f) { return (red * f, green * f, blue * f) }
+    }
+    return (0, 0, 0)
+}
+
+// END PURE-CONTRAST
 
 /// Relative luminance of an accent colour — the shared prelude of
 /// `haoOnAccentFor` / `haoAccentOnBlack` (build 36, item 8, smell 2):
@@ -397,6 +474,37 @@ func haoTabTint(_ accent: Color?, scheme: ColorScheme, fallback: Color) -> Color
         contrast = 1.05 / (luminance + 0.05)
     }
     return contrast >= 1.5 ? accent : fallback
+}
+
+/// Accent-as-text (build 36 follow-up D3): the `Color` wrapper
+/// around the pure `haoTextRGB`. Reads the accent and background
+/// RGBA, adjusts the accent just far enough to clear 4.5:1
+/// against every background, and returns it. Unreadable colours
+/// fall back to the accent unchanged (same fail-open as
+/// `haoAccentOnBlack` / `haoTabTint` on nil).
+func haoAccentText(for accent: Color, darkScheme: Bool, backgrounds: [Color]) -> Color {
+    let ui = UIColor(accent)
+    var r: CGFloat = 0
+    var g: CGFloat = 0
+    var b: CGFloat = 0
+    var a: CGFloat = 0
+    guard ui.getRed(&r, green: &g, blue: &b, alpha: &a) else { return accent }
+    var backgroundLuminances: [Double] = []
+    for background in backgrounds {
+        let bui = UIColor(background)
+        var br: CGFloat = 0
+        var bg: CGFloat = 0
+        var bb: CGFloat = 0
+        var ba: CGFloat = 0
+        guard bui.getRed(&br, green: &bg, blue: &bb, alpha: &ba) else { continue }
+        backgroundLuminances.append(
+            haoRelativeLuminance(red: Double(br), green: Double(bg), blue: Double(bb)))
+    }
+    guard !backgroundLuminances.isEmpty else { return accent }
+    let adjusted = haoTextRGB(
+        red: Double(r), green: Double(g), blue: Double(b),
+        darkScheme: darkScheme, backgroundLuminances: backgroundLuminances)
+    return Color(red: adjusted.red, green: adjusted.green, blue: adjusted.blue)
 }
 
 // MARK: - Type scale (build 36, item 4)

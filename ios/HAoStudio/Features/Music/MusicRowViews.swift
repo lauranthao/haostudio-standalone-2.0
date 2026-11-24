@@ -144,7 +144,7 @@ struct MusicSongRow: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(song.title.isEmpty ? "未知歌曲" : song.title)
                                 .font(.haoCalloutStrong)
-                                .foregroundStyle(isPlaying ? theme.accent : theme.textPrimary)
+                                .foregroundStyle(isPlaying ? theme.accentText : theme.textPrimary)
                                 .lineLimit(1)
                             HStack(spacing: 6) {
                                 if showPlatformBadge, let badge = song.badgePlatform {
@@ -560,7 +560,7 @@ struct MusicCapsuleButton: View {
                 Text(label)
                     .font(.haoFootnoteStrong)
             }
-            .foregroundStyle(enabled ? theme.accent : theme.textMuted)
+            .foregroundStyle(enabled ? theme.accentText : theme.textMuted)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .background(theme.accentSoft, in: Capsule())

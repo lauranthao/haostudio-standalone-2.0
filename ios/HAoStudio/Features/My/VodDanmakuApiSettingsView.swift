@@ -66,7 +66,7 @@ struct VodDanmakuApiSettingsView: View {
                     }
                 }
                 .font(.haoBody)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
                 Button("恢复默认") {
                     apiUrlDraft = ""
                     apiTokenDraft = ""
@@ -74,7 +74,7 @@ struct VodDanmakuApiSettingsView: View {
                     VodDanmakuApiConfig().save()
                 }
                 .font(.haoBody)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
                 if let errorMessage {
                     Text(errorMessage)
                         .font(.haoFootnote)

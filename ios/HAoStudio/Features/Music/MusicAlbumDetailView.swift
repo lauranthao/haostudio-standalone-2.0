@@ -173,7 +173,7 @@ struct MusicAlbumDetailView: View {
                 .multilineTextAlignment(.center)
             Text(viewModel.detail.artist.isEmpty ? album.artist : viewModel.detail.artist)
                 .font(.haoCallout)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
                 .lineLimit(1)
             HStack(spacing: 8) {
                 if !viewModel.yearText.isEmpty {

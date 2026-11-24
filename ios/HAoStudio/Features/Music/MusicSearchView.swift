@@ -74,7 +74,7 @@ struct MusicSearchView: View {
                         Spacer()
                         Button("清除") { searchVM.clearHistory() }
                             .font(.haoRowSubtitle)
-                            .foregroundStyle(theme.accent)
+                            .foregroundStyle(theme.accentText)
                             .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 20)
@@ -219,7 +219,7 @@ struct MusicAddToPlaylistSheet: View {
                             newListName = ""
                             libraryVM.reload()
                         }
-                        .foregroundStyle(theme.accent)
+                        .foregroundStyle(theme.accentText)
                     }
                 }
                 if let resultText = resultText {

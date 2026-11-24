@@ -86,13 +86,13 @@ struct LXSourceManagementView: View {
                     importFromURL()
                 }
                 .font(.haoBody)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
                 .disabled(isImporting)
                 Button("从文件选择 .js 导入") {
                     showingFileImporter = true
                 }
                 .font(.haoBody)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
                 .disabled(isImporting)
                 if isImporting {
                     ProgressView("正在导入…")
@@ -108,7 +108,7 @@ struct LXSourceManagementView: View {
                     showingRestoreAlert = true
                 }
                 .font(.haoBody)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
             }
         }
         .listStyle(.insetGrouped)
@@ -186,7 +186,7 @@ struct LXSourceManagementView: View {
                     downloadLegacyScript(row)
                 }
                 .font(.haoFootnote)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
                 .disabled(isImporting)
             }
             Toggle(
@@ -388,7 +388,7 @@ struct CmsSourceManagementView: View {
                     showingRestoreAlert = true
                 }
                 .font(.haoBody)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
             }
         }
         .listStyle(.insetGrouped)

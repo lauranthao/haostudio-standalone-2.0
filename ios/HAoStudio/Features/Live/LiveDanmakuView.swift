@@ -286,7 +286,7 @@ struct LiveDanmakuListView: View {
                 .foregroundStyle(theme.textSecondary)
             Button("在弹幕设置中开启", action: onOpenSettings)
                 .font(.haoFootnoteMedium)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
                 .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

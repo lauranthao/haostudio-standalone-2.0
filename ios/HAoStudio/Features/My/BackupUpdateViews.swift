@@ -273,7 +273,7 @@ struct UpdatePromptSheet: View {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.haoSubhead)
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(theme.accentText)
                 Text(blocked)
                     .font(.haoSubhead)
                     .foregroundStyle(theme.textPrimary)
@@ -291,12 +291,12 @@ struct UpdatePromptSheet: View {
                     onSkip()
                 }
                 .font(.haoCallout)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
                 Button("以后再说") {
                     onLater()
                 }
                 .font(.haoCallout)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
             }
             .frame(maxWidth: .infinity)
         }

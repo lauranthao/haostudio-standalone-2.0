@@ -44,7 +44,7 @@ struct MusicSleepTimerView: View {
                                     Spacer()
                                     if isSelected(option) {
                                         Image(systemName: "checkmark")
-                                            .foregroundStyle(theme.accent)
+                                            .foregroundStyle(theme.accentText)
                                     }
                                 }
                             }
@@ -111,7 +111,7 @@ struct MusicSleepTimerView: View {
                 playerVM.sleepTimer.startCustom(minutes: minutes)
                 dismiss()
             }
-            .foregroundStyle(theme.accent)
+            .foregroundStyle(theme.accentText)
         }
     }
 
@@ -132,7 +132,7 @@ struct MusicSleepTimerView: View {
                 playerVM.sleepTimer.startAfterNTracks(count: count)
                 dismiss()
             }
-            .foregroundStyle(theme.accent)
+            .foregroundStyle(theme.accentText)
         }
     }
 }
@@ -162,7 +162,7 @@ struct MusicQualitySheet: View {
                                 Spacer()
                                 if coordinator.targetQuality == tier {
                                     Image(systemName: "checkmark")
-                                        .foregroundStyle(theme.accent)
+                                        .foregroundStyle(theme.accentText)
                                 }
                             }
                         }

@@ -266,13 +266,13 @@ struct MyView: View {
                     BackupUpdateFlow.shared.beginImport()
                 }
                 .font(.haoBody)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
                 Button("不再提示") {
                     MigrationStore.dismissMigrationNotice()
                     showMigrationNotice = false
                 }
                 .font(.haoBody)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
             }
         }
     }

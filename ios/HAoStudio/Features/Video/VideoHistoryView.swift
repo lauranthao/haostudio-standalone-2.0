@@ -83,7 +83,7 @@ struct VideoHistoryView: View {
                 if !entries.isEmpty {
                     Button("清空") { showClearConfirm = true }
                         .font(.haoSubhead)
-                        .foregroundStyle(theme.accent)
+                        .foregroundStyle(theme.accentText)
                 }
             }
         }
