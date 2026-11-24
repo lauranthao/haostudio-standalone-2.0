@@ -169,6 +169,9 @@ struct LiveTabView: View {
         NavigationStack(path: $path) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    // Scroll anchor for the bottom chrome (b35 tab-bar
+                    // link): drives minimize / restore as this tab scrolls.
+                    HaoChromeScrollAnchor()
                     platformRow
                         .padding(.top, 12)
                     if !viewModel.categories.isEmpty {
@@ -192,6 +195,7 @@ struct LiveTabView: View {
                 }
             }
             .haoBottomChromePadding()
+            .haoChromeScrollTracking()
             .refreshable { viewModel.reload() }
             .background(theme.scaffoldBackground)
             .navigationTitle("直播")

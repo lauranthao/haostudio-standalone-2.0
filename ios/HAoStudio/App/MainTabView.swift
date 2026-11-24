@@ -62,14 +62,53 @@ struct MainTabView: View {
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var musicPlayer: MusicPlayerViewModel
     @EnvironmentObject private var immersiveChrome: ImmersiveChromeState
+    @EnvironmentObject private var bottomChrome: BottomChromeState
     @EnvironmentObject private var settingsStore: SettingsStore
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var selectedTab: HaoTab = .home
     @State private var showingFullPlayer = false
+    /// Namespace for the cover morph: the mini cover grows into the
+    /// full player's cover (matchedGeometryEffect, id
+    /// HaoLayout.playerCoverMorphID). Owned here so the mini and the
+    /// presented player share one namespace.
+    @Namespace private var playerMorph
 
     private var tabBarItems: [GlassTabBarItem] {
         HaoTab.allCases.map { GlassTabBarItem(tab: $0, title: $0.title, icon: $0.icon) }
+    }
+
+    /// The bottom chrome in its two forms (b35 tab-bar link, Apple
+    /// Music / iOS 26 behaviour, hand-rolled — see BottomChromeState):
+    /// expanded, the wide mini above the full tab bar; minimized, one
+    /// row — the current-tab capsule beside the narrowed inline mini.
+    /// Both forms share the same outer width (screen − 24, from the
+    /// caller's side margins), the same 8pt spacing, the same glass
+    /// and the same 12pt radius, so the row never reads as a different
+    /// component. MiniPlayerBar hides itself when nothing is playing,
+    /// in both forms — minimized without a mini is just the capsule.
+    @ViewBuilder
+    private var bottomChromeContent: some View {
+        if bottomChrome.isMinimized {
+            HStack(spacing: HaoLayout.floatingStackSpacing) {
+                MinimizedTabCapsule(selection: $selectedTab, tabAccent: settingsStore.tabAccentColor)
+                MiniPlayerBar(onTapFullPlayer: { showingFullPlayer = true }, morphNamespace: playerMorph)
+            }
+            // Same outer slot as the full tab bar (56 content + 4pt
+            // inset top and bottom = 64), so the row swaps in place.
+            .padding(.vertical, HaoLayout.tabBarInnerInset)
+            .transition(.asymmetric(
+                insertion: .move(edge: .bottom).combined(with: .opacity),
+                removal: .opacity))
+        } else {
+            VStack(spacing: HaoLayout.floatingStackSpacing) {
+                MiniPlayerBar(onTapFullPlayer: { showingFullPlayer = true }, morphNamespace: playerMorph)
+                GlassTabBar(items: tabBarItems, selection: $selectedTab, tabAccent: settingsStore.tabAccentColor)
+            }
+            .transition(.asymmetric(
+                insertion: .opacity,
+                removal: .move(edge: .bottom).combined(with: .opacity)))
+        }
     }
 
     var body: some View {
@@ -89,16 +128,21 @@ struct MainTabView: View {
             // the chrome comes back when the room exits. The glass
             // itself is untouched — hidden, never restyled.
             if !immersiveChrome.isImmersive {
-                VStack(spacing: HaoLayout.floatingStackSpacing) {
-                    // Beans dock: the mini player shares the tab bar's
-                    // 12pt side margins (it used to span full width,
-                    // which read wider — and taller — than the bar).
-                    MiniPlayerBar(onTapFullPlayer: { showingFullPlayer = true })
-                        .padding(.horizontal, HaoLayout.tabBarHorizontalMargin)
-                    GlassTabBar(items: tabBarItems, selection: $selectedTab, tabAccent: settingsStore.tabAccentColor)
-                        .padding(.horizontal, HaoLayout.tabBarHorizontalMargin)
-                }
-                .padding(.bottom, HaoLayout.tabBarBottomMargin)
+                bottomChromeContent
+                    .padding(.horizontal, HaoLayout.tabBarHorizontalMargin)
+                    .padding(.bottom, HaoLayout.tabBarBottomMargin)
+                    // Full-player morph: as the player expands, the
+                    // chrome fades and slides away with it instead of
+                    // vanishing the instant the cover starts up — and
+                    // fades back in as the player collapses. The
+                    // cover itself morphs via matchedGeometryEffect
+                    // (MiniPlayerBar / MusicPlayerView, same
+                    // namespace); this fade is the tab bar's half of
+                    // the same transition, on the same spring.
+                    .opacity(showingFullPlayer ? 0 : 1)
+                    .offset(y: showingFullPlayer ? 24 : 0)
+                    .animation(HaoLayout.settleSpring, value: showingFullPlayer)
+                    .animation(HaoLayout.settleSpring, value: bottomChrome.isMinimized)
             }
         }
         .fullScreenCover(isPresented: $showingFullPlayer) {
@@ -113,7 +157,7 @@ struct MainTabView: View {
             // the room page, rebuilt from the playing item.
             if coordinator.currentItem?.kind == .music
                 || (coordinator.currentItem == nil && musicPlayer.miniFallbackSong != nil) {
-                MusicPlayerView(isPresented: $showingFullPlayer)
+                MusicPlayerView(isPresented: $showingFullPlayer, coverMorphNamespace: playerMorph)
             } else if coordinator.currentItem?.kind == .vod {
                 VideoPlayerView()
             } else if coordinator.currentItem?.kind == .live,

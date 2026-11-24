@@ -128,6 +128,9 @@ struct VideoTabView: View {
     private var cmsHome: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                // Scroll anchor for the bottom chrome (b35 tab-bar
+                // link): drives minimize / restore as this tab scrolls.
+                HaoChromeScrollAnchor()
                 searchEntry
                     .padding(.horizontal, 24)
                     .padding(.top, 12)
@@ -163,6 +166,7 @@ struct VideoTabView: View {
             }
         }
         .haoBottomChromePadding()
+        .haoChromeScrollTracking()
         .refreshable { viewModel.loadFresh() }
     }
 

@@ -56,6 +56,29 @@ enum HaoLayout {
     static let miniPlayerContentPadding: CGFloat = 12
     /// Gap between the mini player strip and the tab bar.
     static let floatingStackSpacing: CGFloat = 8
+    /// Name of the coordinate space a tab root's scroll view publishes
+    /// for the chrome scroll anchor (HaoChromeScrollAnchor): the
+    /// anchor reports its top offset in this space, 0 at the top,
+    /// negative while the content is scrolled down.
+    static let chromeScrollSpace = "haoChromeScroll"
+    /// Cover size in the expanded mini player (Beans MiniPlayerView: 36).
+    static let miniCoverSize: CGFloat = 36
+    /// Cover size in the inline (minimized) mini player: the iOS 26
+    /// NowPlayingTray recipe uses 32 — the tray drops the artist line
+    /// and the next button, and the smaller cover leaves room for the
+    /// title in the narrowed strip.
+    static let miniInlineCoverSize: CGFloat = 32
+    /// matchedGeometryEffect id shared by the mini cover and the full
+    /// player cover: tapping the mini morphs this one cover from 36
+    /// (or 32 inline) to the full player's cover (up to 340).
+    static let playerCoverMorphID = "haoPlayerCover"
+    /// Long-press dwell before the minimized capsule starts
+    /// tab-dragging (Apple: long-press the minimized bar, then slide
+    /// to switch tabs).
+    static let minimizedCapsuleLongPressDuration: TimeInterval = 0.3
+    /// Horizontal drag per tab while switching tabs on the minimized
+    /// capsule.
+    static let minimizedCapsuleTabStep: CGFloat = 64
     /// Total height of the glass tab bar as laid out in the floating
     /// stack: content 56 + 4pt inner inset top and bottom (64).
     static let tabBarTotalHeight: CGFloat = tabBarContentHeight + tabBarInnerInset * 2
@@ -63,13 +86,166 @@ enum HaoLayout {
     /// bottom margin + tab bar + (gap + mini player while one is
     /// showing). This is the clearance a scroll page under the stack
     /// must add so its last row can scroll fully above the stack —
-    /// 66pt idle, 124pt while playing. See haoBottomChromePadding().
-    static func floatingStackClearance(miniPlayerVisible: Bool) -> CGFloat {
-        tabBarBottomMargin + tabBarTotalHeight
+    /// 66pt idle, 124pt while playing. Minimized, the stack is a
+    /// single tab-bar slot (capsule + inline mini side by side),
+    /// so the clearance is 66pt whatever the mini is doing — the
+    /// reclaimed space is the point of minimizing. See
+    /// haoBottomChromePadding().
+    static func floatingStackClearance(miniPlayerVisible: Bool, isMinimized: Bool = false) -> CGFloat {
+        if isMinimized {
+            return tabBarBottomMargin + tabBarTotalHeight
+        }
+        return tabBarBottomMargin + tabBarTotalHeight
             + (miniPlayerVisible ? floatingStackSpacing + miniPlayerHeight : 0)
     }
     /// Settle spring for the tab-bar selection pill.
     static let settleSpring = Animation.spring(response: 0.35, dampingFraction: 0.82)
+}
+
+/// Scroll-driven minimize state for the bottom chrome (b35 tab-bar
+/// link — Apple Music / iOS 26 behaviour, hand-rolled).
+///
+/// iOS 26 ships this as `.tabBarMinimizeBehavior(.onScrollDown)` +
+/// `.tabViewBottomAccessory`, but those modifiers belong to a stock
+/// TabView: this app has no TabView (custom UITabBar + @State content
+/// switch in MainTabView) and the deployment target is iOS 17, so the
+/// system behaviour is reimplemented here from a scroll anchor. The
+/// payoff is that it runs on iOS 17–27 with one code path.
+///
+/// Behaviour (matches the iOS 26 Music shell):
+/// - Scroll down: the tab bar tucks into one small glass capsule
+///   showing only the current tab, and the mini player slides down
+///   beside it, narrower, without its artist line or next button.
+/// - Scroll up (or back to the top): both spring back — the full
+///   tab bar and the wide mini above it.
+/// - The state is driven by the visible tab's scroll offset only;
+///   pushed pages carry no anchor, so scrolling a pushed page leaves
+///   the chrome exactly as it was (known gap, see the anchor docs).
+@MainActor
+final class BottomChromeState: ObservableObject {
+    /// True while the chrome is in its minimized (single-row) form.
+    @Published private(set) var isMinimized = false
+
+    /// Last offset the anchor reported. The hysteresis band below
+    /// only follows the scroll DIRECTION, so a slow drag near the
+    /// boundary never flickers the chrome.
+    private var lastOffset: CGFloat?
+
+    /// At or above this offset the content is at the top: always expanded.
+    private static let expandOffset: CGFloat = -16
+    /// At or below this offset the content is clearly scrolled down:
+    /// always minimized.
+    private static let minimizeOffset: CGFloat = -64
+    /// Inside the band, a downward move of this much minimizes…
+    private static let minimizeStep: CGFloat = 6
+    /// …and an upward move of this much expands.
+    private static let expandStep: CGFloat = 10
+
+    /// Feed the anchor's top offset (0 at the top, negative while
+    /// scrolled down). Only publishes when the minimized flag actually
+    /// flips, so a scroll drag does not re-render the chrome every frame.
+    func noteScrollOffset(_ minY: CGFloat) {
+        let previous = lastOffset
+        lastOffset = minY
+        let target: Bool?
+        if minY >= Self.expandOffset {
+            target = false
+        } else if minY <= Self.minimizeOffset {
+            target = true
+        } else if let previous {
+            let delta = minY - previous
+            if delta <= -Self.minimizeStep {
+                target = true
+            } else if delta >= Self.expandStep {
+                target = false
+            } else {
+                target = nil
+            }
+        } else {
+            target = nil
+        }
+        guard let target, target != isMinimized else { return }
+        withAnimation(HaoLayout.settleSpring) {
+            isMinimized = target
+        }
+    }
+
+    /// Expand the chrome (tap on the minimized capsule). No-op when
+    /// already expanded, so a stray tap can never wedge it.
+    func expand() {
+        guard isMinimized else { return }
+        withAnimation(HaoLayout.settleSpring) {
+            isMinimized = false
+        }
+    }
+
+    /// Minimize the chrome (explicit callers; scrolling normally
+    /// drives this through noteScrollOffset).
+    func minimize() {
+        guard !isMinimized else { return }
+        withAnimation(HaoLayout.settleSpring) {
+            isMinimized = true
+        }
+    }
+}
+
+/// Preference key carrying the scroll anchor's top offset up to the
+/// scroll view that owns the coordinate space.
+private struct HaoChromeScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat? = nil
+    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) {
+        value = nextValue() ?? value
+    }
+}
+
+/// Zero-height view placed as the FIRST child of a tab root's
+/// vertical scroll content (ScrollView or List). It reports its top
+/// offset in the scroll view's coordinate space — 0 at the top,
+/// negative while the content is scrolled down — and
+/// BottomChromeState turns that into minimize / restore. Invisible
+/// (clear, zero height, hidden from VoiceOver) and outside the tab's
+/// content spacing, so it never shifts a row by a point.
+///
+/// Only the five tab roots carry one. A page pushed inside a tab has
+/// no anchor: scrolling it leaves the chrome as it was when the page
+/// was pushed, and the state self-corrects from the root anchor when
+/// the user pops back. Wiring every pushed scroll page is a later
+/// pass, not this leg.
+struct HaoChromeScrollAnchor: View {
+    var body: some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: HaoChromeScrollOffsetKey.self,
+                value: proxy.frame(in: .named(HaoLayout.chromeScrollSpace)).minY
+            )
+        }
+        .frame(height: 0)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct HaoChromeScrollTracking: ViewModifier {
+    @EnvironmentObject private var bottomChrome: BottomChromeState
+
+    func body(content: Content) -> some View {
+        content
+            .coordinateSpace(name: HaoLayout.chromeScrollSpace)
+            .onPreferenceChange(HaoChromeScrollOffsetKey.self) { minY in
+                guard let minY else { return }
+                bottomChrome.noteScrollOffset(minY)
+            }
+    }
+}
+
+extension View {
+    /// Watch this scroll view's content offset and drive the bottom
+    /// chrome's minimize / restore state. Apply to the tab root's
+    /// ScrollView / List (which must contain a HaoChromeScrollAnchor
+    /// as its first content child). Horizontal inner scroll views are
+    /// untouched — only vertical content offset moves the anchor.
+    func haoChromeScrollTracking() -> some View {
+        modifier(HaoChromeScrollTracking())
+    }
 }
 
 /// A capsule with native liquid glass on iOS 26+, regular frosted glass
@@ -185,16 +361,21 @@ extension View {
 /// (MusicPlayerViewModel.miniFallbackSong — a failed / stopped track
 /// the full player keeps showing). Using only `currentItem` here
 /// would leave 66pt of clearance under a visible 124pt stack.
+/// It also reads BottomChromeState: minimized, the stack is one
+/// tab-bar slot tall (66pt) whatever the mini is doing, so the
+/// clearance shrinks with the chrome and the reclaimed space is real.
 private struct HaoBottomChromePadding: ViewModifier {
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var musicPlayer: MusicPlayerViewModel
+    @EnvironmentObject private var bottomChrome: BottomChromeState
 
     func body(content: Content) -> some View {
         content.safeAreaPadding(
             .bottom,
             HaoLayout.floatingStackClearance(
                 miniPlayerVisible: coordinator.currentItem != nil
-                    || musicPlayer.miniFallbackSong != nil
+                    || musicPlayer.miniFallbackSong != nil,
+                isMinimized: bottomChrome.isMinimized
             )
         )
     }

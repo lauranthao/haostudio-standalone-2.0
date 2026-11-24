@@ -96,6 +96,9 @@ struct EmbyTabView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
+                        // Scroll anchor for the bottom chrome (b35 tab-bar
+                        // link): drives minimize / restore as this tab scrolls.
+                        HaoChromeScrollAnchor()
                         libraryStrip
                             .padding(.top, 12)
                         if !viewModel.genres.isEmpty {
@@ -130,6 +133,7 @@ struct EmbyTabView: View {
                     }
                 }
                 .haoBottomChromePadding()
+                .haoChromeScrollTracking()
                 .refreshable { viewModel.reload() }
             }
         }

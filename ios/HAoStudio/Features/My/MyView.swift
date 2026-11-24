@@ -137,11 +137,20 @@ struct MyView: View {
     var body: some View {
         NavigationStack {
             List {
+                // Scroll anchor for the bottom chrome (b35 tab-bar
+                // link): drives minimize / restore as this tab scrolls.
+                // A zero-height, separator-less first row — the List
+                // equivalent of the ScrollView anchor.
+                HaoChromeScrollAnchor()
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                 entriesSection
                 migrationSection
                 settingsSection
             }
             .haoBottomChromePadding()
+            .haoChromeScrollTracking()
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(theme.scaffoldBackground)

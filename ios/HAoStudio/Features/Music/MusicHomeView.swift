@@ -39,6 +39,9 @@ struct MusicHomeView: View {
         NavigationStack(path: $path) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    // Scroll anchor for the bottom chrome (b35 tab-bar
+                    // link): drives minimize / restore as this tab scrolls.
+                    HaoChromeScrollAnchor()
                     featureShelf
                     fmRow
                         .padding(.top, 10)
@@ -51,6 +54,7 @@ struct MusicHomeView: View {
                 .padding(.horizontal, 24)
             }
             .haoBottomChromePadding()
+            .haoChromeScrollTracking()
             .background(theme.scaffoldBackground)
             .navigationTitle("音乐")
             .navigationBarTitleDisplayMode(.large)

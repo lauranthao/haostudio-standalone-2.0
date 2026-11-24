@@ -82,6 +82,91 @@ struct GlassTabBar: View {
     }
 }
 
+/// The minimized tab bar: one small glass capsule showing only the
+/// current tab (iOS 26 Music: scroll down and the bar tucks into a
+/// capsule while the mini tray slides down beside it). Same glass,
+/// same 12pt radius and same side margins as the full bar, so the
+/// minimized row reads as the same unit, not a different component.
+/// The selected colour is the same as the full bar's (the user's tab
+/// accent from Settings, else theme.tabSelected — never red, never
+/// the theme accent by default).
+///
+/// Interaction (Apple's minimized-bar behaviour, hand-rolled):
+/// - Quick tap: expand the full tab bar again (scrolling up does
+///   the same — the capsule is never a dead end).
+/// - Long-press, then drag horizontally: switch tabs, one tab per
+///   64pt of drag, with a selection tick per step. The drag and the
+///   tap share ONE sequenced gesture, so a long-press can never
+///   also fire a tap on release: a touch that ends before the dwell
+///   is the tap, a held touch is the start of a drag.
+struct MinimizedTabCapsule: View {
+    @Binding var selection: HaoTab
+    /// Selected-tab colour override (S5-C): the user's chosen tab
+    /// accent from Settings; nil keeps the theme default.
+    var tabAccent: Color? = nil
+
+    @EnvironmentObject private var bottomChrome: BottomChromeState
+    @Environment(\.haoTheme) private var theme
+
+    /// Index the tab drag started from (nil = not dragging).
+    @State private var dragBaseIndex: Int? = nil
+
+    private var selectedColor: Color {
+        tabAccent ?? theme.tabSelected
+    }
+
+    var body: some View {
+        let tab = selection
+        HStack(spacing: 6) {
+            Image(systemName: tab.icon)
+                .font(.system(size: 20, weight: .semibold))
+            Text(tab.title)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(selectedColor)
+        .frame(height: HaoLayout.tabBarContentHeight)
+        .padding(.horizontal, 16)
+        .haoGlassRoundedRect()
+        .scaleEffect(dragBaseIndex != nil ? 0.96 : 1)
+        .animation(HaoLayout.settleSpring, value: dragBaseIndex != nil)
+        .sensoryFeedback(.selection, trigger: selection)
+        .accessibilityLabel("当前标签：\(tab.title)，点按展开菜单栏，长按滑动切换标签")
+        .gesture(
+            LongPressGesture(minimumDuration: HaoLayout.minimizedCapsuleLongPressDuration)
+                .sequenced(before: DragGesture(minimumDistance: 4, coordinateSpace: .local))
+                .onChanged { value in
+                    switch value {
+                    case .first(true):
+                        // Long-press recognised: the drag starts here.
+                        dragBaseIndex = HaoTab.allCases.firstIndex(of: selection)
+                    case .second(true, let drag):
+                        guard let base = dragBaseIndex,
+                              let drag else { return }
+                        let step = Int((drag.translation.width / HaoLayout.minimizedCapsuleTabStep).rounded())
+                        let next = min(max(base + step, 0), HaoTab.allCases.count - 1)
+                        if let current = HaoTab.allCases.firstIndex(of: selection),
+                           next != current {
+                            selection = HaoTab.allCases[next]
+                        }
+                    default:
+                        break
+                    }
+                }
+                .onEnded { value in
+                    // A touch that ends before the long-press dwell is
+                    // a tap: expand the bar again. A held long-press
+                    // without dragging, or a finished drag, ends here
+                    // without expanding.
+                    if case .first(false) = value {
+                        bottomChrome.expand()
+                    }
+                    dragBaseIndex = nil
+                }
+        )
+    }
+}
+
 /// The system UITabBar, bridged into SwiftUI.
 ///
 /// A bare UITabBar (not a UITabBarController): MainTabView owns the tab

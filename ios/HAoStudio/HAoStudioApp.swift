@@ -36,6 +36,12 @@ struct HAoStudioApp: App {
     /// disappear). Created here, next to the other shared state —
     /// never one instance per page.
     @StateObject private var immersiveChrome = ImmersiveChromeState()
+    /// One shared bottom-chrome minimize state for the whole app
+    /// (b35 tab-bar link: the tab roots' scroll anchors drive it,
+    /// MainTabView renders the minimized / expanded chrome from it,
+    /// and the content clearance follows it). Same pattern as
+    /// immersiveChrome above — created here, never one per page.
+    @StateObject private var bottomChrome = BottomChromeState()
     /// S5-A: one shared settings store for the whole app (Settings
     /// page, theme overrides, engine preference). Built with the
     /// themeStore above — the ThemeStore is created first and
@@ -137,6 +143,7 @@ struct HAoStudioApp: App {
             .environmentObject(videoPlayer)
             .environmentObject(livePlayer)
             .environmentObject(immersiveChrome)
+            .environmentObject(bottomChrome)
             .onChange(of: scenePhase) { newPhase in
                 switch newPhase {
                 case .background:

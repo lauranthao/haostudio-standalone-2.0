@@ -179,3 +179,140 @@ final class MiniPlayerB35Tests: XCTestCase {
         XCTAssertNil(viewModel.miniFallbackSong)
     }
 }
+
+// MARK: - b35 tab-bar link: scroll-driven minimize + morph contract
+
+/// Covers the b35 tab-bar link leg: the BottomChromeState machine
+/// (scroll down minimizes, scroll up restores, hysteresis holds in
+/// the middle band), the minimized-row geometry (capsule + inline
+/// mini share one row at screen − 24), and the cover-morph
+/// constants (mini 36 / inline 32 -> full player up to 340, one
+/// shared matchedGeometryEffect id). The morph animation itself and
+/// the long-press tab drag are device-only: no simulator runs here,
+/// so they are listed as "needs device confirmation", not asserted.
+@MainActor
+final class BottomChromeB35Tests: XCTestCase {
+
+    // MARK: - State machine: scroll direction drives minimize / restore
+
+    /// Stepped scroll-down past the band minimizes; stepped
+    /// scroll-up restores. Offsets arrive a few points per frame in
+    /// a real drag, so the test feeds realistic steps.
+    func testScrollDownMinimizesScrollUpRestores() {
+        let state = BottomChromeState()
+        XCTAssertFalse(state.isMinimized)
+
+        // At the top: stays expanded.
+        state.noteScrollOffset(0)
+        XCTAssertFalse(state.isMinimized)
+
+        // Scroll down in small steps: minimizes once clearly past the top.
+        for offset in [-4, -8, -12, -18, -26, -40, -80] as [CGFloat] {
+            state.noteScrollOffset(offset)
+        }
+        XCTAssertTrue(state.isMinimized)
+
+        // Scroll back up in small steps: restores.
+        for offset in [-70, -60, -50, -40, -30] as [CGFloat] {
+            state.noteScrollOffset(offset)
+        }
+        XCTAssertFalse(state.isMinimized)
+
+        // Back at the top: expanded, whatever came before.
+        state.noteScrollOffset(0)
+        XCTAssertFalse(state.isMinimized)
+    }
+
+    /// Deep scroll (a jump, e.g. switching to a tab that was left
+    /// scrolled down) minimizes from the absolute position alone;
+    /// a jump back to the top expands the same way.
+    func testAbsolutePositionWinsOnJump() {
+        let state = BottomChromeState()
+        state.noteScrollOffset(-200)
+        XCTAssertTrue(state.isMinimized)
+        state.noteScrollOffset(0)
+        XCTAssertFalse(state.isMinimized)
+        state.noteScrollOffset(-200)
+        XCTAssertTrue(state.isMinimized)
+    }
+
+    /// Inside the middle band, small wiggles (under the step
+    /// thresholds) hold the current state — a slow drag near the
+    /// boundary never flickers the chrome.
+    func testHysteresisBandHoldsStateOnSmallWiggles() {
+        let state = BottomChromeState()
+        state.noteScrollOffset(-200)
+        XCTAssertTrue(state.isMinimized)
+        // Drift back up 5pt at a time: under the 10pt expand step,
+        // so the chrome stays minimized through the whole band.
+        for offset in [-195, -190, -185, -180, -100, -70] as [CGFloat] {
+            state.noteScrollOffset(offset)
+            XCTAssertTrue(state.isMinimized, "offset \(offset)")
+        }
+        // One clear upward move of 10pt+ restores.
+        state.noteScrollOffset(-58)
+        XCTAssertFalse(state.isMinimized)
+    }
+
+    /// expand() / minimize() are idempotent no-ops in their own
+    /// state, so a stray tap can never wedge the chrome.
+    func testExpandAndMinimizeAreIdempotent() {
+        let state = BottomChromeState()
+        state.expand()
+        XCTAssertFalse(state.isMinimized)
+        state.minimize()
+        XCTAssertTrue(state.isMinimized)
+        state.minimize()
+        XCTAssertTrue(state.isMinimized)
+        state.expand()
+        XCTAssertFalse(state.isMinimized)
+    }
+
+    // MARK: - Geometry: minimized row == expanded width, one slot tall
+
+    /// The minimized row (capsule + inline mini, 8pt between) spans
+    /// exactly the expanded chrome's width — screen − 24 on every
+    /// width — because the side margins are applied once to the row,
+    /// not per element.
+    func testMinimizedRowSharesExpandedWidth() {
+        for width: CGFloat in [320, 360, 375, 390, 393, 402, 428, 430] {
+            let rowWidth = width - 2 * HaoLayout.tabBarHorizontalMargin
+            XCTAssertEqual(rowWidth, width - 24, "screen width \(width)")
+        }
+        XCTAssertEqual(HaoLayout.floatingStackSpacing, 8)
+    }
+
+    /// The inline mini is exactly one tab-bar slot tall (56, same as
+    /// the capsule beside it), and the minimized row occupies the
+    /// same 64pt outer slot as the full tab bar — it swaps in place.
+    func testInlineMiniMatchesTabBarHeight() {
+        XCTAssertEqual(HaoLayout.tabBarContentHeight, 56)
+        XCTAssertEqual(HaoLayout.tabBarTotalHeight, 64)
+    }
+
+    /// Minimized clearance is 66pt whether or not the mini is
+    /// showing — the reclaimed space is the point of minimizing —
+    /// while the expanded clearance is unchanged (66 idle / 124 playing).
+    func testClearanceShrinksWhenMinimized() {
+        XCTAssertEqual(
+            HaoLayout.floatingStackClearance(miniPlayerVisible: true, isMinimized: true), 66)
+        XCTAssertEqual(
+            HaoLayout.floatingStackClearance(miniPlayerVisible: false, isMinimized: true), 66)
+        XCTAssertEqual(
+            HaoLayout.floatingStackClearance(miniPlayerVisible: false, isMinimized: false), 66)
+        XCTAssertEqual(
+            HaoLayout.floatingStackClearance(miniPlayerVisible: true, isMinimized: false), 124)
+    }
+
+    // MARK: - Morph contract: one cover, one id, known sizes
+
+    /// The morph endpoints are constants, not literals scattered in
+    /// the views: mini cover 36, inline mini cover 32 (iOS 26
+    /// NowPlayingTray recipe), full-player cover capped at 340
+    /// (MusicPlayerView.coverSize), one shared id.
+    func testCoverMorphEndpoints() {
+        XCTAssertEqual(HaoLayout.miniCoverSize, 36)
+        XCTAssertEqual(HaoLayout.miniInlineCoverSize, 32)
+        XCTAssertFalse(HaoLayout.playerCoverMorphID.isEmpty)
+    }
+}

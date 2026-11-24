@@ -45,6 +45,9 @@ struct HomeView: View {
         NavigationStack(path: $path) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    // Scroll anchor for the bottom chrome (b35 tab-bar
+                    // link): drives minimize / restore as this tab scrolls.
+                    HaoChromeScrollAnchor()
                     continueWatchingSection
                         .padding(.top, 12)
                     continueListeningSection
@@ -59,6 +62,7 @@ struct HomeView: View {
                 }
             }
             .haoBottomChromePadding()
+            .haoChromeScrollTracking()
             .refreshable { viewModel.reload() }
             .background(theme.scaffoldBackground)
             .navigationTitle("首页")
