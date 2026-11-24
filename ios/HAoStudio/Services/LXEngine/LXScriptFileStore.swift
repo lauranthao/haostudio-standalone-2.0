@@ -117,9 +117,14 @@ final class LXScriptFileStore {
     /// only pass ids the user has not deleted (LXEngine skips
     /// `deletedBundledIds`). Returns the file URL when the file
     /// exists afterwards, nil when there is no bundled code to
-    /// seed from and no file yet.
+    /// seed from and no file yet. When `bundleCode` is nil the id
+    /// no longer ships: return nil even if an orphan file exists
+    /// — the orphan must never be treated as a seeded script
+    /// (LXEngine would load it) — and leave the file untouched;
+    /// deleting it is `removeOrphanBundledFile`'s job.
     @discardableResult
     func seedOrRefresh(id: String, bundleCode: String?) -> URL? {
+        guard bundleCode != nil else { return nil }
         let url = fileURL(forScriptID: id)
         let existing = try? String(contentsOf: url, encoding: .utf8)
         let storedHash = recordedSeedHash(for: id)
