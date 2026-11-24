@@ -215,7 +215,20 @@ final class LiveRecovery {
     }
 
     deinit {
-        locked { prefetchTimer?.invalidate() }
+        // B36 item 5: the timer lives on the main run loop, so
+        // it must be invalidated on the main thread. dispose()
+        // (the exit path) already runs there, but deinit can
+        // land on a URLSession callback thread when an
+        // in-flight resolve outlives the session — invalidating
+        // a main-run-loop timer from that thread is undefined
+        // behaviour. Hop to main; the timer's closure holds a
+        // weak self, so a fire in between is a no-op.
+        let timer = locked { prefetchTimer }
+        if Thread.isMainThread {
+            timer?.invalidate()
+        } else if let timer = timer {
+            DispatchQueue.main.async { timer.invalidate() }
+        }
     }
 
     /// (URL, format) pairs for the given lines — the pure core of

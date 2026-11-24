@@ -43,6 +43,13 @@ final class LiveDriverFakeResolver: LiveSiteResolver {
     var platform: LivePlatform { .huya }
     var resolutionsToReturn: [LivePlayUrlResolution?] = []
     var resolveCount = 0
+    /// Hold resolve completions instead of answering them (b36
+    /// item 5: the stale-resolve test leaves the first resolve
+    /// pending, releases the driver, re-enters, and only then
+    /// answers the stale resolve — the re-entry's resolve must
+    /// still be pending when the stale answer lands).
+    var deferResolve = false
+    var deferredResolveCompletions: [(Result<LivePlayUrlResolution, Error>) -> Void] = []
 
     func roomInfo(roomId: String, completion: @escaping (Result<LiveRoom, Error>) -> Void) {
         completion(.failure(LiveError.unsupported("test fake has no room info")))
@@ -50,6 +57,10 @@ final class LiveDriverFakeResolver: LiveSiteResolver {
 
     func resolve(roomId: String, quality: LiveQuality?, completion: @escaping (Result<LivePlayUrlResolution, Error>) -> Void) {
         resolveCount += 1
+        if deferResolve {
+            deferredResolveCompletions.append(completion)
+            return
+        }
         let resolution = resolutionsToReturn.isEmpty ? nil : resolutionsToReturn.removeFirst()
         if let resolution = resolution {
             completion(.success(resolution))
@@ -334,5 +345,68 @@ final class LiveDriverTests: XCTestCase {
         XCTAssertNil(driver.currentRoom)
         XCTAssertFalse(driver.isPlaying)
         XCTAssertFalse(driver.isAudioOnly)
+    }
+
+    func testStaleResolveAfterReleaseDoesNotOpenAgainstReentry() {
+        // B36 item 5 (live back-out crash): backing out of a
+        // room releases the driver while its initial resolve is
+        // still in flight; a late resolve from the exited room
+        // must not open against the fresh re-entry. Without the
+        // release() attempt-token bump (and the token check on
+        // the resolve completion), the stale resolve passes the
+        // pendingItem check — the re-entry re-set pendingItem
+        // to the same room id — and opens the old URL, racing
+        // the new resolve and churning backends mid-flight.
+        let factory = FakeBackendFactory()
+        let deferredMPV = FakeVideoBackend(engine: .mpv)
+        deferredMPV.deferOpenCompletion = true
+        factory.fakes = [.mpv: [deferredMPV]]
+        let resolver = LiveDriverFakeResolver()
+        resolver.deferResolve = true
+        let driver = makeDriver(factory: factory, resolver: resolver)
+        var failedError: MusicPlayerError?
+        driver.onRoomFailed = { _, error in failedError = error }
+        let started = expectation(description: "re-entered room started")
+        driver.onRoomStarted = { _ in started.fulfill() }
+
+        let room = makeRoom()
+        let item = LiveDriver.playbackItem(room: room)
+        let urls = [
+            URL(string: "https://tx.flv.huya.com/room/1.flv")!,
+            URL(string: "https://tx2.flv.huya.com/room/1.flv")!
+        ]
+        let resolution = makeResolution(urls: urls)
+
+        // First entry: the resolve is still in flight.
+        driver.play(item: item)
+        XCTAssertEqual(resolver.deferredResolveCompletions.count, 1)
+
+        // Back out mid-resolve (release is idempotent — the room
+        // page's onDisappear path calls stop() then release()),
+        // then immediately re-enter the same room; the
+        // re-entry's resolve is still pending too.
+        driver.release {}
+        driver.release {}
+        driver.configure(room: room, resolver: resolver)
+        driver.play(item: item)
+        XCTAssertEqual(resolver.deferredResolveCompletions.count, 2)
+
+        // The exited room's resolve finally answers: it must be
+        // ignored — no backend opens for it.
+        resolver.deferredResolveCompletions.removeFirst()(.success(resolution))
+        XCTAssertNil(failedError)
+        XCTAssertNil(driver.currentRoom)
+        XCTAssertEqual(deferredMPV.openCount, 0)
+
+        // The re-entry's resolve answers and the room starts on
+        // the (only) deferred backend.
+        resolver.deferredResolveCompletions.removeFirst()(.success(resolution))
+        XCTAssertEqual(deferredMPV.openCount, 1)
+        XCTAssertNotNil(deferredMPV.deferredOpenCompletion)
+        deferredMPV.deferredOpenCompletion?(true)
+        waitForExpectations(timeout: 2)
+        XCTAssertNil(failedError)
+        XCTAssertTrue(driver.isPlaying)
+        XCTAssertEqual(driver.currentRoom?.id, item.id)
     }
 }

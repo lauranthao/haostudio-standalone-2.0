@@ -446,6 +446,12 @@ struct LiveDanmakuOverlayView: View {
     @State private var lastSeenCount = 0
     @State private var lastSeenSequence = 0
     @State private var nextLane = 0
+    /// Pending per-row removal work (b36 item 5): each flying
+    /// row schedules its own removal 8 s after arrival. The
+    /// work items are cancelled on disappear, so a back-out
+    /// leaves no work behind that mutates this view's state
+    /// after the room is gone.
+    @State private var removalWorkItems: [DispatchWorkItem] = []
 
     var body: some View {
         GeometryReader { geometry in
@@ -467,6 +473,10 @@ struct LiveDanmakuOverlayView: View {
         }
         .allowsHitTesting(false)
         .onAppear { ingestNewMessages() }
+        .onDisappear {
+            removalWorkItems.forEach { $0.cancel() }
+            removalWorkItems = []
+        }
         .onChange(of: messages.count) { _, _ in ingestNewMessages() }
         .onChange(of: sequence) { _, _ in ingestNewMessages() }
     }
@@ -523,9 +533,9 @@ struct LiveDanmakuOverlayView: View {
             recentTexts.insert(message.text, at: 0)
             recentTexts = Array(recentTexts.prefix(20))
             let itemId = item.id
-            DispatchQueue.main.asyncAfter(deadline: .now() + LiveDanmakuOverlayView.scrollDuration) {
-                flying.removeAll { $0.id == itemId }
-            }
+            let removal = DispatchWorkItem { flying.removeAll { $0.id == itemId } }
+            removalWorkItems.append(removal)
+            DispatchQueue.main.asyncAfter(deadline: .now() + LiveDanmakuOverlayView.scrollDuration, execute: removal)
         }
     }
 }
