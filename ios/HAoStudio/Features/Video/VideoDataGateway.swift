@@ -423,6 +423,18 @@ final class RealVideoDataGateway: VideoDataGateway {
         line: PlayLine,
         completion: @escaping (Bool) -> Void
     ) {
+        // Emby details never download through this gateway: the
+        // Emby stream URL carries the server credential and
+        // expires after ~5 minutes, so the saved file would be a
+        // dead URL + a cleartext api_key in the download index.
+        // The detail page already refuses Emby downloads with an
+        // honest note (VideoDetailView.downloadSelected); this is
+        // the seam-side guard, so no other caller can reach the
+        // resolver with an Emby detail.
+        guard detail.item.detailSource != .emby else {
+            DispatchQueue.main.async { completion(false) }
+            return
+        }
         cms.resolvePlayURL(detail: detail, episode: episode, line: line, excluding: []) { url in
             guard let url = url, url.pathExtension.lowercased() != "m3u8" else {
                 DispatchQueue.main.async { completion(false) }
