@@ -95,7 +95,7 @@ struct MiniPlayerBar: View {
     /// The cover with the morph attached when the caller supplied
     /// the namespace. The full player attaches the same id to its
     /// cover, so tapping the strip grows this one cover into the
-    /// full player's cover (36 up to 340). The
+    /// full player's cover (32 up to 340). The
     /// corner radius is NOT part of the morph (matchedGeometryEffect
     /// moves the frame only): it snaps at the end of the transition.
     @ViewBuilder
@@ -126,21 +126,23 @@ struct MiniPlayerBar: View {
                     // Real artwork when the item carries a cover
                     // URL; MusicCoverView falls back to the note
                     // placeholder when there is none.
-                    // Beans MiniPlayerView: cover 36, radius 7.
+                    // Kumone MiniPlayerView: cover 32, radius 6
+                    // (b38 — down from Beans' 36 so the 40pt strip
+                    // reads visibly slimmer).
                     morphCover(
                         urlString: item.coverURL?.absoluteString ?? "",
-                        size: HaoLayout.miniCoverSize, cornerRadius: 7)
+                        size: HaoLayout.miniCoverSize, cornerRadius: 6)
                     VStack(alignment: .leading, spacing: 2) {
-                        // Apple Music mini: title 15 / artist 13
-                        // in the 64pt bar. This strip is 44pt, so
-                        // 14 / 12 — one step up from the old
-                        // 12 / 10, still fitting the 36 cover.
+                        // Kumone mini: title 13 semibold / artist
+                        // 10 in the 40pt strip (ours: 13 semibold /
+                        // 11 — the type scale's closest roles;
+                        // 10pt is badge-only in this app).
                         Text(item.title)
-                            .font(.haoDenseTitle)
+                            .font(.haoFootnoteStrong)
                             .foregroundStyle(theme.textPrimary)
                             .lineLimit(1)
                         Text(item.subtitle)
-                            .font(.haoCaption)
+                            .font(.haoCaption2)
                             .foregroundStyle(theme.textSecondary)
                             .lineLimit(1)
                     }
@@ -154,7 +156,7 @@ struct MiniPlayerBar: View {
                         Image(systemName: musicPlayer.isPlaying ? "pause.fill" : "play.fill")
                             .font(.haoCalloutStrong)
                             .foregroundStyle(theme.textPrimary)
-                            .frame(width: 44, height: 44)
+                            .frame(width: 40, height: 40)
                     }
                     .buttonStyle(MusicPressScaleStyle())
                     .contentShape(Rectangle())
@@ -166,7 +168,7 @@ struct MiniPlayerBar: View {
                         Image(systemName: "forward.fill")
                             .font(.haoCalloutStrong)
                             .foregroundStyle(theme.textPrimary)
-                            .frame(width: 44, height: 44)
+                            .frame(width: 40, height: 40)
                     }
                     .buttonStyle(MusicPressScaleStyle())
                     .contentShape(Rectangle())

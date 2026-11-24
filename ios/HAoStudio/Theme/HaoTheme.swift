@@ -606,6 +606,10 @@ extension Font {
     /// Badge only: LIVE / quality badges, live-room battery readout
     /// (10 bold — the app's minimum; the old 9pt text was raised here).
     static let haoBadge = Font.system(size: 10, weight: .bold)
+    /// Tab-bar label (10 medium): UnionTabView's tab label size
+    /// (b38 — the glass tab bar copies its icon .title3 / label
+    /// 10pt medium). The only 10pt non-badge text in the app.
+    static let haoTabLabel = Font.system(size: 10, weight: .medium)
 }
 
 // MARK: - Environment

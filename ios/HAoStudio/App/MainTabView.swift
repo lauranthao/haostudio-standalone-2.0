@@ -89,11 +89,16 @@ struct MainTabView: View {
         HaoTab.allCases.map { GlassTabBarItem(tab: $0, title: $0.title, icon: $0.icon) }
     }
 
-    /// The bottom chrome (build 37: the b35 scroll-minimize is
-    /// reverted — chen 2026-11-24: "菜单恢复原样". The menu is
-    /// always the original full glass tab bar, with the mini above
-    /// it; there is no minimized capsule form any more). The mini
-    /// hides itself when nothing is playing.
+    /// The bottom chrome (b38: mini + menu are ONE connected
+    /// floating unit — VStack spacing 0, so the mini's bottom edge
+    /// touches the bar's top edge, same width, same margins; the
+    /// whole unit is dropped by HaoLayout.chromeBottomOffset so
+    /// its bottom sits 8pt above the screen edge, the home
+    /// indicator's own space — chen 2026-11-24 "你看布局啊" /
+    /// "菜单可以往底下挪一下"). The mini hides itself when nothing
+    /// is playing. The b35 scroll-minimize is reverted (build 37,
+    /// chen: "菜单恢复原样" — the menu is always the original full
+    /// glass tab bar, no narrowed capsule form).
     private var bottomChromeContent: some View {
         VStack(spacing: HaoLayout.floatingStackSpacing) {
             MiniPlayerBar(onTapFullPlayer: { showingFullPlayer = true }, morphNamespace: playerMorph)
@@ -146,8 +151,11 @@ struct MainTabView: View {
                     // (MiniPlayerBar / MusicPlayerView, same
                     // namespace); this fade is the tab bar's half of
                     // the same transition, on the same spring.
+                    // chromeBottomOffset (b38) drops the whole unit
+                    // down to 8pt above the screen edge; the
+                    // full-player slide composes on top of it.
                     .opacity(showingFullPlayer ? 0 : 1)
-                    .offset(y: showingFullPlayer ? 24 : 0)
+                    .offset(y: HaoLayout.chromeBottomOffset + (showingFullPlayer ? 24 : 0))
                     .animation(HaoLayout.settleSpring, value: showingFullPlayer)
             }
         }

@@ -5,7 +5,9 @@
 // resolve, or playback was stopped), exactly like the full player
 // does — and hides only when the queue is truly empty. Plus the
 // geometry contract against the tab bar (same width, same corner
-// radius, same vertical spacing, ~6pt above the home indicator).
+// radius, one connected unit with no gap, bottom edge 8pt above the
+// screen edge — b38, chen 2026-11-24 "你看布局啊" / "菜单可以往底下
+// 挪一下" / "mini 播放器做短一点").
 //
 // NOTE: like the rest of Tests/MusicFeaturesTests, this target is
 // unwired until the S7 Xcode test target exists (see Package.swift
@@ -56,10 +58,11 @@ final class MiniPlayerB35Tests: XCTestCase {
         }
     }
 
-    /// The mini is the row directly above the bar: VStack spacing
-    /// 8pt, so the mini's bottom edge is the tab bar's top edge.
+    /// The mini is the row directly above the bar — and in b38 the
+    /// two touch: VStack spacing 0, so the mini's bottom edge IS
+    /// the tab bar's top edge (one connected unit, no seam).
     func testMiniSitsDirectlyAboveTabBar() {
-        XCTAssertEqual(HaoLayout.floatingStackSpacing, 8)
+        XCTAssertEqual(HaoLayout.floatingStackSpacing, 0)
         XCTAssertEqual(
             HaoLayout.floatingStackClearance(miniPlayerVisible: true),
             HaoLayout.tabBarBottomMargin + HaoLayout.tabBarTotalHeight
@@ -67,27 +70,37 @@ final class MiniPlayerB35Tests: XCTestCase {
         )
     }
 
-    /// The visible bar sits ~6pt above the home-indicator zone:
-    /// 2pt bottom margin + 4pt inner inset.
+    /// The whole unit is dropped so its bottom edge sits 8pt above
+    /// the screen edge (chromeBottomGap — the home indicator's own
+    /// space). The drop is the bottom safe inset minus that gap:
+    /// 26pt on a 34pt Face ID device, 12pt on a 20pt device, 0
+    /// where there is no bottom safe area. The bar itself has no
+    /// bottom margin any more (the old 2pt + 4pt inner inset left
+    /// it floating 6pt above the home-indicator zone).
     func testTabBarSitsNearHomeIndicator() {
-        XCTAssertEqual(
-            HaoLayout.tabBarBottomMargin + HaoLayout.tabBarInnerInset, 6)
+        XCTAssertEqual(HaoLayout.tabBarBottomMargin, 0)
+        XCTAssertEqual(HaoLayout.chromeBottomGap, 8)
+        XCTAssertEqual(HaoLayout.bottomOffset(forSafeBottom: 34), 26)
+        XCTAssertEqual(HaoLayout.bottomOffset(forSafeBottom: 20), 12)
+        XCTAssertEqual(HaoLayout.bottomOffset(forSafeBottom: 0), 0)
     }
 
     /// One shape, one radius: the mini is a rounded rectangle at
     /// the shared floating-chrome radius (24, b35 polish), not a
-    /// content padding is symmetric (12 both sides).
+    /// content padding is symmetric (12 both sides). The strip is
+    /// 40pt in b38 (Kumone total — cover 32 + 2 x 4pt padding),
+    /// down from 44: chen 2026-11-24 "mini 播放器做短一点".
     func testMiniCornerRadiusAndPadding() {
         XCTAssertEqual(HaoLayout.floatingChromeCornerRadius, 24)
         XCTAssertEqual(HaoLayout.miniPlayerContentPadding, 12)
-        XCTAssertEqual(HaoLayout.miniPlayerHeight, 44)
+        XCTAssertEqual(HaoLayout.miniPlayerHeight, 40)
     }
 
-    /// Bottom clearance for scroll content under the stack: 66pt
-    /// idle, 118pt while the mini is showing (52pt taller).
+    /// Bottom clearance for scroll content under the stack: 64pt
+    /// idle, 104pt while the mini is showing (40pt taller).
     func testFloatingStackClearance() {
-        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: false), 66)
-        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: true), 118)
+        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: false), 64)
+        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: true), 104)
     }
 
     // MARK: - Fallback: failed / stopped track keeps the mini visible
@@ -185,9 +198,9 @@ final class MiniPlayerB35Tests: XCTestCase {
 // MARK: - b35 tab-bar link: morph contract (minimize reverted, build 37)
 
 /// Covers the b35 tab-bar link leg's SURVIVING contract: the
-/// cover-morph constants (mini 36 -> full player up to 340, one
+/// cover-morph constants (mini 32 -> full player up to 340, one
 /// shared matchedGeometryEffect id) and the floating-stack
-/// clearance (66 idle / 118 playing). The scroll-driven minimize
+/// clearance (64 idle / 104 playing). The scroll-driven minimize
 /// itself is REVERTED in build 37 (chen 2026-11-24: "菜单恢复原样"
 /// — the menu stays the original full glass tab bar, no narrowed
 /// capsule form): the state-machine tests, the minimized-row
@@ -200,23 +213,23 @@ final class BottomChromeB35Tests: XCTestCase {
 
     // MARK: - Clearance: follows the mini player, never shrinks
 
-    /// Clearance is 118pt while the mini is showing and 66pt
-    /// idle — it no longer shrinks to 66 when minimized, because
+    /// Clearance is 104pt while the mini is showing and 64pt
+    /// idle — it no longer shrinks to 64 when minimized, because
     /// there is no minimized form any more.
     func testClearanceFollowsMiniPlayer() {
         XCTAssertEqual(
-            HaoLayout.floatingStackClearance(miniPlayerVisible: true), 118)
+            HaoLayout.floatingStackClearance(miniPlayerVisible: true), 104)
         XCTAssertEqual(
-            HaoLayout.floatingStackClearance(miniPlayerVisible: false), 66)
+            HaoLayout.floatingStackClearance(miniPlayerVisible: false), 64)
     }
 
     // MARK: - Morph contract: one cover, one id, known sizes
 
     /// The morph endpoints are constants, not literals scattered in
-    /// the views: mini cover 36, full-player cover capped at 340
-    /// (MusicPlayerView.coverSize), one shared id.
+    /// the views: mini cover 32 (b38, Kumone), full-player cover
+    /// capped at 340 (MusicPlayerView.coverSize), one shared id.
     func testCoverMorphEndpoints() {
-        XCTAssertEqual(HaoLayout.miniCoverSize, 36)
+        XCTAssertEqual(HaoLayout.miniCoverSize, 32)
         XCTAssertFalse(HaoLayout.playerCoverMorphID.isEmpty)
     }
 }
