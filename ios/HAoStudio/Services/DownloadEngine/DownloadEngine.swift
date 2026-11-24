@@ -31,6 +31,9 @@
 // `Range: bytes=<downloaded>-`. Cancel deletes the `.part` file.
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // MARK: - Public types
 
@@ -195,8 +198,31 @@ final class DownloadEngine: NSObject {
         return dir.appendingPathComponent(UUID().uuidString + ".bin")
     }
 
+    /// Part-file name for a task: the final name plus a short stable
+    /// hash of the task key. Two tasks with the same file name (same
+    /// song title/artist from two platforms) must NOT share one
+    /// `.part` file — concurrent copies into a shared part corrupt
+    /// each other, and the part-size check then fails both (§2.1 D).
+    /// The hash keeps the name short and deterministic across
+    /// launches, so resume finds the same part.
+    static func partFileName(for request: DownloadRequest) -> String {
+        let base = sanitisedFileName(request.fileName, fallbackKey: request.key)
+        return "\(base).\(stableKeyHash(request.key)).part"
+    }
+
+    /// FNV-1a 64-bit, hex, 16 chars. Deterministic; no crypto needed.
+    static func stableKeyHash(_ key: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in key.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+        let hex = String(hash, radix: 16)
+        return String(repeating: "0", count: max(0, 16 - hex.count)) + hex
+    }
+
     private func partURL(for request: DownloadRequest) -> URL {
-        finalURL(for: request).appendingPathExtension("part")
+        downloadsDirectory().appendingPathComponent(DownloadEngine.partFileName(for: request))
     }
 
     /// Relative name for the index (`music_downloads/<file>`).
@@ -728,7 +754,13 @@ final class DownloadEngine: NSObject {
         do {
             try FileManager.default.moveItem(at: part, to: temp)
             if FileManager.default.fileExists(atPath: final.path) {
+                #if canImport(FoundationNetworking)
+                // swift-corelibs-foundation drops the resultingItemURL
+                // parameter (autoreleased pointers unsupported).
+                try FileManager.default.replaceItem(at: final, withItemAt: temp, backupItemName: nil, options: [])
+                #else
                 try FileManager.default.replaceItem(at: final, withItemAt: temp, backupItemName: nil, options: [], resultingItemURL: nil)
+                #endif
             } else {
                 try FileManager.default.moveItem(at: temp, to: final)
             }
@@ -826,9 +858,21 @@ final class DownloadEngine: NSObject {
                       let url = LocalFileIndex.resolve(relative, subdir: DownloadEngine.downloadSubdir),
                       FileManager.default.fileExists(atPath: url.path) else { continue }
             } else {
+                // Adopt a legacy `<name>.part` (pre-2.1 layout, shared
+                // per file name) into this task's per-key part name,
+                // so an in-flight download from before the upgrade
+                // resumes instead of restarting from 0.
+                let part = partURL(for: restored.request)
+                if !FileManager.default.fileExists(atPath: part.path) {
+                    let legacy = downloadsDirectory()
+                        .appendingPathComponent(DownloadEngine.sanitisedFileName(restored.request.fileName, fallbackKey: key))
+                        .appendingPathExtension("part")
+                    if FileManager.default.fileExists(atPath: legacy.path) {
+                        try? FileManager.default.moveItem(at: legacy, to: part)
+                    }
+                }
                 // Clamp downloadedBytes to the part size on disk —
                 // the persisted count is stale after a kill (Finding E).
-                let part = partURL(for: restored.request)
                 let partSize = (try? FileManager.default.attributesOfItem(atPath: part.path)[.size] as? NSNumber)?.int64Value ?? 0
                 restored.downloadedBytes = partSize
                 if restored.totalBytes >= 0 && restored.downloadedBytes > restored.totalBytes {
