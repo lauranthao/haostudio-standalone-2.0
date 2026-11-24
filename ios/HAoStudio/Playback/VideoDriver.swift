@@ -585,6 +585,15 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     /// unchanged but the line is new).
     private func startNewPlayback(item: PlaybackItem) {
         self.stopBackendForNewRequest()
+        // #3: one token per request. Two rapid line switches re-open
+        // the SAME episode id (switchLine / reopen*), so the old
+        // pendingItem?.id check cannot tell the resolves apart —
+        // resolve #1 answering after switch #2 started would pass
+        // it and open the old line's URL. The token is the
+        // generation bumped once per request (open() bumps it again
+        // per open — harmless, it is only a monotonic counter);
+        // both resolve completions below require it.
+        let requestGen = self.nextGeneration()
         self.pendingItem = item
         self.stallFailed = false
         self.lastOpenFailed = false
@@ -600,7 +609,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         self.resolveURL?(item, []) { [weak self] url in
             guard let self = self else { return }
             self.ensureMain {
-                guard self.pendingItem?.id == item.id else { return }
+                guard requestGen == self.generation, self.pendingItem?.id == item.id else { return }
                 guard let url = url else {
                     self.isLoading = false
                     self.pendingItem = nil
@@ -608,7 +617,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                     self.onEpisodeFailed?(item, .noPlayableURL)
                     return
                 }
-                self.attemptOpen(item: item, url: url, tried: [url])
+                self.attemptOpen(item: item, url: url, tried: [url], requestGen: requestGen)
             }
         }
         if self.resolveURL == nil {
@@ -624,7 +633,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     /// the fallback consumes exactly one more candidate, never a
     /// fan-out and never an unbounded retry loop — and never the
     /// same URL twice (`excluding` is passed through).
-    private func attemptOpen(item: PlaybackItem, url: URL, tried: [URL]) {
+    private func attemptOpen(item: PlaybackItem, url: URL, tried: [URL], requestGen: Int) {
         open(item: item, url: url) { [weak self] result in
             guard let self = self else { return }
             switch result {
@@ -638,12 +647,14 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                 self.resolveURL?(item, tried) { [weak self] nextURL in
                     guard let self = self else { return }
                     self.ensureMain {
-                        guard self.pendingItem?.id == item.id else { return }
+                        // #3: same token as the first resolve — a
+                        // newer request supersedes this fallback too.
+                        guard requestGen == self.generation, self.pendingItem?.id == item.id else { return }
                         guard let nextURL = nextURL else {
                             self.failOrTranscode(item: item, error: error)
                             return
                         }
-                        self.attemptOpen(item: item, url: nextURL, tried: tried + [nextURL])
+                        self.attemptOpen(item: item, url: nextURL, tried: tried + [nextURL], requestGen: requestGen)
                     }
                 }
                 if self.resolveURL == nil {
