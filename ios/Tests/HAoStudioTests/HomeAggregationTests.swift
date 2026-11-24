@@ -443,6 +443,7 @@ final class HomeAggregationTests: XCTestCase {
         XCTAssertEqual(viewModel.hotLive.count, 0)
         XCTAssertEqual(viewModel.daily.count, 0)
         XCTAssertEqual(viewModel.recentPlays.count, 0)
+        XCTAssertEqual(viewModel.allRecentPlays.count, 0)
     }
 
     func testReloadFillsSectionsFromFixtures() {
@@ -476,6 +477,11 @@ final class HomeAggregationTests: XCTestCase {
         XCTAssertEqual(viewModel.recentPlays.first?.songId, "0")
         XCTAssertEqual(viewModel.daily.count, 10)
         XCTAssertEqual(viewModel.daily.first?.songId, "d0")
+        // The full list behind "全部" is NOT capped: the section
+        // shows 10, the page shows all 12.
+        XCTAssertEqual(viewModel.allRecentPlays.count, 12)
+        XCTAssertEqual(viewModel.allRecentPlays.first?.songId, "0")
+        XCTAssertEqual(viewModel.allRecentPlays.last?.songId, "11")
     }
 
     func testReloadFallsBackToFirstRecentWithoutResume() {
@@ -497,7 +503,7 @@ final class HomeAggregationTests: XCTestCase {
         var calls = 0
         let viewModel = HomeViewModel(liveStatusChecker: { _, completion in
             calls += 1
-            completion(true)
+            completion(.live)
         })
         emptyReload(on: viewModel)
         XCTAssertEqual(calls, 0)
@@ -506,7 +512,7 @@ final class HomeAggregationTests: XCTestCase {
     func testReloadAppliesConfirmedLiveStatus() {
         let viewModel = HomeViewModel(liveStatusChecker: { item, completion in
             // Only room "1" is on air; room "2" is unknown.
-            completion(item.roomId == "1")
+            completion(item.roomId == "1" ? .live : .unknown)
         })
         viewModel.reload(
             videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
@@ -518,5 +524,60 @@ final class HomeAggregationTests: XCTestCase {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
         XCTAssertEqual(viewModel.hotLive.map { $0.roomId }, ["1", "2"])
         XCTAssertEqual(viewModel.hotLive.map { $0.isLive }, [true, false])
+    }
+
+    func testLiveBadgeSurvivesReloadWhenCheckIsUnknown() {
+        // The old code rebuilt hotLive with isLive false on every
+        // reload, so every LIVE badge blinked off until the
+        // room-info answers came back — on every tab switch and
+        // every favourite tap. A failed / timed-out check must
+        // keep the last confirmed value.
+        var answerLive = true
+        let viewModel = HomeViewModel(liveStatusChecker: { _, completion in
+            completion(answerLive ? .live : .unknown)
+        })
+        let follows = [follow(roomId: "1", followedAt: Date(timeIntervalSince1970: 2000))]
+        let inputs = (
+            videoHistory: [VideoHistoryEntry](), recent: [MusicSong](),
+            listenLog: [ListenEvent](), resumeMap: [String: Int](),
+            follows: follows, liveHistory: [LiveHistoryEntry](),
+            dailyPicks: [MusicSong]())
+        viewModel.reload(
+            videoHistory: inputs.videoHistory, recent: inputs.recent,
+            listenLog: inputs.listenLog, resumeMap: inputs.resumeMap,
+            follows: inputs.follows, liveHistory: inputs.liveHistory,
+            dailyPicks: inputs.dailyPicks)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        XCTAssertEqual(viewModel.hotLive.map { $0.isLive }, [true])
+        answerLive = false
+        viewModel.reload(
+            videoHistory: inputs.videoHistory, recent: inputs.recent,
+            listenLog: inputs.listenLog, resumeMap: inputs.resumeMap,
+            follows: inputs.follows, liveHistory: inputs.liveHistory,
+            dailyPicks: inputs.dailyPicks)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        XCTAssertEqual(viewModel.hotLive.map { $0.isLive }, [true])
+    }
+
+    func testLiveBadgeClearsWhenRoomGoesOffline() {
+        // The flip side of the test above: a successful "off air"
+        // answer must clear the badge — preservation alone would
+        // leave a stale LIVE badge on a room that ended its stream.
+        var answerLive = true
+        let viewModel = HomeViewModel(liveStatusChecker: { _, completion in
+            completion(answerLive ? .live : .offline)
+        })
+        let follows = [follow(roomId: "1", followedAt: Date(timeIntervalSince1970: 2000))]
+        viewModel.reload(
+            videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
+            follows: follows, liveHistory: [], dailyPicks: [])
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        XCTAssertEqual(viewModel.hotLive.map { $0.isLive }, [true])
+        answerLive = false
+        viewModel.reload(
+            videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
+            follows: follows, liveHistory: [], dailyPicks: [])
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        XCTAssertEqual(viewModel.hotLive.map { $0.isLive }, [false])
     }
 }

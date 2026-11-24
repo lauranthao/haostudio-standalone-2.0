@@ -8,14 +8,14 @@
 //
 // Navigation reuses the destinations the tabs already have:
 // a video card opens VideoDetailView, "全部" on continue
-// watching opens VideoHistoryView, "全部" on hot live opens
-// LiveFollowsView, and a live card opens LiveRoomView with the
-// hot list as the switch playlist. The one exception is
-// "全部" on recent plays: the music recent list
-// (MyRecentPlaysView) is private inside MyView.swift, so the
-// home tab carries its own small HomeRecentPlaysView below
-// that lists the same view-model array instead of inventing a
-// second store read.
+// watching opens VideoHistoryView, and a live card opens
+// LiveRoomView with the hot list as the switch playlist. Two
+// "全部" pages are home's own, because the tab versions do not
+// show the same content: "全部" on recent plays lists the same
+// view-model array (the music recent list in MyView.swift is
+// private inside that file), and "全部" on hot live lists the
+// merged follow + history rooms with their LIVE badges (the
+// follows page shows follows only, with no badges).
 //
 // Live cards reuse LiveRoomCard, so the LIVE badge (theme
 // liveRed, the only red in the app) appears only when the
@@ -30,7 +30,7 @@ enum HomeDestination: Hashable {
     case detail(VideoItem)
     case history
     case recent
-    case follows
+    case hotLive
     case room(LiveRoom, [LiveRoom])
 }
 
@@ -89,15 +89,25 @@ struct HomeView: View {
                     VideoHistoryView()
                 case .recent:
                     HomeRecentPlaysView(viewModel: viewModel)
-                case .follows:
-                    LiveFollowsView(onSelect: { room in
-                        openRoom(room, playlist: [room])
-                    })
+                case .hotLive:
+                    HomeHotLiveView(viewModel: viewModel) { room, playlist in
+                        openRoom(room, playlist: playlist)
+                    }
                 case .room(let room, let playlist):
                     LiveRoomView(room: room, playlist: playlist)
                 }
             }
             .onAppear { viewModel.reload() }
+            // Return-to-home refresh: NavigationStack's own
+            // onAppear does not re-fire when a pushed detail or
+            // room pops (the stack itself never disappears), so
+            // without this the sections still showed the data from
+            // before the push — a video watched from home stayed
+            // in its old place in 继续观看 until the tab was
+            // switched. An empty path means back at the home root.
+            .onChange(of: path) { _, newPath in
+                if newPath.isEmpty { viewModel.reload() }
+            }
         }
     }
 
@@ -110,9 +120,20 @@ struct HomeView: View {
                 .foregroundStyle(theme.textPrimary)
             Spacer()
             if let onAll = onAll {
-                Button("全部", action: onAll)
-                    .font(.haoDenseBody)
-                    .foregroundStyle(theme.accent)
+                Button(action: onAll) {
+                    HStack(spacing: 2) {
+                        Text("全部")
+                            .font(.haoDenseBody)
+                        Image(systemName: "chevron.right")
+                            .font(.haoCaption2)
+                    }
+                    // The bare text was a ~30pt-wide hit target;
+                    // the padding makes it a ~44pt HIG target
+                    // (14pt text + 12pt above and below).
+                    .padding(.vertical, 12)
+                    .contentShape(Rectangle())
+                }
+                .foregroundStyle(theme.accent)
             }
         }
         .padding(.horizontal, 24)
@@ -127,7 +148,7 @@ struct HomeView: View {
                 MusicEmptyState(
                     icon: "film",
                     title: "还没有看过影片",
-                    note: "看过的影片会出现在这里，点一下继续看。"
+                    note: "看过的影片会出现在这里，点一下继续看"
                 )
                 .padding(.horizontal, 24)
             } else {
@@ -154,41 +175,56 @@ struct HomeView: View {
                 MusicEmptyState(
                     icon: "music.note",
                     title: "还没有听过歌",
-                    note: "播过的歌会出现在这里，点一下继续听。"
+                    note: "播过的歌会出现在这里，点一下继续听"
                 )
                 .padding(.horizontal, 24)
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(Array(viewModel.continueListening.enumerated()), id: \.element.id) { index, song in
-                            HomeSongCard(song: song) {
-                                playerVM.play(song: song, in: viewModel.continueListening, startAt: index)
-                            }
+                // One card only (the view model returns exactly
+                // one resume song), so no scroll view: a horizontal
+                // ScrollView around a single non-scrollable child
+                // is structure with no job. Plain HStack, same
+                // 24pt edge as every other section.
+                HStack(spacing: 12) {
+                    ForEach(Array(viewModel.continueListening.enumerated()), id: \.element.id) { index, song in
+                        HomeSongCard(song: song) {
+                            playerVM.play(song: song, in: continueListeningQueue(for: song), startAt: 0)
                         }
                     }
-                    .padding(.horizontal, 24)
                 }
+                .padding(.horizontal, 24)
             }
         }
+    }
+
+    /// The queue behind a "继续听" tap: the resume song first,
+    /// then the rest of recent plays (the resume song itself
+    /// removed). The tap used to queue just the one song, so
+    /// playback stopped dead when it ended instead of carrying
+    /// on into what was played recently.
+    private func continueListeningQueue(for song: MusicSong) -> [MusicSong] {
+        var queue = [song]
+        queue.append(contentsOf: viewModel.allRecentPlays.filter { $0.identityKey != song.identityKey })
+        return queue
     }
 
     // MARK: - Hot live
 
     private var hotLiveSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionHeader(title: "热门直播", onAll: { path.append(.follows) })
+            sectionHeader(title: "热门直播", onAll: { path.append(.hotLive) })
             if viewModel.hotLive.isEmpty {
                 MusicEmptyState(
                     icon: "antenna.radiowaves.left.and.right",
                     title: "关注的主播还没开播",
-                    note: "去直播里关注主播，开播后会出现在这里。"
+                    note: "去直播里关注主播，开播后会出现在这里"
                 )
                 .padding(.horizontal, 24)
             } else {
                 LazyVGrid(columns: LiveGridLayout.gridColumns, spacing: LiveGridLayout.gridRowSpacing) {
                     ForEach(viewModel.hotLive, id: \.id) { item in
-                        LiveRoomCard(room: liveRoom(from: item)) {
-                            openRoom(liveRoom(from: item), playlist: hotLiveRooms)
+                        let room = homeLiveRoom(from: item)
+                        LiveRoomCard(room: room) {
+                            openRoom(room, playlist: hotLiveRooms)
                         }
                     }
                 }
@@ -198,7 +234,7 @@ struct HomeView: View {
     }
 
     private var hotLiveRooms: [LiveRoom] {
-        viewModel.hotLive.map { liveRoom(from: $0) }
+        viewModel.hotLive.map { homeLiveRoom(from: $0) }
     }
 
     // MARK: - Daily picks
@@ -210,7 +246,7 @@ struct HomeView: View {
                 MusicEmptyState(
                     icon: "calendar",
                     title: "今天还没有推荐",
-                    note: "先收藏几首歌或播几首歌，每日推荐会从你听过的歌里挑。"
+                    note: "先收藏几首歌或播几首歌，每日推荐会从你听过的歌里挑"
                 )
                 .padding(.horizontal, 24)
             } else {
@@ -233,7 +269,7 @@ struct HomeView: View {
                 MusicEmptyState(
                     icon: "clock",
                     title: "还没有播放记录",
-                    note: "播过的歌会出现在这里。"
+                    note: "播过的歌会出现在这里"
                 )
                 .padding(.horizontal, 24)
             } else {
@@ -281,36 +317,37 @@ struct HomeView: View {
             title: room.title, nick: room.streamer, cover: room.cover)
         path.append(.room(room, playlist))
     }
+}
 
-    /// Build the room page input from a home live item. The
-    /// platform string is matched against the kernel id first
-    /// ("bili", "ks"), then the Flutter site id ("bilibili",
-    /// "kuaishou"), then the display name; an unknown value
-    /// falls back to Bilibili so the room still opens instead
-    /// of dropping the tap.
-    private func liveRoom(from item: HomeLiveItem) -> LiveRoom {
-        LiveRoom(
-            roomId: item.roomId,
-            platform: livePlatform(from: item.platform),
-            title: item.title,
-            streamer: item.nick,
-            cover: item.cover,
-            isLive: item.isLive
-        )
-    }
+/// Build the room page input from a home live item. The
+/// platform string is matched against the kernel id first
+/// ("bili", "ks"), then the Flutter site id ("bilibili",
+/// "kuaishou"), then the display name; an unknown value
+/// falls back to Bilibili so the room still opens instead
+/// of dropping the tap. File scope (not a HomeView method)
+/// so the home hot-live page below can build rooms too.
+fileprivate func homeLiveRoom(from item: HomeLiveItem) -> LiveRoom {
+    LiveRoom(
+        roomId: item.roomId,
+        platform: homeLivePlatform(from: item.platform),
+        title: item.title,
+        streamer: item.nick,
+        cover: item.cover,
+        isLive: item.isLive
+    )
+}
 
-    private func livePlatform(from value: String) -> LivePlatform {
-        if let platform = LivePlatform(rawValue: value) {
-            return platform
-        }
-        if let platform = LivePlatform.allCases.first(where: { $0.flutterSiteId == value }) {
-            return platform
-        }
-        if let platform = LivePlatform.allCases.first(where: { $0.displayName == value }) {
-            return platform
-        }
-        return .bilibili
+fileprivate func homeLivePlatform(from value: String) -> LivePlatform {
+    if let platform = LivePlatform(rawValue: value) {
+        return platform
     }
+    if let platform = LivePlatform.allCases.first(where: { $0.flutterSiteId == value }) {
+        return platform
+    }
+    if let platform = LivePlatform.allCases.first(where: { $0.displayName == value }) {
+        return platform
+    }
+    return .bilibili
 }
 
 /// One song in the horizontal "继续听" shelf: square cover +
@@ -347,9 +384,12 @@ struct HomeSongCard: View {
 }
 
 /// Full recent-plays list behind the "全部" link. Reads the
-/// same view-model array live (no second store read); the music
-/// recent list in MyView.swift is private to that file, so the
-/// home tab carries this small list instead of duplicating it.
+/// view model's full list (allRecentPlays, up to 100) — the
+/// home section itself only shows the first 10, so this page
+/// used to list exactly the same 10 rows as the section. The
+/// music recent list in MyView.swift is private to that file,
+/// so the home tab carries this small list instead of
+/// duplicating the store read.
 private struct HomeRecentPlaysView: View {
     @ObservedObject var viewModel: HomeViewModel
 
@@ -358,21 +398,22 @@ private struct HomeRecentPlaysView: View {
 
     var body: some View {
         Group {
-            if viewModel.recentPlays.isEmpty {
+            if viewModel.allRecentPlays.isEmpty {
                 MusicEmptyState(
                     icon: "clock",
                     title: "还没有播放记录",
-                    note: "播过的歌会出现在这里。"
+                    note: "播过的歌会出现在这里"
                 )
+                .haoBottomChromePadding()
             } else {
                 ScrollView {
                     VStack(spacing: 0) {
-                        ForEach(Array(viewModel.recentPlays.enumerated()), id: \.element.id) { index, song in
+                        ForEach(Array(viewModel.allRecentPlays.enumerated()), id: \.element.id) { index, song in
                             MusicSongRow(
                                 song: song,
                                 isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
                                 onTap: {
-                                    playerVM.play(song: song, in: viewModel.recentPlays, startAt: index)
+                                    playerVM.play(song: song, in: viewModel.allRecentPlays, startAt: index)
                                 },
                                 onToggleFav: {
                                     viewModel.reload()
@@ -390,5 +431,56 @@ private struct HomeRecentPlaysView: View {
         .navigationTitle("最近播放")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { viewModel.reload() }
+    }
+}
+
+/// Full hot-live list behind the "全部" link: the same merged
+/// follow + history rooms as the home section, in the same grid
+/// with the same cards and LIVE badges. The follows page
+/// (LiveFollowsView) used to be the destination, but it shows
+/// follows only, with no badges — half the section's rooms were
+/// missing behind its own "全部". Follows management is still
+/// reachable from the live tab and the 我的 page.
+private struct HomeHotLiveView: View {
+    @ObservedObject var viewModel: HomeViewModel
+    var openRoom: (LiveRoom, [LiveRoom]) -> Void
+
+    @Environment(\.haoTheme) private var theme
+
+    private var rooms: [LiveRoom] {
+        viewModel.hotLive.map { homeLiveRoom(from: $0) }
+    }
+
+    var body: some View {
+        Group {
+            if viewModel.hotLive.isEmpty {
+                MusicEmptyState(
+                    icon: "antenna.radiowaves.left.and.right",
+                    title: "关注的主播还没开播",
+                    note: "去直播里关注主播，开播后会出现在这里"
+                )
+                .haoBottomChromePadding()
+            } else {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        LazyVGrid(columns: LiveGridLayout.gridColumns, spacing: LiveGridLayout.gridRowSpacing) {
+                            ForEach(viewModel.hotLive, id: \.id) { item in
+                                let room = homeLiveRoom(from: item)
+                                LiveRoomCard(room: room) {
+                                    openRoom(room, rooms)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, LiveGridLayout.gridEdgePadding)
+                        .padding(.top, 12)
+                        Spacer(minLength: 16)
+                    }
+                }
+                .haoBottomChromePadding()
+            }
+        }
+        .background(theme.scaffoldBackground)
+        .navigationTitle("热门直播")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
