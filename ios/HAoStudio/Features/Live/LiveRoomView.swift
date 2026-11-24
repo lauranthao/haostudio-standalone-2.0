@@ -384,8 +384,7 @@ struct LiveRoomView: View {
     }
 
     /// Bottom safe-area inset (home indicator) from the key
-    /// window — the landscape edge guard reads it, like
-    /// topSafeAreaInset above.
+    /// window — the landscape edge guard reads it.
     private var bottomSafeAreaInset: CGFloat {
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
@@ -583,17 +582,19 @@ struct LiveRoomView: View {
 
     // MARK: - Portrait (16:9 inline video + info + danmaku list)
 
-    /// The real top safe-area inset (status bar / Dynamic Island).
-    /// A GeometryReader inside portraitBody reads 0: the body
-    /// ignores the top safe area, so the inset is zeroed for its
-    /// descendants. The key window's inset is unaffected.
-    private var topSafeAreaInset: CGFloat {
-        UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap { $0.windows }
-            .first(where: { $0.isKeyWindow })?.safeAreaInsets.top ?? 47
-    }
-
+    /// Portrait layout (16:9 inline video + info + danmaku list).
+    ///
+    /// b39: the body does NOT ignore the top safe area — the video
+    /// starts below the Dynamic Island / status bar (chen
+    /// 2026-11-25 build 38: the island covered the top-centre
+    /// icon of the room). The b35 top ignore was there to kill a
+    /// black band left by the then-visible navigation bar; the bar
+    /// is hidden now (.toolbar(.hidden)), so the band is gone and
+    /// the safe area can apply. The scaffold background still
+    /// paints the status-bar strip; only the content sits below
+    /// the island. The size is adaptive: the 16:9 video is sized
+    /// from the real screen width, and the top offset is the
+    /// device's own safe-area inset, never a fixed number.
     private var portraitBody: some View {
         VStack(spacing: 0) {
             videoArea
@@ -613,7 +614,6 @@ struct LiveRoomView: View {
                 .frame(height: 0.5)
             portraitBottomBar
         }
-        .ignoresSafeArea(edges: .top)
         .background(theme.scaffoldBackground)
     }
 
@@ -704,15 +704,15 @@ struct LiveRoomView: View {
                 portraitVideoControls
             }
             // Back button over the portrait video (fix 2026-11-24,
-            // build 35); build 37: the row was laid out at +8pt —
-            // geo.safeAreaInsets.top reads 0 here because
-            // portraitBody ignores the top safe area, so the button
-            // sat UNDER the status bar (chen's screenshot) where
-            // the system eats the tap. The inset now comes from
-            // the key window (topSafeAreaInset), which is
-            // unaffected. Same 36pt black-0.45 circle + 0.55 top
-            // gradient as landscapeTopBar; the button's hit
-            // target is 44pt.
+            // build 35). b39: portraitBody no longer ignores the
+            // top safe area — the video starts below the Dynamic
+            // Island / status bar (chen 2026-11-25: the island
+            // covered the top of the room) — so the row needs only
+            // 8pt below the safe-area edge, not the key-window
+            // inset on top of it (the old topSafeAreaInset + 8
+            // double-counted once the safe area applies). Same
+            // 36pt black-0.45 circle + 0.55 top gradient as
+            // landscapeTopBar; the button's hit target is 44pt.
             VStack {
                 HStack {
                     Button(action: { dismiss() }) {
@@ -729,7 +729,7 @@ struct LiveRoomView: View {
                     Spacer()
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, topSafeAreaInset + 8)
+                .padding(.top, 8)
                 .background(
                     LinearGradient(
                         colors: [Color.black.opacity(0.55), Color.black.opacity(0)],
