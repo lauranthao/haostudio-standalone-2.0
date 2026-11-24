@@ -59,6 +59,11 @@ struct BackupImportReport {
     var skippedKeys: [String]
     var rolledBack: Bool
     var embyCredentialsMissing: Bool
+    /// Non-fatal warnings from the import (e.g. unrecognised zip
+    /// entries that were ignored). b35-sweep-settings: previously
+    /// the engine produced these but FileBackupEngine dropped
+    /// them, so the user never saw them.
+    var warnings: [String] = []
 }
 
 // MARK: - Update check result (C leg)
@@ -219,6 +224,9 @@ enum UpdateCheckLogic {
         }
         if report.embyCredentialsMissing {
             lines.append("备份里没有 Emby 凭证，导入后请重新登录 Emby。")
+        }
+        for warning in report.warnings {
+            lines.append(warning)
         }
         return lines.joined(separator: "\n")
     }

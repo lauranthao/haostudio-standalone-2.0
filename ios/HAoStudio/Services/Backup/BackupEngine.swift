@@ -1260,14 +1260,16 @@ final class FileBackupEngine: BackupEngine {
                     importedCount: 0,
                     skippedKeys: (detail.skippedKeyNames + detail.unknownKeyNames).sorted(),
                     rolledBack: true,
-                    embyCredentialsMissing: false
+                    embyCredentialsMissing: false,
+                    warnings: detail.warnings
                 ))
             case .imported:
                 result = .success(BackupImportReport(
                     importedCount: detail.appliedKeys + detail.appliedCollections + detail.appliedFiles,
                     skippedKeys: (detail.skippedKeyNames + detail.unknownKeyNames).sorted(),
                     rolledBack: false,
-                    embyCredentialsMissing: detail.embyCredentialsMissing
+                    embyCredentialsMissing: detail.embyCredentialsMissing,
+                    warnings: detail.warnings
                 ))
             }
             group.leave()
