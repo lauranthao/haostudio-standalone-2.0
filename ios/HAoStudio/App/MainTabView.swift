@@ -60,6 +60,7 @@ enum HaoTab: String, CaseIterable, Identifiable {
 struct MainTabView: View {
     @EnvironmentObject private var themeStore: ThemeStore
     @EnvironmentObject private var coordinator: PlaybackCoordinator
+    @EnvironmentObject private var immersiveChrome: ImmersiveChromeState
     @EnvironmentObject private var settingsStore: SettingsStore
     @Environment(\.colorScheme) private var colorScheme
 
@@ -80,16 +81,24 @@ struct MainTabView: View {
             tabContent
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: HaoLayout.floatingStackSpacing) {
-                // Beans dock: the mini player shares the tab bar's
-                // 12pt side margins (it used to span full width,
-                // which read wider — and taller — than the bar).
-                MiniPlayerBar(onTapFullPlayer: { showingFullPlayer = true })
-                    .padding(.horizontal, HaoLayout.tabBarHorizontalMargin)
-                GlassTabBar(items: tabBarItems, selection: $selectedTab, tabAccent: settingsStore.tabAccentColor)
-                    .padding(.horizontal, HaoLayout.tabBarHorizontalMargin)
+            // Immersive pages (a live room pushed inside a tab)
+            // hide the whole bottom chrome — mini player + glass
+            // tab bar — while they are up, so the room's own bottom
+            // bar is never covered by it. Tab pages are unaffected;
+            // the chrome comes back when the room exits. The glass
+            // itself is untouched — hidden, never restyled.
+            if !immersiveChrome.isImmersive {
+                VStack(spacing: HaoLayout.floatingStackSpacing) {
+                    // Beans dock: the mini player shares the tab bar's
+                    // 12pt side margins (it used to span full width,
+                    // which read wider — and taller — than the bar).
+                    MiniPlayerBar(onTapFullPlayer: { showingFullPlayer = true })
+                        .padding(.horizontal, HaoLayout.tabBarHorizontalMargin)
+                    GlassTabBar(items: tabBarItems, selection: $selectedTab, tabAccent: settingsStore.tabAccentColor)
+                        .padding(.horizontal, HaoLayout.tabBarHorizontalMargin)
+                }
+                .padding(.bottom, HaoLayout.tabBarBottomMargin)
             }
-            .padding(.bottom, HaoLayout.tabBarBottomMargin)
         }
         .fullScreenCover(isPresented: $showingFullPlayer) {
             // S2-C: a music item opens the real full player.

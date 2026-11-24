@@ -186,7 +186,7 @@ check("4l. every Swift file ref resolves to a file on disk", not _missing,
 
 # --- 5. Swift sources: balance + forbidden leftovers ----------------------
 swift_files = sorted(APP_DIR.rglob("*.swift"))
-check("5. Swift file count (final = 148: S7 144 + HomeViewModel.swift + HomeView.swift - PlaceholderViews.swift + VodPlaybackSettings.swift + MusicResumeLogic.swift - ProfileStore.swift [chen 2026-11-24: 个人资料/会员已删] + LiveDataGatewayAdapter.swift [audit 2026-11-24: 直播推荐/搜索适配器] + LXScriptImport.swift [fix/js-import 2026-11-24: 音源 .js 导入])", len(swift_files) == 148,
+check("5. Swift file count (final = 149: S7 144 + HomeViewModel.swift + HomeView.swift - PlaceholderViews.swift + VodPlaybackSettings.swift + MusicResumeLogic.swift - ProfileStore.swift [chen 2026-11-24: 个人资料/会员已删] + LiveDataGatewayAdapter.swift [audit 2026-11-24: 直播推荐/搜索适配器] + LXScriptImport.swift [fix/js-import 2026-11-24: 音源 .js 导入] + ImmersiveChromeState.swift [fix/immersive-tabbar: 沉浸页隐藏底栏])", len(swift_files) == 149,
       f"{len(swift_files)}: {[f.name for f in swift_files]}")
 for f in swift_files:
     s = f.read_text()
