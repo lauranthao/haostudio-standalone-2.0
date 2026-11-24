@@ -144,65 +144,69 @@ struct EmbyTabView: View {
                 }
                 .padding(.horizontal, 16)
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        // Scroll anchor for the bottom chrome (b35 tab-bar
-                        // link): drives minimize / restore as this tab scrolls.
-                        HaoChromeScrollAnchor()
-                        searchEntry
-                            .padding(.horizontal, 16)
-                            .padding(.top, 12)
-                        libraryStrip
-                            .padding(.top, 12)
-                        if !viewModel.genres.isEmpty {
-                            genreStrip
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            // Scroll anchor for the bottom chrome (b35 tab-bar
+                            // link): drives minimize / restore as this tab scrolls.
+                            HaoChromeScrollAnchor()
+                                .id(HaoTabScrollTop.id(for: .movies))
+                            searchEntry
+                                .padding(.horizontal, 16)
                                 .padding(.top, 12)
-                        }
-                        if viewModel.items.isEmpty && viewModel.isLoading {
-                            ProgressView()
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 32)
-                    } else if let error = viewModel.errorMessage {
-                        VStack(spacing: 12) {
-                            MusicEmptyState(
-                                icon: "wifi.exclamationmark",
-                                title: "连不上 Emby",
-                                note: error
-                            )
-                            Button("重试") { viewModel.reload() }
-                                .font(.haoSubheadStrong)
-                                .foregroundStyle(theme.onAccent)
-                                .padding(.horizontal, 24)
-                                .padding(.vertical, 12)
-                                .background(theme.accent, in: Capsule())
-                        }
-                        .padding(.horizontal, 16)
-                        } else if viewModel.items.isEmpty {
-                            MusicEmptyState(
-                                icon: "film",
-                                title: "媒体库是空的",
-                                note: "该媒体库下没有影片。"
-                            )
-                            .padding(.horizontal, 16)
-                        } else {
-                            VideoPosterGrid(items: viewModel.items, isEmby: true) { item in
-                                onSelect(item)
+                            libraryStrip
+                                .padding(.top, 12)
+                            if !viewModel.genres.isEmpty {
+                                genreStrip
+                                    .padding(.top, 12)
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.top, 12)
-                            if viewModel.hasMore {
+                            if viewModel.items.isEmpty && viewModel.isLoading {
                                 ProgressView()
                                     .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 16)
-                                    .onAppear { viewModel.loadMore() }
+                                    .padding(.vertical, 32)
+                        } else if let error = viewModel.errorMessage {
+                            VStack(spacing: 12) {
+                                MusicEmptyState(
+                                    icon: "wifi.exclamationmark",
+                                    title: "连不上 Emby",
+                                    note: error
+                                )
+                                Button("重试") { viewModel.reload() }
+                                    .font(.haoSubheadStrong)
+                                    .foregroundStyle(theme.onAccent)
+                                    .padding(.horizontal, 24)
+                                    .padding(.vertical, 12)
+                                    .background(theme.accent, in: Capsule())
                             }
+                            .padding(.horizontal, 16)
+                            } else if viewModel.items.isEmpty {
+                                MusicEmptyState(
+                                    icon: "film",
+                                    title: "媒体库是空的",
+                                    note: "该媒体库下没有影片。"
+                                )
+                                .padding(.horizontal, 16)
+                            } else {
+                                VideoPosterGrid(items: viewModel.items, isEmby: true) { item in
+                                    onSelect(item)
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.top, 12)
+                                if viewModel.hasMore {
+                                    ProgressView()
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 16)
+                                        .onAppear { viewModel.loadMore() }
+                                }
+                            }
+                            Spacer(minLength: 16)
                         }
-                        Spacer(minLength: 16)
                     }
+                    .haoBottomChromePadding()
+                    .haoChromeScrollTracking()
+                    .haoReselectScrollToTop(tab: .movies, proxy: proxy)
+                    .refreshable { viewModel.reload() }
                 }
-                .haoBottomChromePadding()
-                .haoChromeScrollTracking()
-                .refreshable { viewModel.reload() }
             }
         }
         .onAppear { viewModel.reloadIfNeeded() }
@@ -247,7 +251,7 @@ struct EmbyTabView: View {
             }
             .padding(.horizontal, 16)
         }
-        .sensoryFeedback(.selection, trigger: viewModel.selectedLibraryId)
+        .haoSensoryFeedback(.selection, trigger: viewModel.selectedLibraryId)
     }
 
     private func libraryChip(id: String?, name: String) -> some View {

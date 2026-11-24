@@ -531,7 +531,7 @@ struct VideoDetailContentView: View {
                 .background(theme.accentSoft, in: Capsule())
             }
             .buttonStyle(.plain)
-            .sensoryFeedback(.selection, trigger: viewModel.isFavourite)
+            .haoSensoryFeedback(.selection, trigger: viewModel.isFavourite)
             Button(action: { viewModel.downloadSelected() }) {
                 Label("下载", systemImage: "arrow.down.circle")
                     .font(.haoDenseBody)

@@ -186,6 +186,18 @@ final class BottomChromeState: ObservableObject {
         lastOffset = nil
     }
 
+    /// True when the visible tab's content is at its top: the last
+    /// anchor report is inside the expand band (the same 16pt the
+    /// chrome itself uses to decide "at the top"). A reselect
+    /// scroll-to-top reads this first — already at the top means
+    /// nothing to do: no scroll, no reload, no flash. True before
+    /// any anchor report (a fresh tab starts at the top, and a tab
+    /// switch clears the last offset).
+    var isAtTop: Bool {
+        guard let lastOffset else { return true }
+        return lastOffset >= restOffset - Self.expandTravel
+    }
+
     /// Feed the anchor's top offset (rest offset at the top,
     /// decreasing while scrolled down). Only publishes when the
     /// minimized flag actually flips, so a scroll drag does not
@@ -302,6 +314,93 @@ extension View {
     /// untouched — only vertical content offset moves the anchor.
     func haoChromeScrollTracking() -> some View {
         modifier(HaoChromeScrollTracking())
+    }
+}
+
+// MARK: - Reselect scroll-to-top (build 36 follow-up, chrome O1)
+
+extension Notification.Name {
+    /// Posted by MainTabView when the already-selected tab is tapped
+    /// again (reselect). `object` is the HaoTab. Each tab root scrolls
+    /// only its own list to the top; nothing else listens.
+    static let haoTabReselected = Notification.Name("haoTabReselected")
+}
+
+/// Scroll-to-top anchor id for a tab root's vertical scroll content.
+/// The tab root gives its HaoChromeScrollAnchor this id inside a
+/// ScrollViewReader; a reselect scrolls the proxy to it.
+enum HaoTabScrollTop {
+    static func id(for tab: HaoTab) -> String { "hao-scroll-top-\(tab.rawValue)" }
+}
+
+private struct HaoReselectScrollToTop: ViewModifier {
+    @EnvironmentObject private var bottomChrome: BottomChromeState
+    let tab: HaoTab
+    let proxy: ScrollViewProxy
+
+    func body(content: Content) -> some View {
+        content.onReceive(NotificationCenter.default.publisher(for: .haoTabReselected)) { note in
+            guard (note.object as? HaoTab) == tab else { return }
+            // Already at the top: nothing to do — no scroll, no
+            // reload, no flash. The guard reads the same "at top"
+            // BottomChromeState itself uses for the chrome.
+            guard !bottomChrome.isAtTop else { return }
+            // Scroll-to-top only. It never pops the tab's navigation
+            // stack and never touches playback: a live room pushed
+            // inside the tab keeps playing, and the scroll happens
+            // on the list underneath it. The chrome follows on its
+            // own — the anchor reports stream in as the content
+            // rises and expand the bar; nothing here calls
+            // expand() / minimize() directly.
+            withAnimation(.easeOut(duration: 0.25)) {
+                proxy.scrollTo(HaoTabScrollTop.id(for: tab), anchor: .top)
+            }
+        }
+    }
+}
+
+extension View {
+    /// Reselect scroll-to-top for one tab root. Apply inside the tab
+    /// root's ScrollViewReader, on the vertical ScrollView / List
+    /// whose first child is the HaoChromeScrollAnchor carrying this
+    /// tab's HaoTabScrollTop id. Fires only for this tab's reselect.
+    func haoReselectScrollToTop(tab: HaoTab, proxy: ScrollViewProxy) -> some View {
+        modifier(HaoReselectScrollToTop(tab: tab, proxy: proxy))
+    }
+}
+
+// MARK: - Haptics switch gate (build 36 follow-up, chrome O6)
+
+/// `.sensoryFeedback`, gated by the 触感反馈 switch (Settings →
+/// 触感反馈; UserDefaults key `hapticsEnabled`, default true — the
+/// same key the music player already reads through
+/// MusicLibraryStore.hapticsEnabled(), mirrored live by
+/// SettingsStore.hapticsEnabled; no second copy of the key). Off =
+/// this feedback never fires; on = the platform behaviour is
+/// unchanged. The gate reads the live SettingsStore, so flipping
+/// the switch takes effect without remounting.
+private struct HaoGatedSensoryFeedback<V: Equatable>: ViewModifier {
+    @EnvironmentObject private var settings: SettingsStore
+    let feedback: SensoryFeedback
+    let trigger: V
+
+    func body(content: Content) -> some View {
+        if settings.hapticsEnabled {
+            content.sensoryFeedback(feedback, trigger: trigger)
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    /// `.sensoryFeedback` that obeys the 触感反馈 switch. Use this
+    /// for every selection/tap haptic in the app; the raw
+    /// `.sensoryFeedback` must not be called from app views (the
+    /// music player's programmatic hapticTick is the only other
+    /// haptic path and is already gated the same way).
+    func haoSensoryFeedback<V: Equatable>(_ feedback: SensoryFeedback, trigger: V) -> some View {
+        modifier(HaoGatedSensoryFeedback(feedback: feedback, trigger: trigger))
     }
 }
 

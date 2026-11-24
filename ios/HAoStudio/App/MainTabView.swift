@@ -114,7 +114,18 @@ struct MainTabView: View {
         } else {
             VStack(spacing: HaoLayout.floatingStackSpacing) {
                 MiniPlayerBar(onTapFullPlayer: { showingFullPlayer = true }, morphNamespace: playerMorph)
-                GlassTabBar(items: tabBarItems, selection: $selectedTab, tabAccent: settingsStore.tabAccentColor)
+                GlassTabBar(
+                    items: tabBarItems,
+                    selection: $selectedTab,
+                    // chrome O1: tapping the already-selected tab
+                    // scrolls that tab's own list back to the top.
+                    // The five tab roots listen for this
+                    // notification; nothing else does.
+                    onReselect: { tab in
+                        NotificationCenter.default.post(name: .haoTabReselected, object: tab)
+                    },
+                    tabAccent: settingsStore.tabAccentColor
+                )
             }
             .transition(.asymmetric(
                 insertion: .opacity,
