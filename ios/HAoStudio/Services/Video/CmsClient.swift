@@ -9,12 +9,22 @@
 // deduped items are collected or the overall budget (15 s page 1,
 // 6 s later pages) is spent.
 //
-// Sources (18 defaults, revision 5 — 暴风 deleted 2026-11-23):
-// counted from `cms_sources.dart` (`VideoSource(` occurrences =
-// 18, ids 1,2,3,4,6,7,8,9,10,11,12,13,14,15,16,17,18,19 — id 5
-// 暴风 is gone). 17 enabled; 量子 (id 4) ships disabled. This
-// matches the README ("CMS 源 19→18", build 30). One README-side
-// naming quirk: the README says "新增电影天堂、素博两个 CMS 源"
+// Sources (13 defaults, revision 6 — 暴风 deleted 2026-11-23;
+// 极速/光速/新狼/豪华/速播/速播备用 deleted 2026-11-24: their
+// search APIs answer but their play-CDN hosts (*uus.com family)
+// never connect, so no episode can stream; 量子 deleted
+// 2026-11-24: search answers (total 93) but every play file 404s
+// — the same death signature as 暴风, and it already shipped
+// disabled; 芒果/母鸡 added 2026-11-24 — both verified PLAYABLE
+// by the build-35真播放重验: m3u8 playlist + a real .ts segment
+// fetched): counted from `cms_sources.dart` (`VideoSource(`
+// occurrences = 18, ids 1,2,3,4,6,7,8,9,10,11,12,13,14,15,16,
+// 17,18,19 — id 5 暴风 is gone). All 13 ship enabled; none ships
+// disabled any more (量子 id 4 was the only disabled one, now
+// deleted outright, see revision 6). This matches
+// the README ("CMS 源 19→18", build 30) minus the build-35
+// deletions/additions (18 − 7 + 2 = 13). One README-side naming
+// quirk: the README says "新增电影天堂、素博两个 CMS 源"
 // (build 29) but no source named 素博 exists anywhere in the
 // Flutter code — the code has 速播资源 / 速播备用 (same pinyin,
 // different characters). Count aligns (18); names align except
@@ -301,8 +311,13 @@ extension CmsClient {
     /// 1 = the original 17 sources; 2 = +非凡主站, speed
     /// re-prioritised; 3 = 金鹰/非凡/非凡主站 apiUrl http→https;
     /// 4 = +电影天堂资源; 5 = −暴风资源 (deleted 2026-11-23: its
-    /// API answers but its play files 404).
-    static let sourcesRevision = 5
+    /// API answers but its play files 404); 6 = −极速/光速/新狼/
+    /// 豪华/速播/速播备用/量子资源, +芒果/母鸡资源 (build-35真播放
+    /// 重验 2026-11-24: the 6 deleted sources' search APIs answer
+    /// but their play-CDN hosts never connect, so nothing streams;
+    /// 量子's play files 404; 芒果/母鸡 verified PLAYABLE: m3u8
+    /// playlist + a real .ts segment fetched).
+    static let sourcesRevision = 6
 
     /// UA for CMS video + Douban search-page fallback (must be
     /// verbatim — several upstreams key behaviour off it).
@@ -310,26 +325,21 @@ extension CmsClient {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
-    /// The 18 default CMS sources, in shipped (sort) order.
+    /// The 13 default CMS sources, in shipped (sort) order.
     static let defaultSources: [VideoSource] = [
         VideoSource(id: 12, name: "金鹰资源", apiUrl: "https://jyzyapi.com/api.php/provide/vod", kind: "play", enabled: true, sort: 5),
         VideoSource(id: 13, name: "非凡资源", apiUrl: "https://ffzy5.tv/api.php/provide/vod", kind: "search", enabled: true, sort: 6),
         VideoSource(id: 18, name: "非凡主站", apiUrl: "https://cj.ffzyapi.com/api.php/provide/vod", kind: "search", enabled: true, sort: 7),
-        VideoSource(id: 8, name: "极速资源", apiUrl: "https://jszyapi.com/api.php/provide/vod", kind: "play", enabled: true, sort: 10),
         VideoSource(id: 6, name: "魔都资源", apiUrl: "https://caiji.moduapi.cc/api.php/provide/vod", kind: "play", enabled: true, sort: 11),
         VideoSource(id: 17, name: "iKun资源", apiUrl: "https://ikunzyapi.com/api.php/provide/vod", kind: "play", enabled: true, sort: 12),
-        VideoSource(id: 7, name: "光速资源", apiUrl: "https://api.guangsuapi.com/api.php/provide/vod", kind: "play", enabled: true, sort: 13),
         VideoSource(id: 9, name: "虎牙资源", apiUrl: "https://www.huyaapi.com/api.php/provide/vod", kind: "play", enabled: true, sort: 14),
-        VideoSource(id: 10, name: "新狼资源", apiUrl: "https://api.xinlangapi.com/xinlangapi.php/provide/vod", kind: "play", enabled: true, sort: 15),
         VideoSource(id: 14, name: "厂长资源", apiUrl: "https://api.changzhang.tv/api.php/provide/vod/", kind: "play", enabled: true, sort: 16),
-        VideoSource(id: 2, name: "豪华资源", apiUrl: "https://hhzyapi.com/api.php/provide/vod/", kind: "play", enabled: true, sort: 17),
         VideoSource(id: 1, name: "红牛资源", apiUrl: "https://www.hongniuzy2.com/api.php/provide/vod/", kind: "play", enabled: true, sort: 18),
-        VideoSource(id: 15, name: "速播备用", apiUrl: "https://subocaiji.com/api.php/provide/vod", kind: "play", enabled: true, sort: 19),
-        VideoSource(id: 3, name: "速播资源", apiUrl: "https://www.subozy.com/api.php/provide/vod/", kind: "play", enabled: true, sort: 20),
         VideoSource(id: 16, name: "如意资源", apiUrl: "https://cj.rycjapi.com/api.php/provide/vod", kind: "play", enabled: true, sort: 21),
         VideoSource(id: 11, name: "360资源", apiUrl: "https://360zy.com/api.php/provide/vod", kind: "play", enabled: true, sort: 22),
-        VideoSource(id: 4, name: "量子资源", apiUrl: "https://cj.lziapi.com/api.php/provide/vod", kind: "play", enabled: false, sort: 23),
         VideoSource(id: 19, name: "电影天堂资源", apiUrl: "https://caiji.dyttzyapi.com/api.php/provide/vod", kind: "play", enabled: true, sort: 25),
+        VideoSource(id: 20, name: "芒果资源", apiUrl: "https://caiji.mgzyapi.com/api.php/provide/vod", kind: "play", enabled: true, sort: 26),
+        VideoSource(id: 21, name: "母鸡资源", apiUrl: "https://mujiziyuan00.com/api.php/provide/vod", kind: "play", enabled: true, sort: 27),
     ]
 }
 
