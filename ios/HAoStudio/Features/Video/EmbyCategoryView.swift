@@ -17,6 +17,13 @@ final class EmbyCategoryViewModel: ObservableObject {
     private let genre: String
     private var page = 0
     private var loadingMore = false
+    /// Load generation: every reload bumps it. A page that lands
+    /// for an older generation is dropped and the current query
+    /// re-issued — otherwise a pull-to-refresh during pagination
+    /// drops the fresh load and the stale page-1 items land in
+    /// place of page 0 (same class as the tab's library-switch
+    /// race, b35 sweep).
+    private var generation = 0
 
     init(genre: String, gateway: VideoDataGateway = VideoServices.makeGateway()) {
         self.genre = genre
@@ -24,6 +31,7 @@ final class EmbyCategoryViewModel: ObservableObject {
     }
 
     func reload() {
+        generation += 1
         page = 0
         hasMore = true
         items = []
@@ -34,10 +42,15 @@ final class EmbyCategoryViewModel: ObservableObject {
         guard !loadingMore, hasMore else { return }
         loadingMore = true
         isLoading = true
+        let requestGeneration = generation
         gateway.fetchEmbyItems(libraryId: nil, genre: genre, page: page) { [weak self] result in
             guard let self = self else { return }
             self.loadingMore = false
             self.isLoading = false
+            guard requestGeneration == self.generation else {
+                if self.items.isEmpty { self.loadMore() }
+                return
+            }
             if result.items.isEmpty {
                 self.hasMore = false
             } else {

@@ -54,6 +54,7 @@ struct EmbyConfigView: View {
                     }
                 }
                 .font(.system(size: 15))
+                .disabled(viewModel.status == .testing)
                 Button("保存") {
                     if viewModel.save() {
                         dismiss()
@@ -62,6 +63,7 @@ struct EmbyConfigView: View {
                     }
                 }
                 .font(.system(size: 15))
+                .disabled(viewModel.status == .testing)
                 Button("清除配置", role: .destructive) {
                     showingClearAlert = true
                 }
@@ -87,7 +89,7 @@ struct EmbyConfigView: View {
             Button("好", role: .cancel) {
             }
         } message: {
-            Text("配置没有保存成功，请检查服务器地址后重试。")
+            Text("配置没有保存成功，请检查服务器地址和凭证（API 密钥或用户名密码）后重试。")
         }
     }
 

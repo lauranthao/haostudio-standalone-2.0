@@ -65,7 +65,14 @@ final class EmbyImageLoader {
             request.setValue(value, forHTTPHeaderField: field)
         }
         let task = session.dataTask(with: request) { [weak self] data, response, _ in
-            guard let self = self else { return }
+            // The completion fires exactly once even when this
+            // loader is gone (b35 sweep: the old `guard let self`
+            // return swallowed it, hanging a caller that waits
+            // on the callback).
+            guard let self = self else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard status == 200,
                   let data = data, !data.isEmpty,

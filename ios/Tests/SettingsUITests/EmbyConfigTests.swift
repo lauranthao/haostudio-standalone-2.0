@@ -161,6 +161,75 @@ final class EmbyConfigTests: XCTestCase {
         waitForExpectations(timeout: 5)
     }
 
+    // MARK: - Save validation (b35 sweep)
+
+    /// An empty address never "saves": it used to return true and
+    /// dismiss, leaving the user believing the server was set up.
+    func testSaveWithEmptyAddressFails() {
+        let vm = EmbyConfigViewModel()
+        vm.baseUrl = "   "
+        vm.apiKey = "key-123"
+        XCTAssertFalse(vm.save())
+        XCTAssertNil(EmbyConfigStore.load())
+    }
+
+    /// An address with no credential at all is not a config either.
+    func testSaveWithAddressButNoCredentialFails() {
+        let vm = EmbyConfigViewModel()
+        vm.baseUrl = "http://emby.local:8096"
+        XCTAssertFalse(vm.save())
+        XCTAssertNil(EmbyConfigStore.load())
+    }
+
+    // MARK: - Credential field on load (b35 sweep)
+
+    /// A password login round-trips as a token: the Keychain value
+    /// lands in `accessToken` (keyed on the persisted user id),
+    /// not in `apiKey`.
+    func testPasswordLoginConfigRoundTripsAsToken() throws {
+        try requireKeychain()
+        var config = EmbyServerConfig(baseUrl: "http://emby.local:8096", username: "alice")
+        config.accessToken = "tok-9"
+        config.userId = "user-9"
+        XCTAssertTrue(EmbyConfigStore.save(config))
+        let loaded = EmbyConfigStore.load()
+        XCTAssertEqual(loaded?.accessToken, "tok-9")
+        XCTAssertEqual(loaded?.apiKey, "")
+        XCTAssertEqual(loaded?.userId, "user-9")
+        XCTAssertEqual(loaded?.usesPasswordAuth, true)
+    }
+
+    /// A key-only config round-trips as a key, never as a token.
+    func testApiKeyConfigRoundTripsAsKey() throws {
+        try requireKeychain()
+        let config = EmbyServerConfig(baseUrl: "http://emby.local:8096", apiKey: "key-9")
+        XCTAssertTrue(EmbyConfigStore.save(config))
+        let loaded = EmbyConfigStore.load()
+        XCTAssertEqual(loaded?.apiKey, "key-9")
+        XCTAssertEqual(loaded?.accessToken, "")
+        XCTAssertEqual(loaded?.usesPasswordAuth, false)
+    }
+
+    /// Switching from password login to key auth clears the user
+    /// id, so the next load cannot mistake the key for a token —
+    /// and the token no longer shows up in the API-key field.
+    func testSwitchingToApiKeyClearsUserId() throws {
+        try requireKeychain()
+        var config = EmbyServerConfig(baseUrl: "http://emby.local:8096", username: "alice")
+        config.accessToken = "tok-9"
+        config.userId = "user-9"
+        XCTAssertTrue(EmbyConfigStore.save(config))
+        let vm = EmbyConfigViewModel()
+        XCTAssertEqual(vm.apiKey, "")
+        vm.apiKey = "new-key-1"
+        XCTAssertTrue(vm.save())
+        let loaded = EmbyConfigStore.load()
+        XCTAssertEqual(loaded?.apiKey, "new-key-1")
+        XCTAssertEqual(loaded?.accessToken, "")
+        XCTAssertEqual(loaded?.userId, "")
+        XCTAssertEqual(loaded?.usesPasswordAuth, false)
+    }
+
     // MARK: - Save / clear (Keychain split)
 
     func testSavePutsCredentialInKeychainNotInFile() throws {
