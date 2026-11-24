@@ -89,47 +89,26 @@ struct MainTabView: View {
         HaoTab.allCases.map { GlassTabBarItem(tab: $0, title: $0.title, icon: $0.icon) }
     }
 
-    /// The bottom chrome in its two forms (b35 tab-bar link, Apple
-    /// Music / iOS 26 behaviour, hand-rolled — see BottomChromeState):
-    /// expanded, the wide mini above the full tab bar; minimized, one
-    /// row — the current-tab capsule beside the narrowed inline mini.
-    /// Both forms share the same outer width (screen − 24, from the
-    /// caller's side margins), the same 8pt spacing, the same glass
-    /// and the same 12pt radius, so the row never reads as a different
-    /// component. MiniPlayerBar hides itself when nothing is playing,
-    /// in both forms — minimized without a mini is just the capsule.
-    @ViewBuilder
+    /// The bottom chrome (build 37: the b35 scroll-minimize is
+    /// reverted — chen 2026-11-24: "菜单恢复原样". The menu is
+    /// always the original full glass tab bar, with the mini above
+    /// it; there is no minimized capsule form any more). The mini
+    /// hides itself when nothing is playing.
     private var bottomChromeContent: some View {
-        if bottomChrome.isMinimized {
-            HStack(spacing: HaoLayout.floatingStackSpacing) {
-                MinimizedTabCapsule(selection: $selectedTab, tabAccent: settingsStore.tabAccentColor)
-                MiniPlayerBar(onTapFullPlayer: { showingFullPlayer = true }, morphNamespace: playerMorph)
-            }
-            // Same outer slot as the full tab bar (56 content + 4pt
-            // inset top and bottom = 64), so the row swaps in place.
-            .padding(.vertical, HaoLayout.tabBarInnerInset)
-            .transition(.asymmetric(
-                insertion: .move(edge: .bottom).combined(with: .opacity),
-                removal: .opacity))
-        } else {
-            VStack(spacing: HaoLayout.floatingStackSpacing) {
-                MiniPlayerBar(onTapFullPlayer: { showingFullPlayer = true }, morphNamespace: playerMorph)
-                GlassTabBar(
-                    items: tabBarItems,
-                    selection: $selectedTab,
-                    // chrome O1: tapping the already-selected tab
-                    // scrolls that tab's own list back to the top.
-                    // The five tab roots listen for this
-                    // notification; nothing else does.
-                    onReselect: { tab in
-                        NotificationCenter.default.post(name: .haoTabReselected, object: tab)
-                    },
-                    tabAccent: settingsStore.tabAccentColor
-                )
-            }
-            .transition(.asymmetric(
-                insertion: .opacity,
-                removal: .move(edge: .bottom).combined(with: .opacity)))
+        VStack(spacing: HaoLayout.floatingStackSpacing) {
+            MiniPlayerBar(onTapFullPlayer: { showingFullPlayer = true }, morphNamespace: playerMorph)
+            GlassTabBar(
+                items: tabBarItems,
+                selection: $selectedTab,
+                // chrome O1: tapping the already-selected tab
+                // scrolls that tab's own list back to the top.
+                // The five tab roots listen for this
+                // notification; nothing else does.
+                onReselect: { tab in
+                    NotificationCenter.default.post(name: .haoTabReselected, object: tab)
+                },
+                tabAccent: settingsStore.tabAccentColor
+            )
         }
     }
 
@@ -170,7 +149,6 @@ struct MainTabView: View {
                     .opacity(showingFullPlayer ? 0 : 1)
                     .offset(y: showingFullPlayer ? 24 : 0)
                     .animation(HaoLayout.settleSpring, value: showingFullPlayer)
-                    .animation(HaoLayout.settleSpring, value: bottomChrome.isMinimized)
             }
         }
         .fullScreenCover(isPresented: $showingFullPlayer) {
@@ -199,7 +177,7 @@ struct MainTabView: View {
         .environment(\.haoTheme, palette)
         // b36-1: each tab has its own scroll rest offset — forget
         // the previous tab's so the new tab calibrates from scratch
-        // instead of minimizing at its own top.
+        // (isAtTop for the reselect scroll-to-top guard).
         .onChange(of: selectedTab) { _ in bottomChrome.resetRest() }
         // Wallpaper cache (build 36, item 10): load once on
         // appear and whenever the switch or the picked file

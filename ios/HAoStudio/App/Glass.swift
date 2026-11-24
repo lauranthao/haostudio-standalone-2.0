@@ -66,24 +66,12 @@ enum HaoLayout {
     /// anchor reports its top offset in this space, 0 at the top,
     /// negative while the content is scrolled down.
     static let chromeScrollSpace = "haoChromeScroll"
-    /// Cover size in the expanded mini player (Beans MiniPlayerView: 36).
+    /// Cover size in the mini player (Beans MiniPlayerView: 36).
     static let miniCoverSize: CGFloat = 36
-    /// Cover size in the inline (minimized) mini player: the iOS 26
-    /// NowPlayingTray recipe uses 32 — the tray drops the artist line
-    /// and the next button, and the smaller cover leaves room for the
-    /// title in the narrowed strip.
-    static let miniInlineCoverSize: CGFloat = 32
     /// matchedGeometryEffect id shared by the mini cover and the full
     /// player cover: tapping the mini morphs this one cover from 36
-    /// (or 32 inline) to the full player's cover (up to 340).
+    /// to the full player's cover (up to 340).
     static let playerCoverMorphID = "haoPlayerCover"
-    /// Long-press dwell before the minimized capsule starts
-    /// tab-dragging (Apple: long-press the minimized bar, then slide
-    /// to switch tabs).
-    static let minimizedCapsuleLongPressDuration: TimeInterval = 0.3
-    /// Horizontal drag per tab while switching tabs on the minimized
-    /// capsule.
-    static let minimizedCapsuleTabStep: CGFloat = 64
     /// Total height of the glass tab bar as laid out in the floating
     /// stack: content 56 + 4pt inner inset top and bottom (64).
     static let tabBarTotalHeight: CGFloat = tabBarContentHeight + tabBarInnerInset * 2
@@ -91,15 +79,12 @@ enum HaoLayout {
     /// bottom margin + tab bar + (gap + mini player while one is
     /// showing). This is the clearance a scroll page under the stack
     /// must add so its last row can scroll fully above the stack —
-    /// 66pt idle, 124pt while playing. Minimized, the stack is a
-    /// single tab-bar slot (capsule + inline mini side by side),
-    /// so the clearance is 66pt whatever the mini is doing — the
-    /// reclaimed space is the point of minimizing. See
-    /// haoBottomChromePadding().
-    static func floatingStackClearance(miniPlayerVisible: Bool, isMinimized: Bool = false) -> CGFloat {
-        if isMinimized {
-            return tabBarBottomMargin + tabBarTotalHeight
-        }
+    /// 66pt idle, 124pt while playing. See haoBottomChromePadding().
+    /// (Build 37: the scroll-minimize behaviour is gone — chen
+    /// 2026-11-24 had the menu restored to its original full tab
+    /// bar, so there is no minimized form and no isMinimized
+    /// parameter any more.)
+    static func floatingStackClearance(miniPlayerVisible: Bool) -> CGFloat {
         return tabBarBottomMargin + tabBarTotalHeight
             + (miniPlayerVisible ? floatingStackSpacing + miniPlayerHeight : 0)
     }
@@ -107,54 +92,40 @@ enum HaoLayout {
     static let settleSpring = Animation.spring(response: 0.35, dampingFraction: 0.82)
 }
 
-/// Scroll-driven minimize state for the bottom chrome (b35 tab-bar
-/// link — Apple Music / iOS 26 behaviour, hand-rolled).
-///
-/// iOS 26 ships this as `.tabBarMinimizeBehavior(.onScrollDown)` +
-/// `.tabViewBottomAccessory`, but those modifiers belong to a stock
-/// TabView: this app has no TabView (custom UITabBar + @State content
-/// switch in MainTabView) and the deployment target is iOS 17, so the
-/// system behaviour is reimplemented here from a scroll anchor. The
-/// payoff is that it runs on iOS 17–27 with one code path.
-///
-/// Behaviour (matches the iOS 26 Music shell):
-/// - Scroll down: the tab bar tucks into one small glass capsule
-///   showing only the current tab, and the mini player slides down
-///   beside it, narrower, without its artist line or next button.
-/// - Scroll up (or back to the top): both spring back — the full
-///   tab bar and the wide mini above it.
-/// - Thresholds are relative to the tab's own rest offset (b36-1):
-///   every tab uses a large navigation title, so the anchor rests
-///   ~+100, not 0 — absolute thresholds needed ~165pt of scrolling
-///   to fire, or never fired on shorter tabs.
+/// Scroll-offset tracking for the bottom chrome — build 37: the
+/// b35 scroll-driven minimize is REVERTED (chen 2026-11-24:
+/// "菜单恢复原样"), the menu stays the original full glass tab bar
+/// and never narrows into a capsule. What remains is the anchor
+/// offset bookkeeping the reselect scroll-to-top (chrome O1) needs:
+/// the tab's rest offset and whether the visible tab is at its top.
+/// - The rest offset is learned from the first anchor report after
+///   a reset (b36-1: every tab uses a large navigation title, so
+///   the anchor rests ~+100, not 0 — absolute thresholds needed
+///   ~165pt of scrolling to fire, or never fired on shorter tabs).
 /// - The state is driven by the visible tab's scroll offset only;
 ///   pushed pages carry no anchor, so scrolling a pushed page leaves
-///   the chrome exactly as it was (known gap, see the anchor docs).
+///   the tracking exactly as it was (known gap, see the anchor docs).
 @MainActor
 final class BottomChromeState: ObservableObject {
-    /// True while the chrome is in its minimized (single-row) form.
-    @Published private(set) var isMinimized = false
-
-    /// Last offset the anchor reported. The hysteresis band below
-    /// only follows the scroll DIRECTION, so a slow drag near the
-    /// boundary never flickers the chrome.
+    /// Last offset the anchor reported. isAtTop reads this against
+    /// the rest offset; it is not published — the reselect handler
+    /// reads it synchronously, and nothing observes it.
     private var lastOffset: CGFloat?
 
     /// The anchor's offset with the content at the top, for the
     /// current tab (b36-1: the old code assumed 0, but every tab
     /// uses a large navigation title, so the anchor rests ~+100,
-    /// not 0 — and the absolute -16 / -64 thresholds needed
-    /// ~165pt of scrolling to fire, or never fired on shorter
-    /// tabs). Learned from the FIRST report after a reset (b36-8:
-    /// learning it as a running max let a pull-to-refresh /
-    /// overscroll bounce at the top inflate it — the anchor's minY
-    /// briefly rises above the true top — and the chrome then
-    /// wedged minimized at the top, because minY could never
-    /// reach the inflated rest offset - 16 again. A later upward
-    /// move is a bounce, never a new rest: the rest only changes
-    /// on a tab switch, which resets it. A mid-scroll first
-    /// report still behaves as before: max(0, minY) keeps the 0
-    /// seed, so the absolute fallback is unchanged).
+    /// not 0 — and the absolute -16 threshold needed ~116pt of
+    /// scrolling to fire, or never fired on shorter tabs). Learned
+    /// from the FIRST report after a reset (b36-8: learning it as
+    /// a running max let a pull-to-refresh / overscroll bounce at
+    /// the top inflate it — the anchor's minY briefly rises above
+    /// the true top — and isAtTop then stayed true while scrolled
+    /// down. A later upward move is a bounce, never a new rest:
+    /// the rest only changes on a tab switch, which resets it. A
+    /// mid-scroll first report still behaves as before: max(0,
+    /// minY) keeps the 0 seed, so the absolute fallback is
+    /// unchanged).
     private var restOffset: CGFloat = 0
 
     /// Whether the rest offset has been learned for the current
@@ -163,23 +134,14 @@ final class BottomChromeState: ObservableObject {
     private var restLearned = false
 
     /// At or above this far below the rest offset the content is
-    /// at the top: always expanded.
+    /// at the top.
     private static let expandTravel: CGFloat = 16
-    /// At or below this far below the rest offset the content is
-    /// clearly scrolled down: always minimized.
-    private static let minimizeTravel: CGFloat = 64
-    /// Inside the band, a downward move of this much minimizes…
-    private static let minimizeStep: CGFloat = 6
-    /// …and an upward move of this much expands.
-    private static let expandStep: CGFloat = 10
 
     /// The tab changed: forget the previous tab's rest offset so
     /// the next anchor report calibrates the new tab from scratch.
     /// Called from MainTabView's selection change. Also forgets
     /// the last offset (the cross-tab delta is meaningless) — the
     /// next report re-derives the state from position alone.
-    /// Never touches isMinimized itself — the next report
-    /// re-derives it.
     func resetRest() {
         restOffset = 0
         restLearned = false
@@ -188,7 +150,7 @@ final class BottomChromeState: ObservableObject {
 
     /// True when the visible tab's content is at its top: the last
     /// anchor report is inside the expand band (the same 16pt the
-    /// chrome itself uses to decide "at the top"). A reselect
+    /// chrome used to decide "at the top"). A reselect
     /// scroll-to-top reads this first — already at the top means
     /// nothing to do: no scroll, no reload, no flash. True before
     /// any anchor report (a fresh tab starts at the top, and a tab
@@ -199,61 +161,22 @@ final class BottomChromeState: ObservableObject {
     }
 
     /// Feed the anchor's top offset (rest offset at the top,
-    /// decreasing while scrolled down). Only publishes when the
-    /// minimized flag actually flips, so a scroll drag does not
-    /// re-render the chrome every frame.
+    /// decreasing while scrolled down). Records the offset and
+    /// learns the rest offset once, from the first report after a
+    /// reset: the tab's view starts at the top, so that report
+    /// IS the rest offset. Later upward moves are overscroll
+    /// bounce (pull-to-refresh, rubber-banding), never a new
+    /// rest — adopting them wedged the chrome at the top (b36-8).
+    /// A mid-scroll first report keeps the 0 seed (max), so the
+    /// absolute fallback is unchanged. Nothing is published: the
+    /// minimize state machine this used to drive is gone (build
+    /// 37 revert — chen: menu back to its original full tab bar),
+    /// and isAtTop is read synchronously by the reselect handler.
     func noteScrollOffset(_ minY: CGFloat) {
-        let previous = lastOffset
         lastOffset = minY
-        // Learn the top once, from the first report after a
-        // reset: the tab's view starts at the top, so that report
-        // IS the rest offset. Later upward moves are overscroll
-        // bounce (pull-to-refresh, rubber-banding), never a new
-        // rest — adopting them wedged the chrome minimized at
-        // the top (b36-8). A mid-scroll first report keeps the 0
-        // seed (max), so the absolute fallback is unchanged.
         if !restLearned {
             restOffset = max(restOffset, minY)
             restLearned = true
-        }
-        let target: Bool?
-        if minY >= restOffset - Self.expandTravel {
-            target = false
-        } else if minY <= restOffset - Self.minimizeTravel {
-            target = true
-        } else if let previous {
-            let delta = minY - previous
-            if delta <= -Self.minimizeStep {
-                target = true
-            } else if delta >= Self.expandStep {
-                target = false
-            } else {
-                target = nil
-            }
-        } else {
-            target = nil
-        }
-        guard let target, target != isMinimized else { return }
-        withAnimation(HaoLayout.settleSpring) {
-            isMinimized = target
-        }
-    }
-
-    /// Expand the chrome (tap on the minimized capsule). No-op when
-    /// already expanded, so a stray tap can never wedge it.
-    func expand() {
-        guard isMinimized else { return }
-        withAnimation(HaoLayout.settleSpring) {
-            isMinimized = false
-        }
-    }
-
-    /// Minimize the chrome (explicit callers; scrolling normally
-    /// drives this through noteScrollOffset).
-    func minimize() {
-        guard !isMinimized else { return }
-        withAnimation(HaoLayout.settleSpring) {
-            isMinimized = true
         }
     }
 }
@@ -271,7 +194,8 @@ private struct HaoChromeScrollOffsetKey: PreferenceKey {
 /// vertical scroll content (ScrollView or List). It reports its top
 /// offset in the scroll view's coordinate space — 0 at the top,
 /// negative while the content is scrolled down — and
-/// BottomChromeState turns that into minimize / restore. Invisible
+/// BottomChromeState turns that into the rest offset / isAtTop
+/// (reselect scroll-to-top). Invisible
 /// (clear, zero height, hidden from VoiceOver) and outside the tab's
 /// content spacing, so it never shifts a row by a point.
 ///
@@ -307,8 +231,8 @@ private struct HaoChromeScrollTracking: ViewModifier {
 }
 
 extension View {
-    /// Watch this scroll view's content offset and drive the bottom
-    /// chrome's minimize / restore state. Apply to the tab root's
+    /// Watch this scroll view's content offset and feed the bottom
+    /// chrome's rest-offset / isAtTop tracking. Apply to the tab root's
     /// ScrollView / List (which must contain a HaoChromeScrollAnchor
     /// as its first content child). Horizontal inner scroll views are
     /// untouched — only vertical content offset moves the anchor.
@@ -348,10 +272,7 @@ private struct HaoReselectScrollToTop: ViewModifier {
             // Scroll-to-top only. It never pops the tab's navigation
             // stack and never touches playback: a live room pushed
             // inside the tab keeps playing, and the scroll happens
-            // on the list underneath it. The chrome follows on its
-            // own — the anchor reports stream in as the content
-            // rises and expand the bar; nothing here calls
-            // expand() / minimize() directly.
+            // on the list underneath it.
             withAnimation(.easeOut(duration: 0.25)) {
                 proxy.scrollTo(HaoTabScrollTop.id(for: tab), anchor: .top)
             }
@@ -517,21 +438,16 @@ extension View {
 /// (MusicPlayerViewModel.miniFallbackSong — a failed / stopped track
 /// the full player keeps showing). Using only `currentItem` here
 /// would leave 66pt of clearance under a visible 124pt stack.
-/// It also reads BottomChromeState: minimized, the stack is one
-/// tab-bar slot tall (66pt) whatever the mini is doing, so the
-/// clearance shrinks with the chrome and the reclaimed space is real.
 private struct HaoBottomChromePadding: ViewModifier {
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var musicPlayer: MusicPlayerViewModel
-    @EnvironmentObject private var bottomChrome: BottomChromeState
 
     func body(content: Content) -> some View {
         content.safeAreaPadding(
             .bottom,
             HaoLayout.floatingStackClearance(
                 miniPlayerVisible: coordinator.currentItem != nil
-                    || musicPlayer.miniFallbackSong != nil,
-                isMinimized: bottomChrome.isMinimized
+                    || musicPlayer.miniFallbackSong != nil
             )
         )
     }
