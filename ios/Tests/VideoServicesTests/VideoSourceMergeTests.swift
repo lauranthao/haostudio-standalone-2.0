@@ -50,21 +50,21 @@ final class VideoSourceMergeTests: XCTestCase {
 
     private func mergeA() -> (merged: [VideoSource], applied: Set<String>) {
         VideoSourceStore.mergeVideoSources(
-            stored: chenStoredList(), seen: 5, currentRevision: 7,
+            stored: chenStoredList(), seen: 5, currentRevision: 8,
             currentDefaults: CmsClient.defaultSources, applied: nil,
             legacyRemoved: VideoSourceStore.legacyRemovedURLs)
     }
 
-    func testRevisionIs7AndDefaultsAreRev6Set() {
-        XCTAssertEqual(CmsClient.sourcesRevision, 7)
-        XCTAssertEqual(CmsClient.defaultSources.count, 13)
+    func testRevisionIs8AndDefaultsAreRev6SetMinusHuya() {
+        XCTAssertEqual(CmsClient.sourcesRevision, 8)
+        XCTAssertEqual(CmsClient.defaultSources.count, 12)
         let urls = Set(CmsClient.defaultSources.map { $0.apiUrl })
         XCTAssertTrue(urls.contains("https://caiji.mgzyapi.com/api.php/provide/vod"))
         XCTAssertTrue(urls.contains("https://mujiziyuan00.com/api.php/provide/vod"))
-        // Rev 6 = rev 5 minus the 7 deleted, plus mango + muji.
+        // Rev 8 = rev 5 minus the 8 deleted, plus mango + muji.
         let rev5 = Set(VideoSourceStore.rev5DefaultURLs)
         XCTAssertEqual(rev5.count, 18)
-        XCTAssertEqual(VideoSourceStore.legacyRemovedURLs.count, 7)
+        XCTAssertEqual(VideoSourceStore.legacyRemovedURLs.count, 8)
         XCTAssertEqual(urls, rev5.subtracting(VideoSourceStore.legacyRemovedURLs)
             .union(["https://caiji.mgzyapi.com/api.php/provide/vod",
                     "https://mujiziyuan00.com/api.php/provide/vod"]))
@@ -76,7 +76,7 @@ final class VideoSourceMergeTests: XCTestCase {
         XCTAssertTrue(VideoSourceStore.legacyRemovedURLs.isDisjoint(with: urls))
         XCTAssertTrue(urls.contains("https://caiji.mgzyapi.com/api.php/provide/vod"))
         XCTAssertTrue(urls.contains("https://mujiziyuan00.com/api.php/provide/vod"))
-        XCTAssertEqual(a.merged.count, 13)
+        XCTAssertEqual(a.merged.count, 12)
         XCTAssertEqual(a.applied, Set(CmsClient.defaultSources.map { $0.apiUrl }))
     }
 
@@ -100,7 +100,7 @@ final class VideoSourceMergeTests: XCTestCase {
         // its sort still refreshed.
         let off = VideoSourceStore.mergeVideoSources(
             stored: [src(id: 12, name: "金鹰资源", url: "https://jyzyapi.com/api.php/provide/vod", enabled: false, sort: 99)],
-            seen: 5, currentRevision: 7, currentDefaults: CmsClient.defaultSources,
+            seen: 5, currentRevision: 8, currentDefaults: CmsClient.defaultSources,
             applied: nil, legacyRemoved: VideoSourceStore.legacyRemovedURLs)
         XCTAssertEqual(off.merged.first?.enabled, false)
         XCTAssertEqual(off.merged.first?.sort, 5)
@@ -110,26 +110,26 @@ final class VideoSourceMergeTests: XCTestCase {
         let a = mergeA()
         let stored = a.merged.filter { $0.apiUrl != "https://caiji.mgzyapi.com/api.php/provide/vod" }
         let b = VideoSourceStore.mergeVideoSources(
-            stored: stored, seen: 7, currentRevision: 8,
+            stored: stored, seen: 8, currentRevision: 8,
             currentDefaults: CmsClient.defaultSources, applied: a.applied,
             legacyRemoved: VideoSourceStore.legacyRemovedURLs)
         let urls = Set(b.merged.map { videoToHttps($0.apiUrl) })
         XCTAssertFalse(urls.contains("https://caiji.mgzyapi.com/api.php/provide/vod"))
-        XCTAssertEqual(b.merged.count, 12)
+        XCTAssertEqual(b.merged.count, 11)
     }
 
     func testCaseCAlreadyCurrentIsNoOp() {
         let a = mergeA()
         let c = VideoSourceStore.mergeVideoSources(
-            stored: a.merged, seen: 7, currentRevision: 7,
+            stored: a.merged, seen: 8, currentRevision: 8,
             currentDefaults: CmsClient.defaultSources, applied: a.applied,
             legacyRemoved: VideoSourceStore.legacyRemovedURLs)
         XCTAssertEqual(c.merged, a.merged)
     }
 
-    func testCaseDFixtureReallyContainsTheSevenDead() {
+    func testCaseDFixtureReallyContainsTheEightDead() {
         let dead = chenStoredList().filter { VideoSourceStore.legacyRemovedURLs.contains(videoToHttps($0.apiUrl)) }.count
-        XCTAssertEqual(dead, 7)
+        XCTAssertEqual(dead, 8)
     }
 
     func testNoRecordFallsBackToLegacyRemovedSet() {
@@ -139,16 +139,16 @@ final class VideoSourceMergeTests: XCTestCase {
         // back — the rev-5 recovery above is what avoids that on
         // chen's device, where seen == 5).
         let result = VideoSourceStore.mergeVideoSources(
-            stored: chenStoredList(), seen: 0, currentRevision: 7,
+            stored: chenStoredList(), seen: 0, currentRevision: 8,
             currentDefaults: CmsClient.defaultSources, applied: nil,
             legacyRemoved: VideoSourceStore.legacyRemovedURLs)
         let urls = Set(result.merged.map { videoToHttps($0.apiUrl) })
         XCTAssertTrue(VideoSourceStore.legacyRemovedURLs.isDisjoint(with: urls))
-        XCTAssertEqual(result.merged.count, 14)
+        XCTAssertEqual(result.merged.count, 13)
     }
 
     func testMergeDefaultsNoOpWhenCurrent() {
         let stored = mergeA().merged
-        XCTAssertEqual(VideoSourceStore.mergeDefaults(stored, seenRevision: 7), stored)
+        XCTAssertEqual(VideoSourceStore.mergeDefaults(stored, seenRevision: 8), stored)
     }
 }

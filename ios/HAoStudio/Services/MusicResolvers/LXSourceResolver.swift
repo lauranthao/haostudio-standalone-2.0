@@ -9,7 +9,7 @@
 //   2026-11-17 铁律). A below-target URL plays now as a per-song
 //   downgrade (the target tier persists to the next track), labelled
 //   with its REAL tier.
-// - 7 built-in resolvers (`huibq` disabled — its service returns
+// - 8 built-in resolvers (`huibq` disabled — its service returns
 //   503 "Service Suspended" since 2026-11-16; `oiapi_kw` deleted
 //   2026-11-24 — its oiapi.net Kuwo endpoint answers code -2
 //   "歌曲搜索失败" while the same host's NetEase leg still works,
@@ -18,9 +18,16 @@
 //   2026-11-24 — tang.api.s01s.cn never answers (connection
 //   timeout, 0 bytes, 4 consecutive failures across 2 probe rounds
 //   and 2 HTTP clients while 7 sibling resolvers answer through the
-//   same egress; build-35真播放重验). QQ/TX playback still has LX
-//   script cover (stellarwave / jiexiang / helloworld verified
-//   PLAYABLE 2026-11-24)) + LX script jobs.
+//   same egress; build-35真播放重验); `lzm` deleted 2026-11-24
+//   (item 7) — its endpoint now answers 401
+//   {"code":-1,"error":"NEED_PASS"} (2 probes), replaced by
+//   `meting` (Meting API, wy) and `vkeys_tx` (落月 v3 song/link,
+//   tx — the first built-in QQ resolver; the v2 geturl leg 503s
+//   "系统运行错误！"). Both replacements verified with real audio
+//   bytes 2026-11-24 (see item7-sources-report.md). QQ/TX playback
+//   still has LX script cover too (stellarwave verified PLAYABLE
+//   2026-11-24 — the only QQ success in the item-7 probe)) + LX
+//   script jobs.
 // - Per-job 3 s timeout, whole resolve 8 s (P0-16: first tier pass
 //   capped at 5 s, 3 s reserved for lower tiers, later passes at
 //   most 2 s each — see `ResolverBudget`).
@@ -760,23 +767,6 @@ extension LXSourceResolver {
 
     private var allResolvers: [BuiltInResolver] {
         [
-            BuiltInResolver(key: "lzm", name: "lzm", order: 20, platforms: [.wy]) { resolver, songId, _, _, _, _, token, done in
-                let body = "id=\(resolver.urlEncode(songId))&type=wy"
-                resolver.fetchJson(
-                    "https://music.lzmhhh.com/api/music/url",
-                    method: "POST",
-                    headers: [
-                        "User-Agent": Self.musicUserAgent,
-                        "Content-Type": "application/x-www-form-urlencoded",
-                        "Referer": "https://music.lzmhhh.com/",
-                    ],
-                    body: body.data(using: .utf8),
-                    cancelToken: token
-                ) { json in
-                    let url = (json?["data"] as? String) ?? ""
-                    done(url.isEmpty ? .empty : .url(url, nil))
-                }
-            },
             BuiltInResolver(key: "zddyr", name: "zddyr", order: 25, platforms: [.wy]) { resolver, songId, _, tier, _, _, token, done in
                 let urlString = "https://yy.zddyr.top/lx/api/?source=wy&songmid=\(resolver.urlEncode(songId))&quality=\(tier.lxCode)"
                 resolver.fetchJson(urlString, headers: ["User-Agent": Self.musicUserAgent], cancelToken: token) { json in
@@ -843,6 +833,38 @@ extension LXSourceResolver {
                     }
                 }
             },
+            BuiltInResolver(key: "vkeys_tx", name: "落月QQ", order: 50, platforms: [.tx]) { resolver, songId, _, tier, _, _, token, done in
+                // 落月 v3 song/link (api.vkeys.cn, no key): the first
+                // built-in QQ resolver. The v2 geturl leg answers 503
+                // "系统运行错误！" as of 2026-11-24, so only v3 is
+                // used. Verified 2026-11-24 (item 7): code 0 ->
+                // ws.stream.qqmusic.qq.com mp3, range GET 206,
+                // 65536 bytes. Trial guard (b37 M1-b, same as the
+                // stellarwave script's isTrialTxUrl): RS0 URLs and
+                // 音乐试听/付费 answers are previews, never URLs.
+                let quality: Int
+                switch tier {
+                case .master: quality = 14
+                case .hiRes: quality = 11
+                case .flac: quality = 10
+                case .high320: quality = 8
+                case .standard128: quality = 6
+                }
+                let urlString = "https://api.vkeys.cn/music/tencent/song/link?mid=\(resolver.urlEncode(songId))&quality=\(quality)"
+                resolver.fetchJson(urlString, headers: ["User-Agent": Self.musicUserAgent, "Accept": "application/json"], cancelToken: token) { json in
+                    guard let json = json, (json["code"] as? Int) == 0,
+                          let data = json["data"] as? [String: Any] else {
+                        done(.empty)
+                        return
+                    }
+                    let url = (data["url"] as? String) ?? ""
+                    let trial = PreviewAudioClassifier.isPreviewURL(url)
+                        || (data["quality"] as? String) == "音乐试听"
+                        || (data["pay"] as? String) == "付费"
+                    guard !url.isEmpty, !trial else { done(.empty); return }
+                    done(.url(url, nil))
+                }
+            },
             BuiltInResolver(key: "oiapi_wy", name: "oiapi-网易", order: 60, platforms: [.wy]) { resolver, songId, _, _, _, _, token, done in
                 let urlString = "https://oiapi.net/api/Music_163?id=\(resolver.urlEncode(songId))"
                 resolver.fetchJson(urlString, headers: ["User-Agent": Self.musicUserAgent], cancelToken: token) { json in
@@ -863,6 +885,47 @@ extension LXSourceResolver {
                     }
                     let url = (first?["url"] as? String) ?? ""
                     done(url.isEmpty ? .empty : .url(url, nil))
+                }
+            },
+            BuiltInResolver(key: "meting", name: "Meting", order: 70, platforms: [.wy]) { resolver, songId, _, tier, _, _, token, done in
+                // Meting API (api.qijieya.cn, no key) — the `lzm`
+                // replacement (item 7): GET
+                // ?server=netease&type=url&br=<128|320>&id=<songId>
+                // answers 302 to the real mp3. URLSession follows
+                // the redirect, so the playable URL is the final
+                // response.url (Location header as fallback); a
+                // Range request keeps the body to 1 byte, so no
+                // audio is downloaded during resolve. Verified
+                // 2026-11-24: 302 -> m701.music.126.net mp3, full
+                // file 4,332,717 bytes. Ordered late (70): VM
+                // latency is 6-9 s, the phone will be faster.
+                let br = tier == .standard128 ? 128 : 320
+                guard let url = URL(string: "https://api.qijieya.cn/meting/?server=netease&type=url&br=\(br)&id=\(resolver.urlEncode(songId))") else {
+                    done(.empty)
+                    return
+                }
+                resolver.httpClient.request(
+                    url: url, method: "GET",
+                    headers: ["User-Agent": Self.musicUserAgent, "Range": "bytes=0-0"],
+                    body: nil, timeout: 5
+                ) { _, response, error in
+                    if token.isCancelled { done(.empty); return }
+                    guard error == nil,
+                          let httpResponse = response as? HTTPURLResponse,
+                          (200...206).contains(httpResponse.statusCode) || httpResponse.statusCode == 302 else {
+                        done(.empty)
+                        return
+                    }
+                    var final = httpResponse.url?.absoluteString ?? ""
+                    if final == url.absoluteString || final.isEmpty {
+                        final = (httpResponse.allHeaderFields["Location"] as? String)
+                            ?? (httpResponse.allHeaderFields["location"] as? String) ?? ""
+                    }
+                    guard !final.isEmpty, final != url.absoluteString, final.hasPrefix("http") else {
+                        done(.empty)
+                        return
+                    }
+                    done(.url(final, nil))
                 }
             },
             BuiltInResolver(key: "wwwweb", name: "wwwweb", order: 120, platforms: [.wy, .kw]) { resolver, songId, platform, tier, _, _, token, done in

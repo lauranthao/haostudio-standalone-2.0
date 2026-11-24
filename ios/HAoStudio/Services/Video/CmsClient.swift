@@ -334,8 +334,13 @@ extension CmsClient {
     /// (build 36 item 6): upstream-deleted defaults are dropped
     /// and user-deleted defaults stay deleted, via the applied set
     /// recorded in VideoSourceStore. The bump is what makes the
-    /// fix run at all on a device that already merged rev 6.
-    static let sourcesRevision = 7
+    /// fix run at all on a device that already merged rev 6;
+    /// 8 = −虎牙资源 (deleted 2026-11-24, item 7真播放重验: its API
+    /// answers but its play CDN 1080p.huyall.com refuses every
+    /// connection — empty reply, 4 attempts across 2 clients and 2
+    /// episode URLs — so nothing streams; same catalog as the other
+    /// sources, no replacement added).
+    static let sourcesRevision = 8
 
     /// UA for CMS video + Douban search-page fallback (must be
     /// verbatim — several upstreams key behaviour off it).
@@ -343,14 +348,13 @@ extension CmsClient {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
-    /// The 13 default CMS sources, in shipped (sort) order.
+    /// The 12 default CMS sources, in shipped (sort) order.
     static let defaultSources: [VideoSource] = [
         VideoSource(id: 12, name: "金鹰资源", apiUrl: "https://jyzyapi.com/api.php/provide/vod", kind: "play", enabled: true, sort: 5),
         VideoSource(id: 13, name: "非凡资源", apiUrl: "https://ffzy5.tv/api.php/provide/vod", kind: "search", enabled: true, sort: 6),
         VideoSource(id: 18, name: "非凡主站", apiUrl: "https://cj.ffzyapi.com/api.php/provide/vod", kind: "search", enabled: true, sort: 7),
         VideoSource(id: 6, name: "魔都资源", apiUrl: "https://caiji.moduapi.cc/api.php/provide/vod", kind: "play", enabled: true, sort: 11),
         VideoSource(id: 17, name: "iKun资源", apiUrl: "https://ikunzyapi.com/api.php/provide/vod", kind: "play", enabled: true, sort: 12),
-        VideoSource(id: 9, name: "虎牙资源", apiUrl: "https://www.huyaapi.com/api.php/provide/vod", kind: "play", enabled: true, sort: 14),
         VideoSource(id: 14, name: "厂长资源", apiUrl: "https://api.changzhang.tv/api.php/provide/vod/", kind: "play", enabled: true, sort: 16),
         VideoSource(id: 1, name: "红牛资源", apiUrl: "https://www.hongniuzy2.com/api.php/provide/vod/", kind: "play", enabled: true, sort: 18),
         VideoSource(id: 16, name: "如意资源", apiUrl: "https://cj.rycjapi.com/api.php/provide/vod", kind: "play", enabled: true, sort: 21),
@@ -417,9 +421,11 @@ enum VideoSourceStore {
         "https://caiji.dyttzyapi.com/api.php/provide/vod",
     ]
 
-    /// Urls the upstream deleted in rev 6, verified dead by the
-    /// build-35 real-playback re-test. Only used when no applied
-    /// record exists at all (and `seen != 5`).
+    /// Urls the upstream deleted in rev 6 (verified dead by the
+    /// build-35 real-playback re-test) plus 虎牙资源, deleted in
+    /// rev 8 (item-7 re-test 2026-11-24: API answers, play CDN never
+    /// connects). Only used when no applied record exists at all
+    /// (and `seen != 5`).
     static let legacyRemovedURLs: Set<String> = [
         "https://jszyapi.com/api.php/provide/vod",
         "https://api.guangsuapi.com/api.php/provide/vod",
@@ -428,6 +434,7 @@ enum VideoSourceStore {
         "https://subocaiji.com/api.php/provide/vod",
         "https://www.subozy.com/api.php/provide/vod/",
         "https://cj.lziapi.com/api.php/provide/vod",
+        "https://www.huyaapi.com/api.php/provide/vod",
     ]
 
     /// Load the persisted list, merged with the current defaults.
@@ -652,10 +659,15 @@ final class CmsClient: VideoPlayURLResolver {
 
     private let sources: [VideoSource]
     private let fetcher: VideoJSONFetcher
+    /// Raw-text fetcher for the play-page second-level fetch
+    /// (resolvePlayURL, b38 item 7 §4). Defaults to
+    /// VideoHTTP.fetchText; tests inject a stub.
+    private let textFetcher: VideoTextFetcher
 
-    init(sources: [VideoSource]? = nil, fetcher: VideoJSONFetcher? = nil) {
+    init(sources: [VideoSource]? = nil, fetcher: VideoJSONFetcher? = nil, textFetcher: VideoTextFetcher? = nil) {
         self.sources = sources ?? VideoSourceStore.enabledSources()
         self.fetcher = fetcher ?? VideoHTTP.fetchJSON
+        self.textFetcher = textFetcher ?? VideoHTTP.fetchText
     }
 
     var allSources: [VideoSource] { sources }
@@ -1645,10 +1657,19 @@ final class CmsClient: VideoPlayURLResolver {
     /// non-excluded candidate wins; nil only when every line's
     /// episode is excluded or missing.
     ///
-    /// No second-level fetch exists here on purpose: in the
-    /// Flutter client the CMS episode URL IS the stream URL (the
-    /// player opens it directly). This resolver's job is line
-    /// fallback + the excluding list, not re-parsing a play page.
+    /// Second-level fetch (b38 item 7 §4): some sources (ids 1/12/14
+    /// — 红牛/金鹰/厂长 — and /share/ pages) return an HTML player
+    /// page, not a stream; the real stream is embedded in the page
+    /// (`const vid = '.../index.m3u8'` or `const url =
+    /// "/play/.../index.m3u8"`). A native player cannot play
+    /// text/html, so a page-like candidate is fetched once (5 s)
+    /// and its embedded stream is handed out instead. The page
+    /// itself is NEVER handed out — if the fetch fails or no stream
+    /// is embedded, the next candidate is tried. Direct streams
+    /// (.m3u8/.mp4/…) pass through untouched with no extra fetch.
+    /// A fetch that returns non-HTML (binary bytes, or a body
+    /// starting with #EXTM3U) means the URL was a stream behind an
+    /// odd path after all, so the original URL is handed out.
     func resolvePlayURL(detail: VideoDetail, episode: PlayEpisode, line: PlayLine, excluding: [URL], completion: @escaping (URL?) -> Void) {
         let excluded = Set(excluding.map { $0.absoluteString })
         var candidates: [URL] = []
@@ -1665,10 +1686,74 @@ final class CmsClient: VideoPlayURLResolver {
         if candidates.isEmpty, let url = episode.url {
             candidates.append(url)
         }
-        for url in candidates where !excluded.contains(url.absoluteString) {
+        resolveNextCandidate(candidates: candidates, index: 0, excluded: excluded, completion: completion)
+    }
+
+    /// Walk the candidates in order, resolving each one: a direct
+    /// stream is handed out immediately; a page-like URL gets one
+    /// second-level fetch (see resolvePlayURL). Nil when the list
+    /// is exhausted.
+    private func resolveNextCandidate(candidates: [URL], index: Int, excluded: Set<String>, completion: @escaping (URL?) -> Void) {
+        guard index < candidates.count else {
+            completion(nil)
+            return
+        }
+        let url = candidates[index]
+        guard !excluded.contains(url.absoluteString) else {
+            resolveNextCandidate(candidates: candidates, index: index + 1, excluded: excluded, completion: completion)
+            return
+        }
+        if Self.isDirectStreamURL(url) {
             completion(url)
             return
         }
-        completion(nil)
+        textFetcher(url, ["User-Agent": Self.userAgent], 5) { [weak self] status, body in
+            guard let self else {
+                completion(nil)
+                return
+            }
+            // A stream behind an odd path: binary bytes decode as
+            // nil, a playlist body starts with #EXTM3U — hand out
+            // the original URL, not the next candidate.
+            if status == 200, body == nil {
+                completion(url)
+                return
+            }
+            if status == 200, let body = body, body.contains("#EXTM3U") {
+                completion(url)
+                return
+            }
+            if status == 200, let body = body,
+               let stream = Self.extractEmbeddedStreamURL(html: body, pageURL: url),
+               !excluded.contains(stream.absoluteString) {
+                completion(stream)
+                return
+            }
+            self.resolveNextCandidate(candidates: candidates, index: index + 1, excluded: excluded, completion: completion)
+        }
+    }
+
+    /// True when the URL is already a stream by its path extension
+    /// (.m3u8/.mp4/.flv/.mkv/.mov/.m4v/.ts/.webm, case-insensitive).
+    /// Anything else (no extension, .html, /play/<id>, /share/…)
+    /// is treated as a play page and gets the second-level fetch.
+    static func isDirectStreamURL(_ url: URL) -> Bool {
+        ["m3u8", "mp4", "flv", "mkv", "mov", "m4v", "ts", "webm"]
+            .contains(url.pathExtension.lowercased())
+    }
+
+    /// Extract the first embedded stream URL (.m3u8 / .mp4) from a
+    /// play page's HTML: the first quoted string ending in .m3u8
+    /// or .mp4 (absolute, root-relative, or page-relative — resolved
+    /// against the page URL). Pure (no I/O) — unit-tested. Nil when
+    /// the page embeds no stream (e.g. a 403 page, an error page).
+    static func extractEmbeddedStreamURL(html: String, pageURL: URL) -> URL? {
+        let pattern = #"["']([^"'\s<>]+\.(?:m3u8|mp4)(?:\?[^"'\s<>]*)?)["']"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+              let range = Range(match.range(at: 1), in: html)
+        else { return nil }
+        let captured = String(html[range])
+        return URL(string: captured, relativeTo: pageURL)?.absoluteURL
     }
 }
