@@ -424,6 +424,38 @@ struct EmbyUserData: Equatable {
     }
 }
 
+/// One in-progress item from the server's Resume list
+/// (`GET /Users/{id}/Items/Resume`): the item plus the position
+/// and duration the server recorded, so the tab can render a
+/// progress bar and the tap can seed the local resume (the
+/// detail page only reads the local store — see
+/// EmbyTabView.openResumeItem). `episodeName` is the display
+/// name the detail page matches against ("正片" for a film,
+/// "第N集" / the episode title for an episode). A Resume entry
+/// with no position is not in progress and is dropped by the
+/// client parse, never shown as a 0:00 row.
+struct EmbyResumeItem: Equatable, Identifiable {
+    var id: String { item.id }
+    var item: VideoItem
+    var episodeName: String
+    var positionSeconds: Double
+    var durationSeconds: Double
+
+    init(item: VideoItem, episodeName: String, positionSeconds: Double, durationSeconds: Double) {
+        self.item = item
+        self.episodeName = episodeName
+        self.positionSeconds = positionSeconds
+        self.durationSeconds = durationSeconds
+    }
+
+    /// Progress 0...1 for the card's bar (0 when the duration
+    /// is unknown — a bar at 0% is honest, a guessed one is not).
+    var progress: Double {
+        guard durationSeconds > 0, positionSeconds > 0 else { return 0 }
+        return min(1, positionSeconds / durationSeconds)
+    }
+}
+
 /// One page of library items.
 struct EmbyItemsPage {
     let items: [VideoItem]

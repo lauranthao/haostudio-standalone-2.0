@@ -18,6 +18,11 @@ final class EmbyTabViewModel: ObservableObject {
     @Published private(set) var libraries: [VideoEmbyLibrary] = []
     @Published private(set) var genres: [String] = []
     @Published private(set) var items: [VideoItem] = []
+    /// Server continue watching (b38): the server's Resume list
+    /// (in-progress movies + episodes with positions), loaded
+    /// alongside the libraries. A failed fetch reads as empty —
+    /// resume is best-effort, never a page error.
+    @Published private(set) var resumeItems: [EmbyResumeItem] = []
     @Published private(set) var isLoading = false
     @Published private(set) var hasMore = true
     /// Human error text from the last failed load (EmbyError.message).
@@ -57,6 +62,7 @@ final class EmbyTabViewModel: ObservableObject {
         page = 0
         hasMore = true
         items = []
+        resumeItems = []
         errorMessage = nil
         isUnauthorized = false
         hasLoaded = true
@@ -65,6 +71,14 @@ final class EmbyTabViewModel: ObservableObject {
         }
         gateway.fetchEmbyGenres { [weak self] names in
             self?.genres = names
+        }
+        let requestGeneration = generation
+        gateway.fetchEmbyResume { [weak self] result in
+            guard let self = self, requestGeneration == self.generation else { return }
+            switch result {
+            case .success(let resume): self.resumeItems = resume
+            case .failure: self.resumeItems = []
+            }
         }
         loadMore()
     }
@@ -171,6 +185,10 @@ struct EmbyTabView: View {
                             searchEntry
                                 .padding(.horizontal, 16)
                                 .padding(.top, 12)
+                            if !viewModel.resumeItems.isEmpty {
+                                embyContinueSection
+                                    .padding(.top, 16)
+                            }
                             libraryStrip
                                 .padding(.top, 12)
                             if !viewModel.genres.isEmpty {
@@ -249,6 +267,56 @@ struct EmbyTabView: View {
         .sheet(isPresented: $showingEmbyConfig, onDismiss: { viewModel.reload() }) {
             NavigationStack { EmbyConfigView() }
         }
+    }
+
+    /// Server continue watching (b38): the server's Resume list,
+    /// not the local history — items in progress on any device.
+    /// Same card + rhythm as the CMS home's continue section.
+    private var embyContinueSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("继续观看")
+                    .font(.haoSectionTitle)
+                    .foregroundStyle(theme.textPrimary)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(viewModel.resumeItems) { entry in
+                        VideoContinueCard(entry: resumeHistoryEntry(entry)) {
+                            openResumeItem(entry)
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+        }
+    }
+
+    /// Map a server resume entry onto the local history row the
+    /// continue card renders (same shape: item + episode +
+    /// position + duration). The card never writes the store —
+    /// the tap does.
+    private func resumeHistoryEntry(_ entry: EmbyResumeItem) -> VideoHistoryEntry {
+        VideoHistoryEntry(
+            item: entry.item, episodeName: entry.episodeName, episodeIndex: 0,
+            lineName: "直链", positionSeconds: entry.positionSeconds,
+            durationSeconds: entry.durationSeconds, updatedAt: Date())
+    }
+
+    /// Tap a server resume row: seed the local resume from the
+    /// server position first (the detail page's play button reads
+    /// only the local store), then open the detail. The seed is
+    /// the server's own position for this item — no invented
+    /// numbers — and the normal playback flow takes over from
+    /// there, so the seed never goes stale.
+    private func openResumeItem(_ entry: EmbyResumeItem) {
+        VideoLibraryStore.savePosition(
+            item: entry.item, episodeName: entry.episodeName, episodeIndex: 0,
+            lineName: "直链", positionSeconds: entry.positionSeconds,
+            durationSeconds: entry.durationSeconds)
+        onSelect(entry.item)
     }
 
     /// Search entry (build 36, item 17): visually identical to

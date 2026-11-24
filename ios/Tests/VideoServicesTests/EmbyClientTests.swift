@@ -408,4 +408,76 @@ final class EmbyClientTests: XCTestCase {
         XCTAssertNil(EmbyClient.transcodedHlsUrl(fromStreamUrl: "https://a.b/movie.mp4"))
         XCTAssertNil(EmbyClient.subtitleUrl(fromStreamUrl: "https://a.b/movie.mp4", mediaSourceId: "ms1", index: 0))
     }
+
+    // MARK: - Build 38: server continue watching (Resume)
+
+    /// Resume fixture: one in-progress film, one in-progress
+    /// episode, one finished film (position 0 — dropped), one
+    /// item with no UserData at all (dropped).
+    private func resumeFixture() -> [String: Any] {
+        [
+            "Items": [
+                [
+                    "Id": "mov1", "Name": "731", "Type": "Movie",
+                    "ProductionYear": 2025,
+                    "RunTimeTicks": 72_000_000_000,
+                    "UserData": ["PlaybackPositionTicks": 6_000_000_000, "Played": false],
+                ],
+                [
+                    "Id": "ep9", "Name": "第2集", "Type": "Episode",
+                    "ProductionYear": 2024,
+                    "RunTimeTicks": 27_000_000_000,
+                    "UserData": ["PlaybackPositionTicks": 3_000_000_000, "Played": false],
+                ],
+                [
+                    "Id": "mov2", "Name": "看完的", "Type": "Movie",
+                    "RunTimeTicks": 60_000_000_000,
+                    "UserData": ["PlaybackPositionTicks": 0, "Played": true],
+                ],
+                [
+                    "Id": "mov3", "Name": "没数据", "Type": "Movie",
+                    "RunTimeTicks": 60_000_000_000,
+                ],
+            ],
+            "TotalRecordCount": 4,
+        ]
+    }
+
+    func testResumeItemsKeepsOnlyInProgressWithPositions() {
+        let fixture = resumeFixture()
+        let fetcher: EmbyFetcher = { _, _, _, completion in
+            completion(EmbyResponse(statusCode: 200, json: fixture))
+        }
+        let client = client(fetcher: fetcher)
+        var result: Result<[EmbyResumeItem], EmbyError>?
+        client.resumeItems { result = $0 }
+        guard case .success(let items) = result else {
+            return XCTFail("expected resume success, got \(String(describing: result))")
+        }
+        XCTAssertEqual(items.count, 2)
+        // Film: "正片", 600s of 7200s.
+        XCTAssertEqual(items[0].item.id, "mov1")
+        XCTAssertEqual(items[0].episodeName, "正片")
+        XCTAssertEqual(items[0].positionSeconds, 600)
+        XCTAssertEqual(items[0].durationSeconds, 7200)
+        XCTAssertEqual(items[0].progress, 600.0 / 7200.0, accuracy: 0.001)
+        // Episode: keeps its own display name, 300s of 2700s.
+        XCTAssertEqual(items[1].item.id, "ep9")
+        XCTAssertEqual(items[1].episodeName, "第2集")
+        XCTAssertEqual(items[1].positionSeconds, 300)
+        XCTAssertEqual(items[1].durationSeconds, 2700)
+    }
+
+    func testResumeItemsFailureMapsToError() {
+        let fetcher: EmbyFetcher = { _, _, _, completion in
+            completion(EmbyResponse(statusCode: 401, json: nil))
+        }
+        let client = client(fetcher: fetcher)
+        var result: Result<[EmbyResumeItem], EmbyError>?
+        client.resumeItems { result = $0 }
+        guard case .failure(let error) = result else {
+            return XCTFail("expected resume failure, got \(String(describing: result))")
+        }
+        XCTAssertEqual(error.kind, .unauthorized)
+    }
 }

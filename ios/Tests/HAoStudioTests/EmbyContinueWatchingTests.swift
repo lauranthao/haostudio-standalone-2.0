@@ -24,6 +24,8 @@ private final class StubVideoGateway: VideoDataGateway {
     var fetchEmbyDetailCalls = 0
     var cmsDetailResult: VideoDetail?
     var embyDetailResults: [VideoDetail?] = []
+    /// Build 38: scripted server Resume answer.
+    var resumeResult: Result<[EmbyResumeItem], EmbyError> = .success([])
 
     func fetchHome(completion: @escaping ([VideoHomeRow]) -> Void) { completion([]) }
     func fetchTypeNames(completion: @escaping ([String]) -> Void) { completion([]) }
@@ -53,6 +55,9 @@ private final class StubVideoGateway: VideoDataGateway {
     }
     func searchEmby(keyword: String, completion: @escaping (Result<[VideoItem], EmbyError>) -> Void) {
         completion(.success([]))
+    }
+    func fetchEmbyResume(completion: @escaping (Result<[EmbyResumeItem], EmbyError>) -> Void) {
+        completion(resumeResult)
     }
     func enqueueDownload(
         detail: VideoDetail, episode: PlayEpisode, line: PlayLine,
@@ -279,5 +284,34 @@ final class EmbyContinueWatchingTests: XCTestCase {
         XCTAssertTrue(viewModel.isWatched)
         XCTAssertEqual(viewModel.playButtonLabel, "继续播放 · 10:00")
         XCTAssertEqual(gateway.fetchEmbyDetailCalls, 1)
+    }
+
+    // MARK: - Build 38: server Resume in the tab
+
+    /// reload() loads the server Resume list into resumeItems
+    /// (the tab's "继续观看" section); the grid load is
+    /// unaffected.
+    func testReloadLoadsServerResumeItems() {
+        let gateway = StubVideoGateway()
+        let entry = EmbyResumeItem(
+            item: embyMovieItem(), episodeName: "正片",
+            positionSeconds: 600, durationSeconds: 7200)
+        gateway.resumeResult = .success([entry])
+        let viewModel = EmbyTabViewModel(gateway: gateway)
+        viewModel.reload()
+        XCTAssertEqual(viewModel.resumeItems.count, 1)
+        XCTAssertEqual(viewModel.resumeItems[0].item.id, "emby-731")
+        XCTAssertEqual(viewModel.resumeItems[0].positionSeconds, 600)
+        XCTAssertEqual(viewModel.resumeItems[0].progress, 600.0 / 7200.0, accuracy: 0.001)
+    }
+
+    /// A failed Resume fetch reads as empty (best-effort — the
+    /// tab still shows the library grid, never a page error).
+    func testResumeFailureReadsAsEmpty() {
+        let gateway = StubVideoGateway()
+        gateway.resumeResult = .failure(.unreachable())
+        let viewModel = EmbyTabViewModel(gateway: gateway)
+        viewModel.reload()
+        XCTAssertTrue(viewModel.resumeItems.isEmpty)
     }
 }
