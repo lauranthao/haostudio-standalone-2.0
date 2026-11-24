@@ -148,9 +148,11 @@ final class DownloadEngine: NSObject {
         return dir
     }
 
-    /// Sanitised file name: no separators, no parent traversal.
-    static func sanitisedFileName(_ raw: String, fallbackKey: String) -> String {
+    /// One path component, safe to append under the downloads dir:
+    /// no separators, no parent traversal, no control characters.
+    static func sanitiseComponent(_ raw: String) -> String {
         var name = raw.trimmingCharacters(in: .whitespaces)
+        name = name.components(separatedBy: .controlCharacters).joined()
         for bad in ["/", "\\", ":"] {
             name = name.replacingOccurrences(of: bad, with: "_")
         }
@@ -158,12 +160,33 @@ final class DownloadEngine: NSObject {
         // replacement above turns "../evil.mp3" into ".._evil.mp3",
         // and the leading "_" must go too.
         while name.hasPrefix(".") || name.hasPrefix("_") { name = String(name.dropFirst()) }
-        if name.isEmpty { return "\(fallbackKey).bin" }
+        return name
+    }
+
+    /// Sanitised file name: no separators, no parent traversal.
+    /// The fallback key goes through the SAME sanitising — it used
+    /// to be used verbatim (§2.1 Problem A), so a key containing
+    /// `../` controlled the filesystem path.
+    static func sanitisedFileName(_ raw: String, fallbackKey: String) -> String {
+        let name = sanitiseComponent(raw)
+        if name.isEmpty {
+            let fallback = sanitiseComponent(fallbackKey)
+            return fallback.isEmpty ? "download.bin" : "\(fallback).bin"
+        }
         return name
     }
 
     private func finalURL(for request: DownloadRequest) -> URL {
-        downloadsDirectory().appendingPathComponent(DownloadEngine.sanitisedFileName(request.fileName, fallbackKey: request.key))
+        let dir = downloadsDirectory()
+        let name = DownloadEngine.sanitisedFileName(request.fileName, fallbackKey: request.key)
+        let final = dir.appendingPathComponent(name)
+        // Belt-and-braces containment: the sanitised name is a flat
+        // component by construction, but never let a file land
+        // outside the downloads dir even if sanitising regresses.
+        if final.standardized.path.hasPrefix(dir.standardized.path + "/") {
+            return final
+        }
+        return dir.appendingPathComponent(UUID().uuidString + ".bin")
     }
 
     private func partURL(for request: DownloadRequest) -> URL {
