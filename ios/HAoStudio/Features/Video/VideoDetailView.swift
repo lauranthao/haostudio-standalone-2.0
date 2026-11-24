@@ -599,7 +599,13 @@ struct VideoDetailContentView: View {
                     ForEach(Array(viewModel.lines.enumerated()), id: \.element.id) { index, line in
                         Button(action: {
                             viewModel.selectedLineIndex = index
-                            viewModel.selectedEpisodeIndex = 0
+                            // The highlight must follow the episode
+                            // the play button will actually open:
+                            // playEpisodeIndex is the resume episode
+                            // on the new line (or 0). Resetting to
+                            // 0 highlighted episode 1 while the big
+                            // button said "继续播放 · 第N集".
+                            viewModel.selectedEpisodeIndex = viewModel.playEpisodeIndex
                         }) {
                             Text(line.name)
                                 .font(.haoDenseBody)
