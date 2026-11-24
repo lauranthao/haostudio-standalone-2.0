@@ -55,9 +55,18 @@ struct MusicPlayerView: View {
     /// close path; defaults to a constant so the view still
     /// compiles anywhere else (then dismiss() is the fallback).
     @Binding var isPresented: Bool
+    /// Namespace for the cover morph from the mini player (b35
+    /// tab-bar link): when MainTabView passes its namespace, this
+    /// cover and the mini cover share one matchedGeometryEffect id
+    /// (HaoLayout.playerCoverMorphID), so the cover grows from the
+    /// mini (36 / 32 inline) into this full-size cover on open and
+    /// shrinks back on close. Nil (default) keeps the old behaviour
+    /// — no morph, the player just appears.
+    private let coverMorphNamespace: Namespace.ID?
 
-    init(isPresented: Binding<Bool> = .constant(true)) {
+    init(isPresented: Binding<Bool> = .constant(true), coverMorphNamespace: Namespace.ID? = nil) {
         self._isPresented = isPresented
+        self.coverMorphNamespace = coverMorphNamespace
     }
 
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
@@ -282,16 +291,34 @@ struct MusicPlayerView: View {
     private var coverArea: some View {
         let size = coverSize
         return Button(action: { playerVM.toggleLyrics() }) {
-            MusicCoverView(
-                urlString: playerVM.currentSong?.cover ?? "",
-                size: size,
-                // Beans PlayerView: min(24, size * 0.08) — 24 at 340.
-                cornerRadius: min(24, size * 0.08)
-            )
+            morphCover(size: size)
             .shadow(color: .black.opacity(0.35), radius: 24, y: 12)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("封面，点按查看歌词")
+    }
+
+    /// The cover, with the mini-player morph attached when the
+    /// presenter supplied the namespace (see coverMorphNamespace).
+    /// The corner radius is NOT part of the morph
+    /// (matchedGeometryEffect moves the frame only): it snaps from
+    /// the mini's 7 (6 inline) to min(24, size * 0.08) at the end of
+    /// the transition. When lyrics are showing, coverArea is not
+    /// rendered at all, so there is no destination to morph to and
+    /// the player simply appears — the close path is unaffected.
+    @ViewBuilder
+    private func morphCover(size: CGFloat) -> some View {
+        let cover = MusicCoverView(
+            urlString: playerVM.currentSong?.cover ?? "",
+            size: size,
+            // Beans PlayerView: min(24, size * 0.08) — 24 at 340.
+            cornerRadius: min(24, size * 0.08)
+        )
+        if let namespace = coverMorphNamespace {
+            cover.matchedGeometryEffect(id: HaoLayout.playerCoverMorphID, in: namespace)
+        } else {
+            cover
+        }
     }
 
     private var lyricsArea: some View {
