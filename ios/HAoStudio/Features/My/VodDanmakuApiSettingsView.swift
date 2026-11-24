@@ -78,7 +78,11 @@ struct VodDanmakuApiSettingsView: View {
                 if let errorMessage {
                     Text(errorMessage)
                         .font(.haoFootnote)
-                        .foregroundStyle(.red)
+                        // D3 follow-up: error text is not a LIVE /
+                        // recording signal, so it must not be red —
+                        // same fix as design-settings D2 (the words
+                        // already say it is an error).
+                        .foregroundStyle(theme.textPrimary)
                 }
             }
         }
