@@ -429,6 +429,9 @@ final class VideoPlayerViewModel: ObservableObject {
         // playing. Stop the music here, on every open, whichever
         // branch runs.
         coordinator.stopMusic()
+        // #7: same bypass, live half — a room playing in the
+        // background (audio-only) kept sounding under the VOD.
+        coordinator.stopLive()
         if let engine = engine {
             engine.play(
                 detail: detail, lineIndex: lineIndex, episodeIndex: episodeIndex,
@@ -499,6 +502,8 @@ final class VideoPlayerViewModel: ObservableObject {
         // so stop the music here too (e.g. resumed from Control
         // Center mid-VOD, then auto-advance).
         coordinator.stopMusic()
+        // #7: same bypass, live half — see open().
+        coordinator.stopLive()
         if let engine = engine {
             engine.playEpisode(lineIndex: lineIndex, episodeIndex: index, startPositionSeconds: 0)
         } else if let episode = currentEpisode, let line = currentLine {
@@ -541,6 +546,8 @@ final class VideoPlayerViewModel: ObservableObject {
         }
         // Build 37 (P1): same rule as open() — see selectEpisode.
         coordinator.stopMusic()
+        // #7: same bypass, live half — see open().
+        coordinator.stopLive()
         if let engine = engine {
             engine.playEpisode(
                 lineIndex: index, episodeIndex: targetEpisode,

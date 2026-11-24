@@ -493,6 +493,16 @@ final class PlaybackCoordinator: ObservableObject {
         musicDriver?.stop()
     }
 
+    /// Stop live only — the live half of the same bypass (#7):
+    /// requestVodPlay stops live too, but the VOD engine path
+    /// never reaches it, so a live room playing in the background
+    /// (audio-only) kept sounding under the VOD audio. Same shape
+    /// as stopMusic: live driver only, currentItem untouched, no
+    /// auto-resume.
+    func stopLive() {
+        liveDriver?.stop()
+    }
+
     /// Stop everything. Clears the current item; the player slice also
     /// stops the engine here (rule 1: starting anything else stops the
     /// current playback first).
