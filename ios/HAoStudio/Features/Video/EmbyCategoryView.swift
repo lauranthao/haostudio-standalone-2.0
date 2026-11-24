@@ -73,7 +73,13 @@ final class EmbyCategoryViewModel: ObservableObject {
                 if page.items.isEmpty {
                     self.hasMore = false
                 } else {
-                    self.items.append(contentsOf: page.items)
+                    // Same overlap dedupe as the CMS lists: a page
+                    // boundary that shifts under a changing library
+                    // must not show the same poster twice.
+                    var seen = Set(self.items.map { "\($0.sourceId ?? -1)|\($0.id)" })
+                    for item in page.items where seen.insert("\(item.sourceId ?? -1)|\(item.id)").inserted {
+                        self.items.append(item)
+                    }
                     self.page += 1
                     self.hasMore = page.hasMore
                 }

@@ -1520,6 +1520,86 @@ final class VodSettingsAudioTrackDefaultTests: XCTestCase {
     }
 }
 
+// MARK: - Build 37 sweep: Emby lists dedupe overlapping pages
+
+/// Minimal VideoDataGateway stub: only fetchEmbyItems holds its
+/// completion, so a test can answer pages step by step; everything
+/// else answers empty at once.
+private final class StubEmbyGateway: VideoDataGateway {
+    var embyConfigured: Bool = true
+    private var pendingEmby: [(Result<VideoItemPage, EmbyError>) -> Void] = []
+
+    func fetchHome(completion: @escaping ([VideoHomeRow]) -> Void) { completion([]) }
+    func fetchTypeNames(completion: @escaping ([String]) -> Void) { completion([]) }
+    func fetchByType(_ type: String, page: Int, area: String, year: String, by: String, completion: @escaping (VideoItemPage) -> Void) {
+        completion(.empty)
+    }
+    func search(keyword: String, completion: @escaping ([VideoItem]) -> Void) { completion([]) }
+    func fetchDetail(item: VideoItem, completion: @escaping (VideoDetail?) -> Void) { completion(nil) }
+    func fetchEmbyLibraries(completion: @escaping ([VideoEmbyLibrary]) -> Void) { completion([]) }
+    func fetchEmbyGenres(completion: @escaping ([String]) -> Void) { completion([]) }
+    func fetchEmbyItems(
+        libraryId: String?, genre: String?, page: Int,
+        completion: @escaping (Result<VideoItemPage, EmbyError>) -> Void
+    ) {
+        pendingEmby.append(completion)
+    }
+    func fetchEmbyDetail(item: VideoItem, completion: @escaping (VideoDetail?) -> Void) { completion(nil) }
+    func searchEmby(keyword: String, completion: @escaping (Result<[VideoItem], EmbyError>) -> Void) {
+        completion(.success([]))
+    }
+    func enqueueDownload(
+        detail: VideoDetail, episode: PlayEpisode, line: PlayLine,
+        completion: @escaping (Bool) -> Void
+    ) {
+        completion(false)
+    }
+
+    func completeEmbyNext(with page: VideoItemPage) {
+        guard !pendingEmby.isEmpty else { return }
+        pendingEmby.removeFirst()(.success(page))
+    }
+}
+
+/// The Emby tab / genre page appended pages verbatim, so a page
+/// boundary that shifted under a changing library showed the same
+/// poster twice. The CMS lists dedupe by sourceId|id; Emby must
+/// do the same (Emby items carry sourceId nil, so the key is
+/// "-1|<Emby id>").
+@MainActor
+final class EmbyListDedupeTests: XCTestCase {
+    private func item(_ id: String, title: String) -> VideoItem {
+        VideoItem(id: id, title: title, coverURL: nil, year: "2024",
+                  typeName: nil, remarks: nil, sourceId: nil)
+    }
+
+    private func page(_ items: [VideoItem], hasMore: Bool) -> VideoItemPage {
+        VideoItemPage(items: items, hasMore: hasMore)
+    }
+
+    func testEmbyTabOverlappingPagesDoNotDuplicate() {
+        let gateway = StubEmbyGateway()
+        let viewModel = EmbyTabViewModel(gateway: gateway)
+        viewModel.reload()
+        gateway.completeEmbyNext(with: page([item("e1", title: "E1"), item("e2", title: "E2")], hasMore: true))
+        viewModel.loadMore()
+        gateway.completeEmbyNext(with: page([item("e2", title: "E2"), item("e3", title: "E3")], hasMore: false))
+        XCTAssertEqual(viewModel.items.map { $0.title }, ["E1", "E2", "E3"])
+        XCTAssertFalse(viewModel.hasMore)
+    }
+
+    func testEmbyCategoryOverlappingPagesDoNotDuplicate() {
+        let gateway = StubEmbyGateway()
+        let viewModel = EmbyCategoryViewModel(genre: "动作", gateway: gateway)
+        viewModel.reload()
+        gateway.completeEmbyNext(with: page([item("e1", title: "E1"), item("e2", title: "E2")], hasMore: true))
+        viewModel.loadMore()
+        gateway.completeEmbyNext(with: page([item("e2", title: "E2"), item("e3", title: "E3")], hasMore: false))
+        XCTAssertEqual(viewModel.items.map { $0.title }, ["E1", "E2", "E3"])
+        XCTAssertFalse(viewModel.hasMore)
+    }
+}
+
 // MARK: - Build 36, item 14: format support (G-E / G-F / G-G / G-H / G-J)
 
 /// Driver tests for the "play everything" round: mid-play engine
