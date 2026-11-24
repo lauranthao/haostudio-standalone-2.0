@@ -2,8 +2,12 @@
 //
 // Swift port of the Flutter `vod_danmaku_client.dart`
 // (standalone-app-merge23). Two-hop FongMi-compatible fetch
-// against the danmu-api service. No token, no login, anonymous
-// GETs. Read-only: the app never sends danmaku.
+// against the danmu-api service. Anonymous GETs by default —
+// no login. When the user configures an access token
+// (VodDanmakuApiConfig, b36 item 11), it is sent as the first
+// path segment of the hop-1 URL, the only auth position the
+// danmu-api protocol defines. Never a header, never a query
+// key. Read-only: the app never sends danmaku.
 //
 //   Hop 1  GET /api/v2/fongmi/danmaku?name=<title>&episode=<ep>
 //          -> JSON array of candidates, best match first
@@ -46,6 +50,9 @@
 // async/await, no `any` (Swift 5.0).
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // MARK: - Types
 
@@ -331,6 +338,162 @@ enum VodDanmakuParsers {
     }
 }
 
+// MARK: - API config (b36 item 11)
+
+/// VOD danmaku service address + access token (b36 item 11).
+///
+/// Stored in UserDefaults under `hao_vod_danmaku_api_url` /
+/// `hao_vod_danmaku_api_token`, read directly by the settings
+/// page and by `VideoPlayerView.open` — deliberately NOT part
+/// of `VodSettingsState` (that is the in-player sheet's
+/// per-playback snapshot; the API address is global service
+/// configuration, and stuffing it in there would make every
+/// sheet change re-persist it).
+///
+/// Empty semantics (fixed, never ambiguous):
+/// - empty address = the built-in official host
+///   (`VodDanmakuClient.defaultBaseUrl`). The default is never
+///   written to UserDefaults; clearing the address returns to
+///   the official service. There is no "danmaku service off"
+///   state here — the `hao_vod_danmaku` switch owns that.
+/// - empty token = no prefix, anonymous fetch.
+/// - the token is sent as the first path segment of the hop-1
+///   URL only (`<base>/<TOKEN>/api/v2/fongmi/danmaku?...`);
+///   hop 2 reuses the URL the server returned, verbatim except
+///   for `format=json`, and is never re-prefixed.
+///
+/// Q2 (verified 2026-11-24 against the upstream danmu_api
+/// `worker.js` on main): the server takes `url.pathname`
+/// (WHATWG URL keeps `%2F` / `%3F` / `%23` encoded), splits
+/// on `/`, and compares the first segment against its TOKEN
+/// with a plain `===` — no `decodeURIComponent` anywhere near
+/// the token check (the file's only decode call is for a local
+/// danmu resource key). A token containing `/`, `?` or `#`
+/// therefore can never authenticate, so the settings page
+/// refuses to save one instead of percent-encoding it.
+struct VodDanmakuApiConfig: Equatable {
+    static let apiUrlKey = "hao_vod_danmaku_api_url"
+    static let apiTokenKey = "hao_vod_danmaku_api_token"
+
+    var apiUrl: String = ""
+    var apiToken: String = ""
+
+    static func load(defaults: UserDefaults = .standard) -> VodDanmakuApiConfig {
+        VodDanmakuApiConfig(
+            apiUrl: defaults.string(forKey: apiUrlKey) ?? "",
+            apiToken: defaults.string(forKey: apiTokenKey) ?? ""
+        )
+    }
+
+    /// Normalized copy: surrounding whitespace trimmed, trailing
+    /// slashes stripped from the address. Persist this, never
+    /// the raw draft.
+    func normalized() -> VodDanmakuApiConfig {
+        var out = VodDanmakuApiConfig(
+            apiUrl: apiUrl.trimmingCharacters(in: .whitespacesAndNewlines),
+            apiToken: apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        while out.apiUrl.hasSuffix("/") { out.apiUrl.removeLast() }
+        return out
+    }
+
+    func save(defaults: UserDefaults = .standard) {
+        let value = normalized()
+        defaults.set(value.apiUrl, forKey: Self.apiUrlKey)
+        defaults.set(value.apiToken, forKey: Self.apiTokenKey)
+    }
+
+    /// The base the client actually fetches from: the configured
+    /// address, or the built-in official host when the address is
+    /// empty. The default is NEVER written to UserDefaults.
+    var effectiveBaseUrl: String {
+        let trimmed = normalized().apiUrl
+        return trimmed.isEmpty ? VodDanmakuClient.defaultBaseUrl : trimmed
+    }
+
+    /// True when the user configured an address of their own.
+    /// A token alone (on the official host) does not count: the
+    /// settings entry subtitle reads "官方地址" in that case.
+    var isCustomAddress: Bool { !normalized().apiUrl.isEmpty }
+
+    /// Host of the configured address, for the settings entry
+    /// subtitle. Nil when no custom address is set. The token
+    /// never appears on the settings list page.
+    var displayHost: String? {
+        let trimmed = normalized().apiUrl
+        guard !trimmed.isEmpty else { return nil }
+        return URL(string: trimmed)?.host
+    }
+
+    /// Hop-1 URL for `title` + `episode`, the single assembly
+    /// point (spec §3.5). Empty `baseUrl` falls back to the
+    /// built-in default; a reverse-proxy path on the base
+    /// (`https://example.com/danmu`) is kept and the API path
+    /// appended after it — the old `components.path = ...`
+    /// assignment dropped it. The token, when set, goes between
+    /// the base and `/api/v2/...`, percent-encoded so a stray
+    /// `/` / `?` / `#` can never break the URL structure
+    /// (the settings page refuses to save such a token at all;
+    /// this is defence in depth for any other writer).
+    /// Returns nil when the base is not a usable http(s) URL.
+    static func hop1Url(baseUrl: String, token: String, title: String, episode: String) -> URL? {
+        let base = baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        var stripped = base.isEmpty ? VodDanmakuClient.defaultBaseUrl : base
+        while stripped.hasSuffix("/") { stripped.removeLast() }
+        guard var components = URLComponents(string: stripped),
+              components.scheme == "http" || components.scheme == "https",
+              let host = components.host, !host.isEmpty else { return nil }
+        let cleanToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tokenPrefix = cleanToken.isEmpty ? "" : "/" + percentEncodeToken(cleanToken)
+        var basePath = components.percentEncodedPath
+        while basePath.hasSuffix("/") { basePath.removeLast() }
+        components.percentEncodedPath = basePath + tokenPrefix + "/api/v2/fongmi/danmaku"
+        components.queryItems = [
+            URLQueryItem(name: "name", value: title),
+            URLQueryItem(name: "episode", value: episode),
+        ]
+        return components.url
+    }
+
+    func hop1Url(title: String, episode: String) -> URL? {
+        Self.hop1Url(baseUrl: apiUrl, token: apiToken, title: title, episode: episode)
+    }
+
+    /// Percent-encode one token path segment: only the RFC 3986
+    /// unreserved characters pass through, so `/`, `?`, `#`,
+    /// `%` and whitespace all become `%XX`.
+    static func percentEncodeToken(_ token: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return token.addingPercentEncoding(withAllowedCharacters: allowed) ?? token
+    }
+
+    /// Local format check only — never a network probe (a cold
+    /// hop-1 can take ~25 s; reachability proves nothing about
+    /// "can fetch danmaku" anyway). Returns the inline error
+    /// message, or nil when the draft may be saved.
+    /// - All-empty drafts save as empty strings (= default),
+    ///   never an error.
+    /// - A non-empty address must parse as an http(s) URL with
+    ///   a host.
+    /// - A token containing `/`, `?` or `#` is refused (see the
+    ///   Q2 note on this type): it could never authenticate.
+    static func validationError(apiUrl: String, apiToken: String) -> String? {
+        let url = apiUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if token.contains("/") || token.contains("?") || token.contains("#") {
+            return "密钥不能含 / ? #"
+        }
+        guard !url.isEmpty else { return nil }
+        guard let parsed = URL(string: url),
+              parsed.scheme == "http" || parsed.scheme == "https",
+              let host = parsed.host, !host.isEmpty else {
+            return "地址格式不对，要以 http:// 或 https:// 开头"
+        }
+        return nil
+    }
+}
+
 // MARK: - Client
 
 /// VOD danmaku provider (protocol conformance in
@@ -338,12 +501,17 @@ enum VodDanmakuParsers {
 /// title + year — the protocol only passes a PlayEpisode, which
 /// has no title.
 final class VodDanmakuClient: VodDanmakuProvider {
-    /// danmu-api host. Public API, no token.
+    /// danmu-api host. Public API; anonymous by default, with
+    /// an optional token prefix via `VodDanmakuApiConfig`.
     static let defaultBaseUrl = "https://danmu-api-production-60e143e3.up.railway.app"
 
     private let title: String
     private let year: String
     private let baseUrl: String
+    /// Access token for the hop-1 URL path prefix (empty =
+    /// anonymous). Set from `VodDanmakuApiConfig` by the player;
+    /// never a header, never a query key.
+    private let token: String
     private let fetcher: VodDanmakuFetcher
 
     /// Hop-1 budget (60 s): the server cold-starts in ~25 s, so a
@@ -366,10 +534,11 @@ final class VodDanmakuClient: VodDanmakuProvider {
 
     private let workQueue = DispatchQueue(label: "com.haostudio.voddanmaku", qos: .utility)
 
-    init(title: String, year: String = "", baseUrl: String = VodDanmakuClient.defaultBaseUrl, fetcher: VodDanmakuFetcher? = nil, hop1Timeout: TimeInterval = 60, hop2Timeout: TimeInterval = 30, maxRetries: Int = 2, retryBaseDelay: TimeInterval = 1, emptyRetryDelay: TimeInterval = 2, maxTimelineItems: Int? = nil) {
+    init(title: String, year: String = "", baseUrl: String = VodDanmakuClient.defaultBaseUrl, token: String = "", fetcher: VodDanmakuFetcher? = nil, hop1Timeout: TimeInterval = 60, hop2Timeout: TimeInterval = 30, maxRetries: Int = 2, retryBaseDelay: TimeInterval = 1, emptyRetryDelay: TimeInterval = 2, maxTimelineItems: Int? = nil) {
         self.title = title
         self.year = year
         self.baseUrl = baseUrl
+        self.token = token
         self.fetcher = fetcher ?? VodDanmakuClient.defaultFetcher
         self.hop1Timeout = hop1Timeout
         self.hop2Timeout = hop2Timeout
@@ -445,16 +614,10 @@ final class VodDanmakuClient: VodDanmakuProvider {
     /// fetch occasionally returns empty once, and "no danmaku" is
     /// never a permanent answer.
     func fetchCandidates(title: String, episode: String, completion: @escaping ([VodDanmakuCandidate]?) -> Void) {
-        guard var components = URLComponents(string: baseUrl) else {
-            completion(nil)
-            return
-        }
-        components.path = "/api/v2/fongmi/danmaku"
-        components.queryItems = [
-            URLQueryItem(name: "name", value: title),
-            URLQueryItem(name: "episode", value: episode),
-        ]
-        guard let url = components.url else {
+        // Single assembly point: base path (a reverse-proxy
+        // prefix survives) + optional token prefix + API path.
+        // Hop 2 is untouched — it reuses the server's URL.
+        guard let url = VodDanmakuApiConfig.hop1Url(baseUrl: baseUrl, token: token, title: title, episode: episode) else {
             completion(nil)
             return
         }

@@ -228,6 +228,13 @@ enum BackupEngineCore {
         out["hao_glass_intensity"] = .double
         out["hao_video_player_key"] = .string
         out["hao_video_last_engine"] = .string
+        // b36 item 11: VOD danmaku API address + token (plain
+        // UserDefaults strings, same as the S5 additions above).
+        // Whitelist-based export/import: without these lines a
+        // backup would silently drop them and a restore would
+        // isolate them as unknown keys.
+        out["hao_vod_danmaku_api_url"] = .string
+        out["hao_vod_danmaku_api_token"] = .string
         return out
     }
 

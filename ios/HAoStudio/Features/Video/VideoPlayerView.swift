@@ -400,7 +400,14 @@ final class VideoPlayerViewModel: ObservableObject {
         recordHistory(position: startPosition)
         // Danmaku for this title (B-leg client, read-only). The
         // layer no-ops on a re-load of the same episode.
-        danmakuProvider = VodDanmakuClient(title: detail.item.title, year: detail.item.year ?? "")
+        // b36 item 11: address + token from the VOD danmaku API
+        // settings; empty = official host, anonymous. Read once
+        // per open, so a settings change takes effect on the
+        // next film opened, not mid-playback.
+        let danmakuApi = VodDanmakuApiConfig.load()
+        danmakuProvider = VodDanmakuClient(
+            title: detail.item.title, year: detail.item.year ?? "",
+            baseUrl: danmakuApi.effectiveBaseUrl, token: danmakuApi.apiToken)
         danmaku.load(for: episode, provider: danmakuProvider)
         // S7 wiring: the 影视播放器 settings land before the first
         // frame (the driver stores them and applies at open).
