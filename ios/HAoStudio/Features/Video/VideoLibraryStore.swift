@@ -24,6 +24,14 @@
 
 import Foundation
 
+/// Posted by `VideoLibraryStore.toggleFavourite` on every change
+/// (add or remove). The favourites grid listens for it; the
+/// detail page owns its own `isFavourite` state and does not
+/// need it. (Music has the same pattern: `haoMusicFavChanged`.)
+extension Notification.Name {
+    static let haoVideoFavChanged = Notification.Name("haoVideoFavChanged")
+}
+
 /// One history row: the film + where playback stopped. The film
 /// identity is title + year; the row is replaced (not duplicated)
 /// when the same film is watched again.
@@ -158,6 +166,17 @@ enum VideoLibraryStore {
         saveHistory(history().filter { $0.id != key })
     }
 
+    /// Resume keys of everything with watch history (title +
+    /// year). The poster grid reads this as its default watched
+    /// set, so the "already watched" checkmark is the same on
+    /// every grid (home, browse, category, search, favourites) —
+    /// it used to appear only on the home rows, which pass their
+    /// own keys. Callers with a live list may still pass their
+    /// own set; it wins over this default.
+    static func watchedKeys() -> Set<String> {
+        Set(history().map { $0.id })
+    }
+
     // MARK: - Favourites
 
     static func favourites() -> [VideoItem] {
@@ -176,6 +195,10 @@ enum VideoLibraryStore {
     }
 
     /// Toggle favourite. Returns true when the item was added.
+    /// Posts `haoVideoFavChanged` on every change: the favourites
+    /// grid only re-reads on appear, so a long-press unfavourite
+    /// from a poster card would otherwise leave the card sitting
+    /// in "我的收藏" until the user left and came back.
     @discardableResult
     static func toggleFavourite(item: VideoItem) -> Bool {
         var items = favourites()
@@ -185,10 +208,12 @@ enum VideoLibraryStore {
         }) {
             items.remove(at: index)
             saveFavourites(items)
+            NotificationCenter.default.post(name: .haoVideoFavChanged, object: nil)
             return false
         }
         items.insert(item, at: 0)
         saveFavourites(items)
+        NotificationCenter.default.post(name: .haoVideoFavChanged, object: nil)
         return true
     }
 

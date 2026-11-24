@@ -41,6 +41,9 @@
 // Swift 5.0: completion handlers only, no async/await, no `any`.
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // MARK: - Shared JSON readers (used by every Services/Video file)
 
@@ -155,6 +158,16 @@ func isAdultVideo(type: String?, name: String?) -> Bool {
 func videoToHttps(_ url: String) -> String {
     url.hasPrefix("http://") ? "https://" + url.dropFirst(7) : url
 }
+
+/// Query-value encoding. `.urlQueryAllowed` still permits `&`,
+/// `+`, `=` and `?`, so a title like "Tom & Jerry" splits the
+/// `wd=` parameter at the `&` and the search silently changes
+/// meaning. Values go through this strict set instead (letters,
+/// digits, `-._~` only — everything else %XX). CJK was already
+/// percent-encoded by `.urlQueryAllowed`, so its behaviour is
+/// unchanged.
+let videoStrictQueryAllowed = CharacterSet(
+    charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
 /// Strip HTML tags (CMS synopsis may contain HTML).
 func stripHtmlTags(_ s: String?) -> String {
@@ -860,7 +873,7 @@ final class CmsClient: VideoPlayURLResolver {
     /// Completion carries the rows and whether the source answered
     /// at all (an empty list from a live source still counts).
     func searchOne(source: VideoSource, query: String, page: Int = 1, timeout: TimeInterval = 5, completion: @escaping ([CmsSearchRow], Bool) -> Void) {
-        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: videoStrictQueryAllowed) ?? query
         fetchJSON(source: source, query: "?ac=videolist&wd=\(encoded)&pg=\(page)", timeout: timeout) { json in
             guard let json = json else {
                 completion([], false)
@@ -959,7 +972,7 @@ final class CmsClient: VideoPlayURLResolver {
                 step()
                 return
             }
-            let encoded = title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? title
+            let encoded = title.addingPercentEncoding(withAllowedCharacters: videoStrictQueryAllowed) ?? title
             fetchJSON(source: source, query: "?ac=videolist&wd=\(encoded)&pg=1", timeout: 5) { json in
                 guard let json = json else {
                     step()
@@ -1542,7 +1555,13 @@ final class CmsClient: VideoPlayURLResolver {
         }
         if year != "all" {
             if year == "earlier" {
-                out = out.filter { (Int($0.item.year ?? "") ?? 9999) <= 2021 }
+                // "更早" is everything older than the 5 most
+                // recent years the browse page offers as chips
+                // (current … current−4). The threshold used to be
+                // a hardcoded 2021, which silently disagreed with
+                // the chips from 2027 on.
+                let threshold = Calendar.current.component(.year, from: Date()) - 5
+                out = out.filter { (Int($0.item.year ?? "") ?? 9999) <= threshold }
             } else {
                 out = out.filter { $0.item.year == year }
             }

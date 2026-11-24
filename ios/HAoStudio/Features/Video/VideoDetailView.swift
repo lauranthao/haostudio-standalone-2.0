@@ -141,6 +141,20 @@ final class VideoDetailViewModel: ObservableObject {
         }
     }
 
+    /// Re-read the local state only (favourite / resume / watched)
+    /// without re-fetching the detail. Returning from the player
+    /// only needs this: the old onAppear re-ran load(), which
+    /// drops `detail` first — the episode grid vanished and the
+    /// scroll position jumped to the top on every return. The
+    /// resume re-read is what flips the play button to
+    /// "继续播放 · …" after watching; isWatched re-read is what
+    /// un-blurs a cover that was watched.
+    func refreshLocalState() {
+        isFavourite = VideoLibraryStore.isFavourite(item: item)
+        resume = VideoLibraryStore.resumeInfo(title: item.title, year: item.year)
+        isWatched = VideoLibraryStore.historyEntry(title: item.title, year: item.year) != nil
+    }
+
     func toggleFavourite() {
         isFavourite = VideoLibraryStore.toggleFavourite(item: item)
         // Emby (build 36, item 13): mirror the tap to the server.
@@ -218,7 +232,18 @@ struct VideoDetailView: View {
         .fullScreenCover(isPresented: $showingPlayer) {
             VideoPlayerView()
         }
-        .onAppear { viewModel.load() }
+        .onAppear {
+            // First appearance (or a failed load left detail nil):
+            // fetch. Any later appearance — e.g. back from the
+            // player — only refreshes the local state, so the grid
+            // stays put instead of flashing empty and scrolling
+            // back to the top.
+            if viewModel.detail == nil {
+                viewModel.load()
+            } else {
+                viewModel.refreshLocalState()
+            }
+        }
     }
 
     private func play(lineIndex: Int, episodeIndex: Int) {

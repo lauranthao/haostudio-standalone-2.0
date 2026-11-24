@@ -128,9 +128,12 @@ struct VideoPosterCard: View {
 /// A poster grid that fits three columns with the card's own
 /// metrics (never a hardcoded child aspect ratio elsewhere).
 /// `isEmby` forwards to every card (Emby token header loading).
+/// `watchedKeys` defaults to the store's watched set, so every
+/// grid shows the same "already watched" checkmark the home rows
+/// show (callers with a live list pass their own set instead).
 struct VideoPosterGrid: View {
     var items: [VideoItem]
-    var watchedKeys: Set<String> = []
+    var watchedKeys: Set<String> = VideoLibraryStore.watchedKeys()
     var isEmby: Bool = false
     var onTap: (VideoItem) -> Void
 
