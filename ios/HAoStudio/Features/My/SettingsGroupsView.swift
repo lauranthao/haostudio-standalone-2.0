@@ -92,6 +92,19 @@ struct SettingsGroupsView: View {
     /// when the sheet page disappears.
     @State private var danmakuSettings = LiveDanmakuSettings.load()
 
+    /// VOD danmaku API address + token (b36 item 11), for the
+    /// "影视弹幕 API" entry subtitle. Read once per appear of
+    /// this page; refreshed when the detail page disappears.
+    /// The token never appears on this list page.
+    @State private var vodDanmakuApiConfig = VodDanmakuApiConfig.load()
+
+    /// Entry subtitle: "官方地址" while no custom address is
+    /// set, otherwise only the host the user typed.
+    private var vodDanmakuApiSubtitle: String {
+        guard vodDanmakuApiConfig.isCustomAddress else { return "官方地址" }
+        return vodDanmakuApiConfig.displayHost ?? "自定义地址"
+    }
+
     /// Background-colour hex draft. Only a valid `#RRGGBB`
     /// draft is written to the store; an invalid one reverts.
     @State private var bgHexDraft = ""
@@ -552,6 +565,23 @@ struct SettingsGroupsView: View {
                 subtitleColorRow
                 subtitlePositionRow
                 lowMemoryRow
+                NavigationLink {
+                    VodDanmakuApiSettingsView()
+                        .onDisappear {
+                            // b36 item 11: the page saves through
+                            // its own drafts; refresh this row's
+                            // subtitle when coming back.
+                            vodDanmakuApiConfig = VodDanmakuApiConfig.load()
+                        }
+                } label: {
+                    HStack {
+                        Text("影视弹幕 API")
+                        Spacer()
+                        Text(vodDanmakuApiSubtitle)
+                            .font(.haoBody)
+                            .foregroundStyle(theme.textSecondary)
+                    }
+                }
             }
         }
     }

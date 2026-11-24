@@ -200,6 +200,7 @@
 		00000000000000000000017B /* EmbyPosterImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000017C /* EmbyPosterImage.swift */; };
 		00000000000000000000017D /* MyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000017E /* MyView.swift */; };
 		000000000000000000000181 /* SettingsGroupsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000182 /* SettingsGroupsView.swift */; };
+		0000000000000000000001FD /* VodDanmakuApiSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001FC /* VodDanmakuApiSettingsView.swift */; };
 		000000000000000000000183 /* SettingsLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000184 /* SettingsLogic.swift */; };
 		000000000000000000000185 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000186 /* SettingsStore.swift */; };
 		000000000000000000000187 /* SourceManagementViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000188 /* SourceManagementViews.swift */; };
@@ -418,6 +419,7 @@
 		00000000000000000000017C /* EmbyPosterImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbyPosterImage.swift; sourceTree = "<group>"; };
 		00000000000000000000017E /* MyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyView.swift; sourceTree = "<group>"; };
 		000000000000000000000182 /* SettingsGroupsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsGroupsView.swift; sourceTree = "<group>"; };
+		0000000000000000000001FC /* VodDanmakuApiSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VodDanmakuApiSettingsView.swift; sourceTree = "<group>"; };
 		000000000000000000000184 /* SettingsLogic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsLogic.swift; sourceTree = "<group>"; };
 		000000000000000000000186 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
 		000000000000000000000188 /* SourceManagementViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceManagementViews.swift; sourceTree = "<group>"; };
@@ -669,6 +671,7 @@
 				000000000000000000000186 /* SettingsStore.swift */,
 				000000000000000000000188 /* SourceManagementViews.swift */,
 				00000000000000000000018A /* VideoEngineReporter.swift */,
+				0000000000000000000001FC /* VodDanmakuApiSettingsView.swift */,
 				00000000000000000000018C /* WallpaperStore.swift */,
 			); path = My; sourceTree = "<group>"; };
 		000000000000000000000074 /* Music */ = {isa = PBXGroup; children = (
@@ -1024,6 +1027,7 @@
 				000000000000000000000185 /* SettingsStore.swift in Sources */,
 				000000000000000000000187 /* SourceManagementViews.swift in Sources */,
 				000000000000000000000189 /* VideoEngineReporter.swift in Sources */,
+				0000000000000000000001FD /* VodDanmakuApiSettingsView.swift in Sources */,
 				00000000000000000000018B /* WallpaperStore.swift in Sources */,
 				000000000000000000000191 /* BackupEngine.swift in Sources */,
 				00000000000000000000018F /* BackupEnvelope.swift in Sources */,

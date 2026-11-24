@@ -186,7 +186,7 @@ check("4l. every Swift file ref resolves to a file on disk", not _missing,
 
 # --- 5. Swift sources: balance + forbidden leftovers ----------------------
 swift_files = sorted(APP_DIR.rglob("*.swift"))
-check("5. Swift file count (final = 156: 155 + OpenTimeoutLadder.swift [b36-item8-smell1: shared open-timeout ladder])", len(swift_files) == 156,
+check("5. Swift file count (final = 157: 156 + VodDanmakuApiSettingsView.swift [b36-item11: VOD danmaku API settings page])", len(swift_files) == 157,
       f"{len(swift_files)}: {[f.name for f in swift_files]}")
 for f in swift_files:
     s = f.read_text()
