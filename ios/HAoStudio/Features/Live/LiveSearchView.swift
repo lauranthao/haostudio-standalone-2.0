@@ -201,7 +201,7 @@ struct LiveSearchView: View {
                         viewModel.clearSearchHistory()
                     }
                     .font(.haoDenseBody)
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(theme.accentText)
                     .buttonStyle(.plain)
                 }
             }

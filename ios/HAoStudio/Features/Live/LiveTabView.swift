@@ -446,7 +446,7 @@ struct LiveTabView: View {
             Spacer()
             Button("全部", action: onAll)
                 .font(.haoDenseBody)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
         }
         .padding(.horizontal, 24)
     }
@@ -509,7 +509,7 @@ struct LiveTabView: View {
                 } else if viewModel.loadMoreFailed {
                     Button("加载失败，点击重试") { viewModel.loadMore() }
                         .font(.haoFootnoteMedium)
-                        .foregroundStyle(theme.accent)
+                        .foregroundStyle(theme.accentText)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
                         .buttonStyle(.plain)
@@ -699,7 +699,7 @@ struct LivePlatformTextTabs: View {
                                 .font(.haoSubheadMedium)
                                 .foregroundStyle(
                                     platform == selected
-                                        ? theme.accent : theme.textSecondary)
+                                        ? theme.accentText : theme.textSecondary)
                             Capsule()
                                 .fill(platform == selected ? theme.accent : Color.clear)
                                 .frame(height: 2.5)

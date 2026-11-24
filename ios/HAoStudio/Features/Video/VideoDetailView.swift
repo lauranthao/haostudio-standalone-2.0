@@ -487,7 +487,7 @@ struct VideoDetailContentView: View {
                         .font(.haoFootnote)
                         .foregroundStyle(theme.textMuted)
                 }
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
             }
         }
     }
@@ -525,7 +525,7 @@ struct VideoDetailContentView: View {
                     systemImage: viewModel.isFavourite ? "heart.fill" : "heart"
                 )
                 .font(.haoDenseBody)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
                 .background(theme.accentSoft, in: Capsule())
@@ -535,7 +535,7 @@ struct VideoDetailContentView: View {
             Button(action: { viewModel.downloadSelected() }) {
                 Label("下载", systemImage: "arrow.down.circle")
                     .font(.haoDenseBody)
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(theme.accentText)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .background(theme.accentSoft, in: Capsule())

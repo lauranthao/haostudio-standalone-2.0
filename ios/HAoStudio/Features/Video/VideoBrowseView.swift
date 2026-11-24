@@ -606,7 +606,7 @@ private struct BrowseSidebarView: View {
                     .lineLimit(1)
                 Spacer()
             }
-            .foregroundStyle(selected ? theme.accent : theme.textPrimary)
+            .foregroundStyle(selected ? theme.accentText : theme.textPrimary)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .background {

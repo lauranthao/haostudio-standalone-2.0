@@ -162,7 +162,7 @@ struct MusicEqualizerView: View {
                             Text(preset.displayName)
                                 .font(.haoCaptionMedium)
                         }
-                            .foregroundStyle(selected ? theme.accent : theme.textPrimary)
+                            .foregroundStyle(selected ? theme.accentText : theme.textPrimary)
                             .frame(maxWidth: .infinity)
                             .frame(height: 30)
                             .background(
@@ -209,10 +209,10 @@ struct MusicEqualizerView: View {
                     eqVM.saveCurrentAsCustomPreset(named: newPresetName)
                     newPresetName = ""
                 }
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
                 .disabled(newPresetName.trimmingCharacters(in: .whitespaces).isEmpty)
                 Button("重置") { eqVM.resetToFlat() }
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(theme.accentText)
             }
         }
         .padding(16)
@@ -238,7 +238,7 @@ struct MusicEqualizerView: View {
                         Spacer()
                         if eqVM.selectedAutoEqName == preset.name {
                             Image(systemName: "checkmark")
-                                .foregroundStyle(theme.accent)
+                                .foregroundStyle(theme.accentText)
                         }
                     }
                 }

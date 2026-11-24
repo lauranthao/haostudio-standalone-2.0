@@ -138,7 +138,7 @@ struct HomeView: View {
                     .padding(.vertical, 12)
                     .contentShape(Rectangle())
                 }
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
             }
         }
         .padding(.horizontal, 24)

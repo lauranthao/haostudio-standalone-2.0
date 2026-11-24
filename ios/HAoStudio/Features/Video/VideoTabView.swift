@@ -295,7 +295,7 @@ struct VideoTabView: View {
             Button(action: { path.append(.history) }) {
                 Label("观看历史", systemImage: "clock")
                     .font(.haoDenseBody)
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(theme.accentText)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .background(theme.accentSoft, in: Capsule())
@@ -304,7 +304,7 @@ struct VideoTabView: View {
             Button(action: { path.append(.favourites) }) {
                 Label("我的收藏", systemImage: "heart")
                     .font(.haoDenseBody)
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(theme.accentText)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .background(theme.accentSoft, in: Capsule())
@@ -323,7 +323,7 @@ struct VideoTabView: View {
                 Spacer()
                 Button("全部") { path.append(.history) }
                     .font(.haoDenseBody)
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(theme.accentText)
             }
             .padding(.horizontal, 16)
             ScrollView(.horizontal, showsIndicators: false) {
@@ -352,7 +352,7 @@ struct VideoTabView: View {
                 // type.
                 Button("全部") { path.append(.browse(type: row.id == "daily" ? nil : row.title)) }
                     .font(.haoDenseBody)
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(theme.accentText)
             }
             .padding(.horizontal, 16)
             ScrollView(.horizontal, showsIndicators: false) {

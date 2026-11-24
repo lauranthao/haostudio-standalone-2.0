@@ -658,7 +658,7 @@ struct LiveRoomView: View {
                 if !danmakuEnabledForRoom {
                     Button("已关闭，去开启") { showDanmakuSettings = true }
                         .font(.haoFootnoteMedium)
-                        .foregroundStyle(theme.accent)
+                        .foregroundStyle(theme.accentText)
                         .buttonStyle(.plain)
                 }
             }
@@ -698,7 +698,7 @@ struct LiveRoomView: View {
             Button(action: { showQualitySheet = true }) {
                 Text(livePlayer.currentQuality?.name ?? "画质")
                     .font(.haoDenseTitle)
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(theme.accentText)
                     .lineLimit(1)
             }
             .buttonStyle(.plain)
@@ -706,7 +706,7 @@ struct LiveRoomView: View {
             Button(action: { showBrightnessVolume = true }) {
                 Image(systemName: "sun.max")
                     .font(.system(size: 18, weight: .semibold))  // icon size, not text
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(theme.accentText)
                     .frame(width: 40, height: 40)
             }
             .buttonStyle(.plain)
@@ -714,7 +714,7 @@ struct LiveRoomView: View {
             Button(action: { showDanmakuSettings = true }) {
                 Image(systemName: "gearshape")
                     .font(.system(size: 18, weight: .semibold))  // icon size, not text
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(theme.accentText)
                     .frame(width: 40, height: 40)
             }
             .buttonStyle(.plain)
@@ -1126,6 +1126,10 @@ struct LiveBrightnessVolumeSheet: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("完成") { dismiss() }
+                        // D3: the sheet tint is the accent (the
+                        // brightness slider keeps it); the label
+                        // itself reads in accentText.
+                        .foregroundStyle(theme.accentText)
                 }
             }
         }

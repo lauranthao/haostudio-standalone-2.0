@@ -182,7 +182,7 @@ struct VodSettingsSheet: View {
                             }
                             if isCustomDanmakuAddress {
                                 Button("重新加载弹幕") { onReloadDanmaku?() }
-                                    .foregroundStyle(theme.accent)
+                                    .foregroundStyle(theme.accentText)
                             }
                         case .unavailable:
                             EmptyView()
@@ -317,6 +317,10 @@ struct VodSettingsSheet: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("完成") { dismiss() }
+                        // D3: the sheet tint is the accent (controls
+                        // keep it); the label itself reads in
+                        // accentText.
+                        .foregroundStyle(theme.accentText)
                 }
             }
         }

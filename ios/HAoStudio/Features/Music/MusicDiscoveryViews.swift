@@ -371,7 +371,7 @@ struct MusicListenReportView: View {
                     HStack(spacing: 12) {
                         Text("\(rank + 1)")
                             .font(.haoDenseTitle)
-                            .foregroundStyle(theme.accent)
+                            .foregroundStyle(theme.accentText)
                             .frame(width: 20)
                         MusicSongRow(
                             song: top.song,

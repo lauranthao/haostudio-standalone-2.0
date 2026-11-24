@@ -65,6 +65,9 @@ struct LiveDanmakuSettingsSheet: View {
                         settings.persist()
                         dismiss()
                     }
+                    // D3: the sheet tint is the accent (controls keep
+                    // it); the label itself reads in accentText.
+                    .foregroundStyle(theme.accentText)
                 }
             }
             .onDisappear {
@@ -315,7 +318,7 @@ struct LiveDanmakuSettingsSheet: View {
                 .frame(width: 140)
                 Button("添加", action: addBlockEntry)
                     .buttonStyle(.plain)
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(theme.accentText)
             }
             if settings.blockedEntries.isEmpty {
                 Text("暂无屏蔽词")

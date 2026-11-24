@@ -275,7 +275,7 @@ struct SettingsGroupsView: View {
                     settings.accentOverride = nil
                 }
                 .font(.haoBody)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
             }
         }
     }
@@ -778,7 +778,7 @@ struct SettingsGroupsView: View {
                         showingClearCacheAlert = true
                     }
                     .font(.haoBody)
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(theme.accentText)
                 }
                 .alert("清理缓存", isPresented: $showingClearCacheAlert) {
                     Button("取消", role: .cancel) {
@@ -820,7 +820,7 @@ struct SettingsGroupsView: View {
                         backupFlow.beginExport()
                     }
                     .font(.haoBody)
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(theme.accentText)
                 }
             }
             if let exportedURL = backupFlow.exportedURL {
@@ -864,7 +864,7 @@ struct SettingsGroupsView: View {
                         backupFlow.beginImport()
                     }
                     .font(.haoBody)
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(theme.accentText)
                 }
             }
             footnote("从 .zip 备份文件导入；导入失败会自动回滚，现有数据不受影响。")
@@ -924,7 +924,7 @@ struct SettingsGroupsView: View {
                     backupFlow.checkForUpdate()
                 }
                 .font(.haoBody)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
             }
         }
     }
@@ -944,7 +944,7 @@ struct SettingsGroupsView: View {
                     backupFlow.clearSkippedVersion()
                 }
                 .font(.haoBody)
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.accentText)
             }
         }
     }
@@ -993,6 +993,9 @@ struct WallpaperManagementView: View {
                     selection: $photoItem,
                     matching: .images
                 )
+                // D3: the tint colours the label text; read it in
+                // accentText (the picker itself keeps the accent).
+                .foregroundStyle(theme.accentText)
                 .tint(theme.accent)
             }
         }
@@ -1029,7 +1032,7 @@ struct WallpaperManagementView: View {
                 if settings.wallpaperCurrent == name {
                     Image(systemName: "checkmark")
                         .font(.haoFootnoteStrong)
-                        .foregroundStyle(theme.accent)
+                        .foregroundStyle(theme.accentText)
                 }
             }
         }
