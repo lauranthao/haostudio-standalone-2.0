@@ -42,6 +42,11 @@ final class FakeVideoBackend: VideoPlayerBackend {
     var openedURLs: [URL] = []
     var openCount = 0
     var shutdownCount = 0
+    /// Hold the open completion instead of calling it (timeout
+    /// tests): the test fires `deferredOpenCompletion` later to
+    /// simulate a backend that answers after the open timed out.
+    var deferOpenCompletion = false
+    var deferredOpenCompletion: ((Bool) -> Void)?
     var seekCalls: [Double] = []
     /// What the seek completion reports.
     var seekSucceeds: Bool = true
@@ -59,6 +64,10 @@ final class FakeVideoBackend: VideoPlayerBackend {
     func open(url: URL, headers: [String: String], completion: @escaping (Bool) -> Void) {
         openedURLs.append(url)
         openCount += 1
+        if deferOpenCompletion {
+            deferredOpenCompletion = completion
+            return
+        }
         let ok = openResults.isEmpty ? true : openResults.removeFirst()
         isPrepared = ok
         isPlaying = ok
@@ -600,6 +609,132 @@ final class VideoDriverTests: XCTestCase {
         }
         waitForExpectations(timeout: 2)
     }
+
+    func testAutoNextOffStopsAdvanceOnNaturalEnd() {
+        // b35 sweep: the stored hao_video_auto_next switch used to
+        // gate only the view model's poll-tick advance; a natural
+        // end (.finished) still advanced in the driver.
+        let (detail, line, episode) = makeTestDetail()
+        let factory = FakeBackendFactory()
+        let backend = FakeVideoBackend(engine: .avplayer)
+        factory.fakes = [.avplayer: [backend]]
+        let resolver = FakeVideoResolver()
+        resolver.urlsToReturn = [
+            URL(string: "https://a.b/movie.mp4")!,
+            URL(string: "https://a.b/movie2.mp4")!,
+        ]
+        let driver = makeDriver(factory: factory, resolver: resolver)
+        let suite = UserDefaults(suiteName: "hao.test.b35.autonext")!
+        suite.removePersistentDomain(forName: "hao.test.b35.autonext")
+        suite.set(false, forKey: SettingsStore.autoNextEpisodeKey)
+        driver.defaults = suite
+        let started = expectation(description: "episode started")
+        driver.onEpisodeStarted = { _ in started.fulfill() }
+        driver.playEpisode(detail: detail, line: line, episode: episode)
+        waitForExpectations(timeout: 2)
+        let ended = expectation(description: "episode ended without advancing")
+        driver.onEpisodeEnded = { _ in ended.fulfill() }
+        backend.onEvent?(.finished(.ended))
+        waitForExpectations(timeout: 2)
+        XCTAssertNil(driver.currentEpisode)
+        XCTAssertEqual(backend.openCount, 1)
+        suite.removePersistentDomain(forName: "hao.test.b35.autonext")
+    }
+
+    func testAutoNextOnAdvancesOnNaturalEnd() {
+        let (detail, line, episode) = makeTestDetail()
+        let factory = FakeBackendFactory()
+        let backend = FakeVideoBackend(engine: .avplayer)
+        factory.fakes = [.avplayer: [backend]]
+        let resolver = FakeVideoResolver()
+        resolver.urlsToReturn = [
+            URL(string: "https://a.b/movie.mp4")!,
+            URL(string: "https://a.b/movie2.mp4")!,
+        ]
+        let driver = makeDriver(factory: factory, resolver: resolver)
+        let suite = UserDefaults(suiteName: "hao.test.b35.autonext")!
+        suite.removePersistentDomain(forName: "hao.test.b35.autonext")
+        driver.defaults = suite
+        let started = expectation(description: "episode started")
+        driver.onEpisodeStarted = { _ in started.fulfill() }
+        driver.playEpisode(detail: detail, line: line, episode: episode)
+        waitForExpectations(timeout: 2)
+        let advanced = expectation(description: "advanced to episode 2")
+        driver.onEpisodeStarted = { item in
+            if item.id == VideoResumeKey.episodeId(title: "Test Movie", year: "2024", episodeName: "第02集") {
+                advanced.fulfill()
+            }
+        }
+        backend.onEvent?(.finished(.ended))
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(driver.currentEpisode?.id, VideoResumeKey.episodeId(title: "Test Movie", year: "2024", episodeName: "第02集"))
+        suite.removePersistentDomain(forName: "hao.test.b35.autonext")
+    }
+
+    func testFailedOpenSetsAndClearsLoadFailedFlag() {
+        // b35 sweep: the player page shows the failure + retry
+        // from this flag; a fresh open clears it.
+        let (detail, line, episode) = makeTestDetail()
+        let factory = FakeBackendFactory()
+        let resolver = FakeVideoResolver()
+        resolver.urlsToReturn = [nil]
+        let driver = makeDriver(factory: factory, resolver: resolver)
+        let failed = expectation(description: "episode failed")
+        driver.onEpisodeFailed = { _, _ in failed.fulfill() }
+        driver.playEpisode(detail: detail, line: line, episode: episode)
+        waitForExpectations(timeout: 2)
+        XCTAssertTrue(driver.lastOpenFailed)
+        resolver.urlsToReturn = [URL(string: "https://a.b/movie.mp4")!]
+        let started = expectation(description: "episode started on retry")
+        driver.onEpisodeStarted = { _ in started.fulfill() }
+        driver.playEpisode(detail: detail, line: line, episode: episode)
+        waitForExpectations(timeout: 2)
+        XCTAssertFalse(driver.lastOpenFailed)
+    }
+
+    func testTimeoutInvalidatesLateReopen() {
+        // b35 sweep: the soft-decode reopen (reopenOnAVPlayer)
+        // only checked the generation, not the open's completed
+        // flag - a backend that answered after the 10 s open
+        // timeout still ran finishStartPlayback (play + publish),
+        // so the player showed "load failed" while the video
+        // actually played behind it. The timeout now bumps the
+        // generation, so the late reopen returns early instead.
+        let (detail, line, episode) = makeTestDetail()
+        let factory = FakeBackendFactory()
+        let failingAV = FakeVideoBackend(engine: .avplayer)
+        failingAV.openResults = [false]
+        let softMPV = FakeVideoBackend(engine: .mpv)
+        softMPV.hardwareDecode = .software
+        let goodAV = FakeVideoBackend(engine: .avplayer)
+        goodAV.deferOpenCompletion = true
+        factory.fakes = [.avplayer: [failingAV, goodAV], .mpv: [softMPV]]
+        let resolver = FakeVideoResolver()
+        resolver.urlsToReturn = [URL(string: "https://a.b/movie.mp4?hao_container=mp4&hao_vcodec=hevc&hao_width=3840&hao_height=2160")!]
+        let driver = makeDriver(factory: factory, resolver: resolver)
+        driver.openTimeoutInterval = 0.1
+        let failed = expectation(description: "open timed out")
+        driver.onEpisodeFailed = { _, error in
+            XCTAssertEqual(error, .timeout)
+            failed.fulfill()
+        }
+        driver.playEpisode(detail: detail, line: line, episode: episode)
+        waitForExpectations(timeout: 2)
+        XCTAssertTrue(driver.lastOpenFailed)
+        XCTAssertNil(driver.currentEpisode)
+        // The AVPlayer reopen answers late with success: it must
+        // be ignored, never played or published.
+        goodAV.deferredOpenCompletion?(true)
+        let checked = expectation(description: "late reopen handled")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            XCTAssertFalse(goodAV.isPlaying)
+            XCTAssertNil(driver.currentEpisode)
+            XCTAssertFalse(driver.isPlaying)
+            checked.fulfill()
+        }
+        waitForExpectations(timeout: 2)
+    }
+
 }
 
 // MARK: - S7 wiring: VOD settings (leg A)
@@ -974,6 +1109,8 @@ final class FakePlayerEngine: VideoPlayerEngine {
     var positionSeconds: Double = 0
     var durationSeconds: Double = 100
     var isPlaying: Bool = false
+    var isLoading: Bool = false
+    var lastOpenFailed: Bool = false
     var videoView: UIView? = nil
     var currentEngine: VideoEngine? = .avplayer
     var diagnostics: VideoPlaybackDiagnostics = .empty

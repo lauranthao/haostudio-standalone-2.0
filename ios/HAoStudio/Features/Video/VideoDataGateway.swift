@@ -393,9 +393,11 @@ final class RealVideoDataGateway: VideoDataGateway {
     /// Queue one episode for download. The URL resolves the same
     /// way the player does (line fallback, no exclusions — a fresh
     /// download has tried nothing). False when the episode has no
-    /// URL to fetch. Note: an m3u8 URL downloads the playlist file
-    /// itself, not the segments — the engine cannot transcode; a
-    /// direct mp4/flv file downloads whole.
+    /// URL to fetch. An m3u8 URL is also refused: the engine
+    /// downloads the single URL as-is, so an m3u8 would save only
+    /// the playlist file (not the segments) while the page claimed
+    /// "已加入下载" — a file that cannot play offline. A direct
+    /// mp4/flv file downloads whole.
     func enqueueDownload(
         detail: VideoDetail,
         episode: PlayEpisode,
@@ -403,7 +405,7 @@ final class RealVideoDataGateway: VideoDataGateway {
         completion: @escaping (Bool) -> Void
     ) {
         cms.resolvePlayURL(detail: detail, episode: episode, line: line, excluding: []) { url in
-            guard let url = url else {
+            guard let url = url, url.pathExtension.lowercased() != "m3u8" else {
                 DispatchQueue.main.async { completion(false) }
                 return
             }
