@@ -8,7 +8,7 @@
 // (HaoGlassCapsule: .glassEffect .regular on iOS 26+,
 // .ultraThinMaterial below — the same treatment as the mini player),
 // so content scrolled behind it blurs through, and the selection
-// pill is the theme accent colour, sliding between tabs on the
+// pill is the Apple Music pink, sliding between tabs on the
 // settle spring.
 //
 // Layout contract (MainTabView.swift): this view sits in the bottom
@@ -30,14 +30,15 @@
 // fallback is the dual-track the R1 report records for Muzify /
 // Kumone (the app's deployment target is iOS 17.0).
 //
-// Selection pill colour (chen 2026-11-24, via the Apple Music ref):
-// the theme accent — NOT the old #E4E4E4 grey, never purple. Default
-// theme light = black, dark = grey; darkGold = gold; freshMint =
-// teal; a custom tab accent from Settings flows through the same
-// haoTabTint guard (a near-invisible pick falls back to the theme
-// accent instead of vanishing). The glyph ON the pill is
-// haoOnAccentFor (white on dark accents, near-black on light ones)
-// so it stays legible; unselected tabs are theme.textSecondary.
+// Selection pill colour (chen 2026-11-24, via the Apple Music ref
+// screenshot 0BB2AEAD): the selected tab is a PINK pill (#FA2D48,
+// Apple Music red) with a BLUE glyph (#007AFF system blue) — that
+// is literally what the reference renders; the old #E4E4E4 grey is
+// gone, never purple. A custom tab accent from Settings overrides
+// the pill (through the haoTabTint guard — a near-invisible pick
+// falls back to the theme accent instead of vanishing) and the
+// glyph on it is haoOnAccentFor (white on dark accents, near-black
+// on light ones). Unselected tabs are theme.textSecondary.
 
 import SwiftUI
 
@@ -65,12 +66,27 @@ struct GlassTabBar: View {
     @Environment(\.haoTheme) private var theme
     @Namespace private var selectionPill
 
-    /// The selection pill fill: the theme accent (or the user's
-    /// custom tab accent, guarded so a near-invisible pick falls
-    /// back to the theme accent). See the file header for the
-    /// per-theme values.
+    /// Apple Music's selection treatment, copied from chen's
+    /// reference screenshot (0BB2AEAD): a pink pill (#FA2D48)
+    /// with a blue glyph (#007AFF). This is the default — a custom
+    /// tab accent from Settings overrides the pill (guarded by
+    /// haoTabTint so a near-invisible pick falls back to the theme
+    /// accent instead of vanishing).
+    private static let appleMusicPill = Color(red: 0.98, green: 0.18, blue: 0.28)
+    private static let appleMusicGlyph = Color(red: 0.0, green: 0.48, blue: 1.0)
+
+    /// The selection pill fill: Apple Music pink by default; the
+    /// user's custom tab accent when one is set.
     private var pillColor: Color {
-        haoTabTint(tabAccent, scheme: colorScheme, fallback: theme.accent)
+        guard let tabAccent else { return Self.appleMusicPill }
+        return haoTabTint(tabAccent, scheme: colorScheme, fallback: theme.accent)
+    }
+
+    /// The glyph colour on the pill: Apple Music blue by default;
+    /// on a custom accent, the legible on-accent colour.
+    private var selectedGlyphColor: Color {
+        guard tabAccent != nil else { return Self.appleMusicGlyph }
+        return haoOnAccentFor(pillColor)
     }
 
     var body: some View {
@@ -115,7 +131,7 @@ struct GlassTabBar: View {
                     .font(.haoTabLabel)
             }
             .foregroundStyle(
-                isSelected ? haoOnAccentFor(pillColor) : theme.textSecondary
+                isSelected ? selectedGlyphColor : theme.textSecondary
             )
             .padding(.vertical, 4)
             .padding(.horizontal, 10)
