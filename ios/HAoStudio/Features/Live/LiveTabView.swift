@@ -441,7 +441,7 @@ struct LiveTabView: View {
     private func sectionHeader(title: String, onAll: @escaping () -> Void) -> some View {
         HStack {
             Text(title)
-                .font(.haoDetailTitle)
+                .font(.haoSectionTitle)
                 .foregroundStyle(theme.textPrimary)
             Spacer()
             Button("全部", action: onAll)
@@ -457,7 +457,7 @@ struct LiveTabView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("推荐直播")
-                    .font(.haoDetailTitle)
+                    .font(.haoSectionTitle)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
             }

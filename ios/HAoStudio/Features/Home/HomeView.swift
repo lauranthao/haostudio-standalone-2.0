@@ -116,7 +116,7 @@ struct HomeView: View {
     private func sectionHeader(title: String, onAll: (() -> Void)? = nil) -> some View {
         HStack {
             Text(title)
-                .font(.haoDetailTitle)
+                .font(.haoSectionTitle)
                 .foregroundStyle(theme.textPrimary)
             Spacer()
             if let onAll = onAll {
@@ -215,7 +215,7 @@ struct HomeView: View {
             if viewModel.hotLive.isEmpty {
                 MusicEmptyState(
                     icon: "antenna.radiowaves.left.and.right",
-                    title: "关注的主播还没开播",
+                    title: "暂无直播",
                     note: "去直播里关注主播，开播后会出现在这里"
                 )
                 .padding(.horizontal, 24)
@@ -456,7 +456,7 @@ private struct HomeHotLiveView: View {
             if viewModel.hotLive.isEmpty {
                 MusicEmptyState(
                     icon: "antenna.radiowaves.left.and.right",
-                    title: "关注的主播还没开播",
+                    title: "暂无直播",
                     note: "去直播里关注主播，开播后会出现在这里"
                 )
                 .haoBottomChromePadding()

@@ -360,7 +360,7 @@ struct MusicListenReportView: View {
     private var topSongsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("最常听")
-                .font(.haoDetailTitle)
+                .font(.haoSectionTitle)
                 .foregroundStyle(theme.textPrimary)
             if discoveryVM.report.topSongs.isEmpty {
                 Text("这段时间还没有收听记录。")
@@ -396,7 +396,7 @@ struct MusicListenReportView: View {
     private var topArtistsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("最常听的歌手")
-                .font(.haoDetailTitle)
+                .font(.haoSectionTitle)
                 .foregroundStyle(theme.textPrimary)
             if discoveryVM.report.topArtists.isEmpty {
                 Text("这段时间还没有收听记录。")
@@ -422,7 +422,7 @@ struct MusicListenReportView: View {
     private var topPlatformsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("来源平台")
-                .font(.haoDetailTitle)
+                .font(.haoSectionTitle)
                 .foregroundStyle(theme.textPrimary)
             if discoveryVM.report.topPlatforms.isEmpty {
                 Text("这段时间还没有收听记录。")
