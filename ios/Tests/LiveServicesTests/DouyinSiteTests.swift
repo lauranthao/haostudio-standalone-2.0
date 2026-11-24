@@ -158,4 +158,77 @@ final class DouyinSiteTests: XCTestCase {
         }
         waitForExpectations(timeout: 5)
     }
+
+    // MARK: - Room-detail dedup (build 36 item 10 leg 4)
+
+    /// `room/web/enter` answer for room "123456": a live room
+    /// carrying the `streamUrlJSON` qualities above.
+    private var enterJSON: String {
+        "{\"data\":{\"data\":[{\"id_str\":\"123456\",\"title\":\"测试\",\"status\":2,\"owner\":{\"nickname\":\"主播\",\"avatar_thumb\":[\"https://a/avatar.jpg\"]},\"cover\":[\"https://a/cover.jpg\"],\"user_count\":100,\"stream_url\":\(streamUrlJSON)}],\"user\":{\"nickname\":\"主播\",\"avatar_thumb\":[]}}}"
+    }
+
+    /// Entering a room fires `roomInfo` (danmaku) and `resolve`
+    /// (playback) at once on the same resolver; both used to fetch
+    /// the room detail separately. They now share one in-flight
+    /// load: one `room/web/enter`, and both callers still complete
+    /// successfully. Timeout is 10 s: the anonymous-cookie warmup
+    /// runs on URLSession.shared (pre-existing, not the injectable
+    /// fetcher) and can take a few seconds when it must fail.
+    func testConcurrentRoomInfoAndResolveShareOneRoomDetailLoad() {
+        let fetcher = CountingRoutingFetcher([
+            ("room/web/enter", jsonData(enterJSON), 200)
+        ])
+        let site = DouyinLiveSite(fetcher: fetcher.fetcher)
+        let roomInfoExpectation = expectation(description: "roomInfo")
+        let resolveExpectation = expectation(description: "resolve")
+        var roomInfoOK = false
+        var resolveOK = false
+        site.roomInfo(roomId: "123456") { result in
+            if case .success(let room) = result, room.isLive {
+                roomInfoOK = true
+            }
+            roomInfoExpectation.fulfill()
+        }
+        site.resolve(roomId: "123456", quality: nil) { result in
+            if case .success(let resolution) = result, !resolution.appliedUrls.isEmpty {
+                resolveOK = true
+            }
+            resolveExpectation.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(roomInfoOK)
+        XCTAssertTrue(resolveOK)
+        XCTAssertEqual(fetcher.count(containing: "room/web/enter"), 1)
+    }
+
+    /// The shared load fails the same way for both paths: each
+    /// gets a transient failure (never a disguised offline), and
+    /// the `room/web/enter` request goes out once, not twice
+    /// (the HTML fallback also fails, but it is a different URL).
+    func testConcurrentRoomInfoAndResolveShareOneFailedLoad() {
+        let fetcher = CountingRoutingFetcher([])
+        let site = DouyinLiveSite(fetcher: fetcher.fetcher)
+        let roomInfoExpectation = expectation(description: "roomInfo failure")
+        let resolveExpectation = expectation(description: "resolve failure")
+        var roomInfoTransient = false
+        var resolveFailed = false
+        site.roomInfo(roomId: "123456") { result in
+            if case .failure(let error as LiveError) = result, case .offline = error {
+                // Disguised offline: wrong.
+            } else if case .failure = result {
+                roomInfoTransient = true
+            }
+            roomInfoExpectation.fulfill()
+        }
+        site.resolve(roomId: "123456", quality: nil) { result in
+            if case .failure = result {
+                resolveFailed = true
+            }
+            resolveExpectation.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(roomInfoTransient)
+        XCTAssertTrue(resolveFailed)
+        XCTAssertEqual(fetcher.count(containing: "room/web/enter"), 1)
+    }
 }

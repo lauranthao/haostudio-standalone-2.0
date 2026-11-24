@@ -186,4 +186,77 @@ final class BilibiliSiteTests: XCTestCase {
         }
         waitForExpectations(timeout: 5)
     }
+
+    // MARK: - Room-detail dedup (build 36 item 10 leg 4)
+
+    /// Entering a room fires `roomInfo` (danmaku) and `resolve`
+    /// (playback) at once on the same resolver; both used to issue
+    /// their own room-info + danmaku-info requests (5 HTTP per
+    /// entry). They now share one in-flight load: one
+    /// getInfoByRoom + one getDanmuInfo, and both callers still
+    /// complete successfully.
+    func testConcurrentRoomInfoAndResolveShareOneRoomDetailLoad() {
+        let fetcher = CountingRoutingFetcher([
+            ("getInfoByRoom", jsonData(roomInfoJSON), 200),
+            ("getRoomPlayInfo", jsonData(playInfoJSON), 200),
+            ("getDanmuInfo", jsonData("{\"code\":0,\"data\":{\"token\":\"tok\",\"host_list\":[]}}"), 200),
+            ("nav", jsonData(navJSON), 200)
+        ])
+        let site = BilibiliLiveSite(fetcher: fetcher.fetcher)
+        let roomInfoExpectation = expectation(description: "roomInfo")
+        let resolveExpectation = expectation(description: "resolve")
+        var roomInfoOK = false
+        var resolveOK = false
+        site.roomInfo(roomId: "6") { result in
+            if case .success(let room) = result, room.isLive {
+                roomInfoOK = true
+            }
+            roomInfoExpectation.fulfill()
+        }
+        site.resolve(roomId: "6", quality: nil) { result in
+            if case .success(let resolution) = result, !resolution.appliedUrls.isEmpty {
+                resolveOK = true
+            }
+            resolveExpectation.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(roomInfoOK)
+        XCTAssertTrue(resolveOK)
+        XCTAssertEqual(fetcher.count(containing: "getInfoByRoom"), 1)
+        XCTAssertEqual(fetcher.count(containing: "getDanmuInfo"), 1)
+    }
+
+    /// The shared load fails the same way for both paths: each
+    /// gets a transient failure (never a disguised offline), and
+    /// the room-info request goes out twice — one shared load plus
+    /// its built-in 180 ms retry — not four times.
+    func testConcurrentRoomInfoAndResolveShareOneFailedLoad() {
+        let fetcher = CountingRoutingFetcher([
+            ("getInfoByRoom", nil, 404),
+            ("nav", jsonData(navJSON), 200)
+        ])
+        let site = BilibiliLiveSite(fetcher: fetcher.fetcher)
+        let roomInfoExpectation = expectation(description: "roomInfo failure")
+        let resolveExpectation = expectation(description: "resolve failure")
+        var roomInfoTransient = false
+        var resolveFailed = false
+        site.roomInfo(roomId: "6") { result in
+            if case .failure(let error as LiveError) = result, case .offline = error {
+                // Disguised offline: wrong.
+            } else if case .failure = result {
+                roomInfoTransient = true
+            }
+            roomInfoExpectation.fulfill()
+        }
+        site.resolve(roomId: "6", quality: nil) { result in
+            if case .failure = result {
+                resolveFailed = true
+            }
+            resolveExpectation.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(roomInfoTransient)
+        XCTAssertTrue(resolveFailed)
+        XCTAssertEqual(fetcher.count(containing: "getInfoByRoom"), 2)
+    }
 }

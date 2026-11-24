@@ -563,6 +563,9 @@ final class HuyaLiveSite: LiveSiteResolver {
     private var lastSignatureMillis: Int = 0
     private var playbackTransportIssuedAt: [String: Date] = [:]
     private var playbackTokenLeases: [String: HuyaCdnTokenLease] = [:]
+    /// In-flight room-detail loads, keyed by trimmed room id
+    /// (build 36 item 10 leg 4 — see `loadRoomDetail`).
+    private var roomDetailInFlight: [String: [(Result<LiveRoom, Error>) -> Void]] = [:]
 
     /// Guards the token/identity/lease state above: resolve runs
     /// from URLSession background callbacks and two concurrent
@@ -610,9 +613,32 @@ final class HuyaLiveSite: LiveSiteResolver {
     /// Strict room load: throws when the page carries no parseable
     /// playback metadata (resolve must see the transient error,
     /// never a disguised "offline").
+    ///
+    /// Build 36 item 10 leg 4: entering a room fires two paths at
+    /// once — the playback `resolve` below and the danmaku
+    /// `roomInfo` above — and both used to fetch the room page
+    /// separately (2x the same room detail per entry). A
+    /// concurrent load for the same room joins the one already in
+    /// flight instead of starting another; every joiner still gets
+    /// its own completion with the same result, so the failure
+    /// semantics are unchanged (a transient failure is reported
+    /// as a failure to both paths, never disguised as offline —
+    /// build 36 item 8). The entry is dropped when the load
+    /// finishes, so a later load (recovery re-parse, quality
+    /// switch, prefetch) always fetches fresh: this is dedup,
+    /// never a cache.
     private func loadRoomDetail(roomId: String, completion: @escaping (Result<LiveRoom, Error>) -> Void) {
         guard let url = URL(string: "\(HuyaRequestParams.baseUrl)/\(roomId)") else {
             completion(.failure(LiveError.parseFailed("虎牙房间地址无效")))
+            return
+        }
+        let alreadyInFlight = locked {
+            var list = roomDetailInFlight[roomId] ?? []
+            list.append(completion)
+            roomDetailInFlight[roomId] = list
+            return list.count > 1
+        }
+        if alreadyInFlight {
             return
         }
         var headers = HuyaRequestParams.requestHeaders
@@ -620,18 +646,33 @@ final class HuyaLiveSite: LiveSiteResolver {
         let request = LiveHTTP.getRequest(url: url, headers: headers)
         fetcher(request) { data, _, error in
             if let error = error {
-                completion(.failure(error))
+                self.finishRoomDetail(roomId: roomId, result: .failure(error))
                 return
             }
             guard let data = data, let html = String(data: data, encoding: .utf8), !html.isEmpty else {
-                completion(.failure(LiveError.emptyResponse))
+                self.finishRoomDetail(roomId: roomId, result: .failure(LiveError.emptyResponse))
                 return
             }
             do {
-                completion(.success(try HuyaLiveSite.parseHuyaRoomPage(html: html, roomId: roomId)))
+                self.finishRoomDetail(roomId: roomId, result: .success(try HuyaLiveSite.parseHuyaRoomPage(html: html, roomId: roomId)))
             } catch {
-                completion(.failure(error))
+                self.finishRoomDetail(roomId: roomId, result: .failure(error))
             }
+        }
+    }
+
+    /// Drain one in-flight room-detail load (build 36 item 10 leg
+    /// 4): the entry is removed BEFORE the completions run, so a
+    /// completion that re-enters the loader (recovery, quality
+    /// switch) registers a fresh load instead of joining a
+    /// finished one. The lock is only held for the state touch,
+    /// never across a completion.
+    private func finishRoomDetail(roomId: String, result: Result<LiveRoom, Error>) {
+        let completions = locked {
+            roomDetailInFlight.removeValue(forKey: roomId) ?? []
+        }
+        for item in completions {
+            item(result)
         }
     }
 

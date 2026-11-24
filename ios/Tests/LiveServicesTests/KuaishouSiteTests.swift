@@ -254,4 +254,68 @@ final class KuaishouSiteTests: XCTestCase {
         }
         waitForExpectations(timeout: 5)
     }
+
+    // MARK: - Room-detail dedup (build 36 item 10 leg 4)
+
+    /// Entering a room fires `roomInfo` (danmaku) and `resolve`
+    /// (playback) at once on the same resolver; both used to fetch
+    /// the room page separately. They now share one in-flight load:
+    /// one room-page request, and both callers still complete
+    /// successfully.
+    func testConcurrentRoomInfoAndResolveShareOneRoomDetailLoad() {
+        let fetcher = CountingRoutingFetcher([
+            ("live.kuaishou.com/u/ks123", jsonData(roomPageHTML), 200)
+        ])
+        let site = KuaishouLiveSite(fetcher: fetcher.fetcher)
+        let roomInfoExpectation = expectation(description: "roomInfo")
+        let resolveExpectation = expectation(description: "resolve")
+        var roomInfoOK = false
+        var resolveOK = false
+        site.roomInfo(roomId: "ks123") { result in
+            if case .success(let room) = result, room.isLive {
+                roomInfoOK = true
+            }
+            roomInfoExpectation.fulfill()
+        }
+        site.resolve(roomId: "ks123", quality: nil) { result in
+            if case .success(let resolution) = result, !resolution.appliedUrls.isEmpty {
+                resolveOK = true
+            }
+            resolveExpectation.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(roomInfoOK)
+        XCTAssertTrue(resolveOK)
+        XCTAssertEqual(fetcher.count(containing: "live.kuaishou.com/u/ks123"), 1)
+    }
+
+    /// The shared load fails the same way for both paths: each
+    /// gets a transient failure (never a disguised offline), and
+    /// the room-page request goes out once, not twice.
+    func testConcurrentRoomInfoAndResolveShareOneFailedLoad() {
+        let fetcher = CountingRoutingFetcher([])
+        let site = KuaishouLiveSite(fetcher: fetcher.fetcher)
+        let roomInfoExpectation = expectation(description: "roomInfo failure")
+        let resolveExpectation = expectation(description: "resolve failure")
+        var roomInfoTransient = false
+        var resolveFailed = false
+        site.roomInfo(roomId: "ks123") { result in
+            if case .failure(let error as LiveError) = result, case .offline = error {
+                // Disguised offline: wrong.
+            } else if case .failure = result {
+                roomInfoTransient = true
+            }
+            roomInfoExpectation.fulfill()
+        }
+        site.resolve(roomId: "ks123", quality: nil) { result in
+            if case .failure = result {
+                resolveFailed = true
+            }
+            resolveExpectation.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(roomInfoTransient)
+        XCTAssertTrue(resolveFailed)
+        XCTAssertEqual(fetcher.count(containing: "live.kuaishou.com/u/ks123"), 1)
+    }
 }

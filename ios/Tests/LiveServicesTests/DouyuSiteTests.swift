@@ -204,4 +204,40 @@ final class DouyuSiteTests: XCTestCase {
         }
         waitForExpectations(timeout: 5)
     }
+
+    // MARK: - Room-detail dedup (build 36 item 10 leg 4, control)
+
+    /// Douyu is the control: `resolve` never calls `roomInfo`
+    /// (it goes straight to play data), so there is nothing to
+    /// dedup — the betard request still goes out exactly once
+    /// while a resolve runs concurrently, and both callers still
+    /// complete successfully.
+    func testConcurrentRoomInfoAndResolveFetchRoomInfoOnce() {
+        let fetcher = CountingRoutingFetcher([
+            ("betard/123456", jsonData("{\"room\":{\"room_id\":\"123456\",\"room_name\":\"测试直播\",\"owner_name\":\"主播\",\"owner_avatar\":\"https://a/avatar.jpg\",\"room_pic\":\"https://a/cover.jpg\",\"room_biz_all\":{\"hot\":999},\"show_status\":1}}"), 200),
+            ("getEncryption", jsonData("{\"code\":0,\"data\":{\"key\":\"testkey123\",\"rand_str\":\"RANDSTR9\",\"enc_time\":2,\"enc_data\":\"enc\",\"expire_at\":9999999999}}"), 200),
+            ("getH5PlayV1", jsonData("{\"error\":0,\"data\":{\"rtmp_live\":\"https://cdn.douyucdn.cn/live/123456.flv?wsSecret=x\",\"cdnsWithName\":[{\"cdn\":\"tx\"},{\"cdn\":\"scdn-tx\"},{\"cdn\":\"ws\"}],\"rtmp_cdn\":\"tx\",\"multirates\":[{\"rate\":0,\"name\":\"原画\"},{\"rate\":1,\"name\":\"超清\"}],\"rate\":0}}"), 200)
+        ])
+        let site = DouyuLiveSite(fetcher: fetcher.fetcher)
+        let roomInfoExpectation = expectation(description: "roomInfo")
+        let resolveExpectation = expectation(description: "resolve")
+        var roomInfoOK = false
+        var resolveOK = false
+        site.roomInfo(roomId: "123456") { result in
+            if case .success(let room) = result, room.isLive {
+                roomInfoOK = true
+            }
+            roomInfoExpectation.fulfill()
+        }
+        site.resolve(roomId: "123456", quality: nil) { result in
+            if case .success(let resolution) = result, !resolution.appliedUrls.isEmpty {
+                resolveOK = true
+            }
+            resolveExpectation.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(roomInfoOK)
+        XCTAssertTrue(resolveOK)
+        XCTAssertEqual(fetcher.count(containing: "betard/123456"), 1)
+    }
 }
