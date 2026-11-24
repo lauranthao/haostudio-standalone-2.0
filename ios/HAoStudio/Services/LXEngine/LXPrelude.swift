@@ -13,6 +13,10 @@
 //   - `__haoLxDispatch(idOrFunction, payload)` /
 //     `__haoLxDispatchResult(id)` — the call/response bridge that
 //     the engine installs after the prelude evaluates.
+//   - `__haoLxDispatchDiscard(id)` — Swift-only addition (2026-11-24,
+//     build 36 item 10): unconditionally deletes a dispatch result
+//     entry when a poll exits early (cancel/timeout); no script
+//     calls it, and the Flutter prelude does not have it.
 //
 // The prelude is brace-balanced (preflight check 5b counts braces
 // inside string literals), contains no `async`/`any` token, and no
@@ -121,6 +125,10 @@ enum LXPrelude {
     var out = JSON.stringify(r);
     if (r.done) delete __dispatchResults[id];
     return out;
+  };
+  globalThis.__haoLxDispatchDiscard = function (id) {
+    delete __dispatchResults[id];
+    return 'ok';
   };
   // Timers: flutter_js's native setTimeout is bridged through a
   // process-wide static Dart callback (JSCore: _sendMessageDartFunc),
