@@ -312,6 +312,10 @@ final class VideoCategoryViewModel: ObservableObject {
     @Published private(set) var items: [VideoItem] = []
     @Published private(set) var isLoading = false
     @Published private(set) var hasMore = true
+    /// Human error text from the last failed CMS load
+    /// (VideoFetchError.message). Set only on failure — an empty
+    /// category stays an empty state, never an error state.
+    @Published private(set) var errorMessage: String?
 
     private let gateway: VideoDataGateway
     private let type: String
@@ -325,6 +329,10 @@ final class VideoCategoryViewModel: ObservableObject {
     /// below matters too: a reload whose loadMore is blocked by the
     /// in-flight guard must not leave the grid empty forever.
     private var generation = 0
+    /// Snapshot of the last good grid, taken by reload() before it
+    /// clears (Phase 3, §4.1 — same rule as VideoBrowseViewModel).
+    /// The query here is fixed (one type), so no query key is needed.
+    private var reloadSnapshot: (items: [VideoItem], page: Int, hasMore: Bool)?
 
     init(type: String, gateway: VideoDataGateway = VideoServices.makeGateway()) {
         self.type = type
@@ -333,9 +341,13 @@ final class VideoCategoryViewModel: ObservableObject {
 
     func reload() {
         generation += 1
+        // Snapshot before clearing (Phase 3, §4.1 — same rule as
+        // VideoBrowseViewModel).
+        reloadSnapshot = (items: items, page: page, hasMore: hasMore)
         page = 0
         hasMore = true
         items = []
+        errorMessage = nil
         loadMore()
     }
 
@@ -366,26 +378,46 @@ final class VideoCategoryViewModel: ObservableObject {
                 if self.items.isEmpty { self.loadMore() }
                 return
             }
-            if result.items.isEmpty {
-                // An empty page ends the list only when the service
-                // says there is nothing after it. A hole page (all
-                // rows dropped in parsing) with hasMore set must
-                // advance instead of stranding the list.
-                if result.hasMore {
-                    self.page += 1
-                    self.loadMore()
+            switch result {
+            case .success(let page):
+                if page.items.isEmpty {
+                    // An empty page ends the list only when the service
+                    // says there is nothing after it. A hole page (all
+                    // rows dropped in parsing) with hasMore set must
+                    // advance instead of stranding the list.
+                    if page.hasMore {
+                        self.page += 1
+                        self.loadMore()
+                    } else {
+                        self.hasMore = false
+                    }
                 } else {
-                    self.hasMore = false
+                    var seen = Set(self.items.map { "\($0.sourceId ?? -1)|\($0.id)" })
+                    for item in page.items where seen.insert("\(item.sourceId ?? -1)|\(item.id)").inserted {
+                        self.items.append(item)
+                    }
+                    self.page += 1
+                    self.hasMore = page.hasMore
                 }
-            } else {
-                var seen = Set(self.items.map { "\($0.sourceId ?? -1)|\($0.id)" })
-                for item in result.items where seen.insert("\(item.sourceId ?? -1)|\(item.id)").inserted {
-                    self.items.append(item)
-                }
-                self.page += 1
-                self.hasMore = result.hasMore
+            case .failure(let error):
+                self.handleCmsFailure(error)
             }
         }
+    }
+
+    /// CMS page failure (Phase 3, §4.1 — same rule as
+    /// VideoBrowseViewModel.handleCmsFailure): a page-0 failure
+    /// after a reload restores the snapshot; any other failure
+    /// just records the error and ends paging.
+    private func handleCmsFailure(_ error: VideoFetchError) {
+        if page == 0, let snapshot = reloadSnapshot, !snapshot.items.isEmpty {
+            items = snapshot.items
+            page = snapshot.page
+            hasMore = snapshot.hasMore
+        } else {
+            hasMore = false
+        }
+        errorMessage = error.message
     }
 }
 
@@ -410,6 +442,21 @@ struct VideoCategoryView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 32)
+            } else if let error = viewModel.errorMessage, viewModel.items.isEmpty {
+                VStack(spacing: 12) {
+                    MusicEmptyState(
+                        icon: "wifi.exclamationmark",
+                        title: "连不上影视源",
+                        note: error
+                    )
+                    Button("重试") { viewModel.reload() }
+                        .font(.haoSubheadStrong)
+                        .foregroundStyle(theme.onAccent)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(theme.accent, in: Capsule())
+                }
+                .padding(.horizontal, 16)
             } else if viewModel.items.isEmpty {
                 MusicEmptyState(
                     icon: "film",
@@ -418,6 +465,23 @@ struct VideoCategoryView: View {
                 )
                 .padding(.horizontal, 16)
             } else {
+                // A failed refresh kept the old grid: show the error
+                // as a compact banner instead of hiding the results
+                // behind an error card.
+                if let error = viewModel.errorMessage {
+                    HStack(spacing: 8) {
+                        Image(systemName: "wifi.exclamationmark")
+                        Text(error)
+                            .font(.haoFootnote)
+                        Spacer()
+                        Button("重试") { viewModel.reload() }
+                            .font(.haoFootnote)
+                            .foregroundStyle(theme.accentText)
+                    }
+                    .foregroundStyle(theme.textSecondary)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                }
                 VideoPosterGrid(items: viewModel.items) { item in
                     onSelect(item)
                 }

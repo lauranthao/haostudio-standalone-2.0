@@ -33,7 +33,7 @@ private final class FakeBrowseGateway: VideoDataGateway {
         let by: String
     }
     var byTypeCalls: [ByTypeCall] = []
-    private var pendingByType: [(VideoItemPage) -> Void] = []
+    private var pendingByType: [(Result<VideoItemPage, VideoFetchError>) -> Void] = []
     var pendingByTypeCount: Int { pendingByType.count }
 
     struct EmbyCall: Equatable {
@@ -47,7 +47,7 @@ private final class FakeBrowseGateway: VideoDataGateway {
 
     func fetchHome(completion: @escaping ([VideoHomeRow]) -> Void) { completion([]) }
     func fetchTypeNames(completion: @escaping ([String]) -> Void) { completion(typeNames) }
-    func fetchByType(_ type: String, page: Int, area: String, year: String, by: String, completion: @escaping (VideoItemPage) -> Void) {
+    func fetchByType(_ type: String, page: Int, area: String, year: String, by: String, completion: @escaping (Result<VideoItemPage, VideoFetchError>) -> Void) {
         byTypeCalls.append(ByTypeCall(type: type, page: page, area: area, year: year, by: by))
         pendingByType.append(completion)
     }
@@ -90,7 +90,12 @@ private final class FakeBrowseGateway: VideoDataGateway {
 
     func completeByTypeNext(with page: VideoItemPage) {
         guard !pendingByType.isEmpty else { return }
-        pendingByType.removeFirst()(page)
+        pendingByType.removeFirst()(.success(page))
+    }
+
+    func completeByTypeFailure() {
+        guard !pendingByType.isEmpty else { return }
+        pendingByType.removeFirst()(.failure(.unreachable))
     }
 
     func completeEmbyNext(with page: VideoItemPage) {
@@ -293,6 +298,63 @@ final class VideoBrowseViewModelTests: XCTestCase {
         viewModel.loadIfNeeded()
         XCTAssertEqual(gateway.byTypeCalls.count, callsBefore)
         XCTAssertEqual(viewModel.items.map { $0.title }, ["A"])
+    }
+
+    // MARK: - CMS failure: retain previous results (§4.1)
+
+    /// A same-query reload (pull-to-refresh) that fails must keep
+    /// the last good grid on screen and show the error, not empty
+    /// the grid into "这个分类下没有内容".
+    func testRefreshFailureKeepsPreviousResultsAndShowsError() {
+        let gateway = FakeBrowseGateway()
+        let viewModel = VideoBrowseViewModel(initialType: nil, gateway: gateway)
+        gateway.completeByTypeNext(with: page([item("1", title: "A"), item("2", title: "B")], hasMore: true))
+        XCTAssertEqual(viewModel.items.map { $0.title }, ["A", "B"])
+
+        viewModel.refresh()
+        gateway.completeByTypeFailure()
+        XCTAssertEqual(viewModel.items.map { $0.title }, ["A", "B"])
+        XCTAssertTrue(viewModel.hasMore)
+        XCTAssertNotNil(viewModel.errorMessage)
+    }
+
+    /// A filter change that fails has nothing valid to keep: the
+    /// grid stays empty and the error shows instead of the
+    /// empty-category copy.
+    func testFilterChangeFailureShowsErrorWithoutOldResults() {
+        let gateway = FakeBrowseGateway()
+        let viewModel = VideoBrowseViewModel(initialType: nil, gateway: gateway)
+        gateway.completeByTypeNext(with: page([item("1", title: "A")], hasMore: false))
+
+        viewModel.area = "香港"
+        XCTAssertTrue(viewModel.items.isEmpty)
+        gateway.completeByTypeFailure()
+        XCTAssertTrue(viewModel.items.isEmpty)
+        XCTAssertFalse(viewModel.hasMore)
+        XCTAssertNotNil(viewModel.errorMessage)
+    }
+
+    /// First load failing shows the error, not the empty-category copy.
+    func testFirstLoadFailureShowsError() {
+        let gateway = FakeBrowseGateway()
+        let viewModel = VideoBrowseViewModel(initialType: nil, gateway: gateway)
+        gateway.completeByTypeFailure()
+        XCTAssertTrue(viewModel.items.isEmpty)
+        XCTAssertFalse(viewModel.hasMore)
+        XCTAssertNotNil(viewModel.errorMessage)
+    }
+
+    /// Same rule on the category page: a pull-to-refresh failure
+    /// keeps the loaded posters.
+    func testCategoryRefreshFailureKeepsPreviousResults() {
+        let gateway = FakeBrowseGateway()
+        let viewModel = VideoCategoryViewModel(type: "电影", gateway: gateway)
+        viewModel.loadIfNeeded()
+        gateway.completeByTypeNext(with: page([item("1", title: "A")], hasMore: false))
+        viewModel.reload()
+        gateway.completeByTypeFailure()
+        XCTAssertEqual(viewModel.items.map { $0.title }, ["A"])
+        XCTAssertNotNil(viewModel.errorMessage)
     }
 
     // MARK: - Search: spinner waits for both requests

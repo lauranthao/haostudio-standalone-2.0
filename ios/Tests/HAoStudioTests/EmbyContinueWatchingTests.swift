@@ -27,8 +27,8 @@ private final class StubVideoGateway: VideoDataGateway {
 
     func fetchHome(completion: @escaping ([VideoHomeRow]) -> Void) { completion([]) }
     func fetchTypeNames(completion: @escaping ([String]) -> Void) { completion([]) }
-    func fetchByType(_ type: String, page: Int, area: String, year: String, by: String, completion: @escaping (VideoItemPage) -> Void) {
-        completion(.empty)
+    func fetchByType(_ type: String, page: Int, area: String, year: String, by: String, completion: @escaping (Result<VideoItemPage, VideoFetchError>) -> Void) {
+        completion(.success(.empty))
     }
     func search(keyword: String, completion: @escaping ([VideoItem]) -> Void) { completion([]) }
     func fetchDetail(item: VideoItem, completion: @escaping (VideoDetail?) -> Void) {

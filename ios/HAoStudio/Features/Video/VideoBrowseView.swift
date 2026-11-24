@@ -36,9 +36,10 @@ final class VideoBrowseViewModel: ObservableObject {
     @Published private(set) var items: [VideoItem] = []
     @Published private(set) var isLoading = false
     @Published private(set) var hasMore = true
-    /// Human error text from the last failed Emby load
-    /// (EmbyError.message). Set only on failure — an empty
-    /// library stays an empty state, never an error state.
+    /// Human error text from the last failed load
+    /// (EmbyError.message / VideoFetchError.message). Set only on
+    /// failure — an empty library stays an empty state, never an
+    /// error state.
     @Published private(set) var errorMessage: String?
 
     /// Changing any of these reloads the grid from page 0 (one
@@ -66,6 +67,19 @@ final class VideoBrowseViewModel: ObservableObject {
     /// before that point are no-ops: there is no selected type yet
     /// and nothing to fetch.
     private var ready = false
+    /// The query the items on screen were loaded for (mode + CMS
+    /// type + filters). Set on every page-0 answer; reload()
+    /// snapshots it with the items, so a failure restores only
+    /// same-query results — never the previous filter's posters.
+    private var loadedQueryKey: String?
+    /// Snapshot of the last good grid, taken by reload() before it
+    /// clears (Phase 3, §4.1): a page-0 failure after a same-query
+    /// reload restores it instead of emptying the grid.
+    private var reloadSnapshot: (items: [VideoItem], page: Int, hasMore: Bool, queryKey: String?)?
+    /// Current query key (mode + CMS type + filters).
+    private var queryKey: String {
+        "\(mode)|\(selectedType ?? "")|\(area)|\(year)|\(sort)"
+    }
 
     init(initialType: String?, gateway: VideoDataGateway = VideoServices.makeGateway()) {
         self.initialType = initialType
@@ -131,6 +145,10 @@ final class VideoBrowseViewModel: ObservableObject {
         // empty state forever. Emby bypasses the gate.
         guard ready || mode == "emby" else { return }
         generation += 1
+        // Snapshot before clearing (Phase 3, §4.1): a page-0
+        // failure after a same-query reload restores this instead
+        // of leaving an empty grid that reads as an empty category.
+        reloadSnapshot = (items: items, page: page, hasMore: hasMore, queryKey: loadedQueryKey)
         page = 0
         hasMore = true
         items = []
@@ -156,7 +174,12 @@ final class VideoBrowseViewModel: ObservableObject {
         } else {
             // selectedType is non-nil by the guard above.
             gateway.fetchByType(selectedType ?? "", page: pageToLoad, area: area, year: year, by: sort) { [weak self] result in
-                self?.handlePage(result, requestGeneration: requestGeneration)
+                switch result {
+                case .success(let page):
+                    self?.handlePage(page, requestGeneration: requestGeneration)
+                case .failure(let error):
+                    self?.handleCmsFailure(error, requestGeneration: requestGeneration)
+                }
             }
         }
     }
@@ -193,6 +216,11 @@ final class VideoBrowseViewModel: ObservableObject {
             if items.isEmpty { loadMore() }
             return
         }
+        // The items on screen belong to this query once a page-0
+        // answer lands: reload() snapshots it as the restore key
+        // (a filter change makes the key mismatch, so old-query
+        // items are never restored under a new query).
+        if page == 0 { loadedQueryKey = queryKey }
         if result.items.isEmpty {
             // An empty page ends the list ONLY when the service
             // says there is nothing after it. A filtered window
@@ -218,6 +246,36 @@ final class VideoBrowseViewModel: ObservableObject {
             page += 1
             hasMore = result.hasMore
         }
+    }
+
+    /// CMS page failure (Phase 3, §4.1 "请求失败时保留已有结果"):
+    /// the gateway reports a failure instead of an empty page, so
+    /// a dead source is no longer misread as an empty category.
+    /// A page-0 failure after a same-query reload (pull-to-refresh
+    /// / retry) restores the snapshot — the grid keeps showing the
+    /// last good results with an error banner. A failure after a
+    /// query change (or on first load) has nothing valid to keep:
+    /// the grid stays empty and the error card shows instead.
+    /// A later page's failure never cleared anything, so the loaded
+    /// pages stay on screen and only the error is recorded.
+    private func handleCmsFailure(_ error: VideoFetchError, requestGeneration: Int) {
+        loadingMore = false
+        isLoading = false
+        guard requestGeneration == generation else {
+            if items.isEmpty { loadMore() }
+            return
+        }
+        if page == 0,
+           let snapshot = reloadSnapshot,
+           snapshot.queryKey == queryKey,
+           !snapshot.items.isEmpty {
+            items = snapshot.items
+            page = snapshot.page
+            hasMore = snapshot.hasMore
+        } else {
+            hasMore = false
+        }
+        errorMessage = error.message
     }
 }
 
@@ -421,11 +479,11 @@ struct VideoBrowseView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 32)
-            } else if viewModel.mode == "emby", let error = viewModel.errorMessage {
+            } else if let error = viewModel.errorMessage, viewModel.items.isEmpty {
                 VStack(spacing: 12) {
                     MusicEmptyState(
                         icon: "wifi.exclamationmark",
-                        title: "连不上 Emby",
+                        title: viewModel.mode == "emby" ? "连不上 Emby" : "连不上影视源",
                         note: error
                     )
                     Button("重试") { viewModel.reload() }
@@ -446,6 +504,23 @@ struct VideoBrowseView: View {
                 )
                 .padding(.horizontal, 16)
             } else {
+                // A failed refresh kept the old grid: show the error
+                // as a compact banner instead of hiding the results
+                // behind an error card.
+                if let error = viewModel.errorMessage {
+                    HStack(spacing: 8) {
+                        Image(systemName: "wifi.exclamationmark")
+                        Text(error)
+                            .font(.haoFootnote)
+                        Spacer()
+                        Button("重试") { viewModel.reload() }
+                            .font(.haoFootnote)
+                            .foregroundStyle(theme.accentText)
+                    }
+                    .foregroundStyle(theme.textSecondary)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                }
                 if viewModel.mode == "emby", let filter = viewModel.activeEmbyFilterText {
                     Text(filter)
                         .font(.haoFootnote)

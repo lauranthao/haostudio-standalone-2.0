@@ -43,6 +43,20 @@ struct VideoItemPage: Equatable {
     static let empty = VideoItemPage(items: [], hasMore: false)
 }
 
+/// One CMS list fetch that never answered (transport failure,
+/// non-2xx, unparseable body — CmsClient answers nil for all of
+/// them). The gateway used to collapse this to an empty page, so
+/// a dead source read as an empty category; callers now get the
+/// failure and can keep the previous results (Phase 3, §4.1
+/// "请求失败时保留已有结果").
+enum VideoFetchError: Error {
+    case unreachable
+
+    var message: String {
+        "影视源没有响应，请检查网络后重试。"
+    }
+}
+
 /// What the video UI needs from the services. Every method takes
 /// the narrowest inputs and returns seam models only.
 protocol VideoDataGateway {
@@ -59,7 +73,10 @@ protocol VideoDataGateway {
     /// two-argument call fetched). Swift forbids default arguments
     /// in a protocol method, so the full signature is the
     /// requirement and callers pass the three values explicitly.
-    func fetchByType(_ type: String, page: Int, area: String, year: String, by: String, completion: @escaping (VideoItemPage) -> Void)
+    /// Failures surface as VideoFetchError (not swallowed to
+    /// .empty): a dead source must show an honest error, never
+    /// "这个分类下没有内容".
+    func fetchByType(_ type: String, page: Int, area: String, year: String, by: String, completion: @escaping (Result<VideoItemPage, VideoFetchError>) -> Void)
     /// CMS search across enabled sources, fastest first.
     func search(keyword: String, completion: @escaping ([VideoItem]) -> Void)
     /// Full detail: CMS lines + Douban metadata merged. Nil when
@@ -184,7 +201,7 @@ final class RealVideoDataGateway: VideoDataGateway {
         }
     }
 
-    func fetchByType(_ type: String, page: Int, area: String, year: String, by: String, completion: @escaping (VideoItemPage) -> Void) {
+    func fetchByType(_ type: String, page: Int, area: String, year: String, by: String, completion: @escaping (Result<VideoItemPage, VideoFetchError>) -> Void) {
         // The filtered byType overload (name:page:area:year:by:) —
         // NOT the old byType(typeName:page:) overload, which has
         // no filter parameters. Its `page` is 0-based like the
@@ -192,10 +209,10 @@ final class RealVideoDataGateway: VideoDataGateway {
         cms.byType(name: type, page: page, area: area, year: year, by: by) { result in
             DispatchQueue.main.async {
                 guard let result = result else {
-                    completion(.empty)
+                    completion(.failure(.unreachable))
                     return
                 }
-                completion(VideoItemPage(
+                completion(.success(VideoItemPage(
                     items: result.items,
                     // `page` is 0-based, `pagecount` is the TOTAL
                     // page count: the last page is pagecount - 1,
@@ -203,7 +220,7 @@ final class RealVideoDataGateway: VideoDataGateway {
                     // every list ended with one wasted empty fetch
                     // (bottom spinner after the last page).
                     hasMore: result.page + 1 < result.pagecount
-                ))
+                )))
             }
         }
     }
