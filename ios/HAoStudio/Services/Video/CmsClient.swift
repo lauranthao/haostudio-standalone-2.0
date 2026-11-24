@@ -304,7 +304,7 @@ let kVideoAreaAlias: [String: [String]] = [
 
 let kKnownVideoAreas = ["大陆", "中国大陆", "内地", "香港", "台湾", "美国", "韩国", "日本", "英国"]
 
-// MARK: - Default sources (revision 5)
+// MARK: - Default sources (revision 7)
 
 extension CmsClient {
     /// Defaults revision for the merge in VideoSourceStore.
@@ -316,8 +316,13 @@ extension CmsClient {
     /// 重验 2026-11-24: the 6 deleted sources' search APIs answer
     /// but their play-CDN hosts never connect, so nothing streams;
     /// 量子's play files 404; 芒果/母鸡 verified PLAYABLE: m3u8
-    /// playlist + a real .ts segment fetched).
-    static let sourcesRevision = 6
+    /// playlist + a real .ts segment fetched); 7 = defaults
+    /// UNCHANGED from 6 — the merge itself becomes tombstone-based
+    /// (build 36 item 6): upstream-deleted defaults are dropped
+    /// and user-deleted defaults stay deleted, via the applied set
+    /// recorded in VideoSourceStore. The bump is what makes the
+    /// fix run at all on a device that already merged rev 6.
+    static let sourcesRevision = 7
 
     /// UA for CMS video + Douban search-page fallback (must be
     /// verbatim — several upstreams key behaviour off it).
@@ -347,19 +352,70 @@ extension CmsClient {
 
 /// User-editable CMS source list, persisted under the same
 /// collection name the Flutter side uses (`hao_sa_video`) so a
-/// migrated user keeps their sources. Merge rules (port of
-/// VideoSourcesStore._mergeDefaults):
-/// - defaults missing from the persisted list (matched by apiUrl)
-///   are appended;
+/// migrated user keeps their sources. Merge rules (build 36 item 6,
+/// tombstone merge — port of the item-6 design harness):
+/// - a stored default the upstream dropped is removed; a
+///   user-added source (never a default) always survives;
+/// - a default the user deleted (applied once, absent now) is
+///   never re-added — the recorded applied set is what tells it
+///   apart from an upstream-deleted one;
 /// - matched defaults get their `sort` refreshed; the user's
 ///   `enabled` toggle is never touched;
 /// - a stored http:// URL whose default twin is now https:// is
 ///   upgraded in place (same id, sort and enabled);
-/// - the merge runs once per revision: a source the user
-///   deliberately deleted is never resurrected by a later load.
+/// - missing current defaults are appended, except ones the
+///   user deleted;
+/// - the merge runs once per revision.
 enum VideoSourceStore {
     static let collectionName = "hao_sa_video"
     static let revisionKey = "hao_sa_video_rev"
+    /// UserDefaults key for the applied set: the default urls
+    /// (https-normalised) the stored list was last merged against.
+    static let appliedKey = "hao_sa_video_applied"
+
+    /// Current default urls (https-normalised), sorted — the
+    /// applied set recorded after a merge or a reset.
+    static func currentDefaultURLs() -> [String] {
+        Set(CmsClient.defaultSources.map { videoToHttps($0.apiUrl) }).sorted()
+    }
+
+    /// Rev-5 shipped default urls (18), recovered from the Flutter
+    /// `cms_sources.dart` (`kVideoSourcesRevision` = 5). Only used
+    /// as the one-time fallback applied set for pre-fix installs
+    /// (`seen == 5`, no applied record yet).
+    static let rev5DefaultURLs: [String] = [
+        "https://jyzyapi.com/api.php/provide/vod",
+        "https://ffzy5.tv/api.php/provide/vod",
+        "https://cj.ffzyapi.com/api.php/provide/vod",
+        "https://jszyapi.com/api.php/provide/vod",
+        "https://caiji.moduapi.cc/api.php/provide/vod",
+        "https://ikunzyapi.com/api.php/provide/vod",
+        "https://api.guangsuapi.com/api.php/provide/vod",
+        "https://www.huyaapi.com/api.php/provide/vod",
+        "https://api.xinlangapi.com/xinlangapi.php/provide/vod",
+        "https://api.changzhang.tv/api.php/provide/vod/",
+        "https://hhzyapi.com/api.php/provide/vod/",
+        "https://www.hongniuzy2.com/api.php/provide/vod/",
+        "https://subocaiji.com/api.php/provide/vod",
+        "https://www.subozy.com/api.php/provide/vod/",
+        "https://cj.rycjapi.com/api.php/provide/vod",
+        "https://360zy.com/api.php/provide/vod",
+        "https://cj.lziapi.com/api.php/provide/vod",
+        "https://caiji.dyttzyapi.com/api.php/provide/vod",
+    ]
+
+    /// Urls the upstream deleted in rev 6, verified dead by the
+    /// build-35 real-playback re-test. Only used when no applied
+    /// record exists at all (and `seen != 5`).
+    static let legacyRemovedURLs: Set<String> = [
+        "https://jszyapi.com/api.php/provide/vod",
+        "https://api.guangsuapi.com/api.php/provide/vod",
+        "https://api.xinlangapi.com/xinlangapi.php/provide/vod",
+        "https://hhzyapi.com/api.php/provide/vod/",
+        "https://subocaiji.com/api.php/provide/vod",
+        "https://www.subozy.com/api.php/provide/vod/",
+        "https://cj.lziapi.com/api.php/provide/vod",
+    ]
 
     /// Load the persisted list, merged with the current defaults.
     /// Defaults when absent or corrupt — never throws into the UI.
@@ -395,6 +451,7 @@ enum VideoSourceStore {
     /// reset — the reset itself is the deliberate act).
     static func resetToDefaults() {
         save(CmsClient.defaultSources)
+        UserDefaults.standard.set(currentDefaultURLs(), forKey: appliedKey)
         UserDefaults.standard.set(CmsClient.sourcesRevision, forKey: revisionKey)
     }
 
@@ -403,41 +460,90 @@ enum VideoSourceStore {
         sources.count > 1
     }
 
-    /// Pure merge (unit-tested): `seenRevision` is the revision the
-    /// stored list was last merged at.
+    /// Pure tombstone merge (unit-tested, port of the build-36
+    /// item-6 design harness `mergeVideoSources`): `seen` is the
+    /// revision the stored list was last merged at, `applied` is
+    /// the default-url set recorded at that merge (nil when this
+    /// install never recorded one). Returns the merged list and
+    /// the applied set to persist (always the current defaults).
+    /// Rules: a stored default the upstream dropped is removed,
+    /// a user-added source always survives, a default the user
+    /// deleted (applied once, absent now) is never re-added, a
+    /// matched current default refreshes `sort` and upgrades
+    /// http→https without touching the user's `enabled`, and
+    /// missing current defaults are appended except user-deleted
+    /// ones. Pre-fix installs (`seen == 5`, no applied record)
+    /// fall back to the recovered rev-5 default set, which is
+    /// what makes a user-deleted rev-5 default distinguishable
+    /// from an upstream-deleted one. With no record at all, only
+    /// the known-dead legacy urls are dropped.
+    static func mergeVideoSources(
+        stored: [VideoSource],
+        seen: Int,
+        currentRevision: Int,
+        currentDefaults: [VideoSource],
+        applied: Set<String>?,
+        legacyRemoved: Set<String>
+    ) -> (merged: [VideoSource], applied: Set<String>) {
+        let currentURLs = Set(currentDefaults.map { videoToHttps($0.apiUrl) })
+        if seen >= currentRevision { return (stored, applied ?? currentURLs) }
+        var effectiveApplied = applied
+        if effectiveApplied == nil && seen == 5 {
+            effectiveApplied = Set(rev5DefaultURLs.map { videoToHttps($0) })
+        }
+        let storedURLs = Set(stored.map { videoToHttps($0.apiUrl) })
+        let userDeleted: Set<String> = effectiveApplied.map { $0.subtracting(storedURLs) } ?? []
+        var merged: [VideoSource] = []
+        for s in stored {
+            let url = videoToHttps(s.apiUrl)
+            let upstreamDeleted: Bool
+            if let a = effectiveApplied {
+                upstreamDeleted = a.contains(url) && !currentURLs.contains(url)
+            } else {
+                upstreamDeleted = legacyRemoved.contains(url)
+            }
+            if upstreamDeleted { continue }
+            if let def = currentDefaults.first(where: { videoToHttps($0.apiUrl) == url }) {
+                merged.append(VideoSource(id: s.id, name: s.name, apiUrl: def.apiUrl, kind: s.kind, enabled: s.enabled, sort: def.sort))
+            } else {
+                merged.append(s)
+            }
+        }
+        for def in currentDefaults where !storedURLs.contains(videoToHttps(def.apiUrl))
+            && !userDeleted.contains(videoToHttps(def.apiUrl)) {
+            merged.append(def)
+        }
+        return (merged, currentURLs)
+    }
+
+    /// Merge the stored list with the current defaults (IO wrapper
+    /// around `mergeVideoSources`): persists the merged list, the
+    /// applied set and the revision. The revision is bumped ONLY
+    /// after the merged list lands, so a crash mid-merge never
+    /// records rev 7 against the old list. `seenRevision`
+    /// overrides the recorded revision (tests).
     static func mergeDefaults(_ stored: [VideoSource], seenRevision: Int = -1) -> [VideoSource] {
         let seen = seenRevision >= 0
             ? seenRevision
             : UserDefaults.standard.integer(forKey: revisionKey)
-        if seen >= CmsClient.sourcesRevision { return stored }
-        let storedUrls: Set<String> = Set(stored.flatMap { [$0.apiUrl, videoToHttps($0.apiUrl)] })
-        var changed = false
-        var merged: [VideoSource] = stored.map { s in
-            guard let def = CmsClient.defaultSources.first(where: { $0.apiUrl == s.apiUrl || $0.apiUrl == videoToHttps(s.apiUrl) }) else {
-                return s
+        if seen >= CmsClient.sourcesRevision {
+            // Already current: the list is untouched. Record the
+            // applied set if this install never had one, so the
+            // NEXT revision can tell a user-deleted default from
+            // an upstream-deleted one.
+            if UserDefaults.standard.stringArray(forKey: appliedKey) == nil {
+                UserDefaults.standard.set(currentDefaultURLs(), forKey: appliedKey)
             }
-            if def.apiUrl != s.apiUrl {
-                changed = true
-                return VideoSource(id: s.id, name: s.name, apiUrl: def.apiUrl, kind: s.kind, enabled: s.enabled, sort: s.sort)
-            }
-            if def.sort != s.sort {
-                changed = true
-                return VideoSource(id: s.id, name: s.name, apiUrl: s.apiUrl, kind: s.kind, enabled: s.enabled, sort: def.sort)
-            }
-            return s
+            return stored
         }
-        for def in CmsClient.defaultSources where !storedUrls.contains(def.apiUrl) {
-            merged.append(def)
-            changed = true
-        }
-        if changed {
-            // Bump the revision ONLY after the merged list lands.
-            save(merged)
-            UserDefaults.standard.set(CmsClient.sourcesRevision, forKey: revisionKey)
-        } else {
-            UserDefaults.standard.set(CmsClient.sourcesRevision, forKey: revisionKey)
-        }
-        return merged
+        let applied: Set<String>? = UserDefaults.standard.stringArray(forKey: appliedKey).map { Set($0) }
+        let result = mergeVideoSources(
+            stored: stored, seen: seen, currentRevision: CmsClient.sourcesRevision,
+            currentDefaults: CmsClient.defaultSources, applied: applied, legacyRemoved: legacyRemovedURLs)
+        save(result.merged)
+        UserDefaults.standard.set(Array(result.applied).sorted(), forKey: appliedKey)
+        UserDefaults.standard.set(CmsClient.sourcesRevision, forKey: revisionKey)
+        return result.merged
     }
 }
 

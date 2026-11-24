@@ -55,6 +55,108 @@ final class LXScriptFileStore {
         }
     }
 
+    // MARK: - Seed refresh (build 36 item 6)
+
+    /// File holding the seed hashes, `Documents/lx_script_seed_hashes.json`
+    /// (id → SHA-256 hex of the content last seeded/refreshed).
+    /// Same Documents JSON-file pattern as LXScriptStore; the
+    /// record is what lets a refresh tell a pristine seed from a
+    /// user-modified file. Pre-fix installs have no record.
+    static let seedHashesFileName = "lx_script_seed_hashes.json"
+
+    /// SHA-256 hex of a script body (equality only — never a secret).
+    static func sha256Hex(_ code: String) -> String {
+        let digest = SHA256.hash(data: Data(code.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func loadSeedHashes() -> [String: String] {
+        let url = documentsDirectory.appendingPathComponent(Self.seedHashesFileName)
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode([String: String].self, from: data)
+        else { return [:] }
+        return decoded
+    }
+
+    private func saveSeedHashes(_ hashes: [String: String]) {
+        let url = documentsDirectory.appendingPathComponent(Self.seedHashesFileName)
+        guard let data = try? JSONEncoder().encode(hashes) else { return }
+        try? data.write(to: url, options: [.atomic])
+    }
+
+    /// Recorded seed hash for one bundled id (nil = pre-fix
+    /// install, no record yet).
+    func recordedSeedHash(for id: String) -> String? {
+        loadSeedHashes()[id]
+    }
+
+    func recordSeedHash(_ hash: String, for id: String) {
+        var hashes = loadSeedHashes()
+        hashes[id] = hash
+        saveSeedHashes(hashes)
+    }
+
+    func dropSeedHash(for id: String) {
+        var hashes = loadSeedHashes()
+        hashes.removeValue(forKey: id)
+        saveSeedHashes(hashes)
+    }
+
+    /// Seed a bundled script, refreshing a stale seed when the
+    /// bundle changed (build 36 item 6). Decision table — see
+    /// `LXScriptRefresh.decision`:
+    /// - no file → seed from the bundle, record its hash;
+    /// - file already current → keep, record the hash if missing;
+    /// - pristine seed (hash matches the recorded seed) and the
+    ///   bundle changed → refresh to the new bundle code, no backup;
+    /// - user-modified file (hash differs from the recorded seed)
+    ///   → NEVER touch;
+    /// - stale pre-fix file with no recorded hash → refresh WITH a
+    ///   one-time `<id>.js.bak` backup of the old content.
+    /// A user-deleted bundled id is never re-seeded here: callers
+    /// only pass ids the user has not deleted (LXEngine skips
+    /// `deletedBundledIds`). Returns the file URL when the file
+    /// exists afterwards, nil when there is no bundled code to
+    /// seed from and no file yet.
+    @discardableResult
+    func seedOrRefresh(id: String, bundleCode: String?) -> URL? {
+        let url = fileURL(forScriptID: id)
+        let existing = try? String(contentsOf: url, encoding: .utf8)
+        let storedHash = recordedSeedHash(for: id)
+        switch LXScriptRefresh.decision(existing: existing, bundle: bundleCode, storedHash: storedHash) {
+        case .keep:
+            return existing == nil ? nil : url
+        case .write(let content, let backup, let newHash):
+            do {
+                try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+                if let backup = backup {
+                    let backupURL = fileURL(forFileName: "\(id).js.bak")
+                    if !fileManager.fileExists(atPath: backupURL.path) {
+                        try backup.write(to: backupURL, atomically: true, encoding: .utf8)
+                    }
+                }
+                try content.write(to: url, atomically: true, encoding: .utf8)
+                recordSeedHash(newHash, for: id)
+                return url
+            } catch {
+                return existing == nil ? nil : url
+            }
+        }
+    }
+
+    /// Delete the on-disk copy of a bundled id that no longer ships
+    /// (e.g. `tang`): the orphan file — and its `.bak`, if any —
+    /// is removed and the seed-hash record dropped, so the id can
+    /// never be re-seeded. Never touches custom scripts or bundled
+    /// ids that still ship.
+    @discardableResult
+    func removeOrphanBundledFile(id: String) -> Bool {
+        dropSeedHash(for: id)
+        let fileOK = delete(id: id)
+        _ = deleteFile(named: "\(id).js.bak")
+        return fileOK
+    }
+
     func read(id: String) -> String? {
         try? String(contentsOf: fileURL(forScriptID: id), encoding: .utf8)
     }
@@ -124,6 +226,38 @@ final class LXScriptFileStore {
     static func displayName(for code: String, fileName: String) -> String {
         if let name = LXScriptHeader.parseName(from: code) { return name }
         return URL(fileURLWithPath: fileName).deletingPathExtension().lastPathComponent
+    }
+}
+
+/// Pure refresh decision for one bundled script file (unit-tested).
+/// Port of the build-36 item-6 design harness `refreshDecision`,
+/// with SHA-256 (`LXScriptFileStore.sha256Hex`) in place of the
+/// harness's stand-in hash — the algorithm only needs equality.
+/// - `bundle` nil means the id no longer ships: never re-seed
+///   (orphan deletion is the caller's job, see
+///   `LXScriptFileStore.removeOrphanBundledFile`).
+enum LXScriptRefresh {
+    case keep
+    case write(content: String, backup: String?, newHash: String)
+
+    static func decision(existing: String?, bundle: String?, storedHash: String?) -> LXScriptRefresh {
+        guard let bundle = bundle else { return .keep }
+        guard let existing = existing else {
+            return .write(content: bundle, backup: nil, newHash: LXScriptFileStore.sha256Hex(bundle))
+        }
+        if LXScriptFileStore.sha256Hex(existing) == LXScriptFileStore.sha256Hex(bundle) {
+            if storedHash == nil {
+                return .write(content: existing, backup: nil, newHash: LXScriptFileStore.sha256Hex(existing))
+            }
+            return .keep
+        }
+        if let stored = storedHash {
+            if LXScriptFileStore.sha256Hex(existing) == stored {
+                return .write(content: bundle, backup: nil, newHash: LXScriptFileStore.sha256Hex(bundle))
+            }
+            return .keep
+        }
+        return .write(content: bundle, backup: existing, newHash: LXScriptFileStore.sha256Hex(bundle))
     }
 }
 
