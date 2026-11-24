@@ -35,17 +35,22 @@ enum HaoLayout {
     static let tabBarBottomMargin: CGFloat = 2
     /// Horizontal margin of the floating capsule.
     static let tabBarHorizontalMargin: CGFloat = 12
-    /// Mini player strip height (Beans MiniPlayerView: 42pt content
-    /// + 2 x 4pt vertical padding = 50pt rendered; cover 36,
-    /// control 32, title 12 semibold, subtitle 10).
-    static let miniPlayerHeight: CGFloat = 50
+    /// Mini player strip height (Beans MiniPlayerView: cover 36 +
+    /// 2 x 4pt vertical padding = 44pt rendered; control 32, title
+    /// 12 semibold, subtitle 10). Build 37, chen 2026-11-24:
+    /// "mini 播放器做短一点" — the strip is shortened 50 -> 44pt
+    /// (HEIGHT, not width: the width stays screen − 24, equal to
+    /// the tab bar's). 44 is the floor with the current controls:
+    /// the 36 cover + 4pt padding each side, and the 44pt play /
+    /// pause hit targets fill the strip exactly.
+    static let miniPlayerHeight: CGFloat = 44
     /// Corner radius of the floating chrome (mini player + tab bar):
     /// a rounded rectangle, NOT a capsule. chen's Apple Music
     /// reference (2026-11-24 build 34): the mini and the bar share
     /// one shape, one width, stacked with an 8pt gap. 24pt, on the
     /// 4pt grid (raised from 12 in the build-35 polish pass): the
     /// iOS 26 reference measures the mini and the floating tab bar
-    /// at ~20–28pt — near half the 50pt strip height, almost a
+    /// at ~20–28pt — near half the 44pt strip height, almost a
     /// capsule — so 12 read square next to the system bar, whose
     /// radius is Apple's own (~20–30pt). One constant: if the two
     /// still read as different shapes on device, this is the
@@ -79,7 +84,7 @@ enum HaoLayout {
     /// bottom margin + tab bar + (gap + mini player while one is
     /// showing). This is the clearance a scroll page under the stack
     /// must add so its last row can scroll fully above the stack —
-    /// 66pt idle, 124pt while playing. See haoBottomChromePadding().
+    /// 66pt idle, 118pt while playing. See haoBottomChromePadding().
     /// (Build 37: the scroll-minimize behaviour is gone — chen
     /// 2026-11-24 had the menu restored to its original full tab
     /// bar, so there is no minimized form and no isMinimized
@@ -437,7 +442,7 @@ extension View {
 /// coordinator has a current item OR a music song is still loaded
 /// (MusicPlayerViewModel.miniFallbackSong — a failed / stopped track
 /// the full player keeps showing). Using only `currentItem` here
-/// would leave 66pt of clearance under a visible 124pt stack.
+/// would leave 66pt of clearance under a visible 118pt stack.
 private struct HaoBottomChromePadding: ViewModifier {
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var musicPlayer: MusicPlayerViewModel

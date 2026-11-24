@@ -78,14 +78,14 @@ final class MiniPlayerB35Tests: XCTestCase {
     func testMiniCornerRadiusAndPadding() {
         XCTAssertEqual(HaoLayout.floatingChromeCornerRadius, 24)
         XCTAssertEqual(HaoLayout.miniPlayerContentPadding, 12)
-        XCTAssertEqual(HaoLayout.miniPlayerHeight, 50)
+        XCTAssertEqual(HaoLayout.miniPlayerHeight, 44)
     }
 
     /// Bottom clearance for scroll content under the stack: 66pt
-    /// idle, 124pt while the mini is showing (58pt taller).
+    /// idle, 118pt while the mini is showing (52pt taller).
     func testFloatingStackClearance() {
         XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: false), 66)
-        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: true), 124)
+        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: true), 118)
     }
 
     // MARK: - Fallback: failed / stopped track keeps the mini visible
@@ -185,7 +185,7 @@ final class MiniPlayerB35Tests: XCTestCase {
 /// Covers the b35 tab-bar link leg's SURVIVING contract: the
 /// cover-morph constants (mini 36 -> full player up to 340, one
 /// shared matchedGeometryEffect id) and the floating-stack
-/// clearance (66 idle / 124 playing). The scroll-driven minimize
+/// clearance (66 idle / 118 playing). The scroll-driven minimize
 /// itself is REVERTED in build 37 (chen 2026-11-24: "菜单恢复原样"
 /// — the menu stays the original full glass tab bar, no narrowed
 /// capsule form): the state-machine tests, the minimized-row
@@ -198,12 +198,12 @@ final class BottomChromeB35Tests: XCTestCase {
 
     // MARK: - Clearance: follows the mini player, never shrinks
 
-    /// Clearance is 124pt while the mini is showing and 66pt
+    /// Clearance is 118pt while the mini is showing and 66pt
     /// idle — it no longer shrinks to 66 when minimized, because
     /// there is no minimized form any more.
     func testClearanceFollowsMiniPlayer() {
         XCTAssertEqual(
-            HaoLayout.floatingStackClearance(miniPlayerVisible: true), 124)
+            HaoLayout.floatingStackClearance(miniPlayerVisible: true), 118)
         XCTAssertEqual(
             HaoLayout.floatingStackClearance(miniPlayerVisible: false), 66)
     }
