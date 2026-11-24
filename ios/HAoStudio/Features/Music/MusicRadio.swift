@@ -29,7 +29,11 @@ enum MusicRadio {
         var pool: [MusicSong] = []
         for song in favourites + recent + listenTop {
             let key = song.identityKey
-            if dislikedIds.contains(song.songId) { continue }
+            // B4: dislikes are keyed by identityKey (platform|id),
+            // not the bare song id — the same id on two platforms
+            // used to dislike both. Bare ids stored before this
+            // change still match via the songId check below.
+            if dislikedIds.contains(song.songId) || dislikedIds.contains(key) { continue }
             if seen.insert(key).inserted { pool.append(song) }
         }
         var rng = MusicSeededRandom(seed: seed)

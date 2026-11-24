@@ -107,7 +107,11 @@ struct MusicCommentsView: View {
                     List {
                         if !viewModel.hot.isEmpty {
                             Section("热门评论") {
-                                ForEach(viewModel.hot, id: \.content) { comment in
+                                // A10: id was the comment text — two
+                                // identical comments ("好听") collided
+                                // and dropped a row. Offset is stable
+                                // for a loaded page.
+                                ForEach(Array(viewModel.hot.enumerated()), id: \.offset) { _, comment in
                                     MusicCommentRow(comment: comment)
                                         .listRowBackground(theme.scaffoldBackground)
                                         .listRowSeparatorTint(theme.hairline)
@@ -115,7 +119,7 @@ struct MusicCommentsView: View {
                             }
                         }
                         Section("最新评论") {
-                            ForEach(viewModel.latest, id: \.content) { comment in
+                            ForEach(Array(viewModel.latest.enumerated()), id: \.offset) { _, comment in
                                 MusicCommentRow(comment: comment)
                                     .listRowBackground(theme.scaffoldBackground)
                                     .listRowSeparatorTint(theme.hairline)
@@ -206,6 +210,9 @@ func musicCommentDateText(milliseconds: Int) -> String {
 
 private let musicCommentDateFormatter: DateFormatter = {
     let formatter = DateFormatter()
+    // B12: pin the locale — without it, non-Gregorian calendars
+    // change the year in the rendered date.
+    formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.dateFormat = "yyyy-MM-dd HH:mm"
     return formatter
 }()

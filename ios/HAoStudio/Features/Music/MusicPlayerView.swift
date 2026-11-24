@@ -351,17 +351,32 @@ struct MusicPlayerView: View {
                             Button(action: {
                                 playerVM.seek(to: line.time)
                             }) {
-                                Text(line.text.isEmpty ? " " : line.text)
-                                    .font(.system(
-                                        size: index == playerVM.activeLyricIndex ? 18 : 15,
-                                        weight: index == playerVM.activeLyricIndex ? .bold : .regular
-                                    ))
-                                    .foregroundStyle(.white.opacity(
-                                        index == playerVM.activeLyricIndex ? 1.0 : 0.55
-                                    ))
-                                    .multilineTextAlignment(.center)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 9)
+                                // A11: the translation (when one was
+                                // matched and the switch is on) rides
+                                // under its line, smaller and dimmer.
+                                VStack(spacing: 2) {
+                                    Text(line.text.isEmpty ? " " : line.text)
+                                        .font(.system(
+                                            size: index == playerVM.activeLyricIndex ? 18 : 15,
+                                            weight: index == playerVM.activeLyricIndex ? .bold : .regular
+                                        ))
+                                        .foregroundStyle(.white.opacity(
+                                            index == playerVM.activeLyricIndex ? 1.0 : 0.55
+                                        ))
+                                    if playerVM.showLyricTranslation,
+                                       let translation = line.translation, !translation.isEmpty {
+                                        Text(translation)
+                                            .font(.system(
+                                                size: index == playerVM.activeLyricIndex ? 14 : 13
+                                            ))
+                                            .foregroundStyle(.white.opacity(
+                                                index == playerVM.activeLyricIndex ? 0.85 : 0.4
+                                            ))
+                                    }
+                                }
+                                .multilineTextAlignment(.center)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 9)
                             }
                             .buttonStyle(.plain)
                             .id(index)
@@ -701,6 +716,9 @@ struct MusicPlayerView: View {
                         ),
                         in: -5000...5000, step: 100
                     )
+                    // E5: translation switch, same section as the
+                    // offset (A11). Default on.
+                    Toggle("显示翻译", isOn: $playerVM.showLyricTranslation)
                 }
                 Section("反馈") {
                     Toggle("触感反馈", isOn: Binding(

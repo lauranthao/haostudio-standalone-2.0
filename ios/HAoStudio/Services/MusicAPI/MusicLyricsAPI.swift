@@ -133,23 +133,28 @@ final class MusicLyricsAPI {
 
     /// Parse LRC text into lines. `[mm:ss.xx]` only; metadata tags,
     /// `暂无歌词` and `纯音乐` lines are skipped; sorted by time.
+    /// B6: a line may carry several time tags
+    /// (`[00:10.00][00:20.00]text`) — one line is emitted per tag,
+    /// not just the first. Only the time tags are stripped: the old
+    /// blanket `\[.*?\]` removal also ate bracketed lyric text
+    /// (e.g. a word in [brackets]). A leading bracketed segment is
+    /// dropped only when it is a section label (chorus / verse /
+    /// 副歌 …), never lyric content.
     static func parseLrc(_ text: String) -> [LyricsLine] {
         var out: [LyricsLine] = []
-        let timePattern = try? NSRegularExpression(pattern: "\\[(\\d+):(\\d+(?:\\.\\d+)?)\\]")
-        let tagPattern = try? NSRegularExpression(pattern: "\\[.*?\\]")
+        guard let timePattern = try? NSRegularExpression(pattern: "\\[(\\d+):(\\d+(?:\\.\\d+)?)\\]") else {
+            return []
+        }
+        let fullRange = { (s: String) in NSRange(s.startIndex..., in: s) }
         for line in text.components(separatedBy: "\n") {
-            guard let timePattern = timePattern,
-                  let match = timePattern.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
-                  let minRange = Range(match.range(at: 1), in: line),
-                  let secRange = Range(match.range(at: 2), in: line),
-                  let minutes = Int(line[minRange]),
-                  let seconds = Double(line[secRange])
-            else { continue }
-            var stripped = line
-            if let tagPattern = tagPattern {
-                stripped = tagPattern.stringByReplacingMatches(
-                    in: stripped, range: NSRange(stripped.startIndex..., in: stripped), withTemplate: "")
-            }
+            let matches = timePattern.matches(in: line, range: fullRange(line))
+            guard !matches.isEmpty else { continue }
+            // Text = the line with only its time tags removed.
+            var stripped = timePattern.stringByReplacingMatches(
+                in: line, range: fullRange(line), withTemplate: "")
+            // Strip leading section labels ("[Chorus]", "[副歌]"):
+            // they are structure, not lyrics.
+            stripped = stripLeadingSectionLabel(stripped)
             let text = stripped.trimmingCharacters(in: .whitespaces)
             guard !text.isEmpty else { continue }
             let lower = text.lowercased()
@@ -158,10 +163,37 @@ final class MusicLyricsAPI {
                 continue
             }
             if text.hasPrefix("暂无歌词") || text.hasPrefix("纯音乐") { continue }
-            out.append(LyricsLine(time: Double(minutes * 60) + seconds, text: text))
+            for match in matches {
+                guard let minRange = Range(match.range(at: 1), in: line),
+                      let secRange = Range(match.range(at: 2), in: line),
+                      let minutes = Int(line[minRange]),
+                      let seconds = Double(line[secRange])
+                else { continue }
+                out.append(LyricsLine(time: Double(minutes * 60) + seconds, text: text))
+            }
         }
         out.sort { $0.time < $1.time }
         return out
+    }
+
+    /// Drop leading "[...]" segments whose content is a section
+    /// label rather than lyric text. Anything else (including a
+    /// bracketed lyric word) is kept.
+    private static func stripLeadingSectionLabel(_ text: String) -> String {
+        let labels: Set<String> = [
+            "chorus", "verse", "bridge", "intro", "outro", "pre-chorus",
+            "post-chorus", "hook", "interlude", "instrumental", "refrain",
+            "副歌", "主歌", "前奏", "间奏", "尾奏", "桥段", "合唱", "独白", "对白",
+        ]
+        var rest = text
+        while rest.hasPrefix("["),
+              let close = rest.firstIndex(of: "]") {
+            let content = String(rest[rest.index(after: rest.startIndex)..<close])
+                .trimmingCharacters(in: .whitespaces).lowercased()
+            guard labels.contains(content) else { break }
+            rest = String(rest[rest.index(after: close)...])
+        }
+        return rest
     }
 
     /// Parse LRC with an optional translation track (NetEase

@@ -164,4 +164,27 @@ final class MusicQueueTests: XCTestCase {
         let restored = MusicQueue.fromQueueData(MusicQueueData(songs: [song("1")], index: 9))
         XCTAssertEqual(restored.index, 0)
     }
+
+    // MARK: - Shuffle bounded retries (B1)
+
+    func testShuffleNextDegenerateRandomFallsBack() {
+        // A random source that always returns the current index
+        // used to spin the old `while` loop forever. The bounded
+        // version must return the next index instead.
+        let next = musicNextTrackIndex(mode: .shuffle, current: 1, length: 3, auto: true,
+                                       randomIndex: { _ in 1 })
+        XCTAssertEqual(next, 2)
+    }
+
+    func testShufflePrevDegenerateRandomFallsBack() {
+        let prev = musicPrevTrackIndex(mode: .shuffle, current: 1, length: 3,
+                                       randomIndex: { _ in 1 })
+        XCTAssertEqual(prev, 0)
+    }
+
+    func testShuffleNextHonoursRandomWhenItDiffers() {
+        let next = musicNextTrackIndex(mode: .shuffle, current: 1, length: 3, auto: true,
+                                       randomIndex: { _ in 2 })
+        XCTAssertEqual(next, 2)
+    }
 }
