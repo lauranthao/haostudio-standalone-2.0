@@ -47,7 +47,7 @@ struct MusicEqualizerView: View {
 
     private var enableRow: some View {
         Toggle("均衡器", isOn: $eqVM.enabled)
-            .font(.system(size: 16, weight: .semibold))
+            .font(.haoCalloutStrong)
             .foregroundStyle(theme.textPrimary)
             .tint(theme.accent)
     }
@@ -57,16 +57,16 @@ struct MusicEqualizerView: View {
     private var responseCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("响应曲线")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.haoDenseTitle)
                 .foregroundStyle(theme.textPrimary)
             EQCurveView(gains: eqVM.previewGains)
                 .frame(height: 90)
             HStack {
-                Text("31 Hz").font(.system(size: 10)).foregroundStyle(theme.textMuted)
+                Text("31 Hz").font(.haoCaption2).foregroundStyle(theme.textMuted)
                 Spacer()
-                Text("1 kHz").font(.system(size: 10)).foregroundStyle(theme.textMuted)
+                Text("1 kHz").font(.haoCaption2).foregroundStyle(theme.textMuted)
                 Spacer()
-                Text("16 kHz").font(.system(size: 10)).foregroundStyle(theme.textMuted)
+                Text("16 kHz").font(.haoCaption2).foregroundStyle(theme.textMuted)
             }
         }
         .padding(16)
@@ -80,7 +80,7 @@ struct MusicEqualizerView: View {
             ForEach(0..<MusicEQMath.bandCount, id: \.self) { band in
                 HStack(spacing: 12) {
                     Text(MusicEQMath.frequencyLabel(MusicEQMath.bandFrequencies[band]))
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.haoFootnoteMedium)
                         .foregroundStyle(theme.textSecondary)
                         .frame(width: 52, alignment: .leading)
                     Slider(
@@ -94,7 +94,7 @@ struct MusicEqualizerView: View {
                     .tint(theme.accent)
                     .disabled(!eqVM.enabled)
                     Text(String(format: "%+.1f", eqVM.gains[band]))
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.haoCaptionMedium)
                         .foregroundStyle(theme.textSecondary)
                         .frame(width: 44, alignment: .trailing)
                 }
@@ -115,11 +115,11 @@ struct MusicEqualizerView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("前级增益")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.haoDenseTitle)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 Text(String(format: "%+.1f dB", eqVM.preamp))
-                    .font(.system(size: 13))
+                    .font(.haoFootnote)
                     .foregroundStyle(theme.textSecondary)
             }
             Slider(
@@ -143,11 +143,11 @@ struct MusicEqualizerView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("预设")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.haoDenseTitle)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 Text(eqVM.currentPresetName)
-                    .font(.system(size: 13))
+                    .font(.haoFootnote)
                     .foregroundStyle(theme.textSecondary)
             }
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
@@ -157,10 +157,10 @@ struct MusicEqualizerView: View {
                         HStack(spacing: 4) {
                             if selected {
                                 Image(systemName: "checkmark")
-                                    .font(.system(size: 12, weight: .semibold))
+                                    .font(.haoCaptionStrong)
                             }
                             Text(preset.displayName)
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.haoCaptionMedium)
                         }
                             .foregroundStyle(selected ? theme.accent : theme.textPrimary)
                             .frame(maxWidth: .infinity)
@@ -181,20 +181,20 @@ struct MusicEqualizerView: View {
             if !eqVM.customPresets.isEmpty {
                 Divider().background(theme.hairline)
                 Text("我的预设")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.haoFootnoteStrong)
                     .foregroundStyle(theme.textSecondary)
                 ForEach(eqVM.customPresets, id: \.name) { preset in
                     HStack {
                         Button(action: { eqVM.applyCustomPreset(preset) }) {
                             Text(preset.name)
-                                .font(.system(size: 14))
+                                .font(.haoRowSubtitle)
                                 .foregroundStyle(theme.textPrimary)
                         }
                         .buttonStyle(.plain)
                         Spacer()
                         Button(action: { eqVM.deleteCustomPreset(preset) }) {
                             Image(systemName: "trash")
-                                .font(.system(size: 13))
+                                .font(.haoFootnote)
                                 .foregroundStyle(theme.textMuted)
                         }
                         .buttonStyle(.plain)
@@ -204,7 +204,7 @@ struct MusicEqualizerView: View {
             Divider().background(theme.hairline)
             HStack(spacing: 10) {
                 TextField("保存为自定义预设", text: $newPresetName)
-                    .font(.system(size: 14))
+                    .font(.haoRowSubtitle)
                 Button("保存") {
                     eqVM.saveCurrentAsCustomPreset(named: newPresetName)
                     newPresetName = ""
@@ -224,16 +224,16 @@ struct MusicEqualizerView: View {
     private var autoEqCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("耳机预设（AutoEq）")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.haoDenseTitle)
                 .foregroundStyle(theme.textPrimary)
             Text("社区风格修正的近似值，不是完整测量曲线。")
-                .font(.system(size: 12))
+                .font(.haoCaption)
                 .foregroundStyle(theme.textSecondary)
             ForEach(MusicAutoEqPreset.all, id: \.name) { preset in
                 Button(action: { eqVM.applyAutoEq(preset) }) {
                     HStack {
                         Text(preset.name)
-                            .font(.system(size: 14))
+                            .font(.haoRowSubtitle)
                             .foregroundStyle(theme.textPrimary)
                         Spacer()
                         if eqVM.selectedAutoEqName == preset.name {
@@ -255,21 +255,21 @@ struct MusicEqualizerView: View {
     private var normalizationCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             Toggle("音量归一化", isOn: $eqVM.normalizationEnabled)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.haoDenseTitle)
                 .foregroundStyle(theme.textPrimary)
                 .tint(theme.accent)
                 .disabled(!eqVM.normalizationAvailable)
             Text("归一化需开启均衡器才能测响度；只压低不抬升，第二遍播放起生效。")
-                .font(.system(size: 12))
+                .font(.haoCaption)
                 .foregroundStyle(theme.textSecondary)
             HStack {
                 Text("归一化强度")
-                    .font(.system(size: 14))
+                    .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 Stepper(value: $eqVM.normalizationStrength, in: 0...2) {
                     Text("\(eqVM.normalizationStrength)")
-                        .font(.system(size: 14))
+                        .font(.haoRowSubtitle)
                         .foregroundStyle(theme.textSecondary)
                 }
                 .disabled(!eqVM.normalizationAvailable || !eqVM.normalizationEnabled)

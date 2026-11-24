@@ -116,10 +116,10 @@ struct VideoSearchView: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.haoSubheadStrong)
                 .foregroundStyle(theme.textMuted)
             TextField("搜索影片、剧集", text: $query)
-                .font(.system(size: 15))
+                .font(.haoSubhead)
                 .foregroundStyle(theme.textPrimary)
                 .textInputAutocapitalization(.never)
                 .disableAutocorrection(true)
@@ -127,13 +127,13 @@ struct VideoSearchView: View {
             if !query.isEmpty {
                 Button(action: { query = "" }) {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 15))
+                        .font(.haoSubhead)
                         .foregroundStyle(theme.textMuted)
                 }
                 .buttonStyle(.plain)
             }
             Button("搜索") { viewModel.search(query) }
-                .font(.system(size: 15, weight: .semibold))
+                .font(.haoSubheadStrong)
                 .foregroundStyle(theme.accent)
                 .buttonStyle(.plain)
         }
@@ -150,19 +150,19 @@ struct VideoSearchView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("搜索历史")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.haoSectionTitle)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 if !viewModel.history.isEmpty {
                     Button("清除") { viewModel.clearHistory() }
-                        .font(.system(size: 14))
+                        .font(.haoRowSubtitle)
                         .foregroundStyle(theme.accent)
                 }
             }
             .padding(.horizontal, 24)
             if viewModel.history.isEmpty {
                 Text("还没有搜索记录。")
-                    .font(.system(size: 14))
+                    .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textMuted)
                     .padding(.horizontal, 16)
             } else {
@@ -182,13 +182,13 @@ struct VideoSearchView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title)
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.haoSectionTitle)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 // VidHub-style count ("共 3 部"): the number comes
                 // from the results themselves, never invented.
                 Text("共 \(items.count) 部")
-                    .font(.system(size: 13))
+                    .font(.haoFootnote)
                     .foregroundStyle(theme.textMuted)
             }
             .padding(.horizontal, 16)
@@ -230,7 +230,7 @@ struct FlowChips: View {
                     ForEach(row, id: \.self) { term in
                         Button(action: { onTap(term) }) {
                             Text(term)
-                                .font(.system(size: 14, weight: .medium))
+                                .font(.haoDenseBody)
                                 .foregroundStyle(theme.textPrimary)
                                 .lineLimit(1)
                                 .padding(.horizontal, 12)

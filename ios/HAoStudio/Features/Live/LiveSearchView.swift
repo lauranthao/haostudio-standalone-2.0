@@ -116,10 +116,10 @@ struct LiveSearchView: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.haoSubheadStrong)
                 .foregroundStyle(theme.textMuted)
             TextField("搜索直播间、主播", text: $query)
-                .font(.system(size: 15))
+                .font(.haoSubhead)
                 .foregroundStyle(theme.textPrimary)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -130,7 +130,7 @@ struct LiveSearchView: View {
             if !query.isEmpty {
                 Button(action: { query = "" }) {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 15))
+                        .font(.haoSubhead)
                         .foregroundStyle(theme.textMuted)
                 }
                 .buttonStyle(.plain)
@@ -155,7 +155,7 @@ struct LiveSearchView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("搜索历史")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.haoBodyStrong)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 if !viewModel.searchHistory.isEmpty {
@@ -163,7 +163,7 @@ struct LiveSearchView: View {
                         viewModel.clearSearchHistory()
                         historyVersion += 1
                     }
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.haoDenseBody)
                     .foregroundStyle(theme.accent)
                     .buttonStyle(.plain)
                 }
@@ -171,7 +171,7 @@ struct LiveSearchView: View {
             .padding(.horizontal, 24)
             if viewModel.searchHistory.isEmpty {
                 Text("还没有搜索记录")
-                    .font(.system(size: 14))
+                    .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textMuted)
                     .padding(.horizontal, 24)
             } else {

@@ -101,7 +101,7 @@ struct LiveDanmakuSettingsSheet: View {
                     step: 1
                 )
                 Text("\(Int(settings.fontSize))")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.haoSubheadStrong)
                     .foregroundStyle(theme.textPrimary)
                     .frame(width: 32, alignment: .center)
             }
@@ -121,7 +121,7 @@ struct LiveDanmakuSettingsSheet: View {
                     step: 0.1
                 )
                 Text(String(format: "%.1f", settings.opacity))
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.haoSubheadStrong)
                     .foregroundStyle(theme.textPrimary)
                     .frame(width: 32, alignment: .center)
             }
@@ -189,7 +189,7 @@ struct LiveDanmakuSettingsSheet: View {
                     step: 1
                 )
                 Text("越高越严格（只挡更像的）")
-                    .font(.system(size: 13))
+                    .font(.haoFootnote)
                     .foregroundStyle(theme.textMuted)
             }
             Toggle("屏蔽纯表情弹幕", isOn: $settings.blockEmoteOnly)
@@ -245,7 +245,7 @@ struct LiveDanmakuSettingsSheet: View {
                             .foregroundStyle(theme.textPrimary)
                         Spacer()
                         Text(entry.isUser ? "用户名" : "关键词")
-                            .font(.system(size: 13))
+                            .font(.haoFootnote)
                             .foregroundStyle(theme.textSecondary)
                         Button(action: { removeBlockEntry(entry) }) {
                             Image(systemName: "trash")

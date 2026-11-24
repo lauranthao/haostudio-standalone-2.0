@@ -30,28 +30,28 @@ struct VideoHistoryView: View {
                                 VideoPosterCardImage(item: entry.item, size: 80)
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(entry.item.title)
-                                        .font(.system(size: 15, weight: .semibold))
+                                        .font(.haoSubheadStrong)
                                         .foregroundStyle(theme.textPrimary)
                                         .lineLimit(1)
                                     Text(entry.episodeName.isEmpty ? "正片" : entry.episodeName)
-                                        .font(.system(size: 13))
+                                        .font(.haoFootnote)
                                         .foregroundStyle(theme.textSecondary)
                                         .lineLimit(1)
                                     if entry.durationSeconds > 0 {
                                         ProgressView(value: entry.progress)
                                             .tint(theme.accent)
                                         Text(historyProgressText(entry: entry))
-                                            .font(.system(size: 12))
+                                            .font(.haoCaption)
                                             .foregroundStyle(theme.textMuted)
                                     } else {
                                         Text("上次看到这里")
-                                            .font(.system(size: 12))
+                                            .font(.haoCaption)
                                             .foregroundStyle(theme.textMuted)
                                     }
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: 13, weight: .semibold))
+                                    .font(.haoFootnoteStrong)
                                     .foregroundStyle(theme.textMuted)
                             }
                             .contentShape(Rectangle())
@@ -82,7 +82,7 @@ struct VideoHistoryView: View {
             ToolbarItem(placement: .primaryAction) {
                 if !entries.isEmpty {
                     Button("清空") { showClearConfirm = true }
-                        .font(.system(size: 15))
+                        .font(.haoSubhead)
                         .foregroundStyle(theme.accent)
                 }
             }

@@ -45,11 +45,11 @@ struct SettingsSectionHeader: View {
         }) {
             HStack {
                 Text(section.title)
-                    .font(.system(size: 13))
+                    .font(.haoFootnote)
                     .foregroundStyle(theme.textSecondary)
                 Spacer()
                 Image(systemName: settings.sectionExpanded(section.rawValue) ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.haoCaption2Strong)
                     .foregroundStyle(theme.textMuted)
             }
         }
@@ -169,7 +169,7 @@ struct SettingsGroupsView: View {
 
     private func footnote(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 13))
+            .font(.haoFootnote)
             .foregroundStyle(theme.textSecondary)
             .listRowSeparator(.hidden)
     }
@@ -257,7 +257,7 @@ struct SettingsGroupsView: View {
                 Button("恢复默认") {
                     settings.accentOverride = nil
                 }
-                .font(.system(size: 17))
+                .font(.haoBody)
             }
         }
     }
@@ -274,7 +274,7 @@ struct SettingsGroupsView: View {
     private var tabAccentRow: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("底栏选中颜色")
-                .font(.system(size: 17))
+                .font(.haoBody)
                 .foregroundStyle(theme.textPrimary)
             HStack(spacing: 12) {
                 ForEach(tabAccentChoices) { choice in
@@ -312,7 +312,7 @@ struct SettingsGroupsView: View {
                             .frame(width: 28, height: 28)
                             .overlay {
                                 Image(systemName: "slash.circle")
-                                    .font(.system(size: 14))
+                                    .font(.haoRowSubtitle)
                                     .foregroundStyle(theme.textSecondary)
                             }
                     }
@@ -323,7 +323,7 @@ struct SettingsGroupsView: View {
                     }
                 }
                 Text(choice.label)
-                    .font(.system(size: 11))
+                    .font(.haoCaption2)
                     .foregroundStyle(theme.textSecondary)
             }
         }
@@ -357,11 +357,11 @@ struct SettingsGroupsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("液态玻璃强度")
-                    .font(.system(size: 17))
+                    .font(.haoBody)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 Text("\(Int(settings.glassIntensity * 100))%")
-                    .font(.system(size: 17))
+                    .font(.haoBody)
                     .foregroundStyle(theme.textSecondary)
             }
             // Coordinator fix (S5 merge): glassIntensity is a
@@ -554,11 +554,11 @@ struct SettingsGroupsView: View {
     private var lastUsedEngineRow: some View {
         HStack {
             Text("上次实际")
-                .font(.system(size: 17))
+                .font(.haoBody)
                 .foregroundStyle(theme.textPrimary)
             Spacer()
             Text(engineReporter.lastUsed?.displayName ?? "—")
-                .font(.system(size: 17))
+                .font(.haoBody)
                 .foregroundStyle(theme.textSecondary)
         }
     }
@@ -693,7 +693,7 @@ struct SettingsGroupsView: View {
                         Text("Emby 连接")
                         Spacer()
                         Text(embySubtitle)
-                            .font(.system(size: 17))
+                            .font(.haoBody)
                             .foregroundStyle(theme.textSecondary)
                     }
                 }
@@ -721,19 +721,19 @@ struct SettingsGroupsView: View {
             if isExpanded(.data) {
                 HStack {
                     Text("缓存管理")
-                        .font(.system(size: 17))
+                        .font(.haoBody)
                         .foregroundStyle(theme.textPrimary)
                     Spacer()
                     Text(ByteCountFormatter.string(
                         fromByteCount: Int64(cacheSizeBytes),
                         countStyle: .file
                     ))
-                    .font(.system(size: 17))
+                    .font(.haoBody)
                     .foregroundStyle(theme.textSecondary)
                     Button("清理") {
                         showingClearCacheAlert = true
                     }
-                    .font(.system(size: 17))
+                    .font(.haoBody)
                 }
                 .alert("清理缓存", isPresented: $showingClearCacheAlert) {
                     Button("取消", role: .cancel) {
@@ -765,7 +765,7 @@ struct SettingsGroupsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("导出备份")
-                    .font(.system(size: 17))
+                    .font(.haoBody)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 if backupFlow.isExporting {
@@ -774,18 +774,18 @@ struct SettingsGroupsView: View {
                     Button("导出") {
                         backupFlow.beginExport()
                     }
-                    .font(.system(size: 17))
+                    .font(.haoBody)
                 }
             }
             if let exportedURL = backupFlow.exportedURL {
                 ShareLink(item: exportedURL) {
                     HStack {
                         Text("分享备份文件")
-                            .font(.system(size: 17))
+                            .font(.haoBody)
                             .foregroundStyle(theme.textPrimary)
                         Spacer()
                         Text(exportedURL.lastPathComponent)
-                            .font(.system(size: 13))
+                            .font(.haoFootnote)
                             .foregroundStyle(theme.textSecondary)
                             .lineLimit(1)
                     }
@@ -801,7 +801,7 @@ struct SettingsGroupsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("导入备份")
-                    .font(.system(size: 17))
+                    .font(.haoBody)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 if backupFlow.isImporting {
@@ -810,7 +810,7 @@ struct SettingsGroupsView: View {
                     Button("选择文件") {
                         backupFlow.beginImport()
                     }
-                    .font(.system(size: 17))
+                    .font(.haoBody)
                 }
             }
             footnote("从 .zip 备份文件导入；导入失败会自动回滚，现有数据不受影响。")
@@ -832,11 +832,11 @@ struct SettingsGroupsView: View {
             if isExpanded(.about) {
                 HStack {
                     Text("版本")
-                        .font(.system(size: 17))
+                        .font(.haoBody)
                         .foregroundStyle(theme.textPrimary)
                     Spacer()
                     Text(bundleVersion)
-                        .font(.system(size: 17))
+                        .font(.haoBody)
                         .foregroundStyle(theme.textSecondary)
                 }
                 checkUpdateRow
@@ -856,10 +856,10 @@ struct SettingsGroupsView: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text("检查更新")
-                    .font(.system(size: 17))
+                    .font(.haoBody)
                     .foregroundStyle(theme.textPrimary)
                 Text(UpdateCheckLogic.lastCheckLabel(date: backupFlow.lastCheckDate, now: Date()))
-                    .font(.system(size: 13))
+                    .font(.haoFootnote)
                     .foregroundStyle(theme.textMuted)
             }
             Spacer()
@@ -869,7 +869,7 @@ struct SettingsGroupsView: View {
                 Button("检查") {
                     backupFlow.checkForUpdate()
                 }
-                .font(.system(size: 17))
+                .font(.haoBody)
             }
         }
     }
@@ -882,13 +882,13 @@ struct SettingsGroupsView: View {
         if let skipped = backupFlow.skippedVersionLabel {
             HStack {
                 Text("已跳过 \(skipped)，点按取消跳过")
-                    .font(.system(size: 17))
+                    .font(.haoBody)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 Button("取消跳过") {
                     backupFlow.clearSkippedVersion()
                 }
-                .font(.system(size: 17))
+                .font(.haoBody)
             }
         }
     }
@@ -922,7 +922,7 @@ struct WallpaperManagementView: View {
             Section {
                 if names.isEmpty {
                     Text("还没有壁纸，从相册导入一张。")
-                        .font(.system(size: 14))
+                        .font(.haoRowSubtitle)
                         .foregroundStyle(theme.textMuted)
                 } else {
                     ForEach(names, id: \.self) { name in
@@ -966,12 +966,12 @@ struct WallpaperManagementView: View {
         }) {
             HStack {
                 Text(displayName(for: name))
-                    .font(.system(size: 17))
+                    .font(.haoBody)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 if settings.wallpaperCurrent == name {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.haoFootnoteStrong)
                         .foregroundStyle(theme.accent)
                 }
             }
@@ -1075,7 +1075,7 @@ struct VideoCategoryEditView: View {
     private func categoryRow(_ name: String) -> some View {
         HStack {
             Text(name)
-                .font(.system(size: 17))
+                .font(.haoBody)
                 .foregroundStyle(theme.textPrimary)
             Spacer()
             Toggle(

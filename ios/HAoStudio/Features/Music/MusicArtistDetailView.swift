@@ -100,9 +100,9 @@ struct MusicArtistDetailView: View {
         Button(action: { playerVM.playAll(viewModel.songs) }) {
             HStack(spacing: 8) {
                 Image(systemName: "play.fill")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.haoCalloutStrong)
                 Text("播放")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.haoCalloutStrong)
             }
             .foregroundStyle(theme.onAccent)
             .frame(maxWidth: .infinity)
@@ -153,12 +153,12 @@ struct MusicArtistDetailView: View {
                                     VStack(alignment: .leading, spacing: 6) {
                                         MusicCoverView(urlString: album.cover, size: 120, cornerRadius: 10)
                                         Text(album.name)
-                                            .font(.system(size: 13, weight: .semibold))
+                                            .font(.haoFootnoteStrong)
                                             .foregroundStyle(theme.textPrimary)
                                             .lineLimit(2)
                                             .frame(width: 120, alignment: .leading)
                                         Text(albumRowSubtitle(album))
-                                            .font(.system(size: 12))
+                                            .font(.haoCaption)
                                             .foregroundStyle(theme.textSecondary)
                                             .lineLimit(1)
                                             .frame(width: 120, alignment: .leading)
@@ -188,23 +188,23 @@ struct MusicArtistDetailView: View {
             MusicCoverView(urlString: viewModel.detail.pic, size: 160, cornerRadius: 80)
                 .shadow(color: .black.opacity(0.25), radius: 16, y: 8)
             Text(viewModel.detail.name.isEmpty ? artist.name : viewModel.detail.name)
-                .font(.system(size: 22, weight: .bold))
+                .font(.haoDetailTitle)
                 .foregroundStyle(theme.textPrimary)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
             if !artist.alias.isEmpty {
                 Text("又名 \(artist.alias)")
-                    .font(.system(size: 14))
+                    .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textSecondary)
                     .lineLimit(1)
             }
             if !countsText.isEmpty {
                 Text(countsText)
-                    .font(.system(size: 13))
+                    .font(.haoFootnote)
                     .foregroundStyle(theme.textMuted)
             }
             Text(artist.platform.badgeName)
-                .font(.system(size: 11, weight: .medium))
+                .font(.haoCaption2Strong)
                 .foregroundStyle(theme.textSecondary)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)

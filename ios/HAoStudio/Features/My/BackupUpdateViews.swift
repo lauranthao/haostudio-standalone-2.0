@@ -238,17 +238,17 @@ struct UpdatePromptSheet: View {
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("发现新版本")
-                .font(.system(size: 20, weight: .bold))
+                .font(.haoDetailTitle)
                 .foregroundStyle(theme.textPrimary)
             Text(content.versionLabel)
-                .font(.system(size: 15))
+                .font(.haoSubhead)
                 .foregroundStyle(theme.textSecondary)
         }
     }
 
     private var notesSection: some View {
         Text(content.releaseNotes)
-            .font(.system(size: 15))
+            .font(.haoSubhead)
             .foregroundStyle(theme.textPrimary)
     }
 
@@ -257,10 +257,10 @@ struct UpdatePromptSheet: View {
         if let blocked = content.blockedMessage {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 15))
+                    .font(.haoSubhead)
                     .foregroundStyle(theme.accent)
                 Text(blocked)
-                    .font(.system(size: 15))
+                    .font(.haoSubhead)
                     .foregroundStyle(theme.textPrimary)
             }
         }
@@ -275,12 +275,12 @@ struct UpdatePromptSheet: View {
                 Button("跳过该版本") {
                     onSkip()
                 }
-                .font(.system(size: 16))
+                .font(.haoCallout)
                 .foregroundStyle(theme.accent)
                 Button("以后再说") {
                     onLater()
                 }
-                .font(.system(size: 16))
+                .font(.haoCallout)
                 .foregroundStyle(theme.accent)
             }
             .frame(maxWidth: .infinity)
@@ -295,7 +295,7 @@ struct UpdatePromptSheet: View {
             onLater()
         }) {
             Text("更新")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.haoCalloutStrong)
                 .foregroundStyle(theme.onAccent)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)

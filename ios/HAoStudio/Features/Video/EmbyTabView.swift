@@ -176,7 +176,7 @@ struct EmbyTabView: View {
         let selected = viewModel.selectedLibraryId == id
         return Button(action: { viewModel.selectLibrary(id) }) {
             Text(name)
-                .font(.system(size: 14, weight: .medium))
+                .font(.haoDenseBody)
                 .foregroundStyle(selected ? theme.onAccent : theme.textPrimary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -192,7 +192,7 @@ struct EmbyTabView: View {
     private var genreStrip: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("分类")
-                .font(.system(size: 20, weight: .semibold))
+                .font(.haoSectionTitle)
                 .foregroundStyle(theme.textPrimary)
                 .padding(.horizontal, 16)
             ScrollView(.horizontal, showsIndicators: false) {
@@ -200,7 +200,7 @@ struct EmbyTabView: View {
                     ForEach(viewModel.genres, id: \.self) { genre in
                         Button(action: { onSelectGenre(genre) }) {
                             Text(genre)
-                                .font(.system(size: 14, weight: .medium))
+                                .font(.haoDenseBody)
                                 .foregroundStyle(theme.textPrimary)
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 8)

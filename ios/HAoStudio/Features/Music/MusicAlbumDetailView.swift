@@ -147,9 +147,9 @@ struct MusicAlbumDetailView: View {
         Button(action: { playerVM.playAll(viewModel.songs) }) {
             HStack(spacing: 8) {
                 Image(systemName: "play.fill")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.haoCalloutStrong)
                 Text("播放")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.haoCalloutStrong)
             }
             .foregroundStyle(theme.onAccent)
             .frame(maxWidth: .infinity)
@@ -170,27 +170,27 @@ struct MusicAlbumDetailView: View {
             MusicCoverView(urlString: viewModel.detail.pic, size: 200, cornerRadius: 16)
                 .shadow(color: .black.opacity(0.25), radius: 16, y: 8)
             Text(viewModel.detail.name.isEmpty ? album.name : viewModel.detail.name)
-                .font(.system(size: 22, weight: .bold))
+                .font(.haoDetailTitle)
                 .foregroundStyle(theme.textPrimary)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
             Text(viewModel.detail.artist.isEmpty ? album.artist : viewModel.detail.artist)
-                .font(.system(size: 16))
+                .font(.haoCallout)
                 .foregroundStyle(theme.accent)
                 .lineLimit(1)
             HStack(spacing: 8) {
                 if !viewModel.yearText.isEmpty {
                     Text(viewModel.yearText)
-                        .font(.system(size: 13))
+                        .font(.haoFootnote)
                         .foregroundStyle(theme.textMuted)
                 }
                 if viewModel.detail.songs.count > 0 {
                     Text("共 \(viewModel.detail.songs.count) 首")
-                        .font(.system(size: 13))
+                        .font(.haoFootnote)
                         .foregroundStyle(theme.textMuted)
                 }
                 Text(album.platform.badgeName)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.haoCaption2Strong)
                     .foregroundStyle(theme.textSecondary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)

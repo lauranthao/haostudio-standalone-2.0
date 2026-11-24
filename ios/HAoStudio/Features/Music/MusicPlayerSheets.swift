@@ -103,7 +103,7 @@ struct MusicSleepTimerView: View {
                 .multilineTextAlignment(.trailing)
                 .frame(width: 80)
             Text("分钟")
-                .font(.system(size: 13))
+                .font(.haoFootnote)
                 .foregroundStyle(theme.textSecondary)
             Button("开始") {
                 let minutes = clampSleepCustomMinutes(Int(customMinutesText))
@@ -125,7 +125,7 @@ struct MusicSleepTimerView: View {
                 .multilineTextAlignment(.trailing)
                 .frame(width: 60)
             Text("首")
-                .font(.system(size: 13))
+                .font(.haoFootnote)
                 .foregroundStyle(theme.textSecondary)
             Button("开始") {
                 let count = clampSleepTrackCount(Int(trackCountText))

@@ -43,10 +43,10 @@ struct MusicSearchView: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.haoSubheadStrong)
                 .foregroundStyle(theme.textSecondary)
             TextField("搜索歌曲、歌手", text: $query)
-                .font(.system(size: 16))
+                .font(.haoCallout)
                 .foregroundStyle(theme.textPrimary)
                 .focused($searchFocused)
                 .submitLabel(.search)
@@ -57,7 +57,7 @@ struct MusicSearchView: View {
                     searchVM.clear()
                 }) {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 15))
+                        .font(.haoSubhead)
                         .foregroundStyle(theme.textMuted)
                 }
                 .buttonStyle(.plain)
@@ -75,11 +75,11 @@ struct MusicSearchView: View {
                 if !searchVM.history.isEmpty {
                     HStack {
                         Text("搜索历史")
-                            .font(.system(size: 17, weight: .semibold))
+                            .font(.haoBodyStrong)
                             .foregroundStyle(theme.textPrimary)
                         Spacer()
                         Button("清除") { searchVM.clearHistory() }
-                            .font(.system(size: 14))
+                            .font(.haoRowSubtitle)
                             .foregroundStyle(theme.accent)
                             .buttonStyle(.plain)
                     }
@@ -99,10 +99,10 @@ struct MusicSearchView: View {
                             }) {
                                 HStack(spacing: 10) {
                                     Image(systemName: "clock")
-                                        .font(.system(size: 13))
+                                        .font(.haoFootnote)
                                         .foregroundStyle(theme.textMuted)
                                     Text(item)
-                                        .font(.system(size: 15))
+                                        .font(.haoSubhead)
                                         .foregroundStyle(theme.textPrimary)
                                         .lineLimit(1)
                                     Spacer()
@@ -112,7 +112,7 @@ struct MusicSearchView: View {
                             .buttonStyle(.plain)
                             Button(action: { searchVM.removeHistoryItem(item) }) {
                                 Image(systemName: "xmark")
-                                    .font(.system(size: 11, weight: .semibold))
+                                    .font(.haoCaption2Strong)
                                     .foregroundStyle(theme.textMuted)
                                     .frame(width: 28, height: 28)
                             }
@@ -157,7 +157,7 @@ struct MusicSearchView: View {
                 HStack(spacing: 8) {
                     ProgressView()
                     Text("搜索中…")
-                        .font(.system(size: 13))
+                        .font(.haoFootnote)
                         .foregroundStyle(theme.textSecondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
@@ -210,7 +210,7 @@ struct MusicAddToPlaylistSheet: View {
                                     .foregroundStyle(theme.textPrimary)
                                 Spacer()
                                 Text("\(list.trackCount) 首")
-                                    .font(.system(size: 13))
+                                    .font(.haoFootnote)
                                     .foregroundStyle(theme.textSecondary)
                             }
                         }
@@ -232,7 +232,7 @@ struct MusicAddToPlaylistSheet: View {
                 if let resultText = resultText {
                     Section {
                         Text(resultText)
-                            .font(.system(size: 14))
+                            .font(.haoRowSubtitle)
                             .foregroundStyle(theme.textSecondary)
                     }
                 }

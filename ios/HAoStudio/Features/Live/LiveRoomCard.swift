@@ -23,7 +23,7 @@ struct LiveRoomCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 coverView
                 Text(room.title.isEmpty ? "直播间" : room.title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.haoDenseTitle)
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1)
                 // Anchor + watching on ONE row (Pure Live card):
@@ -38,16 +38,16 @@ struct LiveRoomCard: View {
                 // lineLimit 1, so the two can never collide.)
                 HStack(spacing: 4) {
                     Text(room.streamer.isEmpty ? room.platform.displayName : room.streamer)
-                        .font(.system(size: 12))
+                        .font(.haoCaption)
                         .foregroundStyle(theme.textSecondary)
                         .lineLimit(1)
                     Spacer(minLength: 6)
                     if !liveWatchingText(room.onlineCount).isEmpty {
                         Image(systemName: "flame.fill")
-                            .font(.system(size: 11))
+                            .font(.haoCaption2)
                             .foregroundStyle(theme.textMuted)
                         Text(liveWatchingText(room.onlineCount))
-                            .font(.system(size: 12))
+                            .font(.haoCaption)
                             .foregroundStyle(theme.textMuted)
                             .lineLimit(1)
                     }
@@ -85,7 +85,7 @@ struct LiveRoomCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             if room.isLive {
                 Text("LIVE")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.haoBadge)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
@@ -138,30 +138,30 @@ struct LiveRoomRow: View {
                 rowCover
                 VStack(alignment: .leading, spacing: 4) {
                     Text(room.title.isEmpty ? "直播间" : room.title)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.haoSubheadStrong)
                         .foregroundStyle(theme.textPrimary)
                         .lineLimit(1)
                     HStack(spacing: 6) {
                         if room.isLive {
                             Text("LIVE")
-                                .font(.system(size: 10, weight: .bold))
+                                .font(.haoBadge)
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3)
                                 .background(theme.liveRed, in: Capsule())
                         }
                         Text(room.streamer.isEmpty ? room.platform.displayName : room.streamer)
-                            .font(.system(size: 13))
+                            .font(.haoFootnote)
                             .foregroundStyle(theme.textSecondary)
                             .lineLimit(1)
                     }
                     if !liveWatchingText(room.onlineCount).isEmpty {
                         HStack(spacing: 4) {
                             Image(systemName: "flame.fill")
-                                .font(.system(size: 11))
+                                .font(.haoCaption2)
                                 .foregroundStyle(theme.textMuted)
                             Text(liveWatchingText(room.onlineCount))
-                                .font(.system(size: 12))
+                                .font(.haoCaption)
                                 .foregroundStyle(theme.textMuted)
                                 .lineLimit(1)
                         }
@@ -169,7 +169,7 @@ struct LiveRoomRow: View {
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.haoFootnoteStrong)
                     .foregroundStyle(theme.textMuted)
             }
             .contentShape(Rectangle())
@@ -203,7 +203,7 @@ struct LiveRoomRow: View {
             .fill(theme.surfaceStrong)
             .overlay {
                 Image(systemName: "antenna.radiowaves.left.and.right")
-                    .font(.system(size: 16))
+                    .font(.haoCallout)
                     .foregroundStyle(theme.textSecondary)
             }
     }

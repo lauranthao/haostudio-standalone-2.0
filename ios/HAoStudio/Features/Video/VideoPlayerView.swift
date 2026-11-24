@@ -802,7 +802,7 @@ struct VideoPlayerView: View {
             }
             if videoPlayer.isDoubleSpeed {
                 Text("2x")
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.haoSubheadStrong)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
@@ -812,7 +812,7 @@ struct VideoPlayerView: View {
                 VStack {
                     Spacer()
                     Text("定位失败，已回到实际位置")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.haoFootnoteMedium)
                         .foregroundStyle(.white)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
@@ -837,13 +837,13 @@ struct VideoPlayerView: View {
                         .font(.system(size: 28))
                         .foregroundStyle(.white.opacity(0.8))
                     Text("加载失败")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.haoCalloutStrong)
                         .foregroundStyle(.white)
                     Text("该集暂时无法播放，换个线路或重试。")
-                        .font(.system(size: 13))
+                        .font(.haoFootnote)
                         .foregroundStyle(.white.opacity(0.72))
                     Button("重试") { videoPlayer.retry() }
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.haoSubheadStrong)
                         .foregroundStyle(.black)
                         .padding(.horizontal, 24)
                         .padding(.vertical, 10)
@@ -855,7 +855,7 @@ struct VideoPlayerView: View {
                     ProgressView()
                         .tint(.white)
                     Text("正在加载…")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.haoDenseBody)
                         .foregroundStyle(.white.opacity(0.8))
                 }
             }
@@ -868,7 +868,7 @@ struct VideoPlayerView: View {
                     HStack(spacing: 10) {
                         if let pill = videoPlayer.skipIntroPill {
                             Button(pill) { videoPlayer.skipIntroNow() }
-                                .font(.system(size: 14, weight: .semibold))
+                                .font(.haoDenseTitle)
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 10)
@@ -877,7 +877,7 @@ struct VideoPlayerView: View {
                         }
                         if videoPlayer.skipCreditsPill {
                             Button("跳过片尾") { videoPlayer.skipCreditsNow() }
-                                .font(.system(size: 14, weight: .semibold))
+                                .font(.haoDenseTitle)
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 10)
@@ -998,7 +998,7 @@ struct VideoPlayerView: View {
                 dismiss()
             }) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.haoBodyStrong)
                     .foregroundStyle(.white)
                     .frame(width: 40, height: 40)
                     .background(Color.black.opacity(0.45), in: Circle())
@@ -1006,11 +1006,11 @@ struct VideoPlayerView: View {
             .buttonStyle(.plain)
             VStack(alignment: .leading, spacing: 2) {
                 Text(videoPlayer.detail?.item.title ?? "")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.haoCalloutStrong)
                     .foregroundStyle(.white)
                     .lineLimit(1)
                 Text(videoPlayer.currentEpisode?.displayName ?? "")
-                    .font(.system(size: 13))
+                    .font(.haoFootnote)
                     .foregroundStyle(.white.opacity(0.72))
                     .lineLimit(1)
             }
@@ -1022,7 +1022,7 @@ struct VideoPlayerView: View {
             // URL per episode, no quality tiers).
             Button(action: { showingMore = true }) {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.haoBodyStrong)
                     .foregroundStyle(.white)
                     .frame(width: 40, height: 40)
                     .background(Color.black.opacity(0.45), in: Circle())
@@ -1079,17 +1079,17 @@ struct VideoPlayerView: View {
             )
             HStack(spacing: 24) {
                 Text(videoTimeText(seconds: videoPlayer.dragPosition ?? videoPlayer.position))
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.haoCaptionMedium)
                     .foregroundStyle(.white)
                     .monospacedDigit()
                 Text(videoRemainingText(position: videoPlayer.position, duration: videoPlayer.duration))
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.haoCaptionMedium)
                     .foregroundStyle(.white.opacity(0.72))
                     .monospacedDigit()
                 Spacer()
                 if videoPlayer.hasNextEpisode {
                     Button("下一集") { videoPlayer.playNextEpisode() }
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.haoDenseTitle)
                         .foregroundStyle(.white)
                         .buttonStyle(.plain)
                 }
@@ -1215,7 +1215,7 @@ struct VideoSeekBar: View {
             )
             if dragging {
                 Text(videoTimeText(seconds: position))
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.haoCaptionStrong)
                     .foregroundStyle(.white)
                     .monospacedDigit()
                     .padding(.horizontal, 10)
@@ -1260,7 +1260,7 @@ struct VideoPlayerSurface: View {
                         .font(.system(size: 28))
                         .foregroundStyle(.white.opacity(0.6))
                     Text("暂无画面")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.haoDenseBody)
                         .foregroundStyle(.white.opacity(0.8))
                 }
             }
@@ -1348,17 +1348,17 @@ struct PlayerBrightnessVolumeRows: View {
                     Image(systemName: "sun.max")
                         .foregroundStyle(theme.textSecondary)
                     Text("亮度")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.haoSubheadStrong)
                         .foregroundStyle(theme.textPrimary)
                     Spacer()
                     Text("\(Int(brightness * 100))%")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.haoDenseBody)
                         .foregroundStyle(theme.textSecondary)
                 }
                 Slider(value: $brightness, in: 0...1)
                     .tint(theme.accent)
                 Text(brightnessNote)
-                    .font(.system(size: 12))
+                    .font(.haoCaption)
                     .foregroundStyle(theme.textMuted)
             }
             VStack(alignment: .leading, spacing: 8) {
@@ -1366,14 +1366,14 @@ struct PlayerBrightnessVolumeRows: View {
                     Image(systemName: "speaker.wave.2")
                         .foregroundStyle(theme.textSecondary)
                     Text("音量")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.haoSubheadStrong)
                         .foregroundStyle(theme.textPrimary)
                     Spacer()
                 }
                 PlayerVolumeSliderView()
                     .frame(height: 30)
                 Text(volumeNote)
-                    .font(.system(size: 12))
+                    .font(.haoCaption)
                     .foregroundStyle(theme.textMuted)
             }
         }

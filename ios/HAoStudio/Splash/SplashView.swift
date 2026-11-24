@@ -138,7 +138,7 @@ struct SplashView: View {
                         .progressViewStyle(.circular)
                         .controlSize(.large)
                     Text("正在加载…")
-                        .font(.system(size: 14))
+                        .font(.haoRowSubtitle)
                         .foregroundStyle(.gray)
                 }
                 .padding(.top, 92)

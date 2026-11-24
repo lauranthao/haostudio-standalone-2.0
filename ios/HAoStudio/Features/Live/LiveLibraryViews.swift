@@ -178,21 +178,21 @@ private struct LiveHistoryListRow: View {
                 rowCover
                 VStack(alignment: .leading, spacing: 4) {
                     Text(entry.title.isEmpty ? "直播间" : entry.title)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.haoSubheadStrong)
                         .foregroundStyle(theme.textPrimary)
                         .lineLimit(1)
                     Text(entry.nick.isEmpty ? entry.platform : entry.nick)
-                        .font(.system(size: 13))
+                        .font(.haoFootnote)
                         .foregroundStyle(theme.textSecondary)
                         .lineLimit(1)
                     Text(liveRelativeTimeText(date: entry.watchedAt))
-                        .font(.system(size: 12))
+                        .font(.haoCaption)
                         .foregroundStyle(theme.textMuted)
                         .lineLimit(1)
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.haoFootnoteStrong)
                     .foregroundStyle(theme.textMuted)
             }
             .contentShape(Rectangle())
@@ -226,7 +226,7 @@ private struct LiveHistoryListRow: View {
             .fill(theme.surfaceStrong)
             .overlay {
                 Image(systemName: "clock")
-                    .font(.system(size: 16))
+                    .font(.haoCallout)
                     .foregroundStyle(theme.textSecondary)
             }
     }

@@ -99,11 +99,11 @@ struct MusicHomeView: View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 0) {
                 Image(systemName: icon)
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(.system(size: 22, weight: .semibold))  // icon size, not text
                     .foregroundStyle(theme.accent)
                 Spacer()
                 Text(title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.haoSubheadStrong)
                     .foregroundStyle(theme.textPrimary)
             }
             .padding(16)
@@ -131,10 +131,10 @@ struct MusicHomeView: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.system(size: 18, weight: .semibold))  // icon size, not text
                     .foregroundStyle(theme.accent)
                 Text(title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.haoSubheadStrong)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
             }
@@ -234,20 +234,20 @@ struct MusicHomeView: View {
         Button(action: action) {
             HStack(spacing: 12) {
                 Image(systemName: icon)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 18, weight: .semibold))  // icon size, not text
                     .foregroundStyle(theme.accent)
                     .frame(width: 28)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.haoSubheadStrong)
                         .foregroundStyle(theme.textPrimary)
                     Text(subtitle)
-                        .font(.system(size: 13))
+                        .font(.haoFootnote)
                         .foregroundStyle(theme.textSecondary)
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.haoFootnoteStrong)
                     .foregroundStyle(theme.textMuted)
             }
             .padding(.vertical, 12)
@@ -312,11 +312,11 @@ struct MusicHomeView: View {
             VStack(alignment: .leading, spacing: 6) {
                 MusicCoverView(urlString: song.cover, size: 148, cornerRadius: 12)
                 Text(song.title.isEmpty ? "未知歌曲" : song.title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.haoSubheadStrong)
                     .foregroundStyle(isPlaying ? theme.accent : theme.textPrimary)
                     .lineLimit(1)
                 Text(song.artist.isEmpty ? "未知艺人" : song.artist)
-                    .font(.system(size: 13))
+                    .font(.haoFootnote)
                     .foregroundStyle(theme.textSecondary)
                     .lineLimit(1)
             }

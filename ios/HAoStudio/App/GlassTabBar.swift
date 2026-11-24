@@ -119,9 +119,9 @@ struct MinimizedTabCapsule: View {
         let tab = selection
         HStack(spacing: 6) {
             Image(systemName: tab.icon)
-                .font(.system(size: 20, weight: .semibold))
+                .font(.haoSectionTitle)
             Text(tab.title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.haoFootnoteStrong)
                 .lineLimit(1)
         }
         .foregroundStyle(selectedColor)

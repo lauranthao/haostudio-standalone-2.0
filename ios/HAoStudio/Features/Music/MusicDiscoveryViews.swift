@@ -151,11 +151,11 @@ struct MusicPlazaView: View {
             MusicCoverView(urlString: summary.cover, size: 56, cornerRadius: 10)
             VStack(alignment: .leading, spacing: 2) {
                 Text(summary.name)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.haoCalloutStrong)
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1)
                 Text(plazaSubtitle(summary))
-                    .font(.system(size: 14))
+                    .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textSecondary)
                     .lineLimit(1)
             }
@@ -256,7 +256,7 @@ struct MusicPlazaDetailView: View {
                     if !viewModel.note.isEmpty {
                         Section {
                             Text(viewModel.note)
-                                .font(.system(size: 13))
+                                .font(.haoFootnote)
                                 .foregroundStyle(theme.textSecondary)
                         }
                         .listRowBackground(theme.scaffoldBackground)
@@ -350,12 +350,12 @@ struct MusicListenReportView: View {
     private func summaryStat(value: String, label: String) -> some View {
         VStack(spacing: 4) {
             Text(value)
-                .font(.system(size: 20, weight: .bold))
+                .font(.haoDetailTitle)
                 .foregroundStyle(theme.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Text(label)
-                .font(.system(size: 12))
+                .font(.haoCaption)
                 .foregroundStyle(theme.textSecondary)
         }
         .frame(maxWidth: .infinity)
@@ -364,17 +364,17 @@ struct MusicListenReportView: View {
     private var topSongsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("最常听")
-                .font(.system(size: 20, weight: .bold))
+                .font(.haoDetailTitle)
                 .foregroundStyle(theme.textPrimary)
             if discoveryVM.report.topSongs.isEmpty {
                 Text("这段时间还没有收听记录。")
-                    .font(.system(size: 14))
+                    .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textSecondary)
             } else {
                 ForEach(Array(discoveryVM.report.topSongs.prefix(10).enumerated()), id: \.element.song.id) { rank, top in
                     HStack(spacing: 12) {
                         Text("\(rank + 1)")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.haoDenseTitle)
                             .foregroundStyle(theme.accent)
                             .frame(width: 20)
                         MusicSongRow(
@@ -389,7 +389,7 @@ struct MusicListenReportView: View {
                             }
                         )
                         Text("\(top.plays) 次")
-                            .font(.system(size: 13))
+                            .font(.haoFootnote)
                             .foregroundStyle(theme.textSecondary)
                     }
                 }
@@ -400,21 +400,21 @@ struct MusicListenReportView: View {
     private var topArtistsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("最常听的歌手")
-                .font(.system(size: 20, weight: .bold))
+                .font(.haoDetailTitle)
                 .foregroundStyle(theme.textPrimary)
             if discoveryVM.report.topArtists.isEmpty {
                 Text("这段时间还没有收听记录。")
-                    .font(.system(size: 14))
+                    .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textSecondary)
             } else {
                 ForEach(discoveryVM.report.topArtists.prefix(10), id: \.artist) { top in
                     HStack {
                         Text(top.artist)
-                            .font(.system(size: 15))
+                            .font(.haoSubhead)
                             .foregroundStyle(theme.textPrimary)
                         Spacer()
                         Text("\(top.plays) 次")
-                            .font(.system(size: 13))
+                            .font(.haoFootnote)
                             .foregroundStyle(theme.textSecondary)
                     }
                     .padding(.vertical, 4)
@@ -426,21 +426,21 @@ struct MusicListenReportView: View {
     private var topPlatformsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("来源平台")
-                .font(.system(size: 20, weight: .bold))
+                .font(.haoDetailTitle)
                 .foregroundStyle(theme.textPrimary)
             if discoveryVM.report.topPlatforms.isEmpty {
                 Text("这段时间还没有收听记录。")
-                    .font(.system(size: 14))
+                    .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textSecondary)
             } else {
                 ForEach(discoveryVM.report.topPlatforms, id: \.platform) { top in
                     HStack {
                         Text(top.platform.displayName)
-                            .font(.system(size: 15))
+                            .font(.haoSubhead)
                             .foregroundStyle(theme.textPrimary)
                         Spacer()
                         Text("\(top.plays) 次")
-                            .font(.system(size: 13))
+                            .font(.haoFootnote)
                             .foregroundStyle(theme.textSecondary)
                     }
                     .padding(.vertical, 4)
@@ -452,21 +452,21 @@ struct MusicListenReportView: View {
     private var perDaySection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(discoveryVM.reportRange == .all ? "按月" : "按天")
-                .font(.system(size: 20, weight: .bold))
+                .font(.haoDetailTitle)
                 .foregroundStyle(theme.textPrimary)
             if discoveryVM.report.perDay.isEmpty {
                 Text("这段时间还没有收听记录。")
-                    .font(.system(size: 14))
+                    .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textSecondary)
             } else {
                 ForEach(discoveryVM.report.perDay, id: \.label) { day in
                     HStack {
                         Text(day.label)
-                            .font(.system(size: 15))
+                            .font(.haoSubhead)
                             .foregroundStyle(theme.textPrimary)
                         Spacer()
                         Text("\(day.plays) 次")
-                            .font(.system(size: 13))
+                            .font(.haoFootnote)
                             .foregroundStyle(theme.textSecondary)
                     }
                     .padding(.vertical, 4)
