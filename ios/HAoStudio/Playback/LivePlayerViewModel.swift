@@ -78,6 +78,15 @@ final class LivePlayerViewModel: ObservableObject {
     /// Watching count, mirrored from the session room (0 until the
     /// first room info arrives; the B leg refreshes it).
     @Published private(set) var watching: Int = 0
+    /// Live status refreshed from `roomInfo` (build 35 sweep S7):
+    /// nil until the first room info answers for this room — the
+    /// view falls back to the card's `isLive` until then. Rooms
+    /// opened from history / follows / the mini player carry
+    /// stored values (`isLive: false`, count 0), so without this
+    /// the LIVE badge never appears even while the room is live.
+    /// Only set on a successful room info; a failed fetch leaves
+    /// the card's value in place.
+    @Published private(set) var roomIsLive: Bool?
     /// Danmaku messages for the room page, newest last. Fed by the
     /// B-leg transports via `appendDanmaku` (the seam); capped so a
     /// busy room cannot grow the list without bound.
@@ -119,9 +128,38 @@ final class LivePlayerViewModel: ObservableObject {
     /// room (or from after the room closed) cannot revive a
     /// transport for the wrong room.
     private var danmakuGeneration = 0
+    /// Key of the room the danmaku list currently shows
+    /// (build 35 sweep S1): `messages` is cleared only when this
+    /// changes, so a spurious second `startDanmaku` for the room
+    /// already showing never wipes the visible chat.
+    private var danmakuRoomKey: String?
+    /// True after `stopDanmaku` until the next start (build 35
+    /// sweep S1): the room was exited in between, so a restart
+    /// for the SAME room still starts from a clean list — the
+    /// messages showing are from the previous visit, minutes old.
+    private var danmakuWasStopped = false
 
     func startDanmaku(room: LiveRoom, resolver: LiveSiteResolver) {
+        // Build 35 sweep S1: the list belonged to the previous
+        // room until now — `messages` was never cleared on a room
+        // switch, so the new room opened showing the old room's
+        // chat (and the views' "count drops" reset never fired,
+        // because the count only ever grew). Clear on a real room
+        // change, or after an exit (`stopDanmaku` in between);
+        // a bare restart for the room already showing keeps the
+        // visible chat. The monotonic `danmakuSequence` is NOT
+        // reset (D2 contract — the views derive the fresh suffix
+        // from it, and the count-drop branch resets their lists).
+        let key = "\(room.platform.rawValue)|\(room.roomId)"
+        let isNewRoom = key != danmakuRoomKey
+        let resumeAfterExit = danmakuWasStopped
+        danmakuRoomKey = key
         stopDanmaku()
+        danmakuWasStopped = false
+        if isNewRoom || resumeAfterExit {
+            messages = []
+            roomIsLive = nil
+        }
         let generation = danmakuGeneration
         if let data = room.danmakuData, !data.isEmpty {
             startTransport(with: data, resolver: resolver)
@@ -136,6 +174,11 @@ final class LivePlayerViewModel: ObservableObject {
                 switch result {
                 case .success(let info):
                     fullRoom = info
+                    // S7: the room info is the fresh live status —
+                    // history / follow / mini entries carry a
+                    // stored `isLive: false`, so the badge would
+                    // otherwise never appear while live.
+                    self.roomIsLive = info.isLive
                 case .failure:
                     fullRoom = room
                 }
@@ -150,6 +193,11 @@ final class LivePlayerViewModel: ObservableObject {
         // Invalidate any in-flight roomInfo callback: a late
         // answer must not start a transport after the room closed.
         danmakuGeneration += 1
+        // Build 35 sweep S1: record the stop, so the next start
+        // knows the room was exited in between and clears the
+        // list (a restart without an intervening stop keeps it).
+        // `startDanmaku` resets this right after its own stop.
+        danmakuWasStopped = true
         danmakuTransport?.stop()
         danmakuTransport = nil
     }
@@ -159,10 +207,19 @@ final class LivePlayerViewModel: ObservableObject {
         // without this, a fast A->B switch left both sockets alive
         // and the wrong room's danmaku kept feeding `messages`.
         danmakuTransport?.stop()
+        // Build 35 sweep S1: the old transport's `onMessage`
+        // forwards through a main-queue hop, so an append queued
+        // before `stopDanmaku` could land AFTER the new room's
+        // list was cleared. Capture this start's generation and
+        // drop appends from a superseded one — the same guard D1
+        // puts on the roomInfo callback, extended to the message
+        // path itself.
+        let generation = danmakuGeneration
         let transport = resolver.makeDanmakuTransport()
         transport.onMessage = { [weak self] message in
             DispatchQueue.main.async {
-                self?.appendDanmaku(message)
+                guard let self = self, generation == self.danmakuGeneration else { return }
+                self.appendDanmaku(message)
             }
         }
         danmakuTransport = transport
@@ -323,15 +380,17 @@ final class LivePlayerViewModel: ObservableObject {
     // MARK: - Lines / quality (live only)
 
     /// Switch to another CDN line. The driver opens the new line;
-    /// the toast names the line the room is now on.
+    /// the toast names the line the room is now on — "线路 N"
+    /// only (build 35 sweep S6): the line's `name` is a CDN host /
+    /// CDN type (Bilibili host, Huya cdnType), and the toast used
+    /// to print it, leaking CDN names the sheet never shows.
     func switchLine(to index: Int) {
         guard driver.lines.indices.contains(index) else {
             return
         }
-        let name = driver.lines[index].name
         if driver.switchLine(to: index) {
             showLinePicker = false
-            toast = "已切换线路：\(name)"
+            toast = "已切换到线路 \(index + 1)"
         }
     }
 

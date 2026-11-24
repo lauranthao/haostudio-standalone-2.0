@@ -505,6 +505,16 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                             self.onRoomFailed?(item, error)
                             return
                         }
+                        // Build 35 sweep S2: the fallback opens a
+                        // different line than the one requested, so
+                        // the recovery's line index must follow the
+                        // URL actually opened — otherwise the
+                        // picker highlight (and `currentLineIndex`)
+                        // keeps naming the failed line while
+                        // another line plays.
+                        if let index = self.session.recovery?.urls.firstIndex(of: nextURL) {
+                            self.session.recovery?.currentLineIndex = index
+                        }
                         self.attemptOpen(item: item, url: nextURL, tried: tried + [nextURL], freshRounds: freshRounds)
                     }
                 }
@@ -1083,6 +1093,15 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             }
         case .nextLine(let url):
             stallFailed = false
+            // Build 35 sweep S2: `nextLineUrl` is computed from
+            // the current index but never advances it, so the
+            // recovery opened the next line while the index (and
+            // the picker highlight) still named the dead one.
+            // Point the index at the URL actually opened, like
+            // the attemptOpen fallback does.
+            if let index = session.recovery?.urls.firstIndex(of: url) {
+                session.recovery?.currentLineIndex = index
+            }
             attemptOpen(item: item, url: url, tried: [url], freshRounds: 2)
         case .exhausted:
             stop()

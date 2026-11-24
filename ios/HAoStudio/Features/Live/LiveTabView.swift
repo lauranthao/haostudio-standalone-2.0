@@ -47,6 +47,13 @@ final class LiveTabViewModel: ObservableObject {
     /// The gateway, readable so the search page can share it.
     let gateway: LiveDataGateway?
     private var page = 0
+    /// Load generation (build 35 sweep S4): bumped by every
+    /// `reload()` / category change, so a slow answer for the old
+    /// platform / area can never overwrite the new one — fast
+    /// platform switching used to show Bilibili's rooms under the
+    /// Douyu tab, because the in-flight load was neither
+    /// cancelled nor checked.
+    private var loadGeneration = 0
 
     /// `gateway` nil = no live source wired yet (merge provides
     /// the B-leg adapter); the tab still shows local rows.
@@ -64,8 +71,36 @@ final class LiveTabViewModel: ObservableObject {
         rooms = []
         hasMore = false
         loadMoreFailed = false
+        loadGeneration += 1
         loadFresh()
         loadCategories()
+    }
+
+    /// Refresh only the local rows (follows + history), without
+    /// touching the recommend grid (build 35 sweep S4): entering
+    /// a room used to call `reload()`, which cleared `rooms` and
+    /// re-fetched — so every return from a room flashed the grid
+    /// empty and lost the scroll position. `openRoom` calls this;
+    /// the grid only reloads on pull-to-refresh / platform /
+    /// category change, or when it has never loaded.
+    func refreshLibrary() {
+        follows = LiveLibraryStore.follows()
+        history = LiveLibraryStore.history()
+    }
+
+    /// What the tab's `onAppear` calls (build 35 sweep S4): the
+    /// local rows always refresh (a follow toggled in the room
+    /// must show on return), but the recommend grid only loads
+    /// when it has nothing — returning from a room used to
+    /// re-run `reload()` and wipe the grid + scroll position.
+    func loadIfNeeded() {
+        refreshLibrary()
+        if rooms.isEmpty && !isLoading {
+            loadFresh()
+        }
+        if categories.isEmpty {
+            loadCategories()
+        }
     }
 
     func selectPlatform(_ next: LivePlatform) {
@@ -82,17 +117,31 @@ final class LiveTabViewModel: ObservableObject {
         rooms = []
         hasMore = false
         loadMoreFailed = false
+        loadGeneration += 1
         loadFresh()
     }
 
     func loadFresh() {
-        guard let gateway = gateway, !isLoading else { return }
+        // Build 35 sweep S4: no `!isLoading` start-guard — a
+        // reload during a load must still start a fetch, or the
+        // tab is left empty with nothing in flight (the old
+        // guard dropped the new load and the stale callback then
+        // bailed). Concurrent fetches are arbitrated by the
+        // generation check in the callback below.
+        guard let gateway = gateway else { return }
         isLoading = true
         loadFailed = false
         let platformId = platform.rawValue
         let area = selectedArea
+        let generation = loadGeneration
         gateway.fetchRecommended(platform: platformId, area: area, page: 0) { [weak self] result in
             guard let self = self else { return }
+            // Stale answer (platform / area moved on): touch
+            // nothing — not even `isLoading`, which the current
+            // load's callback owns.
+            guard generation == self.loadGeneration,
+                  platformId == self.platform.rawValue,
+                  area == self.selectedArea else { return }
             self.isLoading = false
             if result.rooms.isEmpty && self.rooms.isEmpty {
                 self.loadFailed = true
@@ -115,9 +164,17 @@ final class LiveTabViewModel: ObservableObject {
         let nextPage = page + 1
         let platformId = platform.rawValue
         let area = selectedArea
+        let generation = loadGeneration
         gateway.fetchRecommended(platform: platformId, area: area, page: nextPage) { [weak self] result in
             guard let self = self else { return }
+            // The loading flag is always cleared (no newer
+            // loadMore can be in flight — the `!loadingMore`
+            // guard above forbids it); the data is only applied
+            // when this answer is still current.
             self.loadingMore = false
+            guard generation == self.loadGeneration,
+                  platformId == self.platform.rawValue,
+                  area == self.selectedArea else { return }
             if result.rooms.isEmpty {
                 self.loadMoreFailed = true
                 return
@@ -146,8 +203,12 @@ final class LiveTabViewModel: ObservableObject {
             return
         }
         let platformId = platform.rawValue
+        let generation = loadGeneration
         gateway.fetchCategories(platform: platformId) { [weak self] names in
-            self?.categories = names
+            guard let self = self,
+                  generation == self.loadGeneration,
+                  platformId == self.platform.rawValue else { return }
+            self.categories = names
         }
     }
 }
@@ -230,17 +291,19 @@ struct LiveTabView: View {
                     LiveRoomView(room: room, playlist: playlist)
                 }
             }
-            .onAppear { viewModel.reload() }
+            .onAppear { viewModel.loadIfNeeded() }
         }
     }
 
     /// Enter a room: record history first (Flutter L01), then
     /// navigate with the current list as the switch playlist.
+    /// Only the local rows refresh (build 35 sweep S4) — the
+    /// recommend grid keeps its rooms and scroll position.
     private func openRoom(_ room: LiveRoom, playlist: [LiveRoom]) {
         LiveLibraryStore.recordHistory(
             platform: room.platform.rawValue, roomId: room.roomId,
             title: room.title, nick: room.streamer, cover: room.cover)
-        viewModel.reload()
+        viewModel.refreshLibrary()
         path.append(.room(room, playlist))
     }
 
