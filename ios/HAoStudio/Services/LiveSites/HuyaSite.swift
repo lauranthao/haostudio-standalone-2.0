@@ -1061,3 +1061,231 @@ final class HuyaLiveSite: LiveSiteResolver {
         )
     }
 }
+
+// MARK: - Lists (recommend / categories / search)
+//
+// Port of the Flutter `huya_site.dart` list methods
+// (getRecommendRooms / getCategories / getCategoryRooms /
+// searchRooms) + `huya_room_parser.dart` list parsers. The
+// room-detail leg (S4-B) left these out; the live tab's gateway
+// needs them. Every method completes with [] on any failure —
+// a list failure is an empty list, never a throw out of the
+// completion handler. All parsing is pure + static so fixtures
+// can cover it without network.
+
+extension HuyaLiveSite {
+    private static let searchBaseURL = "https://search.cdn.huya.com/"
+    private static let cacheListURL = "https://www.huya.com/cache.php"
+    private static let categoryConfigURL = "https://live.cdn.huya.com/liveconfig/game/bussLive"
+
+    private var listHeaders: [String: String] {
+        [
+            "User-Agent": HuyaRequestParams.kUserAgent,
+            "Origin": "https://www.huya.com",
+            "Referer": "https://www.huya.com/"
+        ]
+    }
+
+    private var searchHeaders: [String: String] {
+        ["User-Agent": HuyaRequestParams.kUserAgent]
+    }
+
+    /// Home hot list via cache.php LiveList, no gameId
+    /// (Dart `getRecommendRooms`). Page is 1-based here.
+    func recommendRooms(page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        fetchCacheList(gameId: nil, page: page, completion: completion)
+    }
+
+    /// Rooms of one game (Dart `getCategoryRooms`): the same
+    /// cache.php list with `gameId`.
+    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        fetchCacheList(gameId: areaId, page: page, completion: completion)
+    }
+
+    private func fetchCacheList(gameId: String?, page: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        var params: [(String, String)] = [
+            ("m", "LiveList"), ("do", "getLiveListByPage"), ("tagAll", "0"),
+            ("page", "\(max(1, page))")
+        ]
+        if let gameId = gameId, !gameId.isEmpty {
+            params.append(("gameId", gameId))
+        }
+        guard let url = LiveListURL.url(base: HuyaLiveSite.cacheListURL, params: params) else {
+            completion([])
+            return
+        }
+        LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: listHeaders, fetcher: fetcher) { json in
+            completion(HuyaLiveSite.parseCacheList(json) ?? [])
+        }
+    }
+
+    /// Room search (Dart `searchRooms`): search.cdn.huya.com,
+    /// `response["3"]["docs"]`.
+    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            completion([])
+            return
+        }
+        let rows = min(50, max(1, pageSize))
+        guard let url = LiveListURL.url(base: HuyaLiveSite.searchBaseURL, params: [
+            ("m", "Search"), ("do", "getSearchContent"), ("q", trimmed),
+            ("uid", "0"), ("v", "4"), ("typ", "-5"), ("livestate", "0"),
+            ("rows", "\(rows)"), ("start", "\((max(1, page) - 1) * rows)")
+        ]) else {
+            completion([])
+            return
+        }
+        LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: searchHeaders, fetcher: fetcher) { json in
+            completion(HuyaLiveSite.parseSearchRooms(json) ?? [])
+        }
+    }
+
+    /// Categories (Dart `getCategories`, port of Pure Live 3.x
+    /// `getCategores` + `getSubCategores`): the four top types
+    /// are fixed upstream (网游 1 / 单机 2 / 娱乐 8 / 手游 3);
+    /// each one's games come from bussLive. The four fetches run
+    /// in parallel and one dead type never kills the other three.
+    /// When every fetch fails, the verified-popular fallback below
+    /// is returned so the tab never shows a blank category row —
+    /// the gids are real and `categoryRooms` accepts them.
+    func listCategories(completion: @escaping ([(id: String, name: String)]) -> Void) {
+        let types = ["1", "2", "8", "3"]
+        var collected: [[(id: String, name: String)]] = Array(repeating: [], count: types.count)
+        let group = DispatchGroup()
+        let lock = NSLock()
+        for (index, type) in types.enumerated() {
+            group.enter()
+            fetchCategoryType(type) { areas in
+                lock.lock()
+                collected[index] = areas
+                lock.unlock()
+                group.leave()
+            }
+        }
+        group.notify(queue: DispatchQueue.global(qos: .utility)) {
+            let areas = collected.flatMap { $0 }
+            if areas.isEmpty {
+                completion(HuyaLiveSite.fallbackCategories)
+            } else {
+                completion(areas)
+            }
+        }
+    }
+
+    private func fetchCategoryType(_ type: String, completion: @escaping ([(id: String, name: String)]) -> Void) {
+        guard let url = LiveListURL.url(base: HuyaLiveSite.categoryConfigURL, params: [("bussType", type)]) else {
+            completion([])
+            return
+        }
+        LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: searchHeaders, fetcher: fetcher) { json in
+            completion(HuyaLiveSite.parseCategories(json) ?? [])
+        }
+    }
+
+    /// Verified-popular games per top type (live probe 2026-11-16,
+    /// `bussLive` top entries by heat). Only used when all four
+    /// live fetches fail; areaId is the real gid, so category
+    /// rooms load.
+    static let fallbackCategories: [(id: String, name: String)] = [
+        ("1", "英雄联盟"), ("862", "CS2"), ("5937", "无畏契约"), ("5485", "lol云顶之弈"),
+        ("393", "炉石传说"), ("4", "穿越火线"), ("7", "DOTA2"), ("8", "魔兽世界"),
+        ("2793", "天天吃鸡"), ("100032", "主机游戏"), ("1732", "我的世界"), ("70953", "失控进化-RUST"),
+        ("485", "植物大战僵尸"), ("1318", "部落：上升"), ("5907", "互动点播"), ("4375", "精灵宝可梦Let's Go"),
+        ("2165", "户外"), ("1663", "星秀"), ("6861", "原创"), ("2356", "体育"),
+        ("2135", "一起看"), ("4079", "交友"), ("2633", "二次元"), ("2168", "颜值"),
+        ("2336", "王者荣耀"), ("9449", "三角洲行动"), ("3203", "和平精英"), ("7185", "金铲铲之战"),
+        ("2928", "QQ飞车手游"), ("4769", "COD手游"), ("2429", "火影忍者手游"), ("6909", "蛋仔派对")
+    ]
+
+    // MARK: - Pure parsers (fixture-testable, no network)
+
+    /// Parses a cache.php LiveList response (`data.datas[]`).
+    /// Nil when the response has no datas list.
+    static func parseCacheList(_ json: [String: Any]?) -> [LiveRoom]? {
+        guard let json = json,
+              let data = LiveJSON.asMap(json["data"]) else { return nil }
+        var rooms: [LiveRoom] = []
+        for item in LiveJSON.asList(data["datas"]) {
+            let roomId = LiveJSON.asString(item["profileRoom"])
+            guard !roomId.isEmpty else { continue }
+            var cover = LiveJSON.asString(item["screenshot"])
+            if !cover.isEmpty && !cover.contains("?") {
+                cover += "?x-oss-process=style/w338_h190&"
+            }
+            var title = LiveJSON.asString(item["introduction"])
+            if title.isEmpty {
+                title = LiveJSON.asString(item["roomName"])
+            }
+            rooms.append(LiveRoom(
+                roomId: roomId, platform: .huya,
+                title: title,
+                streamer: LiveJSON.asString(item["nick"]),
+                avatar: LiveJSON.asString(item["avatar180"]),
+                cover: cover,
+                onlineCount: LiveJSON.asInt(item["totalCount"]),
+                isLive: true,
+                link: "https://www.huya.com/\(roomId)"))
+        }
+        return rooms
+    }
+
+    /// Parses a search.cdn.huya.com response for rooms
+    /// (`response["3"]["docs"]`). Nil when the response has no
+    /// room docs.
+    static func parseSearchRooms(_ json: [String: Any]?) -> [LiveRoom]? {
+        guard let json = json,
+              let response = LiveJSON.asMap(json["response"]),
+              let docs = LiveJSON.asMap(response["3"]) else { return nil }
+        var rooms: [LiveRoom] = []
+        for item in LiveJSON.asList(docs["docs"]) {
+            let roomId = LiveJSON.asString(item["room_id"])
+            guard !roomId.isEmpty else { continue }
+            var cover = LiveJSON.asString(item["game_screenshot"])
+            if !cover.isEmpty && !cover.contains("?") {
+                cover += "?x-oss-process=style/w338_h190&"
+            }
+            var title = LiveJSON.asString(item["game_introduction"])
+            if title.isEmpty {
+                title = LiveJSON.asString(item["game_roomName"])
+            }
+            rooms.append(LiveRoom(
+                roomId: roomId, platform: .huya,
+                title: title,
+                streamer: LiveJSON.asString(item["game_nick"]),
+                avatar: LiveJSON.asString(item["game_imgUrl"]),
+                cover: cover,
+                onlineCount: LiveJSON.asInt(item["game_total_count"]),
+                isLive: true,
+                link: "https://www.huya.com/\(roomId)"))
+        }
+        return rooms
+    }
+
+    /// Parses a `bussLive` response (`data[]` of `{gid,
+    /// gameFullName}`) into flat areas. `gid` has four historical
+    /// shapes (Pure Live): Map (comma-separated value, take
+    /// first), double, int, String.
+    static func parseCategories(_ json: [String: Any]?) -> [(id: String, name: String)]? {
+        guard let json = json else { return nil }
+        var areas: [(id: String, name: String)] = []
+        for item in LiveJSON.asList(json["data"]) {
+            let gid = HuyaLiveSite.categoryGid(item["gid"])
+            let name = LiveJSON.asString(item["gameFullName"])
+            guard !gid.isEmpty, !name.isEmpty else { continue }
+            areas.append((id: gid, name: name))
+        }
+        return areas
+    }
+
+    private static func categoryGid(_ raw: Any?) -> String {
+        if let map = LiveJSON.asMap(raw) {
+            let value = LiveJSON.asString(map["value"])
+            return value.components(separatedBy: ",").first ?? ""
+        }
+        if let number = raw as? NSNumber {
+            return "\(number.intValue)"
+        }
+        return LiveJSON.asString(raw)
+    }
+}

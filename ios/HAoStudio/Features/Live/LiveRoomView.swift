@@ -38,7 +38,8 @@
 //   brightnessLevel / volumeLevel (Double 0...1, private(set)) +
 //     setBrightness(_:) / setVolume(_:) — the ONLY writers to the
 //     screen / system volume; notePlayerEntry() arms on appear,
-//     restoreBrightnessOnExit() restores on disappear;
+//     disarmBrightness() stops writes on disappear — exit never
+//     restores the system brightness (chen 2026-11-20);
 //   togglePlayPause(), switchQuality(to: LiveQuality),
 //     switchLine(to: Int index).
 //   LiveQuality has `name` (label) + `id` (identity). LiveLine is
@@ -113,8 +114,9 @@ struct LiveRoomView: View {
             openCurrentRoom()
             isFollowing = LiveLibraryStore.isFollowed(
                 platform: currentRoom.platform.rawValue, roomId: currentRoom.roomId)
-            // Arm brightness (records the entry value, arms writes)
-            // and seed the volume state from the system value.
+            // Arm brightness writes (seeds the slider from the
+            // system value) and seed the volume state from the
+            // system value.
             livePlayer.notePlayerEntry()
             livePlayer.setVolume(Double(AVAudioSession.sharedInstance().outputVolume))
         }
@@ -122,7 +124,7 @@ struct LiveRoomView: View {
             autoHideWork?.cancel()
             VideoOrientation.unlockPortrait()
             livePlayer.stopDanmaku()
-            livePlayer.restoreBrightnessOnExit()
+            livePlayer.disarmBrightness()
             coordinator.stop()
         }
         .onChange(of: isFullscreen) { _, fullscreen in

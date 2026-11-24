@@ -1031,3 +1031,621 @@ final class DouyinLiveSite: LiveSiteResolver {
         }
     }
 }
+
+// MARK: - Lists (recommend / categories / search)
+//
+// Port of the Flutter `douyin_site.dart` list methods
+// (getRecommendRooms / getCategories / getCategoryRooms) +
+// `douyin_search.dart` (three-stage room search). The
+// room-detail leg (S4-B) left these out; the live tab's gateway
+// needs them. Every method completes with [] on any failure —
+// a list failure is an empty list, never a throw out of the
+// completion handler. All parsing is pure + static so fixtures
+// can cover it without network.
+//
+// The feed endpoint has no paging of its own: the whole feed is
+// fetched once and the page slice is taken client-side.
+
+extension DouyinLiveSite {
+    private static let feedURL = "https://live.douyin.com/webcast/feed/"
+    private static let homeURL = "https://live.douyin.com/"
+    private static let partitionRoomsURL = "https://live.douyin.com/webcast/web/partition/detail/room/v2/"
+    private static let partitionRoomsFallbackURL = "https://webcast.amemv.com/webcast/web/partition/detail/room/v2/"
+    private static let liveSearchURL = "https://www.douyin.com/aweme/v1/web/live/search/"
+    private static let generalSearchURL = "https://www.douyin.com/aweme/v1/web/general/search/stream/"
+    private static let partitionSearchURL = "https://live.douyin.com/webcast/web/partition/search/"
+    private static let searchUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+    /// Recommended rooms (Dart `getRecommendRooms`): the
+    /// anonymous webcast feed, sliced client-side. A feed failure
+    /// returns an empty list rather than fake rooms.
+    func recommendRooms(page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        let size = max(1, pageSize)
+        let currentPage = max(1, page)
+        requestHeaders { [weak self] headers in
+            guard let self = self else { return }
+            guard let url = LiveListURL.url(base: DouyinLiveSite.feedURL, params: [
+                ("aid", "6383"), ("app_name", "douyin_web"), ("need_map", "1"),
+                ("is_draw", "1"), ("inner_from_drawer", "0"),
+                ("enter_source", "web_homepage_hot_web_live_card"),
+                ("source_key", "web_homepage_hot_web_live_card")
+            ]) else {
+                completion([])
+                return
+            }
+            LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
+                guard let rooms = DouyinLiveSite.parseRecommendRooms(json) else {
+                    completion([])
+                    return
+                }
+                completion(DouyinLiveSite.slice(rooms, page: currentPage, pageSize: size))
+            }
+        }
+    }
+
+    /// Categories (Dart `getCategories`): the homepage
+    /// `categoryData` blob. Homepage blocked (bot check) or the
+    /// SSR blob moved: never leave the tab without categories —
+    /// the fallback ids are the repo's on-record partition ids.
+    func listCategories(completion: @escaping ([(id: String, name: String)]) -> Void) {
+        requestHeaders { [weak self] headers in
+            guard let self = self else { return }
+            guard let url = URL(string: "https://live.douyin.com/?from_nav=1") else {
+                completion(DouyinLiveSite.fallbackCategories)
+                return
+            }
+            var request = URLRequest(url: url, timeoutInterval: LiveHTTP.defaultTimeoutSeconds)
+            for (key, value) in headers {
+                request.setValue(value, forHTTPHeaderField: key)
+            }
+            LiveHTTP.fetchText(request: request, fetcher: self.fetcher) { _, html in
+                guard let html = html else {
+                    completion(DouyinLiveSite.fallbackCategories)
+                    return
+                }
+                let areas = DouyinLiveSite.parseCategories(html)
+                completion(areas.isEmpty ? DouyinLiveSite.fallbackCategories : areas)
+            }
+        }
+    }
+
+    static let fallbackCategories: [(id: String, name: String)] = [
+        ("1,1", "游戏"), ("2,1", "英雄联盟")
+    ]
+
+    /// Rooms of one partition (Dart `getCategoryRooms`):
+    /// areaId is "id,type" — the exact shape listCategories
+    /// produces. Count is 15 per page, offset by page.
+    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        let parts = areaId.components(separatedBy: ",")
+        let partitionId = parts.first ?? ""
+        let partitionType = parts.count > 1 ? parts[1] : ""
+        guard !partitionId.isEmpty else {
+            completion([])
+            return
+        }
+        let currentPage = max(1, page)
+        let params: [String: String] = [
+            "aid": "6383", "app_name": "douyin_web", "live_id": "1",
+            "device_platform": "web", "language": "zh-CN",
+            "enter_from": "link_share", "cookie_enabled": "true",
+            "screen_width": "1980", "screen_height": "1080",
+            "browser_language": "zh-CN", "browser_platform": "Win32",
+            "browser_name": "Edge", "browser_version": "125.0.0.0",
+            "browser_online": "true", "count": "15",
+            "offset": "\((currentPage - 1) * 15)",
+            "partition": partitionId, "partition_type": partitionType,
+            "req_from": "2"
+        ]
+        requestHeaders { [weak self] headers in
+            guard let self = self else { return }
+            let target = self.requestUrlSigner(DouyinLiveSite.partitionRoomsURL, params)
+            guard let url = URL(string: target) else {
+                completion([])
+                return
+            }
+            LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
+                completion(DouyinLiveSite.parseCategoryRooms(json) ?? [])
+            }
+        }
+    }
+
+    /// Room search (Dart `DouyinSearch.search`): three stages,
+    /// first non-empty wins — live API, general API, partition
+    /// search. Every stage failing returns [].
+    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            completion([])
+            return
+        }
+        let currentPage = max(1, page)
+        let size = min(50, max(1, pageSize))
+        searchByLiveAPI(keyword: trimmed, page: currentPage, pageSize: size) { [weak self] rooms in
+            guard let self = self else { return }
+            if !rooms.isEmpty {
+                completion(rooms)
+                return
+            }
+            self.searchByGeneralAPI(keyword: trimmed, page: currentPage, pageSize: size) { [weak self] rooms in
+                guard let self = self else { return }
+                if !rooms.isEmpty {
+                    completion(rooms)
+                    return
+                }
+                self.searchByPartition(keyword: trimmed, page: currentPage, pageSize: size, completion: completion)
+            }
+        }
+    }
+
+    /// Search headers (Dart `DouyinSearch._getHeaders`): the
+    /// warmed-up anonymous cookie + a search Referer. The cookie
+    /// fetch is best-effort: headers without a Cookie are
+    /// returned when it fails.
+    private func searchHeaders(keyword: String, completion: @escaping ([String: String]) -> Void) {
+        requestHeaders { headers in
+            var result: [String: String] = [
+                "User-Agent": DouyinLiveSite.searchUserAgent,
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+                "Referer": "https://www.douyin.com/search/\(LiveQuery.percentEncode(keyword))?source=switch_tab&type=live",
+                "Origin": "https://www.douyin.com",
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Site": "same-origin"
+            ]
+            if let cookie = headers["Cookie"], !cookie.isEmpty {
+                result["Cookie"] = cookie
+            }
+            completion(result)
+        }
+    }
+
+    private func searchByLiveAPI(keyword: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        let count = min(50, max(1, pageSize))
+        let offset = count * (page - 1)
+        searchHeaders(keyword: keyword) { [weak self] headers in
+            guard let self = self else { return }
+            guard let url = LiveListURL.url(base: DouyinLiveSite.liveSearchURL, params: [
+                ("device_platform", "webapp"), ("aid", "6383"), ("channel", "channel_pc_web"),
+                ("search_channel", "aweme_live"), ("search_source", "switch_tab"),
+                ("query_correct_type", "1"), ("need_filter_settings", "1"),
+                ("list_type", "single"), ("keyword", keyword),
+                ("offset", "\(offset)"), ("count", "\(count)"), ("os_version", "10")
+            ]) else {
+                completion([])
+                return
+            }
+            LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
+                guard let json = json, LiveJSON.asInt(json["status_code"]) == 0 else {
+                    completion([])
+                    return
+                }
+                completion(DouyinLiveSite.parseSearchVideos(json["data"]))
+            }
+        }
+    }
+
+    private func searchByGeneralAPI(keyword: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        let count = min(50, max(1, pageSize))
+        let offset = count * (page - 1)
+        searchHeaders(keyword: keyword) { [weak self] headers in
+            guard let self = self else { return }
+            guard let url = LiveListURL.url(base: DouyinLiveSite.generalSearchURL, params: [
+                ("device_platform", "webapp"), ("aid", "6383"), ("channel", "channel_pc_web"),
+                ("search_channel", "aweme_live"), ("keyword", keyword),
+                ("offset", "\(offset)"), ("count", "\(count)"), ("os_version", "10")
+            ]) else {
+                completion([])
+                return
+            }
+            LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
+                guard let json = json, LiveJSON.asInt(json["status_code"]) == 0 else {
+                    completion([])
+                    return
+                }
+                completion(DouyinLiveSite.parseSearchVideos(json["data"]))
+            }
+        }
+    }
+
+    private func searchByPartition(keyword: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        searchHeaders(keyword: keyword) { [weak self] headers in
+            guard let self = self else { return }
+            guard let url = LiveListURL.url(base: DouyinLiveSite.partitionSearchURL, params: [
+                ("keyword", keyword), ("aid", "6383")
+            ]) else {
+                completion([])
+                return
+            }
+            LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { [weak self] json in
+                guard let self = self else { return }
+                guard let json = json,
+                      let data = LiveJSON.asMap(json["data"]),
+                      let partitions = data["SearchResult"] as? [Any],
+                      !partitions.isEmpty else {
+                    completion([])
+                    return
+                }
+                self.searchPartitionRooms(partitions: partitions, page: page, pageSize: pageSize, headers: headers, completion: completion)
+            }
+        }
+    }
+
+    /// Walks at most the first three partitions, merging rooms
+    /// (deduped by room id) until the page is full. One dead
+    /// partition never kills the other two.
+    private func searchPartitionRooms(partitions: [Any], page: Int, pageSize: Int, headers: [String: String], completion: @escaping ([LiveRoom]) -> Void) {
+        var merged: [LiveRoom] = []
+        var seen: Set<String> = []
+        let limit = min(3, partitions.count)
+        var index = 0
+        func next() {
+            if index >= limit || merged.count >= pageSize {
+                completion(merged)
+                return
+            }
+            let partitionItem = partitions[index]
+            index += 1
+            guard let itemMap = LiveJSON.asMap(partitionItem),
+                  let partition = LiveJSON.asMap(itemMap["partition"]) else {
+                next()
+                return
+            }
+            let partitionId = LiveJSON.asString(partition["id_str"])
+            guard !partitionId.isEmpty, let partitionType = partition["type"] else {
+                next()
+                return
+            }
+            self.partitionRooms(partition: partitionId, partitionType: "\(partitionType)", page: page, pageSize: pageSize, headers: headers) { rooms in
+                for room in rooms {
+                    if seen.insert(room.roomId).inserted {
+                        merged.append(room)
+                        if merged.count >= pageSize {
+                            break
+                        }
+                    }
+                }
+                next()
+            }
+        }
+        next()
+    }
+
+    /// Partition rooms for one partition id/type, trying both
+    /// hosts (Dart `DouyinSearch._getPartitionRooms`). The first
+    /// host returning a non-empty list wins.
+    private func partitionRooms(partition: String, partitionType: String, page: Int, pageSize: Int, headers: [String: String], completion: @escaping ([LiveRoom]) -> Void) {
+        let count = min(50, max(1, pageSize))
+        let params: [String: String] = [
+            "aid": "6383", "app_name": "douyin_web", "live_id": "1",
+            "device_platform": "web", "language": "zh-CN",
+            "browser_language": "zh-CN", "browser_platform": "Win32",
+            "browser_name": "Chrome", "browser_version": "120.0.0.0",
+            "partition": partition, "partition_type": partitionType,
+            "count": "\(count)", "offset": "\((page - 1) * count)",
+            "cookie_enabled": "true", "screen_width": "1920", "screen_height": "1080"
+        ]
+        let hosts = [DouyinLiveSite.partitionRoomsURL, DouyinLiveSite.partitionRoomsFallbackURL]
+        var hostIndex = 0
+        func attempt() {
+            if hostIndex >= hosts.count {
+                completion([])
+                return
+            }
+            let target = self.requestUrlSigner(hosts[hostIndex], params)
+            hostIndex += 1
+            guard let url = URL(string: target) else {
+                attempt()
+                return
+            }
+            LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
+                guard let json = json, LiveJSON.asInt(json["status_code"]) == 0,
+                      let data = LiveJSON.asMap(json["data"]),
+                      let list = data["data"] as? [Any], !list.isEmpty else {
+                    attempt()
+                    return
+                }
+                completion(DouyinLiveSite.parsePartitionRoomList(list))
+            }
+        }
+        attempt()
+    }
+
+    // MARK: - Pure parsers (fixture-testable, no network)
+
+    /// Client-side page slice of a fetched-full list. Page is
+    /// 1-based; out-of-range pages are empty, never faked.
+    static func slice(_ rooms: [LiveRoom], page: Int, pageSize: Int) -> [LiveRoom] {
+        let start = (max(1, page) - 1) * pageSize
+        guard start < rooms.count else { return [] }
+        let end = min(start + pageSize, rooms.count)
+        return Array(rooms[start..<end])
+    }
+
+    /// Parses both generations of the anonymous feed response:
+    /// the legacy `data.data` list and (since Aug 2026) `data`
+    /// as a list of feed envelopes with the room in each
+    /// envelope's `data` field. Nil when the response is not a
+    /// code-0 object with a room list.
+    static func parseRecommendRooms(_ json: [String: Any]?) -> [LiveRoom]? {
+        guard let root = json else { return nil }
+        if let status = LiveJSON.asIntOrNil(root["status_code"]), status != 0 {
+            return nil
+        }
+        var rawRooms = root["data"]
+        if let map = LiveJSON.asMap(rawRooms) {
+            rawRooms = map["data"]
+        }
+        guard let list = rawRooms as? [Any] else { return nil }
+        var rooms: [LiveRoom] = []
+        var seen: Set<String> = []
+        for rawItem in list {
+            guard let envelope = LiveJSON.asMap(rawItem) else { continue }
+            let embedded = DouyinLiveSite.decodeEmbeddedMap(envelope["data"])
+            let nestedRoom = LiveJSON.asMap(envelope["room"])
+            var room: [String: Any]? = nil
+            for candidate in [embedded, nestedRoom, envelope] as [[String: Any]?] {
+                if let candidate = candidate, DouyinLiveSite.looksLikeRoom(candidate) {
+                    room = candidate
+                    break
+                }
+            }
+            guard let room = room else { continue }
+            let owner = LiveJSON.asMap(room["owner"]) ?? LiveJSON.asMap(envelope["owner"]) ?? [:]
+            let roomId = DouyinLiveSite.firstText([envelope["web_rid"], owner["web_rid"], room["web_rid"], room["id_str"], room["id"]])
+            guard !roomId.isEmpty, seen.insert(roomId).inserted else { continue }
+            let title = DouyinLiveSite.firstText([room["title"], envelope["title"], owner["nickname"]])
+            let nick = DouyinLiveSite.firstText([owner["nickname"], envelope["nickname"]])
+            rooms.append(LiveRoom(
+                roomId: roomId, platform: .douyin,
+                title: title,
+                streamer: nick,
+                avatar: DouyinLiveSite.firstImageUrl([owner["avatar_thumb"], owner["avatar_large"], envelope["avatar_thumb"]]),
+                cover: DouyinLiveSite.firstImageUrl([room["cover"], envelope["cover"]]),
+                onlineCount: DouyinLiveSite.douyinWatching(room),
+                isLive: true,
+                link: "https://live.douyin.com/\(roomId)"))
+        }
+        return rooms
+    }
+
+    private static func decodeEmbeddedMap(_ value: Any?) -> [String: Any]? {
+        if let direct = LiveJSON.asMap(value) {
+            return direct
+        }
+        // Open brace as a scalar: a literal open brace here
+        // would break the preflight brace count (it counts
+        // braces naively, including inside strings/comments).
+        let openBrace = String(UnicodeScalar(0x7B))
+        guard let text = value as? String, text.trimmingCharacters(in: .whitespaces).hasPrefix(openBrace) else {
+            return nil
+        }
+        return LiveJSON.decodeObject(Data(text.utf8))
+    }
+
+    private static func looksLikeRoom(_ value: [String: Any]) -> Bool {
+        return value["owner"] is [String: Any]
+            || value["title"] != nil
+            || value["id_str"] != nil
+            || value["stream_url"] is [String: Any]
+    }
+
+    /// Parses the homepage `categoryData` blob into areas.
+    /// areaId is "id,type" — the exact shape categoryRooms
+    /// splits on. The blob escaping varies by page generation
+    /// (raw, singly- or doubly-escaped JSON), so extraction is
+    /// retried on the HTML unescaped 0..3 times; the first
+    /// attempt yielding a `categoryData` list wins.
+    static func parseCategories(_ html: String) -> [(id: String, name: String)] {
+        var text = html
+        for _ in 0..<4 {
+            let extracted = DouyinLiveSite.extractCategoryDataJson(text)
+            if !extracted.isEmpty,
+               let renderData = LiveJSON.decodeObject(Data(extracted.utf8)),
+               let data = renderData["categoryData"] as? [Any] {
+                return DouyinLiveSite.areasFromCategoryData(data)
+            }
+            text = DouyinLiveSite.unescapeOnce(text)
+        }
+        return []
+    }
+
+    /// One JSON-unescape pass: backslash-quote becomes a quote,
+    /// then a doubled backslash becomes one.
+    static func unescapeOnce(_ value: String) -> String {
+        value.replacingOccurrences(of: "\\\"", with: "\"").replacingOccurrences(of: "\\\\", with: "\\")
+    }
+
+    private static func areasFromCategoryData(_ data: [Any]) -> [(id: String, name: String)] {
+        var areas: [(id: String, name: String)] = []
+        for item in data {
+            guard let itemMap = LiveJSON.asMap(item),
+                  let partition = LiveJSON.asMap(itemMap["partition"]) else { continue }
+            let id = "\(LiveJSON.asString(partition["id_str"])),\(LiveJSON.asString(partition["type"]))"
+            let title = LiveJSON.asString(partition["title"])
+            guard !title.isEmpty else { continue }
+            areas.append((id: id, name: title))
+            if let subs = itemMap["sub_partition"] as? [Any] {
+                for subItem in subs {
+                    guard let subMap = LiveJSON.asMap(subItem),
+                          let subPartition = LiveJSON.asMap(subMap["partition"]) else { continue }
+                    let subId = "\(LiveJSON.asString(subPartition["id_str"])),\(LiveJSON.asString(subPartition["type"]))"
+                    let subTitle = LiveJSON.asString(subPartition["title"])
+                    guard !subTitle.isEmpty else { continue }
+                    areas.append((id: subId, name: subTitle))
+                }
+            }
+        }
+        return areas
+    }
+
+    static func extractCategoryDataJson(_ source: String) -> String {
+        // Open brace built from a scalar (see decodeEmbeddedMap):
+        // a literal open brace in these patterns would break the
+        // preflight brace count, which counts braces naively.
+        let openBrace = String(UnicodeScalar(0x7B))
+        let startPatterns = [openBrace + "\\\"pathname\\\":\\\"/\\\",\\\"categoryData\\\":" , openBrace + "\"pathname\":\"/\",\"categoryData\":"]
+        for pattern in startPatterns {
+            guard let startRange = source.range(of: pattern) else { continue }
+            var openBraces = 0
+            var foundFirstBrace = false
+            var index = startRange.lowerBound
+            while index < source.endIndex {
+                let char = source[index]
+                if char == "{" {
+                    openBraces += 1
+                    foundFirstBrace = true
+                } else if char == "}" {
+                    openBraces -= 1
+                }
+                if foundFirstBrace && openBraces == 0 {
+                    let rawData = String(source[startRange.lowerBound...index])
+                    return rawData.replacingOccurrences(of: "\\\"", with: "\"").replacingOccurrences(of: "\\\\", with: "\\")
+                }
+                index = source.index(after: index)
+            }
+        }
+        return ""
+    }
+
+    /// Parses a partition room list (`data.data[]`) into rooms.
+    /// Nil when the payload has no room list.
+    static func parseCategoryRooms(_ json: [String: Any]?) -> [LiveRoom]? {
+        guard let root = json,
+              let data = LiveJSON.asMap(root["data"]),
+              let list = data["data"] as? [Any] else { return nil }
+        return DouyinLiveSite.parsePartitionRoomList(list)
+    }
+
+    /// Parses a partition room list (`data.data[]` from
+    /// partition/detail/room/v2) into rooms.
+    static func parsePartitionRoomList(_ payload: [Any]) -> [LiveRoom] {
+        var rooms: [LiveRoom] = []
+        for item in payload {
+            guard let itemMap = LiveJSON.asMap(item),
+                  let room = LiveJSON.asMap(itemMap["room"]) else { continue }
+            let owner = LiveJSON.asMap(room["owner"]) ?? [:]
+            let roomId = DouyinLiveSite.firstText([itemMap["web_rid"], owner["web_rid"]])
+            guard !roomId.isEmpty else { continue }
+            rooms.append(LiveRoom(
+                roomId: roomId, platform: .douyin,
+                title: DouyinLiveSite.firstText([room["title"]]),
+                streamer: DouyinLiveSite.firstText([owner["nickname"]]),
+                avatar: DouyinLiveSite.firstImageUrl([owner["avatar_thumb"]]),
+                cover: DouyinLiveSite.firstImageUrl([room["cover"]]),
+                onlineCount: DouyinLiveSite.douyinWatching(room),
+                isLive: true,
+                link: "https://live.douyin.com/\(roomId)"))
+        }
+        return rooms
+    }
+
+    /// Parses a search `data` list (live/general API) into rooms.
+    static func parseSearchVideos(_ payload: Any?) -> [LiveRoom] {
+        guard let list = payload as? [Any] else { return [] }
+        var result: [LiveRoom] = []
+        var seen: Set<String> = []
+        for item in list {
+            let raw = DouyinLiveSite.parseRawLiveData(item)
+            let itemMap = LiveJSON.asMap(item) ?? [:]
+            let fallback: [String: Any] = [
+                "nickname": itemMap["nickname"] as Any,
+                "title": (itemMap["title"] ?? itemMap["desc"]) as Any,
+                "tag": itemMap["search_keyword"] as Any
+            ]
+            guard let room = DouyinLiveSite.normalizeSearchItem(raw, fallback: fallback),
+                  seen.insert(room.roomId).inserted else { continue }
+            result.append(room)
+        }
+        return result
+    }
+
+    private static func parseRawLiveData(_ item: Any?) -> [String: Any]? {
+        guard let itemMap = LiveJSON.asMap(item) else { return nil }
+        let candidates: [Any?] = [
+            mapValue(mapValue(itemMap, "lives"), "rawdata"),
+            mapValue(mapValue(itemMap, "lives"), "raw_data"),
+            mapValue(mapValue(itemMap, "live"), "rawdata"),
+            mapValue(mapValue(itemMap, "live_info"), "rawdata"),
+            mapValue(mapValue(mapValue(itemMap, "aweme_info"), "live_info"), "rawdata"),
+            mapValue(mapValue(itemMap, "data"), "rawdata"),
+            itemMap["rawdata"],
+            itemMap["lives"],
+            itemMap["live"],
+            itemMap["live_info"],
+            mapValue(mapValue(itemMap, "aweme_info"), "live_info"),
+            itemMap["aweme_info"],
+            itemMap["data"],
+            itemMap
+        ]
+        for candidate in candidates {
+            if let text = candidate as? String {
+                if let decoded = LiveJSON.decodeObject(Data(text.utf8)) {
+                    return decoded
+                }
+                continue
+            }
+            if let map = LiveJSON.asMap(candidate) {
+                return map
+            }
+        }
+        return nil
+    }
+
+    private static func normalizeSearchItem(_ raw: [String: Any]?, fallback: [String: Any] = [:]) -> LiveRoom? {
+        guard let raw = raw else { return nil }
+        let room = LiveJSON.asMap(raw["room"]) ?? [:]
+        let owner = LiveJSON.asMap(raw["owner"]) ?? [:]
+        let roomOwner = LiveJSON.asMap(room["owner"]) ?? [:]
+        let roomId = DouyinLiveSite.firstText([raw["id_str"], raw["room_id_str"], room["id_str"], room["id"], raw["room_id"], raw["roomId"]])
+        guard !roomId.isEmpty else { return nil }
+        let webRid = DouyinLiveSite.firstText([owner["web_rid"], raw["web_rid"], roomOwner["web_rid"]])
+        let nickname = DouyinLiveSite.firstText([owner["nickname"], raw["nickname"], roomOwner["nickname"], fallback["nickname"]])
+        let title = DouyinLiveSite.firstText([raw["title"], room["title"], fallback["title"], nickname])
+        let cover = LiveJSON.asMap(raw["cover"])
+        let roomCover = LiveJSON.asMap(room["cover"])
+        let avatarLarge = LiveJSON.asMap(owner["avatar_large"])
+        let avatarThumb = LiveJSON.asMap(owner["avatar_thumb"])
+        func firstUrl(_ value: Any?) -> String {
+            guard let list = value as? [Any], let first = list.first else { return "" }
+            return LiveJSON.asString(first)
+        }
+        let pic = DouyinLiveSite.firstText([
+            firstUrl(avatarLarge?["url_list"]),
+            firstUrl(cover?["url_list"]),
+            firstUrl(roomCover?["url_list"]),
+            raw["cover_url"]
+        ])
+        let status = LiveJSON.asInt(raw["status"]) == 2
+        var tagText: String?
+        if let roadMap = room["partition_road_map"] as? [Any],
+           let firstPartition = LiveJSON.asMap(roadMap.first) {
+            tagText = LiveJSON.asString(firstPartition["title"])
+        }
+        if tagText == nil || tagText?.isEmpty == true {
+            tagText = DouyinLiveSite.firstText([raw["video_feed_tag"], mapValue(raw["partition"], "title"), fallback["tag"]])
+        }
+        _ = tagText
+        let realWebRid = webRid.isEmpty ? roomId : webRid
+        let avatar = DouyinLiveSite.firstText([firstUrl(avatarThumb?["url_list"]), firstUrl(avatarLarge?["url_list"])])
+        var watching = DouyinLiveSite.douyinWatching(room)
+        if watching == 0 {
+            watching = DouyinLiveSite.douyinWatching(raw)
+        }
+        return LiveRoom(
+            roomId: realWebRid, platform: .douyin,
+            title: title,
+            streamer: nickname.isEmpty ? "抖音直播" : nickname,
+            avatar: avatar,
+            cover: pic,
+            onlineCount: watching,
+            isLive: status,
+            link: "https://live.douyin.com/\(realWebRid)")
+    }
+
+    private static func mapValue(_ value: Any?, _ key: String) -> Any? {
+        guard let map = LiveJSON.asMap(value) else { return nil }
+        return map[key]
+    }
+}

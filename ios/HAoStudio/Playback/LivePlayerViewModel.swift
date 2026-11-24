@@ -25,12 +25,12 @@
 //   quality and shows a toast).
 // - Brightness / volume ONLY in the live player (chen 2026-11-20):
 //   the app never changes system brightness on entering or leaving
-//   a page, and never re-applies a room brightness on foreground
-//   return. Brightness is saved on entry, applied ONLY from an
-//   explicit user drag while the player is active, and restored on
-//   exit AND on backgrounding (Flutter parity: the value the user
-//   picks in Control Center while backgrounded is the brightness
-//   now — the room must not overwrite it on return).
+//   a page, never restores on exit or on backgrounding, and never
+//   re-applies a room brightness on foreground return. The slider
+//   only ever writes while the user drags it in the player; the
+//   value the user picks anywhere else (Control Center, system
+//   settings, the slider itself) is left exactly as it is when
+//   the room closes or the app backgrounds.
 // - Fullscreen ONLY from the [ ] button (live enters portrait):
 //   the rotation itself reuses S3 VOD's VideoOrientation mechanism
 //   (device orientation + window-scene geometry request), which
@@ -185,12 +185,10 @@ final class LivePlayerViewModel: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
     private var autoHideWork: DispatchWorkItem?
-    /// System brightness as it was when the player was entered.
-    /// Restored on exit and on backgrounding, never re-applied.
-    private var entryBrightness: Double?
-    /// True only between `notePlayerEntry` and
-    /// `restoreBrightnessOnExit`: brightness writes outside that
-    /// window are dropped, never applied.
+    /// True only between `notePlayerEntry` and `disarmBrightness`:
+    /// brightness writes outside that window are dropped, never
+    /// applied. Nothing is ever written back on exit: the system
+    /// value stays exactly as the user left it.
     private var brightnessArmed = false
 
     init(driver: LiveDriver) {
@@ -333,14 +331,14 @@ final class LivePlayerViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Brightness (player-only, restored on exit)
+    // MARK: - Brightness (player-only, never restored)
 
-    /// Call when the room page appears: remember the system
-    /// brightness as it is NOW and arm brightness writes. Nothing
-    /// is written to the screen here.
+    /// Call when the room page appears: seed the slider from the
+    /// system brightness as it is NOW and arm brightness writes.
+    /// Nothing is written to the screen here, and nothing is
+    /// remembered to write back: exit never restores.
     func notePlayerEntry() {
-        entryBrightness = Double(UIScreen.main.brightness)
-        brightnessLevel = entryBrightness ?? 0.5
+        brightnessLevel = Double(UIScreen.main.brightness)
         brightnessArmed = true
     }
 
@@ -358,17 +356,15 @@ final class LivePlayerViewModel: ObservableObject {
         UIScreen.main.brightness = CGFloat(clamped)
     }
 
-    /// Give the brightness back to the system NOW: restores the
-    /// entry value and disarms writes. Called on room exit AND on
-    /// backgrounding — the value the user picks in Control Center
-    /// while backgrounded is the brightness now, and the room must
-    /// not overwrite it on return.
-    func restoreBrightnessOnExit() {
-        if let entry = entryBrightness {
-            UIScreen.main.brightness = CGFloat(entry)
-        }
+    /// Stop accepting brightness writes. Called on room exit AND
+    /// on backgrounding. Deliberately writes NOTHING back: the
+    /// system brightness stays exactly as the user left it —
+    /// restoring the entry value here would overwrite a value
+    /// the user picked in the player or in Control Center
+    /// (chen 2026-11-20: exit never restores, never overwrites
+    /// what the user set in the system).
+    func disarmBrightness() {
         brightnessArmed = false
-        entryBrightness = nil
     }
 
     // MARK: - Volume (player-only, hook-gated)
@@ -385,17 +381,17 @@ final class LivePlayerViewModel: ObservableObject {
 
     // MARK: - App lifecycle (live background audio)
 
-    /// App backgrounded: hand the brightness back immediately,
+    /// App backgrounded: stop accepting brightness writes (the
+    /// system value is left as the user left it — no restore),
     /// then let the driver drop to audio-only (live only — VOD
     /// never takes this path).
     func handleBackground() {
-        restoreBrightnessOnExit()
+        disarmBrightness()
         _ = driver.enterBackground()
     }
 
     /// App foregrounded: restore the video track. Deliberately
-    /// does NOT re-apply any brightness (Flutter parity — see
-    /// `restoreBrightnessOnExit`).
+    /// does NOT re-apply any brightness (see `disarmBrightness`).
     func handleForeground() {
         _ = driver.enterForeground()
     }

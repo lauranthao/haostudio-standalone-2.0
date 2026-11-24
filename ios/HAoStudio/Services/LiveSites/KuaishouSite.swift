@@ -465,3 +465,302 @@ final class KuaishouLiveSite: LiveSiteResolver {
         }
     }
 }
+
+// MARK: - Lists (recommend / categories / search)
+//
+// Port of the Flutter `kuaishou_site.dart` list methods
+// (getRecommendRooms / getCategories / getCategoryRooms /
+// searchRooms) + `kuaishou_room_parser.dart` list parsers. The
+// room-detail leg (S4-B) left these out; the live tab's gateway
+// needs them. Every method completes with [] on any failure —
+// a list failure is an empty list, never a throw out of the
+// completion handler. All parsing is pure + static so fixtures
+// can cover it without network.
+//
+// ROOMID RULE (same as room detail): the room identifier is
+// `author.id`, NEVER `liveStream.id`. The live-stream id is
+// only the danmaku/feed credential (`danmakuData['liveStreamId']`)
+// and the `link` value.
+
+extension KuaishouLiveSite {
+    private static let recommendURL = "https://live.kuaishou.com/live_api/home/list"
+    private static let categoryDataURL = "https://live.kuaishou.com/live_api/category/data"
+    private static let gameboardURL = "https://live.kuaishou.com/live_api/gameboard/list"
+    private static let nonGameboardURL = "https://live.kuaishou.com/live_api/non-gameboard/list"
+    private static let authorSearchURL = "https://live.kuaishou.com/live_api/search/author"
+    private static let categoryPageSize = 50
+
+    /// Home hot list via `live_api/home/list` (Dart
+    /// `getRecommendRooms`): no pagination server-side; the page
+    /// slice is taken client-side.
+    func recommendRooms(page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        let size = min(100, max(1, pageSize))
+        let currentPage = max(1, page)
+        guard let url = URL(string: KuaishouLiveSite.recommendURL) else {
+            completion([])
+            return
+        }
+        LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: KuaishouLiveSite.headers, fetcher: fetcher) { json in
+            guard let rooms = KuaishouLiveSite.parseRecommendRooms(json) else {
+                completion([])
+                return
+            }
+            let start = (currentPage - 1) * size
+            guard start < rooms.count else {
+                completion([])
+                return
+            }
+            completion(Array(rooms[start..<min(start + size, rooms.count)]))
+        }
+    }
+
+    /// Categories (Dart `getCategories`, port of Pure Live 3.x
+    /// `getCategores` + `getSubCategores`): eight fixed top types
+    /// (热门 1 / 网游 2 / 单机 3 / 手游 4 / 棋牌 5 / 娱乐 6 /
+    /// 综合 7 / 文化 8) from `live_api/category/data`. All types
+    /// fetch in parallel; a full first page pulls one more page,
+    /// capped at two. One dead type never kills the others; when
+    /// every fetch fails, the verified-popular fallback below is
+    /// returned so the tab never shows a blank category row.
+    func listCategories(completion: @escaping ([(id: String, name: String)]) -> Void) {
+        let types = ["1", "2", "3", "4", "5", "6", "7", "8"]
+        var first: [[(id: String, name: String)]] = Array(repeating: [], count: types.count)
+        let group = DispatchGroup()
+        let lock = NSLock()
+        for (index, type) in types.enumerated() {
+            group.enter()
+            fetchCategoryPage(type: type, page: 1) { areas in
+                lock.lock()
+                first[index] = areas
+                lock.unlock()
+                group.leave()
+            }
+        }
+        group.notify(queue: DispatchQueue.global(qos: .utility)) { [weak self] in
+            guard let self = self else { return }
+            var areas = first.flatMap { $0 }
+            var fullTypes: [String] = []
+            for (index, type) in types.enumerated() where first[index].count >= KuaishouLiveSite.categoryPageSize {
+                fullTypes.append(type)
+            }
+            if fullTypes.isEmpty {
+                completion(areas.isEmpty ? KuaishouLiveSite.fallbackCategories : areas)
+                return
+            }
+            var second: [[(id: String, name: String)]] = Array(repeating: [], count: fullTypes.count)
+            let secondGroup = DispatchGroup()
+            for (index, type) in fullTypes.enumerated() {
+                secondGroup.enter()
+                self.fetchCategoryPage(type: type, page: 2) { pageAreas in
+                    lock.lock()
+                    second[index] = pageAreas
+                    lock.unlock()
+                    secondGroup.leave()
+                }
+            }
+            secondGroup.notify(queue: DispatchQueue.global(qos: .utility)) {
+                areas.append(contentsOf: second.flatMap { $0 })
+                completion(areas.isEmpty ? KuaishouLiveSite.fallbackCategories : areas)
+            }
+        }
+    }
+
+    private func fetchCategoryPage(type: String, page: Int, completion: @escaping ([(id: String, name: String)]) -> Void) {
+        guard let url = LiveListURL.url(base: KuaishouLiveSite.categoryDataURL, params: [
+            ("type", type), ("page", "\(page)"), ("size", "\(KuaishouLiveSite.categoryPageSize)")
+        ]) else {
+            completion([])
+            return
+        }
+        LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: KuaishouLiveSite.headers, fetcher: fetcher) { json in
+            completion(KuaishouLiveSite.parseCategories(json) ?? [])
+        }
+    }
+
+    /// Verified-popular categories per top type (live probe
+    /// 2026-11-16, `category/data` first-page entries). Only used
+    /// when all live fetches fail; ids are real, so category
+    /// rooms load.
+    static let fallbackCategories: [(id: String, name: String)] = [
+        ("22008", "和平精英"), ("1001", "王者荣耀"), ("22484", "暗区突围"), ("22744", "格斗游戏"),
+        ("2", "穿越火线"), ("21", "绝地求生"),
+        ("1", "英雄联盟"), ("1009", "我的世界"), ("3", "地下城与勇士"), ("13", "守望先锋"),
+        ("22762", "黑神话悟空"), ("22088", "经典单机"), ("15", "街机游戏"), ("22193", "植物大战僵尸"), ("22189", "红警"),
+        ("22181", "原神"), ("1054", "QQ飞车手游"), ("22337", "蛋仔派对"),
+        ("1018", "JJ斗地主"), ("22185", "天天象棋"), ("20", "三国杀"), ("6", "斗地主"), ("10", "象棋"), ("1017", "欢乐斗地主"),
+        ("1000004", "才艺"), ("1000003", "音乐"), ("1000006", "颜值"), ("1000002", "舞蹈"), ("1000007", "情感"), ("1000005", "脱口秀"), ("1000001", "明星"),
+        ("1000024", "其他"), ("1000020", "购物"), ("1000016", "健康"), ("1000021", "媒体"), ("1000011", "美妆"), ("1000008", "汽车"),
+        ("1000023", "科普"), ("1000022", "教育")
+    ]
+
+    /// Category rooms (Dart `getCategoryRooms`, port of Pure Live
+    /// 3.x): game boards (`gameboard/list`, short numeric ids) vs
+    /// non-game boards (`non-gameboard/list`, long 10000xx ids),
+    /// split on id length < 7.
+    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        let base = areaId.count < 7 ? KuaishouLiveSite.gameboardURL : KuaishouLiveSite.nonGameboardURL
+        guard let url = LiveListURL.url(base: base, params: [
+            ("filterType", "0"), ("pageSize", "20"), ("gameId", areaId), ("page", "\(max(1, page))")
+        ]) else {
+            completion([])
+            return
+        }
+        LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: KuaishouLiveSite.headers, fetcher: fetcher) { json in
+            completion(KuaishouLiveSite.parseCategoryRooms(json) ?? [])
+        }
+    }
+
+    /// Author search (Dart `searchRooms`): returns ANCHORS as
+    /// rooms (no viewer count, only a `living` flag). The web
+    /// search page never lists rooms, so finding the anchor and
+    /// opening their room is the whole flow.
+    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            completion([])
+            return
+        }
+        var headers = KuaishouLiveSite.headers
+        headers["Referer"] = "https://live.kuaishou.com/search?keyword=\(LiveQuery.percentEncode(trimmed))"
+        guard let url = LiveListURL.url(base: KuaishouLiveSite.authorSearchURL, params: [
+            ("keyword", trimmed), ("page", "\(max(1, page))"), ("lssid", "")
+        ]) else {
+            completion([])
+            return
+        }
+        LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: fetcher) { json in
+            let rooms = KuaishouLiveSite.parseAuthorSearch(json) ?? []
+            completion(Array(rooms.prefix(min(100, max(1, pageSize)))))
+        }
+    }
+
+    // MARK: - Pure parsers (fixture-testable, no network)
+
+    /// Parses a `live_api/home/list` response
+    /// (`data.list[].gameLiveInfo[].liveInfo[]`) into rooms.
+    /// Nil when the response has no room list.
+    static func parseRecommendRooms(_ json: [String: Any]?) -> [LiveRoom]? {
+        guard let json = json,
+              let data = LiveJSON.asMap(json["data"]) else { return nil }
+        var rooms: [LiveRoom] = []
+        for section in LiveJSON.asList(data["list"]) {
+            for group in LiveJSON.asList(section["gameLiveInfo"]) {
+                for item in LiveJSON.asList(group["liveInfo"]) {
+                    if let room = KuaishouLiveSite.roomFromFeedItem(item, title: nil) {
+                        rooms.append(room)
+                    }
+                }
+            }
+        }
+        return rooms
+    }
+
+    /// Parses a `live_api/gameboard/list` /
+    /// `non-gameboard/list` response into rooms. Items are FLAT
+    /// here (author/caption/poster/playUrls on the item itself),
+    /// unlike the nested `gameLiveInfo[].liveInfo[]` shape of the
+    /// recommend feed — hence a separate parser. Field mapping
+    /// mirrors `parseRecommendRooms`: room id is `author.id`,
+    /// never the live-stream id.
+    static func parseCategoryRooms(_ json: [String: Any]?) -> [LiveRoom]? {
+        guard let json = json,
+              let data = LiveJSON.asMap(json["data"]) else { return nil }
+        var rooms: [LiveRoom] = []
+        for item in LiveJSON.asList(data["list"]) {
+            let author = LiveJSON.asMap(item["author"]) ?? [:]
+            let authorId = LiveJSON.asString(author["id"])
+            guard !authorId.isEmpty else { continue }
+            let caption = LiveJSON.asString(item["caption"])
+            let description = LiveJSON.asString(author["description"])
+            let title = caption.isEmpty ? description : caption
+            if let room = KuaishouLiveSite.roomFromFeedItem(item, title: title) {
+                rooms.append(room)
+            }
+        }
+        return rooms
+    }
+
+    /// One feed item (recommend `liveInfo` or flat category item)
+    /// into a room. `title` overrides the author description
+    /// when the caller supplies one (category items carry a
+    /// caption); nil keeps the description.
+    private static func roomFromFeedItem(_ item: [String: Any], title: String?) -> LiveRoom? {
+        let author = LiveJSON.asMap(item["author"]) ?? [:]
+        let gameInfo = LiveJSON.asMap(item["gameInfo"]) ?? [:]
+        let authorId = LiveJSON.asString(author["id"])
+        guard !authorId.isEmpty else { return nil }
+        let liveStreamId = LiveJSON.asString(item["id"])
+        let description = LiveJSON.asString(author["description"])
+        let titleText = (title ?? description).replacingOccurrences(of: "\n", with: " ")
+        let streamPoster = LiveJSON.asString(item["poster"])
+        let gamePoster = LiveJSON.asString(gameInfo["poster"])
+        let cover = streamPoster.isEmpty ? gamePoster : streamPoster
+        let living = item["living"]
+        let live: Bool
+        if let livingFlag = living as? Bool {
+            live = livingFlag
+        } else {
+            live = true
+        }
+        let playUrls = item["playUrls"]
+        return LiveRoom(
+            roomId: authorId, platform: .kuaishou,
+            title: titleText,
+            streamer: LiveJSON.asString(author["name"]),
+            avatar: LiveJSON.asString(author["avatar"]),
+            cover: KuaishouLiveSite.posterUrl(cover),
+            onlineCount: LiveJSON.asInt(item["watchingCount"]),
+            isLive: live,
+            link: liveStreamId,
+            data: playUrls == nil ? nil : ["playUrls": playUrls as Any],
+            danmakuData: liveStreamId.isEmpty ? nil : ["liveStreamId": liveStreamId])
+    }
+
+    /// Parses a `live_api/category/data` response
+    /// (`data.list[]` of `{id, name, poster}`) into flat areas.
+    /// Nil when the response has no category list.
+    static func parseCategories(_ json: [String: Any]?) -> [(id: String, name: String)]? {
+        guard let json = json,
+              let data = LiveJSON.asMap(json["data"]) else { return nil }
+        var areas: [(id: String, name: String)] = []
+        for item in LiveJSON.asList(data["list"]) {
+            let id = LiveJSON.asString(item["id"])
+            let name = LiveJSON.asString(item["name"])
+            guard !id.isEmpty, !name.isEmpty else { continue }
+            areas.append((id: id, name: name))
+        }
+        return areas
+    }
+
+    /// Parses the `live_api/search/author` response into anchor
+    /// rooms. The endpoint returns ANCHORS, not rooms: no viewer
+    /// count, only a `living` flag (and `bannedStatus`). A
+    /// Kuaishou search therefore finds the anchor; opening the
+    /// anchor's room fetches the live detail. `watching` is 0
+    /// (unknown, never a fabricated count) and banned anchors
+    /// report offline. The room id is the anchor id.
+    static func parseAuthorSearch(_ json: [String: Any]?) -> [LiveRoom]? {
+        guard let json = json,
+              let data = LiveJSON.asMap(json["data"]) else { return nil }
+        var rooms: [LiveRoom] = []
+        for author in LiveJSON.asList(data["list"]) {
+            let id = LiveJSON.asString(author["id"]).trimmingCharacters(in: .whitespaces)
+            guard !id.isEmpty else { continue }
+            let name = LiveJSON.asString(author["name"])
+            let avatar = LiveJSON.asString(author["avatar"])
+            let banned = LiveJSON.asMap(author["bannedStatus"])
+            let isBanned = banned?["banned"] as? Bool == true
+            let live = !isBanned && author["living"] as? Bool == true
+            rooms.append(LiveRoom(
+                roomId: id, platform: .kuaishou,
+                title: name,
+                streamer: name,
+                avatar: avatar,
+                cover: avatar,
+                onlineCount: 0,
+                isLive: live,
+                link: "https://live.kuaishou.com/u/\(id)"))
+        }
+        return rooms
+    }
+}

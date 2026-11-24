@@ -43,6 +43,13 @@ final class BilibiliLiveSite: LiveSiteResolver {
     private var buvid4: String = ""
     private var buvidRequestInFlight: Bool = false
     private var buvidCompletions: [(String, String) -> Void] = []
+    private var accessId: String = ""
+    private var accessIdInFlight: Bool = false
+    private var accessIdCompletions: [(String) -> Void] = []
+    /// sub-area id -> parent area id, filled by listCategories.
+    /// second/getList returns -400 without parent_area_id, so a
+    /// category room list is only attempted when the parent is known.
+    private var categoryParentIds: [String: String] = [:]
 
     init(fetcher: LiveDataFetcher? = nil, wbiSigner: BilibiliWbiSigner? = nil) {
         let sharedFetcher = fetcher ?? LiveHTTP.defaultFetcher
@@ -616,4 +623,398 @@ private struct BilibiliStreamCandidate {
     var protocolName: String
     var format: String
     var codec: String
+}
+
+// MARK: - Lists (recommend / categories / search)
+//
+// Port of the Flutter `bilibili_site.dart` list methods
+// (getRecommendRooms / getCategories / getCategoryRooms /
+// searchRooms). The room-detail leg (S4-B) left these out; the
+// live tab's gateway needs them. Every method completes with []
+// on any failure — a list failure is an empty list, never a throw
+// out of the completion handler. All parsing is pure + static so
+// fixtures can cover it without network.
+
+extension BilibiliLiveSite {
+    private static let rankedRecommendURL = "https://api.live.bilibili.com/room/v1/Area/getListByAreaID"
+    private static let fallbackRecommendURL = "https://api.live.bilibili.com/xlive/web-interface/v1/webMain/getMoreRecList"
+    private static let areaListURL = "https://api.live.bilibili.com/room/v1/Area/getList"
+    private static let categoryRoomsBaseURL = "https://api.live.bilibili.com/xlive/web-interface/v1/second/getList"
+    private static let searchURL = "https://api.bilibili.com/x/web-interface/search/type"
+    private static let accessIdURL = "https://live.bilibili.com/lol"
+
+    /// Recommended rooms, heat-ranked (Dart `getRecommendRooms`):
+    /// the ranked endpoint first (sort=online), the
+    /// recommendation feed only as a bounded fallback. Page is
+    /// 1-based here; the adapter converts the tab's 0-based page.
+    func recommendRooms(page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        let size = min(30, max(1, pageSize))
+        let currentPage = max(1, page)
+        headers { [weak self] headers in
+            guard let self = self else { return }
+            self.requestRankedRecommend(page: currentPage, pageSize: size, headers: headers, attempt: 0) { [weak self] rooms in
+                guard let self = self else { return }
+                if let rooms = rooms {
+                    completion(rooms)
+                    return
+                }
+                self.requestRecommendFallback(page: currentPage, headers: headers, completion: completion)
+            }
+        }
+    }
+
+    private func requestRankedRecommend(page: Int, pageSize: Int, headers: [String: String], attempt: Int, completion: @escaping ([LiveRoom]?) -> Void) {
+        guard let url = LiveListURL.url(base: BilibiliLiveSite.rankedRecommendURL, params: [
+            ("areaId", "0"), ("parent_area_id", "0"), ("sort", "online"),
+            ("pageSize", "\(pageSize)"), ("page", "\(page)")
+        ]) else {
+            completion(nil)
+            return
+        }
+        LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: fetcher) { [weak self] json in
+            guard let self = self else { return }
+            if let rooms = BilibiliLiveSite.parseRecommendRooms(json) {
+                completion(rooms)
+                return
+            }
+            if attempt == 0 {
+                LiveHTTP.after(milliseconds: 180) { [weak self] in
+                    guard let self = self else { return }
+                    self.requestRankedRecommend(page: page, pageSize: pageSize, headers: headers, attempt: 1, completion: completion)
+                }
+                return
+            }
+            completion(nil)
+        }
+    }
+
+    private func requestRecommendFallback(page: Int, headers: [String: String], completion: @escaping ([LiveRoom]) -> Void) {
+        guard let url = LiveListURL.url(base: BilibiliLiveSite.fallbackRecommendURL, params: [
+            ("platform", "web"), ("page", "\(page)")
+        ]) else {
+            completion([])
+            return
+        }
+        LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: fetcher) { json in
+            completion(BilibiliLiveSite.parseRecommendRooms(json) ?? [])
+        }
+    }
+
+    /// Category names + ids (Dart `getCategories`): the parent ->
+    /// sub-area tree flattened to sub-areas. The parent id of each
+    /// sub-area is recorded for `categoryRooms`.
+    func listCategories(completion: @escaping ([(id: String, name: String)]) -> Void) {
+        headers { [weak self] headers in
+            guard let self = self else { return }
+            guard let url = LiveListURL.url(base: BilibiliLiveSite.areaListURL, params: [
+                ("need_entrance", "1"), ("parent_id", "0")
+            ]) else {
+                completion([])
+                return
+            }
+            LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { [weak self] json in
+                guard let self = self else { return }
+                guard let triples = BilibiliLiveSite.parseCategories(json) else {
+                    completion([])
+                    return
+                }
+                for triple in triples {
+                    self.categoryParentIds[triple.id] = triple.parentId
+                }
+                completion(triples.map { (id: $0.id, name: $0.name) })
+            }
+        }
+    }
+
+    /// Rooms of one sub-area (Dart `getCategoryRooms`): WBI-signed
+    /// second/getList with the area's parent id + w_webid. When the
+    /// parent map is empty the categories are fetched first; an
+    /// unknown parent yields an empty list rather than a request
+    /// the server rejects (-400).
+    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        if categoryParentIds.isEmpty {
+            listCategories { [weak self] _ in
+                guard let self = self else { return }
+                self.requestCategoryRooms(areaId: areaId, page: page, completion: completion)
+            }
+            return
+        }
+        requestCategoryRooms(areaId: areaId, page: page, completion: completion)
+    }
+
+    private func requestCategoryRooms(areaId: String, page: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        guard let parentId = categoryParentIds[areaId] else {
+            completion([])
+            return
+        }
+        let currentPage = max(1, page)
+        fetchAccessId { [weak self] accessId in
+            guard let self = self else { return }
+            let raw = "\(BilibiliLiveSite.categoryRoomsBaseURL)?platform=web&parent_area_id=\(parentId)&area_id=\(areaId)&sort_type=online&page=\(currentPage)&w_webid=\(accessId)"
+            self.signedJSON(raw: raw, forceRefresh: false) { [weak self] json in
+                guard let self = self else { return }
+                if let rooms = BilibiliLiveSite.parseCategoryRooms(json) {
+                    completion(rooms)
+                    return
+                }
+                LiveHTTP.after(milliseconds: 180) { [weak self] in
+                    guard let self = self else { return }
+                    self.signedJSON(raw: raw, forceRefresh: true) { json in
+                        completion(BilibiliLiveSite.parseCategoryRooms(json) ?? [])
+                    }
+                }
+            }
+        }
+    }
+
+    /// Room search (Dart `searchRooms`, search_type 'live').
+    /// Matches title AND anchor nick on the server side.
+    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            completion([])
+            return
+        }
+        let size = min(50, max(1, pageSize))
+        headers { [weak self] headers in
+            guard let self = self else { return }
+            guard let url = LiveListURL.url(base: BilibiliLiveSite.searchURL, params: [
+                ("context", ""), ("search_type", "live"), ("cover_type", "user_cover"),
+                ("order", ""), ("keyword", trimmed), ("category_id", ""),
+                ("__refresh__", ""), ("_extra", ""), ("highlight", "0"),
+                ("single_column", "0"), ("page", "\(max(1, page))"), ("page_size", "\(size)")
+            ]) else {
+                completion([])
+                return
+            }
+            LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
+                completion(BilibiliLiveSite.parseSearchRooms(json) ?? [])
+            }
+        }
+    }
+
+    // MARK: - WBI + access id
+
+    /// WBI-signed GET returning decoded JSON (Dart `_getWbiJson`):
+    /// the signed param map is passed as the query of a request
+    /// against the bare base URL so values are encoded once.
+    private func signedJSON(raw: String, forceRefresh: Bool, completion: @escaping ([String: Any]?) -> Void) {
+        headers { [weak self] headers in
+            guard let self = self else { return }
+            self.wbiSigner.signUrl(raw, forceRefresh: forceRefresh) { [weak self] result in
+                guard let self = self else { return }
+                switch result {
+                case .success(let params):
+                    let base = raw.components(separatedBy: "?")[0]
+                    let pairs = params.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
+                    guard let url = LiveListURL.url(base: base, params: pairs) else {
+                        completion(nil)
+                        return
+                    }
+                    LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher, completion: completion)
+                case .failure:
+                    completion(nil)
+                }
+            }
+        }
+    }
+
+    /// w_webid for second/getList, scraped from the live home page
+    /// (Dart `getAccessId`): an empty w_webid answers -352, so the
+    /// scrape is best-effort and the request still goes out.
+    private func fetchAccessId(completion: @escaping (String) -> Void) {
+        if !accessId.isEmpty {
+            completion(accessId)
+            return
+        }
+        accessIdCompletions.append(completion)
+        if accessIdInFlight {
+            return
+        }
+        accessIdInFlight = true
+        headers { [weak self] headers in
+            guard let self = self else { return }
+            guard let url = URL(string: BilibiliLiveSite.accessIdURL) else {
+                self.finishAccessIdFetch("")
+                return
+            }
+            var request = URLRequest(url: url, timeoutInterval: LiveHTTP.defaultTimeoutSeconds)
+            for (key, value) in headers {
+                request.setValue(value, forHTTPHeaderField: key)
+            }
+            self.fetcher(request) { [weak self] data, _, _ in
+                guard let self = self else { return }
+                var found = ""
+                if let data = data, let html = String(data: data, encoding: .utf8),
+                   let regex = try? NSRegularExpression(pattern: "\"access_id\":\"(.*?)\"", options: []),
+                   let match = regex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
+                   let range = Range(match.range(at: 1), in: html) {
+                    found = String(html[range]).replacingOccurrences(of: "\\", with: "")
+                }
+                self.finishAccessIdFetch(found)
+            }
+        }
+    }
+
+    private func finishAccessIdFetch(_ value: String) {
+        accessId = value
+        accessIdInFlight = false
+        let completions = accessIdCompletions
+        accessIdCompletions = []
+        for item in completions {
+            item(value)
+        }
+    }
+
+    // MARK: - Pure parsers (fixture-testable, no network)
+
+    /// Parses both the ranked list (`recommend_room_list`) and the
+    /// webMain fallback (a bare list in `data`). Nil when the
+    /// response is not a code-0 object; [] is a real empty page.
+    static func parseRecommendRooms(_ json: [String: Any]?) -> [LiveRoom]? {
+        guard let json = json, LiveJSON.asInt(json["code"]) == 0 else { return nil }
+        let data = json["data"]
+        let rawList: [Any]?
+        if let map = LiveJSON.asMap(data) {
+            rawList = map["recommend_room_list"] as? [Any]
+        } else {
+            rawList = data as? [Any]
+        }
+        guard let list = rawList else { return nil }
+        var rooms: [LiveRoom] = []
+        for raw in list {
+            guard let item = LiveJSON.asMap(raw) else { continue }
+            let rawId = item["roomid"] ?? item["room_id"]
+            let roomId = LiveJSON.asString(rawId)
+            guard !roomId.isEmpty else { continue }
+            let rawCover = LiveJSON.asString(item["cover"])
+            let coverSource = rawCover.isEmpty ? LiveJSON.asString(item["user_cover"]) : rawCover
+            let cover = BilibiliLiveSite.normalizeImageURL(coverSource)
+            rooms.append(LiveRoom(
+                roomId: roomId, platform: .bilibili,
+                title: LiveJSON.asString(item["title"]),
+                streamer: LiveJSON.asString(item["uname"]),
+                avatar: BilibiliLiveSite.normalizeImageURL(LiveJSON.asString(item["face"])),
+                cover: cover.isEmpty ? "" : "\(cover)@400w.jpg",
+                onlineCount: LiveJSON.asInt(item["online"]),
+                isLive: true,
+                link: LivePlatform.bilibili.roomLink(roomId: roomId)))
+        }
+        return BilibiliLiveSite.sortRoomsByPopularity(rooms)
+    }
+
+    /// The list payload can be a recommendation snapshot, and even
+    /// the ranked endpoint can contain small adjacent inversions
+    /// while heat changes. Re-sort the values shown on the cards
+    /// and use room identity for stable ties so the visible
+    /// ranking is always deterministic.
+    static func sortRoomsByPopularity(_ rooms: [LiveRoom]) -> [LiveRoom] {
+        rooms.sorted {
+            if $0.onlineCount != $1.onlineCount { return $0.onlineCount > $1.onlineCount }
+            return $0.roomId < $1.roomId
+        }
+    }
+
+    /// Flattens the parent -> sub-area tree into sub-areas and
+    /// keeps each sub-area's parent id (third tuple element) for
+    /// categoryRooms. Nil when the response is not a code-0 object.
+    static func parseCategories(_ json: [String: Any]?) -> [(id: String, name: String, parentId: String)]? {
+        guard let json = json, LiveJSON.asInt(json["code"]) == 0 else { return nil }
+        var areas: [(id: String, name: String, parentId: String)] = []
+        for parent in LiveJSON.asList(json["data"]) {
+            let parentId = LiveJSON.asString(parent["id"])
+            for sub in LiveJSON.asList(parent["list"]) {
+                let areaId = LiveJSON.asString(sub["id"])
+                guard !areaId.isEmpty else { continue }
+                areas.append((id: areaId, name: LiveJSON.asString(sub["name"]), parentId: parentId))
+            }
+        }
+        return areas
+    }
+
+    /// Parses a second/getList response (`data.list[]`). Nil when
+    /// the response is not a code-0 object.
+    static func parseCategoryRooms(_ json: [String: Any]?) -> [LiveRoom]? {
+        guard let json = json, LiveJSON.asInt(json["code"]) == 0 else { return nil }
+        guard let data = LiveJSON.asMap(json["data"]) else { return nil }
+        var rooms: [LiveRoom] = []
+        for item in LiveJSON.asList(data["list"]) {
+            let roomId = LiveJSON.asString(item["roomid"])
+            guard !roomId.isEmpty else { continue }
+            let cover = BilibiliLiveSite.normalizeImageURL(LiveJSON.asString(item["cover"]))
+            rooms.append(LiveRoom(
+                roomId: roomId, platform: .bilibili,
+                title: LiveJSON.asString(item["title"]),
+                streamer: LiveJSON.asString(item["uname"]),
+                avatar: BilibiliLiveSite.normalizeImageURL(LiveJSON.asString(item["face"])),
+                cover: cover.isEmpty ? "" : "\(cover)@400w.jpg",
+                onlineCount: LiveJSON.asInt(item["online"]),
+                isLive: true,
+                link: LivePlatform.bilibili.roomLink(roomId: roomId)))
+        }
+        return BilibiliLiveSite.sortRoomsByPopularity(rooms)
+    }
+
+    /// Parses a search/type response (`data.result.live_room[]`).
+    /// Nil when the response is not a code-0 object.
+    static func parseSearchRooms(_ json: [String: Any]?) -> [LiveRoom]? {
+        guard let json = json, LiveJSON.asInt(json["code"]) == 0 else { return nil }
+        guard let data = LiveJSON.asMap(json["data"]),
+              let result = LiveJSON.asMap(data["result"]) else { return nil }
+        var rooms: [LiveRoom] = []
+        for item in LiveJSON.asList(result["live_room"]) {
+            let roomId = LiveJSON.asString(item["roomid"])
+            guard !roomId.isEmpty else { continue }
+            rooms.append(LiveRoom(
+                roomId: roomId, platform: .bilibili,
+                title: BilibiliLiveSite.stripEmTags(LiveJSON.asString(item["title"])),
+                streamer: LiveJSON.asString(item["uname"]),
+                avatar: BilibiliLiveSite.searchCover(item["uface"]),
+                cover: BilibiliLiveSite.searchCover(item["cover"]),
+                onlineCount: LiveJSON.asInt(item["online"]),
+                isLive: LiveJSON.asInt(item["live_status"]) == 1,
+                link: LivePlatform.bilibili.roomLink(roomId: roomId)))
+        }
+        return rooms
+    }
+
+    /// Port of Pure Live's normalizeNetworkImageUrl:
+    /// protocol-relative links get https:, bare hosts get https://,
+    /// anything else unusable becomes ''.
+    static func normalizeImageURL(_ source: String?) -> String {
+        var value = (source ?? "").trimmingCharacters(in: .whitespaces)
+        guard !value.isEmpty, value.lowercased() != "null" else { return "" }
+        let doubleQuoted = value.hasPrefix("\"") && value.hasSuffix("\"")
+        let singleQuoted = value.hasPrefix("'") && value.hasSuffix("'")
+        if value.count >= 2 && (doubleQuoted || singleQuoted) {
+            value = String(value.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+        }
+        guard !value.isEmpty else { return "" }
+        if value.hasPrefix("//") { return "https:\(value)" }
+        if let url = URL(string: value), let scheme = url.scheme,
+           (scheme == "http" || scheme == "https"), !(url.host ?? "").isEmpty {
+            return value
+        }
+        if !value.contains(" "),
+           value.range(of: "^[\\w.-]+\\.[a-zA-Z]{2,}([/:?#]|$)", options: .regularExpression) != nil {
+            return "https://\(value)"
+        }
+        return ""
+    }
+
+    /// Search results highlight the keyword with <em class="keyword">
+    /// tags; strip them before display.
+    static func stripEmTags(_ value: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: "<.*?em.*?>", options: []) else { return value }
+        return regex.stringByReplacingMatches(in: value, options: [], range: NSRange(value.startIndex..., in: value), withTemplate: "")
+    }
+
+    /// Search cover/uface: protocol-relative ('//i0.hdslb.com/…') ->
+    /// https, served at 400w.
+    static func searchCover(_ raw: Any?) -> String {
+        let value = LiveJSON.asString(raw).trimmingCharacters(in: .whitespaces)
+        guard !value.isEmpty else { return "" }
+        let withScheme = value.hasPrefix("//") ? "https:\(value)" : value
+        return "\(withScheme)@400w.jpg"
+    }
 }
