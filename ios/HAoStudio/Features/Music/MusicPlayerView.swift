@@ -715,10 +715,12 @@ struct MusicPlayerView: View {
             HStack {
                 Text(musicDurationText(seconds: Int(playerVM.scrubSeconds ?? playerVM.position)))
                     .font(.haoCaption)
+                    .monospacedDigit()
                     .foregroundStyle(.white.opacity(0.72))
                 Spacer()
                 Text(remainingText)
                     .font(.haoCaption)
+                    .monospacedDigit()
                     .foregroundStyle(.white.opacity(0.72))
             }
         }

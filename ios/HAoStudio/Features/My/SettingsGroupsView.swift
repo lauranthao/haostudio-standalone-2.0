@@ -891,7 +891,7 @@ struct SettingsGroupsView: View {
             // bottom edge instead of dead space, and the honest
             // statement of what this app is — local-only, no
             // login, nothing uploaded.
-            footer: Text("HAo Studio 仅使用本地数据，不上传服务器，也不需要登录。")
+            footer: Text("HAo Studio 仅使用本地数据，不上传服务器，也不需要登录")
                 .font(.haoFootnote)
                 .foregroundStyle(theme.textMuted)
         ) {
