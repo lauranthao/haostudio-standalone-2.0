@@ -162,6 +162,7 @@ struct VideoTabView: View {
                 Spacer(minLength: 16)
             }
         }
+        .haoBottomChromePadding()
         .refreshable { viewModel.loadFresh() }
     }
 

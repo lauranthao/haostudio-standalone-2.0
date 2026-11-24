@@ -68,7 +68,17 @@ struct GlassTabBar: View {
             tabAccent: tabAccent
         )
         .frame(height: HaoLayout.tabBarContentHeight)
-        .padding(HaoLayout.tabBarInnerInset)
+        // Vertical inner inset only (4 top / 4 bottom; total 64pt).
+        // Horizontal padding used to be here too, but the system
+        // tab bar paints its background over its own frame, so it
+        // shrank the visible bar 4pt per side — the bar read 8pt
+        // narrower than the mini player above it (chen 2026-11-24
+        // build 33: mini must be exactly as wide as the bar).
+        // Beans pads all sides only because its capsule background
+        // is painted OVER the padded area. The visible bar now spans
+        // exactly the mini player's width (screen minus the shared
+        // 12pt side margins in MainTabView).
+        .padding(.vertical, HaoLayout.tabBarInnerInset)
     }
 }
 

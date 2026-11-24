@@ -121,6 +121,7 @@ struct MusicSearchView: View {
                 }
             }
         }
+        .haoBottomChromePadding()
     }
 
     private var resultsSection: some View {
@@ -158,6 +159,7 @@ struct MusicSearchView: View {
                     .listRowSeparator(.hidden)
             }
         }
+        .haoBottomChromePadding()
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
     }

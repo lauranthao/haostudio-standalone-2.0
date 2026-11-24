@@ -128,6 +128,7 @@ struct MusicChartsView: View {
                         .listRowSeparatorTint(theme.hairline)
                     }
                 }
+                .haoBottomChromePadding()
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
             }
@@ -227,6 +228,7 @@ struct MusicChartDetailView: View {
                         }
                     }
                 }
+                .haoBottomChromePadding()
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
             }

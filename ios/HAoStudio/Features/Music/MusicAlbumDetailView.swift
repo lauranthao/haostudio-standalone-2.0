@@ -127,6 +127,7 @@ struct MusicAlbumDetailView: View {
                         }
                     }
                 }
+                .haoBottomChromePadding()
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
             }

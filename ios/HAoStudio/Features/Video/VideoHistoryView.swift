@@ -70,6 +70,7 @@ struct VideoHistoryView: View {
                         }
                     }
                 }
+                .haoBottomChromePadding()
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
             }

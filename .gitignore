@@ -17,6 +17,7 @@ ios/patch_pbxproj.py
 ios/HAoStudioWidget/
 # 构建产物
 ios/build/
+ios/.build/
 Pods/
 *.xcuserdata/
 .DS_Store

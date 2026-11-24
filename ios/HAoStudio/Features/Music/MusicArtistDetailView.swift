@@ -134,6 +134,7 @@ struct MusicArtistDetailView: View {
                 }
             }
         }
+        .haoBottomChromePadding()
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
     }

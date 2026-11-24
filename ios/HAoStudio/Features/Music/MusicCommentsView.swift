@@ -133,6 +133,7 @@ struct MusicCommentsView: View {
                                 .foregroundStyle(theme.textMuted)
                         }
                     }
+                    .haoBottomChromePadding()
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
                 }

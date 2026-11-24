@@ -39,6 +39,7 @@ struct LiveFollowsView: View {
                     }
                     .onDelete(perform: removeFollows)
                 }
+                .haoBottomChromePadding()
                 .listStyle(.plain)
             }
         }
@@ -127,6 +128,7 @@ struct LiveHistoryView: View {
                         }
                     }
                 }
+                .haoBottomChromePadding()
                 .listStyle(.plain)
             }
         }

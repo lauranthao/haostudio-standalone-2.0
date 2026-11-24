@@ -185,6 +185,7 @@ struct LiveTabView: View {
                     Spacer(minLength: 16)
                 }
             }
+            .haoBottomChromePadding()
             .refreshable { viewModel.reload() }
             .background(theme.scaffoldBackground)
             .navigationTitle("直播")

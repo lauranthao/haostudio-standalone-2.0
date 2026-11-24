@@ -129,6 +129,7 @@ struct EmbyTabView: View {
                         Spacer(minLength: 16)
                     }
                 }
+                .haoBottomChromePadding()
                 .refreshable { viewModel.reload() }
             }
         }

@@ -6,10 +6,17 @@
 // there is no separate settings destination.
 //
 // The floating stack (mini player above the glass tab bar) lives in a
-// bottom safe-area inset, so tab content is inset above it automatically:
-// the bar and the mini player can never cover content, and they can
-// never cover each other — the mini player is simply the first row of
-// the same stack. No manual bottom padding is computed anywhere.
+// bottom safe-area inset, so the bar sits just above the home
+// indicator and the mini player is simply the first row of the same
+// stack — the two can never overlap each other. The inset positions
+// the stack, but it does NOT inset tab content: the content sits in a
+// NavigationStack, whose UIKit navigation controller owns the safe
+// area there, so on device (chen 2026-11-24 build 33) the last rows
+// slid under the bar and could not be dragged into view. Every
+// vertical scroll page under the stack therefore adds its own bottom
+// clearance from HaoLayout (haoBottomChromePadding()), sized to the
+// stack height above the safe-area bottom edge. No tab content relies
+// on this inset for clearance.
 //
 // No TabView is used: the built-in tab bar cannot be replaced by a
 // floating capsule. The selected tab is plain @State; switching is a

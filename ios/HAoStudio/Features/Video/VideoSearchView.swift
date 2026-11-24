@@ -106,6 +106,7 @@ struct VideoSearchView: View {
                 }
                 .padding(.top, 12)
             }
+            .haoBottomChromePadding()
         }
         .background(theme.scaffoldBackground)
         .navigationTitle("搜索")
@@ -334,6 +335,7 @@ struct VideoCategoryView: View {
             }
             Spacer(minLength: 16)
         }
+        .haoBottomChromePadding()
         .background(theme.scaffoldBackground)
         .navigationTitle(type)
         .navigationBarTitleDisplayMode(.inline)

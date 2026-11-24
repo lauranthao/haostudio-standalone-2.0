@@ -18,10 +18,21 @@ import SwiftUI
 enum HaoLayout {
     /// Glass tab bar content height (56).
     static let tabBarContentHeight: CGFloat = 56
-    /// Inner inset around the tab bar content (4; total 64pt).
+    /// Inner inset around the tab bar content, top and bottom only
+    /// (4; total 64pt). It used to be all-sides padding, but a
+    /// system UITabBar paints its background over its own frame, so
+    /// horizontal padding shrank the visible bar 4pt per side and it
+    /// read 8pt narrower than the mini player above it (chen
+    /// 2026-11-24 build 33). Beans can pad all sides because its
+    /// capsule background is painted OVER the padded area; the
+    /// system bar has no such background. Vertical only now: the
+    /// visible bar spans exactly the mini player's width.
     static let tabBarInnerInset: CGFloat = 4
-    /// Distance from the safe-area bottom edge (bottomMargin 6).
-    static let tabBarBottomMargin: CGFloat = 6
+    /// Distance from the safe-area bottom edge (bottomMargin 2 —
+    /// chen 2026-11-24 build 33: the bar floated too high; 2pt here
+    /// plus the 4pt inner inset leaves the visible glass 6pt above
+    /// the home-indicator zone, the minimum visual gap).
+    static let tabBarBottomMargin: CGFloat = 2
     /// Horizontal margin of the floating capsule.
     static let tabBarHorizontalMargin: CGFloat = 12
     /// Mini player strip height (Beans MiniPlayerView: 42pt content
@@ -30,6 +41,18 @@ enum HaoLayout {
     static let miniPlayerHeight: CGFloat = 50
     /// Gap between the mini player strip and the tab bar.
     static let floatingStackSpacing: CGFloat = 8
+    /// Total height of the glass tab bar as laid out in the floating
+    /// stack: content 56 + 4pt inner inset top and bottom (64).
+    static let tabBarTotalHeight: CGFloat = tabBarContentHeight + tabBarInnerInset * 2
+    /// Height of the floating stack above the safe-area bottom edge:
+    /// bottom margin + tab bar + (gap + mini player while one is
+    /// showing). This is the clearance a scroll page under the stack
+    /// must add so its last row can scroll fully above the stack —
+    /// 66pt idle, 124pt while playing. See haoBottomChromePadding().
+    static func floatingStackClearance(miniPlayerVisible: Bool) -> CGFloat {
+        tabBarBottomMargin + tabBarTotalHeight
+            + (miniPlayerVisible ? floatingStackSpacing + miniPlayerHeight : 0)
+    }
     /// Settle spring for the tab-bar selection pill.
     static let settleSpring = Animation.spring(response: 0.35, dampingFraction: 0.82)
 }
@@ -68,5 +91,38 @@ extension View {
     /// Apply the shared floating-capsule glass treatment.
     func haoGlassCapsule() -> some View {
         modifier(HaoGlassCapsule())
+    }
+
+    /// Bottom clearance for scroll content under the floating stack.
+    ///
+    /// The floating stack (mini player + glass tab bar) lives in a
+    /// bottom safeAreaInset on MainTabView, but that inset does NOT
+    /// reach ScrollView / List content inside a NavigationStack —
+    /// the UIKit navigation controller owns the safe area there, so
+    /// on device (chen 2026-11-24 build 33) the last rows slid under
+    /// the bar and could not be dragged into view. Every vertical
+    /// scroll page under the stack therefore adds this clearance
+    /// itself, as safeAreaPadding on the scroll view: the value is
+    /// the stack height above the safe-area bottom edge (the system
+    /// safe area itself already covers the home indicator), and it
+    /// tracks the mini player — 58pt taller while something is
+    /// playing, so there is no dead gap while idle. One source of
+    /// truth: HaoLayout.floatingStackClearance.
+    func haoBottomChromePadding() -> some View {
+        modifier(HaoBottomChromePadding())
+    }
+}
+
+/// The modifier behind haoBottomChromePadding(). Reads the shared
+/// PlaybackCoordinator from the environment (injected at the app
+/// root), so the clearance follows the mini player's visibility.
+private struct HaoBottomChromePadding: ViewModifier {
+    @EnvironmentObject private var coordinator: PlaybackCoordinator
+
+    func body(content: Content) -> some View {
+        content.safeAreaPadding(
+            .bottom,
+            HaoLayout.floatingStackClearance(miniPlayerVisible: coordinator.currentItem != nil)
+        )
     }
 }

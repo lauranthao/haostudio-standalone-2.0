@@ -237,6 +237,7 @@ struct VideoDetailContentView: View {
                 .padding(.top, 16)
             }
         }
+        .haoBottomChromePadding()
         .background(theme.scaffoldBackground)
         .navigationTitle(viewModel.item.title)
         .navigationBarTitleDisplayMode(.inline)
