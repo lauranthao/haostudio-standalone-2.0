@@ -113,5 +113,9 @@ final class MusicS7PolishTests: XCTestCase {
         XCTAssertEqual(plazaPlayCountText(100_000), "10万次播放")
         XCTAssertEqual(plazaPlayCountText(100_000_000), "1亿次播放")
         XCTAssertEqual(plazaPlayCountText(1_000_000_000), "10亿次播放")
+        // b36 follow-up, same ≥100 cap as liveWatchingText:
+        // 99_999_999 must never read "10000万次播放".
+        XCTAssertEqual(plazaPlayCountText(999_999), "100万次播放")
+        XCTAssertEqual(plazaPlayCountText(99_999_999), "9999万次播放")
     }
 }

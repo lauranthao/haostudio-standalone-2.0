@@ -72,6 +72,8 @@ struct MusicDailyView: View {
 /// Play-count text for a plaza row. Pure function (unit-tested).
 /// Same ".0"-tail rule as liveWatchingText: 10000 -> "1万次播放",
 /// 100000000 -> "1亿次播放", never "1.0万次播放" / "1.0亿次播放".
+/// Same ≥100 cap as liveWatchingText: 99_999_999 -> "9999万次播放",
+/// never "10000万次播放".
 func plazaPlayCountText(_ count: Int) -> String {
     if count <= 0 { return "" }
     if count >= 100_000_000 {
@@ -82,7 +84,11 @@ func plazaPlayCountText(_ count: Int) -> String {
         return formatted
     }
     if count >= 10_000 {
-        let formatted = String(format: "%.1f万次播放", Double(count) / 10_000)
+        let value = Double(count) / 10_000
+        if value >= 100 {
+            return "\(Int(value))万次播放"
+        }
+        let formatted = String(format: "%.1f万次播放", value)
         if formatted.hasSuffix(".0万次播放") {
             return String(formatted.dropLast(6)) + "万次播放"
         }
