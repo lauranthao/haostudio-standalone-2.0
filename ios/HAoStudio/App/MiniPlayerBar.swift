@@ -84,30 +84,33 @@ struct MiniPlayerBar: View {
     /// unit with the capsule beside it.
     private func inlineBody(item: PlaybackItem) -> some View {
         HStack(spacing: 12) {
-            Button(action: onTapFullPlayer) {
-                HStack(spacing: 12) {
-                    // Beans MiniPlayerView: cover 36, radius 7 (expanded).
-                    // Inline the iOS 26 recipe uses 32 / radius 6.
-                    morphCover(
-                        urlString: item.coverURL?.absoluteString ?? "",
-                        size: HaoLayout.miniInlineCoverSize, cornerRadius: 6)
-                    Text(item.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(theme.textPrimary)
-                        .lineLimit(1)
-                    Spacer()
-                }
-                .contentShape(Rectangle())
+            // b36-1: the strip tap is a gesture, not a Button (see
+            // expandedBody — a Spacer-expanded strip Button can
+            // claim the tap meant for the play/pause button).
+            HStack(spacing: 12) {
+                // Beans MiniPlayerView: cover 36, radius 7 (expanded).
+                // Inline the iOS 26 recipe uses 32 / radius 6.
+                morphCover(
+                    urlString: item.coverURL?.absoluteString ?? "",
+                    size: HaoLayout.miniInlineCoverSize, cornerRadius: 6)
+                Text(item.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+                    .lineLimit(1)
+                Spacer()
             }
-            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onTapFullPlayer)
+            .accessibilityAddTraits(.isButton)
             if item.kind == .music {
                 Button(action: { musicPlayer.togglePlayPauseOrRetry() }) {
                     Image(systemName: musicPlayer.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(theme.textPrimary)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
+                .contentShape(Rectangle())
                 .accessibilityLabel(musicPlayer.isPlaying ? "暂停" : "播放")
             }
         }
@@ -119,47 +122,54 @@ struct MiniPlayerBar: View {
 
     /// Expanded form: the wide strip above the full tab bar.
     private func expandedBody(item: PlaybackItem) -> some View {
-            // No nested Buttons: the strip tap area, the play/pause
-            // button and the chevron are SIBLING buttons. A play/pause
-            // Button nested inside the strip Button would also fire
-            // the strip tap and open the full player on every pause.
+            // b36-1: the strip tap is a gesture, not a Button. The
+            // old strip Button's label held a Spacer, so under
+            // .buttonStyle(.plain) its hit region was the full row
+            // rect (a documented SwiftUI hit-test footgun) and it
+            // could claim the tap meant for the play/pause button
+            // beside it — the tap opened the full player instead
+            // of pausing. A gesture never beats a sibling Button,
+            // so the transports are now the only Buttons in the row
+            // and always win their own frames. The chevron stays a
+            // Button: it does the same action as the strip, so a
+            // tap there opening the player is correct either way.
             HStack(spacing: 12) {
-                Button(action: onTapFullPlayer) {
-                    HStack(spacing: 12) {
-                        // Real artwork when the item carries a cover
-                        // URL; MusicCoverView falls back to the note
-                        // placeholder when there is none.
-                        // Beans MiniPlayerView: cover 36, radius 7.
-                        morphCover(
-                            urlString: item.coverURL?.absoluteString ?? "",
-                            size: HaoLayout.miniCoverSize, cornerRadius: 7)
-                        VStack(alignment: .leading, spacing: 2) {
-                            // Apple Music mini: title 15 / artist 13
-                            // in the 64pt bar. This strip is 50pt, so
-                            // 14 / 12 — one step up from the old
-                            // 12 / 10, still fitting the 36 cover.
-                            Text(item.title)
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(theme.textPrimary)
-                                .lineLimit(1)
-                            Text(item.subtitle)
-                                .font(.system(size: 12))
-                                .foregroundStyle(theme.textSecondary)
-                                .lineLimit(1)
-                        }
-                        Spacer()
+                HStack(spacing: 12) {
+                    // Real artwork when the item carries a cover
+                    // URL; MusicCoverView falls back to the note
+                    // placeholder when there is none.
+                    // Beans MiniPlayerView: cover 36, radius 7.
+                    morphCover(
+                        urlString: item.coverURL?.absoluteString ?? "",
+                        size: HaoLayout.miniCoverSize, cornerRadius: 7)
+                    VStack(alignment: .leading, spacing: 2) {
+                        // Apple Music mini: title 15 / artist 13
+                        // in the 64pt bar. This strip is 50pt, so
+                        // 14 / 12 — one step up from the old
+                        // 12 / 10, still fitting the 36 cover.
+                        Text(item.title)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(theme.textPrimary)
+                            .lineLimit(1)
+                        Text(item.subtitle)
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.textSecondary)
+                            .lineLimit(1)
                     }
-                    .contentShape(Rectangle())
+                    Spacer()
                 }
-                .buttonStyle(.plain)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onTapFullPlayer)
+                .accessibilityAddTraits(.isButton)
                 if item.kind == .music {
                     Button(action: { musicPlayer.togglePlayPauseOrRetry() }) {
                         Image(systemName: musicPlayer.isPlaying ? "pause.fill" : "play.fill")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(theme.textPrimary)
-                            .frame(width: 32, height: 32)
+                            .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.plain)
+                    .contentShape(Rectangle())
                     .accessibilityLabel(musicPlayer.isPlaying ? "暂停" : "播放")
                     // Apple Music's mini has a next button next to
                     // play/pause; ours wires the same next() as the
@@ -168,9 +178,10 @@ struct MiniPlayerBar: View {
                         Image(systemName: "forward.fill")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(theme.textPrimary)
-                            .frame(width: 32, height: 32)
+                            .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.plain)
+                    .contentShape(Rectangle())
                     .accessibilityLabel("下一曲")
                 }
                 Button(action: onTapFullPlayer) {
