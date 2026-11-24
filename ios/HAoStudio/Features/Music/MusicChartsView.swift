@@ -98,17 +98,23 @@ struct MusicChartsView: View {
                 }
             } else {
                 List {
-                    ForEach(viewModel.charts, id: \.id) { chart in
+                    ForEach(Array(viewModel.charts.enumerated()), id: \.element.id) { index, chart in
                         NavigationLink(destination: MusicChartDetailView(chart: chart)) {
                             HStack(spacing: 12) {
-                                MusicCoverView(urlString: chart.cover, size: 48)
+                                // Apple Music charts: a big bold rank
+                                // number leads each row.
+                                Text("\(index + 1)")
+                                    .font(.system(size: 20, weight: .bold))
+                                    .foregroundStyle(theme.textPrimary)
+                                    .frame(width: 28, alignment: .center)
+                                MusicCoverView(urlString: chart.cover, size: 56, cornerRadius: 10)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(chart.name)
-                                        .font(.system(size: 15, weight: .semibold))
+                                        .font(.system(size: 16, weight: .semibold))
                                         .foregroundStyle(theme.textPrimary)
                                         .lineLimit(1)
                                     Text(chartSubtitle(chart))
-                                        .font(.system(size: 13))
+                                        .font(.system(size: 14))
                                         .foregroundStyle(theme.textSecondary)
                                         .lineLimit(1)
                                 }
@@ -206,6 +212,7 @@ struct MusicChartDetailView: View {
                             MusicSongRow(
                                 song: song,
                                 isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
+                                trackNumber: index + 1,
                                 onTap: {
                                     playerVM.play(song: song, in: viewModel.tracks, startAt: index)
                                 },

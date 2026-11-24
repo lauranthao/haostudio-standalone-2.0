@@ -22,7 +22,7 @@ struct MusicSearchView: View {
     var body: some View {
         VStack(spacing: 0) {
             searchField
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 20)
                 .padding(.top, 8)
             if !searchVM.hasSearched {
                 historySection
@@ -83,7 +83,7 @@ struct MusicSearchView: View {
                             .foregroundStyle(theme.accent)
                             .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, 20)
                     .padding(.top, 20)
                     ForEach(searchVM.history, id: \.self) { item in
                         // Sibling buttons, NOT a Button inside a
@@ -119,7 +119,7 @@ struct MusicSearchView: View {
                             .buttonStyle(.plain)
                             .accessibilityLabel("删除搜索记录")
                         }
-                        .padding(.horizontal, 24)
+                        .padding(.horizontal, 20)
                         .padding(.vertical, 12)
                     }
                 } else {

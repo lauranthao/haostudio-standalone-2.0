@@ -171,7 +171,7 @@ struct MusicDownloadsView: View {
                     ForEach(libraryVM.downloads, id: \.key) { download in
                         let fileExists = libraryVM.downloadedFileURL(for: download) != nil
                         HStack(spacing: 12) {
-                            MusicCoverView(urlString: download.song.cover, size: 48)
+                            MusicCoverView(urlString: download.song.cover, size: 56, cornerRadius: 10)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(download.song.title.isEmpty ? "未知歌曲" : download.song.title)
                                     .font(.system(size: 15, weight: .semibold))
