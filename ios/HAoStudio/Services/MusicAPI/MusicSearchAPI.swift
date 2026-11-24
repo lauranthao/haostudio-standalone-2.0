@@ -55,8 +55,6 @@ final class MusicSearchAPI {
         var results: [MusicTrack] = []
         var seenKeys = Set<String>()
         var settledPlatforms = Set<MusicPlatform>()
-        var legsRemaining = 4
-        var scriptLegsRemaining = 0
 
         func sortAndBackfill(_ list: [MusicTrack]) -> [MusicTrack] {
             var out = list
@@ -107,19 +105,16 @@ final class MusicSearchAPI {
 
         func platformSettled(_ platform: MusicPlatform) {
             settledPlatforms.insert(platform)
-            legsRemaining -= 1
             emit()
             // Script legs for this platform run now (concurrently) and
             // emit only after the platform leg settled — which is now.
             let sources = engine.searchSources(platform: platform.rawValue)
-            scriptLegsRemaining += sources.count
             for source in sources {
                 engine.search(scriptID: source.scriptID, platform: platform.rawValue,
                               keyword: query, page: 1, limit: 20) { rawMaps in
                     let tracks = rawMaps.compactMap { MusicSearchAPI.trackFromScriptMap($0, platform: platform) }
                     mergeQueue.async {
                         addTracks(tracks, dedupeByTitleArtist: true)
-                        scriptLegsRemaining -= 1
                         emit()
                     }
                 }
@@ -358,60 +353,6 @@ final class MusicSearchAPI {
             coverURL: URL(string: MusicText.coverHi(cover, platform: resolved.rawValue)),
             duration: duration > 0 ? duration : nil,
             sourceID: resolved.rawValue)
-    }
-
-    // MARK: - Alt-platform lookup
-
-    /// Find the same song on another platform (used when the current
-    /// platform cannot play). Preference order tx > wy > kg > kw;
-    /// exact normalised title + first artist (+ album) match.
-    /// Whole-lookup cap 5 s.
-    func findAltPlatform(
-        title: String,
-        artist: String,
-        excludePlatform: MusicPlatform,
-        album: String,
-        completion: @escaping (MusicTrack?) -> Void
-    ) {
-        let others: [MusicPlatform] = [.tx, .wy, .kg, .kw].filter { $0 != excludePlatform }
-        let group = DispatchGroup()
-        var collected: [MusicTrack] = []
-        let lock = NSLock()
-        let token = LXCancelToken()
-        let timeoutWork = DispatchWorkItem { token.cancel() }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: timeoutWork)
-        for platform in others {
-            group.enter()
-            searchOne(platform: platform, keyword: title) { tracks in
-                lock.lock()
-                collected.append(contentsOf: tracks)
-                lock.unlock()
-                group.leave()
-            }
-        }
-        group.notify(queue: .main) {
-            timeoutWork.cancel()
-            let order: [MusicPlatform: Int] = [.tx: 0, .wy: 1, .kg: 2, .kw: 3]
-            let sorted = collected.sorted { (order[$0.platform ?? .mg] ?? 9) < (order[$1.platform ?? .mg] ?? 9) }
-            let targetTitle = MusicText.normalizeName(title)
-            let targetArtist = MusicText.normalizeName(MusicAPIJSON.firstArtist(artist))
-            let targetAlbum = MusicText.normalizeName(album)
-            for track in sorted {
-                guard track.platform != excludePlatform else { continue }
-                guard MusicText.normalizeName(track.title) == targetTitle else { continue }
-                if !targetArtist.isEmpty,
-                   MusicText.normalizeName(MusicAPIJSON.firstArtist(track.artist)) != targetArtist {
-                    continue
-                }
-                if !targetAlbum.isEmpty, !track.album.isEmpty,
-                   MusicText.normalizeName(track.album) != targetAlbum {
-                    continue
-                }
-                completion(track)
-                return
-            }
-            completion(nil)
-        }
     }
 
     // MARK: - NetEase charts (排行榜)

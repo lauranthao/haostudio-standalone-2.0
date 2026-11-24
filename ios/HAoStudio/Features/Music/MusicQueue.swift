@@ -129,9 +129,15 @@ func musicNextTrackIndex(
         return (current + 1) % length
     case .shuffle:
         if length == 1 { return current }
+        // B1: bounded retries — a degenerate random source that
+        // always returns the current index used to spin forever.
+        // Fall back to the next index after `length` tries.
         var next = current
-        while next == current { next = randomIndex(length) }
-        return next
+        for _ in 0..<length {
+            next = randomIndex(length)
+            if next != current { return next }
+        }
+        return (current + 1) % length
     case .single:
         if auto { return -1 }
         return current + 1 < length ? current + 1 : -1
@@ -150,9 +156,13 @@ func musicPrevTrackIndex(
     if length <= 0 || current < 0 || current >= length { return -1 }
     if mode == .shuffle {
         if length == 1 { return current }
+        // B1: bounded retries — same degenerate-source guard.
         var prev = current
-        while prev == current { prev = randomIndex(length) }
-        return prev
+        for _ in 0..<length {
+            prev = randomIndex(length)
+            if prev != current { return prev }
+        }
+        return (current - 1 + length) % length
     }
     switch mode {
     case .sequential, .single:

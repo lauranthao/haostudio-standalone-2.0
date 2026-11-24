@@ -39,7 +39,7 @@ struct MusicQueueView: View {
                             }
                             .contextMenu {
                                 Button("不喜欢（私人漫游不再推）") {
-                                    MusicLibraryStore.addFMDisliked(songId: song.songId)
+                                    MusicLibraryStore.addFMDisliked(key: song.identityKey)
                                     playerVM.removeFromQueue(at: index)
                                 }
                             }

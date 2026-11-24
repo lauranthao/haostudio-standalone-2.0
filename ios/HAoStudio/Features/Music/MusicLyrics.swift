@@ -67,11 +67,10 @@ enum MusicLyrics {
     }
 
     /// Convert cached lines to contract LyricsLine values for display.
-    /// Assumed contract shape (see the C-leg report): LyricsLine has
-    /// `time` (Double seconds) and `text` (String). The stored
-    /// translation is dropped here: the contract line carries no
-    /// translation field, so the player shows the main line only.
+    /// A11: the stored translation used to be dropped here even
+    /// though the cache keeps it — the player could never show a
+    /// translation from a cached song. Pass it through.
     static func toContractLines(_ stored: [StoredLyricLine]) -> [LyricsLine] {
-        return stored.map { LyricsLine(time: $0.t, text: $0.text) }
+        return stored.map { LyricsLine(time: $0.t, text: $0.text, translation: $0.translation) }
     }
 }

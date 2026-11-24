@@ -75,25 +75,16 @@ struct MusicChartsView: View {
 
     @Environment(\.haoTheme) private var theme
 
-    /// The search platform capsule (Flutter parity: charts exist
-    /// only on NetEase).
-    private var searchPlatform: MusicPlatform {
-        MusicPlatform.fromCode(
-            UserDefaults.standard.string(forKey: MusicLibraryStore.searchPlatformKey))
-    }
-
     var body: some View {
         Group {
-            if searchPlatform != .wy {
-                VStack {
-                    MusicEmptyState(
-                        icon: "list.number",
-                        title: "当前平台是\(searchPlatform.displayName)",
-                        note: "排行榜仅网易云音乐提供，去搜索页把平台切回网易云后再看。"
-                    )
-                    Spacer()
-                }
-            } else if viewModel.isLoading {
+            // A6: the old gate read `musicSearchPlatform` and told
+            // the user to "switch the platform back to NetEase on
+            // the search page" — but the search page has no platform
+            // selector (chen's rule) and nothing in the music slice
+            // writes that key, so a migrated non-wy value locked
+            // charts out forever with an impossible instruction.
+            // Charts are NetEase data; the gate is gone.
+            if viewModel.isLoading {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if viewModel.failed {

@@ -92,6 +92,15 @@ final class MusicPlayerViewModel: ObservableObject {
         }
     }
 
+    /// A11/E5: show the matched translation under each lyric line.
+    /// Default on; toggled from the player "更多" sheet, same
+    /// section as the lyric offset.
+    @Published var showLyricTranslation: Bool {
+        didSet {
+            MusicLibraryStore.setLyricShowTranslation(showLyricTranslation)
+        }
+    }
+
     // MARK: - Sleep timer
 
     @Published private(set) var sleepActive = false
@@ -139,6 +148,7 @@ final class MusicPlayerViewModel: ObservableObject {
     init(coordinator: PlaybackCoordinator) {
         self.coordinator = coordinator
         self.lyricOffsetMs = MusicLibraryStore.lyricOffsetMs()
+        self.showLyricTranslation = MusicLibraryStore.lyricShowTranslation()
         self.playMode = MusicQueueMode.fromCode(MusicLibraryStore.playModeCode())
         self.playbackSpeed = MusicLibraryStore.speed()
         // Handlers are attached AFTER the timer exists: capturing
@@ -289,6 +299,18 @@ final class MusicPlayerViewModel: ObservableObject {
 
     private func handleCurrentItemChanged(_ item: PlaybackItem?) {
         guard let item = item else { return }
+        // F: a non-music item (VOD / live) must never become a music
+        // song — the old code built a fake MusicSong for it and
+        // fired a lyrics fetch that could never return anything.
+        // The mini fallback clears alongside (it is music-only).
+        // Note this also skips the natural-completion count: the
+        // music track was interrupted by the user opening a video
+        // or a room, not completed.
+        guard item.kind == .music else {
+            expectedItemId = nil
+            miniFallbackSong = nil
+            return
+        }
         // Same track (e.g. a replay): nothing to re-sync.
         if let current = currentSong,
            current.songId == item.id || current.identityKey == item.id {
@@ -296,8 +318,12 @@ final class MusicPlayerViewModel: ObservableObject {
             return
         }
         // A change to a track this view model did not ask for is a
-        // natural completion of the previous track.
-        if expectedItemId != item.id, let previous = currentSong {
+        // natural completion of the previous track — unless that
+        // track failed (A13): a failure-driven advance must never
+        // count toward the sleep timer's "after N tracks".
+        if expectedItemId != item.id, let previous = currentSong,
+           !player.didTrackFail(id: previous.identityKey),
+           !player.didTrackFail(id: previous.songId) {
             noteNaturalCompletion(completed: previous)
         }
         expectedItemId = nil
@@ -363,9 +389,16 @@ final class MusicPlayerViewModel: ObservableObject {
     /// Play `song`. When `tracks` is given it becomes the queue and
     /// `song` plays from its position in it; otherwise the queue is
     /// just this song. A same-track tap does NOT replay: playing +
-    /// same track = no-op, paused + same track = resume.
+    /// same track = no-op, paused + same track = resume — but only
+    /// when the engine actually holds that track. If the engine
+    /// never loaded it (resolve failed / stopped), the tap falls
+    /// through and re-requests the song instead of resuming
+    /// nothing (A2: the old shortcut called player.play(), which
+    /// no-ops with no currentTrack, leaving a dead tap).
     func play(song: MusicSong, in tracks: [MusicSong]? = nil, startAt: Int? = nil) {
-        if queue.isCurrentTrack(song) {
+        if queue.isCurrentTrack(song),
+           let track = player.currentTrack,
+           track.id == song.identityKey || track.id == song.songId {
             if !isPlaying { player.play() }
             return
         }
@@ -397,12 +430,26 @@ final class MusicPlayerViewModel: ObservableObject {
     func playLocal(song: MusicSong, fileURL: URL? = nil) {
         var song = song
         if let fileURL = fileURL { song.localPath = fileURL.path }
+        // B8: the same song is currently playing from a remote
+        // stream — the play() shortcut below would just resume
+        // that stream. Stop it first so the local file loads.
+        // (After the stop, play() falls through to startPlayback
+        // because the engine holds no track — see its A2 note.)
+        if !song.localPath.isEmpty, queue.isCurrentTrack(song),
+           let current = player.currentTrack,
+           (current.id == song.identityKey || current.id == song.songId),
+           current.localFileURL == nil {
+            player.stop()
+            coordinator.stop()
+        }
         play(song: song, in: [song], startAt: 0)
     }
 
     private func startPlayback() {
         guard let current = queue.current else { return }
-        player.setQueue(queue.toPlaybackItems(), startAt: queue.index)
+        // A1: set the queue WITHOUT playing — requestPlay below is
+        // the only play call, so one tap resolves exactly once.
+        player.setQueueOnly(queue.toPlaybackItems(), startAt: queue.index)
         coordinator.requestPlay(current.toPlaybackItem())
         setCurrentSong(current)
         miniFallbackSong = current
@@ -448,8 +495,10 @@ final class MusicPlayerViewModel: ObservableObject {
         // Never checkpoint the end of a track: a finished
         // song resumes from 0 (its checkpoint is cleared by
         // noteNaturalCompletion, and the restore validator
-        // rejects end positions too).
-        if duration > 0, Double(seconds) >= duration - 1.0 { return }
+        // rejects end positions too). B9: the margin must match
+        // the validator's endMarginSeconds (5 s) — the old 1 s
+        // tail wrote checkpoints the validator then rejected.
+        if duration > 0, Double(seconds) >= duration - MusicResumeLogic.endMarginSeconds { return }
         MusicLibraryStore.saveResume(song.identityKey, seconds: seconds)
         lastResumeSaveAt = Date()
         lastResumeSavedKey = song.identityKey
@@ -473,9 +522,13 @@ final class MusicPlayerViewModel: ObservableObject {
         player.seek(to: Double(target)) { _ in }
     }
 
+    /// Play/pause for the full player. Same retry behaviour as the
+    /// mini player (A2): when the engine never loaded the current
+    /// song — its URL failed to resolve, or playback was stopped —
+    /// a plain toggle is a dead button, so the tap re-requests the
+    /// song instead.
     func togglePlayPause() {
-        player.toggle()
-        hapticTick()
+        togglePlayPauseOrRetry()
     }
 
     /// Mini-player play/pause. While playing this is a plain pause;
@@ -489,13 +542,15 @@ final class MusicPlayerViewModel: ObservableObject {
     /// serially, fastest first, like any other play request.
     func togglePlayPauseOrRetry() {
         if isPlaying {
-            togglePlayPause()
+            player.toggle()
+            hapticTick()
             return
         }
         if let song = currentSong,
            let track = player.currentTrack,
            track.id == song.identityKey || track.id == song.songId {
-            togglePlayPause()
+            player.toggle()
+            hapticTick()
             return
         }
         guard let song = currentSong else { return }
@@ -533,6 +588,16 @@ final class MusicPlayerViewModel: ObservableObject {
         if prevIndex >= 0 {
             let prevSong = queue.tracks[prevIndex]
             expectedItemId = prevSong.identityKey
+            // A8: same fallback as next() — the engine never loaded
+            // a track (the first song failed to resolve), so
+            // player.previous() would no-op on its currentTrack
+            // guard and leave a dead button. Drive the previous
+            // queue song directly.
+            if player.currentTrack == nil {
+                playFromQueue(at: prevIndex)
+                hapticTick()
+                return
+            }
         }
         player.previous()
         hapticTick()
@@ -567,6 +632,12 @@ final class MusicPlayerViewModel: ObservableObject {
     /// scrub value is still the one this seek started from — a
     /// newer drag in flight keeps its own value.
     func seek(to seconds: Double) {
+        // A14: no loaded track (a failed song has duration 0) —
+        // a drag is a no-op, not a failed seek. Never toast here.
+        guard duration > 0, player.currentTrack != nil else {
+            scrubSeconds = nil
+            return
+        }
         let target = min(max(0, seconds), max(0, duration))
         // A manual seek wins over a pending launch-time
         // resume seek: the user just chose where to listen.
@@ -708,7 +779,9 @@ final class MusicPlayerViewModel: ObservableObject {
             guard self.currentSong?.identityKey == song.identityKey else { return }
             self.lyrics = result.lines
             self.lyricsLoaded = true
-            let stored = result.lines.map { StoredLyricLine(t: $0.time, text: $0.text) }
+            // A11: keep the translation in the cache too — the old
+            // mapping dropped it, so a cached song never showed one.
+            let stored = result.lines.map { StoredLyricLine(t: $0.time, text: $0.text, translation: $0.translation) }
             MusicLibraryStore.putLyrics(stored, for: song.identityKey)
             self.updateActiveLyric()
         }
@@ -792,7 +865,15 @@ final class MusicPlayerViewModel: ObservableObject {
         if wasCurrent {
             player.pause()
             coordinator.stop()
-            currentSong = queue.current
+            // A7: route through setCurrentSong (or a full clear) —
+            // assigning currentSong directly left the lyrics, the
+            // favourite star and the quality badge on the deleted
+            // song.
+            if let next = queue.current {
+                setCurrentSong(next)
+            } else {
+                clearCurrentSongState()
+            }
             miniFallbackSong = queue.current
         }
     }
@@ -802,8 +883,24 @@ final class MusicPlayerViewModel: ObservableObject {
         MusicLibraryStore.saveQueue(queue.toQueueData())
         player.pause()
         coordinator.stop()
-        currentSong = nil
+        // A7: same as above — clearing the queue must also clear
+        // the lyrics and the favourite star, not just the song.
+        clearCurrentSongState()
         miniFallbackSong = nil
+    }
+
+    /// Clear every piece of state that belongs to the current song
+    /// (used when the queue empties). setCurrentSong covers the
+    /// has-a-song case; this covers the has-no-song case.
+    private func clearCurrentSongState() {
+        currentSong = nil
+        lyrics = []
+        lyricsLoaded = true
+        activeLyricIndex = -1
+        isCurrentFav = false
+        localQualityLabel = nil
+        heardTrackKey = ""
+        heardSeconds = 0
     }
 
     // MARK: - Haptics

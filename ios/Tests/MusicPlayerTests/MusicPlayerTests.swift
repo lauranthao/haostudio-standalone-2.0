@@ -253,6 +253,60 @@ final class MusicPlayerTests: XCTestCase {
         XCTAssertEqual(defaults.double(forKey: "musicSpeed"), 1.25)
     }
 
+    // MARK: Speed floor (A12)
+
+    func testMinSpeedIsZeroPointSix() {
+        // The 0.5 floor used to sit below the documented 0.6–2.0
+        // range and below what the speed slider offered.
+        XCTAssertEqual(NativeMusicPlayer.minSpeed, 0.6, accuracy: 0.0001)
+        let player = makePlayer(fakes: [FakeEngine()])
+        player.setSpeed(0.55)
+        XCTAssertEqual(player.playbackSpeed, 0.6)
+    }
+
+    // MARK: Queue-only without play (A1)
+
+    func testSetQueueOnlyDoesNotPlayOrResolve() {
+        let engine = FakeEngine()
+        let player = makePlayer(fakes: [engine])
+        let resolver = FakeResolver(urls: [URL(string: "https://example.com/a.mp3")!])
+        wire(player, resolver)
+        player.setQueueOnly([item("a"), item("b")], startAt: 1)
+        XCTAssertNil(player.currentTrack)
+        XCTAssertEqual(resolver.calls.count, 0)
+        XCTAssertEqual(engine.loadedURLs.count, 0)
+        // A later play() resolves exactly once — no double resolve
+        // from the earlier queue-only call.
+        player.play(item: item("a"))
+        XCTAssertEqual(player.currentTrack?.id, "a")
+        XCTAssertEqual(resolver.calls.count, 1)
+    }
+
+    // MARK: Failed track is not a natural completion (A13)
+
+    func testFailedTrackFlaggedAfterAdvance() {
+        let engineA = FakeEngine()
+        let engineB = FakeEngine()
+        engineA.durationSeconds = 200
+        engineA.currentTimeSeconds = 200 // outgoing "done": the
+        engineB.durationSeconds = 180   // crossfade finishes at once
+        let player = makePlayer(fakes: [engineA, engineB])
+        // 1st resolve: a plays. 2nd: recovery finds nothing.
+        // 3rd: b resolves and advances.
+        let resolver = FakeResolver(urls: [
+            URL(string: "https://example.com/a.mp3")!,
+            nil,
+            URL(string: "https://example.com/b.mp3")!,
+        ])
+        wire(player, resolver)
+        player.setQueue([item("a"), item("b")], startAt: 0)
+        XCTAssertEqual(player.currentTrack?.id, "a")
+        engineA.fireFailed()
+        XCTAssertEqual(player.currentTrack?.id, "b")
+        XCTAssertTrue(player.didTrackFail(id: "a"))
+        XCTAssertFalse(player.didTrackFail(id: "b"))
+    }
+
     // MARK: Open success and state
 
     func testOpenSuccessPublishesState() {

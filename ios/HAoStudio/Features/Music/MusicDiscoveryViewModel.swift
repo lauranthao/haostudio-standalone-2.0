@@ -148,6 +148,13 @@ final class MusicDiscoveryViewModel: ObservableObject {
         let platform = plazaPlatform
         MusicPlaylistImportAPI.shared.plaza(platform: platform) { [weak self] playlists in
             guard let self = self else { return }
+            // A9: a stale response must never overwrite the current
+            // platform's list — fast platform switches (wy -> tx)
+            // used to show the wrong platform's results and clear
+            // the loading flag of the newer request. The search
+            // view model already guards its completions this way;
+            // the plaza did not.
+            guard platform == self.plazaPlatform else { return }
             self.plazaLoading = false
             self.plazaPlaylists = playlists
             self.plazaFailed = playlists.isEmpty
@@ -188,6 +195,7 @@ final class MusicDiscoveryViewModel: ObservableObject {
         var byPlatform: [MusicPlatform: Int] = [:]
         var byDay: [String: Int] = [:]
         let dayFormatter = DateFormatter()
+        dayFormatter.locale = Locale(identifier: "en_US_POSIX")
         dayFormatter.dateFormat = "yyyy-MM-dd"
         for event in filtered {
             totalSeconds += event.dur
@@ -225,7 +233,10 @@ final class MusicDiscoveryViewModel: ObservableObject {
                 byMonth[month] = (byMonth[month] ?? 0) + plays
             }
             let months = byMonth.keys.sorted().suffix(12)
-            perDay = months.map { ListenReportDayCount(label: String($0.suffix(2)), plays: byMonth[$0] ?? 0) }
+            // B5: the label was only the month ("11"), so the same
+            // month in two years collided on the chart. Keep the
+            // full yyyy-MM key.
+            perDay = months.map { ListenReportDayCount(label: $0, plays: byMonth[$0] ?? 0) }
         } else {
             perDay = byDay.keys.sorted().map { ListenReportDayCount(label: String($0.suffix(5)), plays: byDay[$0] ?? 0) }
         }

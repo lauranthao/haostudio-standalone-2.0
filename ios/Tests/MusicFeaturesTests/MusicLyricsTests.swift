@@ -87,4 +87,41 @@ final class MusicLyricsTests: XCTestCase {
         XCTAssertEqual(MusicLyrics.offsetLabel(2000), "+2s")
         XCTAssertEqual(MusicLyrics.offsetLabel(-2000), "-2s")
     }
+
+    // MARK: - LRC parsing (B6)
+
+    func testParseLrcMultiTimestampEmitsOneLinePerTag() {
+        let lines = MusicLyricsAPI.parseLrc("[00:10.00][00:20.00]hello\n[00:30.00]world")
+        XCTAssertEqual(lines.map { $0.time }, [10, 20, 30])
+        XCTAssertEqual(lines.map { $0.text }, ["hello", "hello", "world"])
+    }
+
+    func testParseLrcKeepsBracketedLyricText() {
+        let lines = MusicLyricsAPI.parseLrc("[00:10.00]love [you] so much")
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(lines.first?.text, "love [you] so much")
+    }
+
+    func testParseLrcStripsSectionLabelOnly() {
+        let lines = MusicLyricsAPI.parseLrc("[00:10.00][副歌]sing now")
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(lines.first?.text, "sing now")
+    }
+
+    // MARK: - Translation passthrough (A11)
+
+    func testToContractLinesKeepsTranslation() {
+        let stored = [StoredLyricLine(t: 5, text: "hello", translation: "你好")]
+        let contract = MusicLyrics.toContractLines(stored)
+        XCTAssertEqual(contract.count, 1)
+        XCTAssertEqual(contract.first?.text, "hello")
+        XCTAssertEqual(contract.first?.translation, "你好")
+    }
+
+    func testParseLrcWithTranslationMatchesByTime() {
+        let lines = MusicLyricsAPI.parseLrcWithTranslation(
+            "[00:10.00]hello\n[00:20.00]world",
+            translation: "[00:10.00]你好\n[00:20.00]世界")
+        XCTAssertEqual(lines.map { $0.translation }, ["你好", "世界"])
+    }
 }

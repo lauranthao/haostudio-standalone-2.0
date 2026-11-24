@@ -216,6 +216,12 @@ enum MusicLibraryStore {
         return defaults.bool(forKey: lyricShowTranslationKey)
     }
 
+    /// E5: the setter the translation toggle needs (A11) — only
+    /// the getter existed, so the setting could never change.
+    static func setLyricShowTranslation(_ value: Bool, defaults: UserDefaults = .standard) {
+        defaults.set(value, forKey: lyricShowTranslationKey)
+    }
+
     static func normalizationEnabled(defaults: UserDefaults = .standard) -> Bool {
         return defaults.bool(forKey: normalizationEnabledKey)
     }
@@ -549,9 +555,13 @@ enum MusicLibraryStore {
         return Set(array)
     }
 
-    static func addFMDisliked(songId: String) {
+    /// B4: store the identityKey (platform|id), not the bare song
+    /// id — the same id on another platform must not be disliked
+    /// along with it. Legacy bare-id entries keep working: fmQueue
+    /// checks both forms.
+    static func addFMDisliked(key: String) {
         var ids = fmDislikedIds()
-        ids.insert(songId)
+        ids.insert(key)
         let url = LocalStore.collectionURL(named: "fmDislikedIds")
         guard let data = MusicDict.data(forTopLevel: Array(ids)) else { return }
         try? data.write(to: url, options: [.atomic])

@@ -31,11 +31,19 @@ final class MusicEqualizerViewModel: ObservableObject {
     @Published private(set) var customPresets: [MusicEqualizerCustomPreset] = []
     @Published private(set) var selectedAutoEqName = ""
     @Published var normalizationEnabled: Bool = false {
-        didSet { MusicLibraryStore.setNormalizationEnabled(normalizationEnabled) }
+        didSet {
+            MusicLibraryStore.setNormalizationEnabled(normalizationEnabled)
+            // A4: persist alone is not enough — the player only
+            // read this at init, so a mid-session flip did nothing
+            // until relaunch. Notify the player now.
+            player.setNormalizationEnabled(normalizationEnabled)
+        }
     }
     @Published var normalizationStrength: Int = 1 {
         didSet {
             defaults.set(min(2, max(0, normalizationStrength)), forKey: "hao_music_normalization_strength")
+            // A4: same as above — push the new strength live.
+            player.setNormalizationStrength(normalizationStrength)
         }
     }
 
@@ -93,14 +101,15 @@ final class MusicEqualizerViewModel: ObservableObject {
         applyToPlayer()
     }
 
-    /// Push the current settings to the player. Assumed contract
-    /// memberwise init (see the C-leg report): EqualizerSettings
-    /// (enabled:gains:presetName:).
+    /// Push the current settings to the player.
     func applyToPlayer() {
         let settings = EqualizerSettings(
             enabled: enabled,
             gains: gains,
-            presetName: currentPresetName
+            presetName: currentPresetName,
+            // A3: preamp was dropped here — the tap's preampLinear
+            // stayed 1.0 no matter where the slider was. Pass it.
+            preamp: preamp
         )
         player.applyEqualizer(settings)
     }

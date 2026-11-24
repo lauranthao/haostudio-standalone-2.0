@@ -89,16 +89,22 @@ struct PlaybackItem: Identifiable, Equatable {
     /// resolver — local files never go through network resolution.
     let localFileURL: URL?
 
+    /// Album name for Now Playing (B2/E4). Nil when unknown — the
+    /// player falls back to "HAo Studio" then. Added with a
+    /// default so existing constructions keep compiling.
+    let album: String?
+
     var subtitle: String { artist ?? kindSubtitle }
 
     init(id: String, kind: PlaybackKind, title: String, artist: String?,
-         coverURL: URL? = nil, localFileURL: URL? = nil) {
+         coverURL: URL? = nil, localFileURL: URL? = nil, album: String? = nil) {
         self.id = id
         self.kind = kind
         self.title = title
         self.artist = artist
         self.coverURL = coverURL
         self.localFileURL = localFileURL
+        self.album = album
     }
 
     private var kindSubtitle: String {

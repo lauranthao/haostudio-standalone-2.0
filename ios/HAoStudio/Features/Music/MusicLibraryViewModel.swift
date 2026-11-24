@@ -103,6 +103,10 @@ final class MusicLibraryViewModel: ObservableObject {
         }
         MusicLibraryStore.removeDownload(key: download.key)
         downloads = MusicLibraryStore.getDownloads()
+        // B7: the player still holds the deleted file — stop it
+        // when it is the track playing now, instead of letting the
+        // next advance re-resolve the same dead address.
+        stopIfPlaying(key: download.key)
     }
 
     // MARK: - Local music
@@ -113,6 +117,19 @@ final class MusicLibraryViewModel: ObservableObject {
         }
         // Re-read: loadRepaired prunes the missing entry on next load.
         localSongs = MusicLibraryStore.localSongs()
+        // B7: same as deleteDownload — never keep playing a file
+        // that no longer exists.
+        stopIfPlaying(key: song.identityKey)
+    }
+
+    /// Stop playback when the deleted file is the track playing
+    /// now. The coordinator's current item clears through the
+    /// player's failure path when a later retry finds no URL; the
+    /// engine itself must not keep sounding from a deleted file.
+    private func stopIfPlaying(key: String) {
+        let player = NativeMusicPlayer.shared
+        guard player.currentTrack?.id == key else { return }
+        player.stop()
     }
 
     // MARK: - Recent

@@ -229,7 +229,10 @@ struct MusicSong: Equatable, Identifiable {
     func toPlaybackItem() -> PlaybackItem {
         PlaybackItem(id: identityKey, kind: .music, title: title, artist: artist,
                      coverURL: cover.isEmpty ? nil : URL(string: MusicText.toHttps(cover)),
-                     localFileURL: localPath.isEmpty ? nil : URL(fileURLWithPath: localPath))
+                     localFileURL: localPath.isEmpty ? nil : URL(fileURLWithPath: localPath),
+                     // E4/B2: carry the album so Now Playing shows
+                     // it instead of the constant "HAo Studio".
+                     album: album.isEmpty ? nil : album)
     }
 }
 

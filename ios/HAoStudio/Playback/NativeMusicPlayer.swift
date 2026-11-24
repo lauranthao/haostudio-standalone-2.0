@@ -16,8 +16,8 @@
 // Design notes the coordinator needs to know:
 // - Speed range is 0.6-2.0 per this brief and HiveKeys (musicSpeed
 //   "double 0.6..2.0"). Flutter build 29 widened the slider clamp to
-//   0.5-2.0 in clampSpeed; that drift is flagged in the handoff, not
-//   silently adopted here.
+//   0.5-2.0 in clampSpeed; minSpeed was 0.5 here too (A12, build 35)
+//   and is now 0.6, matching the VM clamp, the store and the menu.
 // - Watchdog thresholds are 4 s warn / 12 s fail per P0-06. Flutter
 //   build 30/31 uses 10 s load / 15 s mid-play; flagged in handoff.
 // - AVPlayer has no API to insert an AVAudioUnitEQ node into its
@@ -122,9 +122,14 @@ func musicNextTrackIndex(
     case .shuffle:
         if length == 1 { return current }
         let pick = randomIndex ?? { Int.random(in: 0..<length) }
-        var n = current
-        while n == current { n = pick() }
-        return n
+        // B1: bounded retries — a degenerate random source that
+        // always returns the current index used to spin forever.
+        // Fall back to the next index after `length` tries.
+        for _ in 0..<length {
+            let n = pick()
+            if n != current { return n }
+        }
+        return (current + 1) % length
     case .single:
         if auto { return -1 }
         return current + 1 < length ? current + 1 : -1
@@ -144,9 +149,13 @@ func musicPrevTrackIndex(
     if mode == .shuffle {
         if length == 1 { return current }
         let pick = randomIndex ?? { Int.random(in: 0..<length) }
-        var n = current
-        while n == current { n = pick() }
-        return n
+        // B1: bounded retries — same degenerate-source guard as
+        // musicNextTrackIndex above.
+        for _ in 0..<length {
+            let n = pick()
+            if n != current { return n }
+        }
+        return (current + 1) % length
     }
     switch mode {
     case .sequential, .single:
@@ -554,6 +563,20 @@ final class AVPlayerEngine: MusicPlayerEngine {
         player.replaceCurrentItem(with: nil)
     }
 
+    /// Re-attach or detach the EQ tap on the currently loaded item
+    /// (A5): flipping the EQ switch mid-song must take effect on
+    /// this song, not only the next one. Enabling builds a fresh
+    /// tap from the current settings; disabling removes the mix so
+    /// the old curve stops running. No-op with no item loaded.
+    func refreshAudioMix() {
+        guard let item = player.currentItem else { return }
+        if let eq = equalizer, eq.settings.enabled {
+            item.audioMix = eq.makeAudioMix(identityKey: currentIdentityKey)
+        } else {
+            item.audioMix = nil
+        }
+    }
+
     private func observeEnd(of item: AVPlayerItem) {
         if let o = endObserver { NotificationCenter.default.removeObserver(o) }
         if let o = failObserver { NotificationCenter.default.removeObserver(o) }
@@ -910,7 +933,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     static let openTimeout: TimeInterval = 10
     static let crossfadeDuration: TimeInterval = 2.5
     static let seekTolerance: TimeInterval = 2.0
-    static let minSpeed: Double = 0.5
+    static let minSpeed: Double = 0.6
     static let maxSpeed: Double = 2.0
 
     /// Test seam: open timeout seconds. Production is 10; tests set
@@ -952,6 +975,20 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     private var normalizationEnabled: Bool = false
     private var normalizationStrength: Int = 1
     private var measuredLoudness: [String: Double] = [:]
+    /// IDs of tracks whose playback failed (engine failure, or
+    /// unresolvable during auto-advance). The view model consults
+    /// this before counting a track change as a natural completion:
+    /// a failed track must never count toward the sleep timer's
+    /// "after N tracks" (A13). Cleared when the track later starts
+    /// successfully, and on stop().
+    private var failedTrackIds = Set<String>()
+
+    /// True when this id belongs to a track whose playback failed
+    /// (A13). The view model checks the previous song's keys before
+    /// counting its change as a natural completion.
+    func didTrackFail(id: String) -> Bool {
+        return failedTrackIds.contains(id)
+    }
 
     private var nowPlayingActive: Bool = false
     private var nowPlayingArtwork: MPMediaItemArtwork?
@@ -1061,6 +1098,20 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             let index = min(max(startAt, 0), items.count - 1)
             self.queueIndex = index
             self.play(item: items[index])
+        }
+    }
+
+    /// Replace the queue WITHOUT starting playback (A1). The view
+    /// model uses this before `coordinator.requestPlay` so one tap
+    /// resolves exactly once: `setQueue` would already `play()` the
+    /// item, and `requestPlay` would then `stop()` + replay it,
+    /// throwing the first resolve away (and failing outright when
+    /// the second resolve fails even though the first had a URL).
+    func setQueueOnly(_ items: [PlaybackItem], startAt: Int) {
+        ensureMain {
+            self.queue = items
+            guard !items.isEmpty else { return }
+            self.queueIndex = min(max(startAt, 0), items.count - 1)
         }
     }
 
@@ -1207,6 +1258,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         try? AVAudioSession.sharedInstance().setActive(true, options: [])
         if let index = indexOf(item) { queueIndex = index }
         currentTrack = item
+        failedTrackIds.remove(item.id)
         pendingItem = nil
         position = 0
         duration = engine.durationSeconds
@@ -1305,6 +1357,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             self.playRequested = false
             self.stallFailed = false
             self.pendingItem = nil
+            self.failedTrackIds.removeAll()
             self.activeEngine.pause()
             self.activeEngine.unload()
             self.standbyEngine.pause()
@@ -1439,6 +1492,10 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             guard let item = self.currentTrack else { return }
             self.playRequested = false
             self.recomputePlayingState()
+            // A13: this track failed — record it before recovery
+            // advances, so the advance is not counted as a natural
+            // completion by the view model.
+            self.failedTrackIds.insert(item.id)
             self.recoverFromFailure(item: item)
         }
     }
@@ -1470,6 +1527,9 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             self.ensureMain {
                 guard gen == self.generation else { return }
                 guard let url = url else {
+                    // A13: unresolvable during auto-advance — the
+                    // skip is failure-driven, not a completion.
+                    self.failedTrackIds.insert(item.id)
                     self.advanceAutoFrom(index: nextIndex, attempts: attempts + 1)
                     return
                 }
@@ -1514,6 +1574,9 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                                     return
                                 }
                                 guard let nextURL = nextURL else {
+                                    // A13: the fallback resolve found
+                                    // nothing — failure-driven skip.
+                                    self.failedTrackIds.insert(item.id)
                                     self.advanceAutoFrom(index: self.queueIndex, attempts: 0)
                                     return
                                 }
@@ -1522,6 +1585,9 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                             }
                         }
                     } else {
+                        // A13: the fallback could not save this
+                        // track either — failure-driven skip.
+                        self.failedTrackIds.insert(item.id)
                         self.advanceAutoFrom(index: self.queueIndex, attempts: 0)
                     }
                     return
@@ -1580,6 +1646,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         outgoing.unload()
         if let index = indexOf(item) { queueIndex = index }
         currentTrack = item
+        failedTrackIds.remove(item.id)
         pendingItem = nil
         position = activeEngine.currentTimeSeconds
         duration = activeEngine.durationSeconds
@@ -1799,8 +1866,22 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
 
     /// Apply EQ settings (UI leg calls this). Persists under the
     /// `hao_eq_*` keys and pushes the new curve to the live taps.
+    /// A5: when the enabled switch flips, the already-loaded item
+    /// gets its audioMix re-attached / detached now — otherwise the
+    /// flip only takes effect on the next song (gain slides already
+    /// worked mid-song via the revision mechanism; only the switch
+    /// did not).
     func applyEqualizer(_ settings: EqualizerSettings) {
-        ensureMain { self.equalizer.applyEqualizer(settings) }
+        ensureMain {
+            let wasEnabled = self.equalizer.settings.enabled
+            self.equalizer.applyEqualizer(settings)
+            if wasEnabled != settings.enabled {
+                (self.activeEngine as? AVPlayerEngine)?.refreshAudioMix()
+                if self.standbyEngine.hasItem {
+                    (self.standbyEngine as? AVPlayerEngine)?.refreshAudioMix()
+                }
+            }
+        }
     }
 
     func applyEqualizerPreset(_ preset: EqualizerPreset) {
@@ -1869,7 +1950,9 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         var info: [String: Any] = [:]
         info[MPMediaItemPropertyTitle] = track.title
         info[MPMediaItemPropertyArtist] = track.artist ?? ""
-        info[MPMediaItemPropertyAlbumTitle] = "HAo Studio"
+        // E4/B2: the real album when known; "HAo Studio" only as
+        // the fallback for tracks without one.
+        info[MPMediaItemPropertyAlbumTitle] = track.album ?? "HAo Studio"
         if duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = duration }
         if position >= 0 { info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = position }
         info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? playbackSpeed : 0.0
