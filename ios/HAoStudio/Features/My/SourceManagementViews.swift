@@ -322,7 +322,7 @@ struct LXSourceManagementView: View {
 /// CMS source list from VideoSourceStore. Toggle = enable /
 /// disable (the last enabled source cannot be switched off);
 /// drag = reorder (sort is renumbered so the stored order is
-/// the effective order); 恢复默认 = shipped 18 sources.
+/// the effective order); 恢复默认 = shipped 13 sources.
 struct CmsSourceManagementView: View {
     @Environment(\.haoTheme) private var theme
 

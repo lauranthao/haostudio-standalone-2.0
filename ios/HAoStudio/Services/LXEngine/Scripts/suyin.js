@@ -169,8 +169,16 @@ async function getWyMusicUrl(musicInfo) {
     const data = await sendRequest(`https://oiapi.net/api/Music_163?id=${songId}`)
 
     if (data.code === 0 && data.data) {
-        const song = Array.isArray(data.data) ? data.data[0] : data.data
-        if (song.url) return song.url
+        // oiapi now returns data as a Map {items:[{url,...}]}; the old
+        // shape was a bare List. Accept both (same as the built-in
+        // oiapi_wy resolver — fixed 2026-11-24, build-35真播放重验:
+        // the old code read data.data.url off the Map and always threw
+        // '获取失败' even though the API answered).
+        let song = null
+        if (Array.isArray(data.data)) song = data.data[0]
+        else if (Array.isArray(data.data.items)) song = data.data.items[0]
+        else song = data.data
+        if (song && song.url) return song.url
     }
     throw new Error('获取失败')
 }

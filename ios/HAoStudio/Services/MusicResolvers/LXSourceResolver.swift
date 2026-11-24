@@ -9,12 +9,18 @@
 //   2026-11-17 铁律). A below-target URL plays now as a per-song
 //   downgrade (the target tier persists to the next track), labelled
 //   with its REAL tier.
-// - 9 built-in resolvers (`huibq` disabled — its service returns
+// - 7 built-in resolvers (`huibq` disabled — its service returns
 //   503 "Service Suspended" since 2026-11-16; `oiapi_kw` deleted
 //   2026-11-24 — its oiapi.net Kuwo endpoint answers code -2
 //   "歌曲搜索失败" while the same host's NetEase leg still works,
 //   so the endpoint is dead, not the host; Kuwo is still served by
-//   xinghai / zddyr_kw / wwwweb + the LX scripts) + LX script jobs.
+//   xinghai / zddyr_kw / wwwweb + the LX scripts; `tang` deleted
+//   2026-11-24 — tang.api.s01s.cn never answers (connection
+//   timeout, 0 bytes, 4 consecutive failures across 2 probe rounds
+//   and 2 HTTP clients while 7 sibling resolvers answer through the
+//   same egress; build-35真播放重验). QQ/TX playback still has LX
+//   script cover (stellarwave / jiexiang / helloworld verified
+//   PLAYABLE 2026-11-24)) + LX script jobs.
 // - Per-job 3 s timeout, whole resolve 8 s (P0-16: first tier pass
 //   capped at 5 s, 3 s reserved for lower tiers, later passes at
 //   most 2 s each — see `ResolverBudget`).
@@ -649,27 +655,6 @@ extension LXSourceResolver {
 
     private var allResolvers: [BuiltInResolver] {
         [
-            BuiltInResolver(key: "tang", name: "tang", order: 15, platforms: [.tx]) { resolver, songId, _, tier, _, _, token, done in
-                let urlString = "https://tang.api.s01s.cn/music_open_api.php?mid=\(resolver.urlEncode(songId))"
-                resolver.fetchJson(urlString, headers: ["User-Agent": Self.musicUserAgent], cancelToken: token) { json in
-                    guard let json = json else { done(.empty); return }
-                    // QQ top tier field is `song_play_url_pq` — it is
-                    // the hires tier's URL source, not a separate
-                    // Master tier. Master caps at the same top field:
-                    // falling through to `song_play_url_standard`
-                    // would serve the LOWEST tier while the label
-                    // says hires.
-                    let field: String
-                    switch tier {
-                    case .master, .hiRes: field = "song_play_url_pq"
-                    case .flac: field = "song_play_url_sq"
-                    case .high320: field = "song_play_url_hq"
-                    case .standard128: field = "song_play_url_standard"
-                    }
-                    let url = (json[field] as? String) ?? (json["song_play_url"] as? String) ?? ""
-                    done(url.isEmpty ? .empty : .url(url, nil))
-                }
-            },
             BuiltInResolver(key: "lzm", name: "lzm", order: 20, platforms: [.wy]) { resolver, songId, _, _, _, _, token, done in
                 let body = "id=\(resolver.urlEncode(songId))&type=wy"
                 resolver.fetchJson(
