@@ -154,6 +154,13 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     private var openAttemptToken = 0
     private var pendingItem: PlaybackItem?
     private var playRequested: Bool = false
+    // #6: the backend paused itself (interruption / stall /
+    // background pause) without the driver asking. playRequested
+    // stays true — the user still wants playback — but the
+    // buffering branch of recomputePlayingState must not keep
+    // reporting playing for a paused backend. Set on .paused,
+    // cleared on .playing and on every resume / new request.
+    private var backendPaused: Bool = false
     private var stallFailed: Bool = false
     private var fellBackForSoftwareDecode = false
 
@@ -230,7 +237,9 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     /// is paused or stopped: never report playing for a dead stream.
     private func recomputePlayingState() {
         let sounding = backend?.isPlaying ?? false
-        let buffering = playRequested && backend != nil && !stallFailed
+        // #6: a backend that paused itself is not buffering — see
+        // VideoDriver.
+        let buffering = playRequested && backend != nil && !stallFailed && !backendPaused
         isPlaying = (sounding || buffering) && !stallFailed && currentRoom != nil
     }
 
@@ -1039,6 +1048,8 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         openTimeoutWork?.cancel()
         openTimeoutWork = nil
         playRequested = false
+        // #6: a new request starts un-paused — see VideoDriver.
+        backendPaused = false
         backend?.pause()
         backend?.shutdown()
         backend = nil
@@ -1064,6 +1075,9 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             self.playRequested = true
             self.stallFailed = false
             self.stallWarning = false
+            // #6: resume intends playback — clear a stale
+            // backend-paused flag (see VideoDriver).
+            self.backendPaused = false
             self.backend?.play()
             self.session.stallWatchdog.noteBaseline()
             self.session.noteResumed()
@@ -1244,8 +1258,13 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                 self.isLoading = false
                 self.updateDiagnostics()
             case .playing:
+                self.backendPaused = false
                 self.recomputePlayingState()
             case .paused:
+                // #6: the engine paused itself — report not-playing
+                // at once instead of letting the buffering branch
+                // mask it until the next tick.
+                self.backendPaused = true
                 self.recomputePlayingState()
             case .stalled:
                 // Pre-start only: the watchdog owns stalls after start.
@@ -1285,6 +1304,10 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         let token = openAttemptToken
         stallFailed = true
         stallWarning = false
+        // #6: a stall means not playing — report it synchronously
+        // instead of leaving isPlaying stale-true for up to one
+        // 0.5 s tick (or until the recovery open recomputes).
+        self.recomputePlayingState()
         let step = session.noteFailure()
         switch step {
         case .useHeld:

@@ -279,6 +279,13 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     private var generation: Int = 0
     private var pendingItem: PlaybackItem?
     private var playRequested: Bool = false
+    // #6: the backend paused itself (interruption / stall /
+    // background pause) without the driver asking. playRequested
+    // stays true — the user still wants playback — but the
+    // buffering branch of recomputePlayingState must not keep
+    // reporting playing for a paused backend. Set on .paused,
+    // cleared on .playing and on every resume / new request.
+    private var backendPaused: Bool = false
     private var stallFailed: Bool = false
     private var fellBackForSoftwareDecode = false
 
@@ -394,7 +401,11 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     /// is paused or stopped: never report playing for a dead stream.
     private func recomputePlayingState() {
         let sounding = backend?.isPlaying ?? false
-        let buffering = playRequested && backend != nil && !stallFailed
+        // #6: a backend that paused itself is not buffering — the
+        // old formula (playRequested && backend != nil) reported
+        // playing for any .paused event, because only driver.pause()
+        // cleared playRequested.
+        let buffering = playRequested && backend != nil && !stallFailed && !backendPaused
         isPlaying = (sounding || buffering) && !stallFailed && currentEpisode != nil
     }
 
@@ -1139,6 +1150,10 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         openTimeoutWork?.cancel()
         openTimeoutWork = nil
         playRequested = false
+        // #6: a new request starts un-paused — a stale flag from
+        // the previous episode would mask isPlaying until the first
+        // .playing event.
+        backendPaused = false
         backend?.pause()
         backend?.shutdown()
         backend = nil
@@ -1162,6 +1177,10 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             self.playRequested = true
             self.stallFailed = false
             self.stallWarning = false
+            // #6: resume intends playback — clear a stale
+            // backend-paused flag (the .playing event that follows
+            // clears it again anyway; this covers a lost one).
+            self.backendPaused = false
             self.backend?.play()
             if let rate = self.currentRate { self.backend?.playbackRate = rate }
             self.watchdog.noteBaseline()
@@ -1582,8 +1601,13 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                 self.isLoading = false
                 self.updateDiagnostics()
             case .playing:
+                self.backendPaused = false
                 self.recomputePlayingState()
             case .paused:
+                // #6: the engine paused itself — report not-playing
+                // at once instead of letting the buffering branch
+                // mask it until the next tick.
+                self.backendPaused = true
                 self.recomputePlayingState()
             case .stalled:
                 // Pre-start only: the watchdog owns stalls after start.
