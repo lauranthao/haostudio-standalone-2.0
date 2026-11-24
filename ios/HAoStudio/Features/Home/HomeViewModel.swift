@@ -34,7 +34,7 @@
 // previous badge value alone (unknown), never blocks reload, never
 // throws to the UI — only a successful "off air" answer clears a
 // badge. The check is throttled (build 36, item 10): a room set
-// checked less than 5 min ago is not checked again, and a room
+// checked less than 2 min ago is not checked again, and a room
 // with a check already in flight is never fired twice — so a tab
 // switch, a pop back, or a favourite tap does not re-fire up to
 // 10 room-info requests per reload.
@@ -156,7 +156,7 @@ final class HomeViewModel: ObservableObject {
     /// falls inside `liveStatusThrottleSeconds` skips the check
     /// — the carried badges are the last confirmed answers, so
     /// nothing flickers and no request is wasted.
-    static let liveStatusThrottleSeconds = 300.0
+    static let liveStatusThrottleSeconds = 120.0
     private var liveStatusLastCheckAt: Date?
     private var liveStatusLastCheckedRoomIDs: Set<String> = []
     /// Room ids with a check currently in flight. A reload
@@ -399,7 +399,7 @@ final class HomeViewModel: ObservableObject {
 
     /// Confirm live status for the rooms in hotLive (at most 10),
     /// through the injected checker. Throttled: the same room set
-    /// inside 5 min is not checked again, and a room with a check
+    /// inside 2 min is not checked again, and a room with a check
     /// already in flight is never fired twice. A late answer
     /// (older reload) is dropped; `.unknown` (failed / timed out)
     /// changes nothing, so a transient network failure never

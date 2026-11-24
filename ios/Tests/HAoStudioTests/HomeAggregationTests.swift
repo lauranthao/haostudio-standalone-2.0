@@ -662,7 +662,7 @@ final class HomeAggregationTests: XCTestCase {
         // Flush the first round's main-queue turn, or room "1"
         // still counts as in flight after the window expires.
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
-        clock = Date(timeIntervalSince1970: 1000 + 301)
+        clock = Date(timeIntervalSince1970: 1000 + 121)
         viewModel.reload(
             videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
             follows: follows, liveHistory: [], dailyPicks: [])
