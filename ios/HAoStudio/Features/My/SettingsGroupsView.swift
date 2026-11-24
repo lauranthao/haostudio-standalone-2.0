@@ -896,6 +896,7 @@ struct WallpaperManagementView: View {
                 )
             }
         }
+        .haoBottomChromePadding()
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(theme.scaffoldBackground)
@@ -1011,6 +1012,7 @@ struct VideoCategoryEditView: View {
                         Text("关掉的分类不会在影视首页出现；拖动可调整顺序，改完立即生效。")
                     }
                 }
+                .haoBottomChromePadding()
                 .environment(\.editMode, .constant(.active))
             } else {
                 ProgressView()

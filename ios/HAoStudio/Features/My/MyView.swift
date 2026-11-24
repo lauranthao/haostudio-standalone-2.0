@@ -141,6 +141,7 @@ struct MyView: View {
                 migrationSection
                 settingsSection
             }
+            .haoBottomChromePadding()
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(theme.scaffoldBackground)
@@ -272,6 +273,7 @@ private struct MyPlaylistsView: View {
                         .listRowSeparatorTint(theme.hairline)
                     }
                 }
+                .haoBottomChromePadding()
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
             }
@@ -329,6 +331,7 @@ private struct MyRecentPlaysView: View {
                         .listRowSeparatorTint(theme.hairline)
                     }
                 }
+                .haoBottomChromePadding()
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
             }

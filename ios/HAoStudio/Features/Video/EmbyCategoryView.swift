@@ -92,6 +92,7 @@ struct EmbyCategoryView: View {
             }
             Spacer(minLength: 16)
         }
+        .haoBottomChromePadding()
         .background(theme.scaffoldBackground)
         .navigationTitle(genre)
         .navigationBarTitleDisplayMode(.inline)

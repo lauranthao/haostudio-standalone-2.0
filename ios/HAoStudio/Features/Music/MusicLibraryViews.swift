@@ -41,6 +41,7 @@ struct MusicFavouritesView: View {
                         .listRowSeparatorTint(theme.hairline)
                     }
                 }
+                .haoBottomChromePadding()
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
             }
@@ -107,6 +108,7 @@ struct MusicPlaylistDetailView: View {
                         }
                     }
                 }
+                .haoBottomChromePadding()
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .navigationTitle(list.name)
@@ -215,6 +217,7 @@ struct MusicDownloadsView: View {
                         }
                     }
                 }
+                .haoBottomChromePadding()
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
             }
@@ -273,6 +276,7 @@ struct MusicLocalMusicView: View {
                         }
                     }
                 }
+                .haoBottomChromePadding()
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
             }

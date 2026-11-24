@@ -68,6 +68,7 @@ struct EmbyConfigView: View {
                 .font(.system(size: 15))
             }
         }
+        .haoBottomChromePadding()
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(theme.scaffoldBackground)

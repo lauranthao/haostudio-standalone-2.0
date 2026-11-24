@@ -50,6 +50,7 @@ struct MusicHomeView: View {
                 }
                 .padding(.horizontal, 24)
             }
+            .haoBottomChromePadding()
             .background(theme.scaffoldBackground)
             .navigationTitle("音乐")
             .navigationBarTitleDisplayMode(.large)

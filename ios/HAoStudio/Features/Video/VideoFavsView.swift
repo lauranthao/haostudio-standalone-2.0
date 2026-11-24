@@ -29,6 +29,7 @@ struct VideoFavsView: View {
                     .padding(.top, 12)
                     Spacer(minLength: 16)
                 }
+                .haoBottomChromePadding()
             }
         }
         .background(theme.scaffoldBackground)

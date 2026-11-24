@@ -50,6 +50,7 @@ struct MusicDailyView: View {
                         .listRowSeparatorTint(theme.hairline)
                     }
                 }
+                .haoBottomChromePadding()
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
             }
@@ -140,6 +141,7 @@ struct MusicPlazaView: View {
                 .listRowSeparatorTint(theme.hairline)
             }
         }
+        .haoBottomChromePadding()
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
     }
@@ -277,6 +279,7 @@ struct MusicPlazaDetailView: View {
                         }
                     }
                 }
+                .haoBottomChromePadding()
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
             }
@@ -321,6 +324,7 @@ struct MusicListenReportView: View {
             .padding(.horizontal, 24)
             .padding(.vertical, 16)
         }
+        .haoBottomChromePadding()
         .background(theme.scaffoldBackground)
         .navigationTitle("听歌报告")
         .navigationBarTitleDisplayMode(.inline)
