@@ -193,6 +193,13 @@ extension Notification.Name {
     /// favourites view reload on this, so the star never goes
     /// stale while the song is playing.
     static let haoMusicFavChanged = Notification.Name("haoMusicFavChanged")
+    /// A user playlist was deleted (A3). 我的's 歌单 count reloads
+    /// on this; the pushed playlist list refreshes itself locally,
+    /// but the count on 我的 only refreshed on re-appear before.
+    static let haoMusicPlaylistChanged = Notification.Name("haoMusicPlaylistChanged")
+    /// A downloaded song was removed (A3). 我的's 我的下载 count
+    /// reloads on this — same staleness as the playlist count.
+    static let haoMusicDownloadChanged = Notification.Name("haoMusicDownloadChanged")
     /// The Emby server config changed (saved or cleared in
     /// Settings). Posters are keyed by clean image URL, so a new
     /// server's posters must not reuse the old server's cached

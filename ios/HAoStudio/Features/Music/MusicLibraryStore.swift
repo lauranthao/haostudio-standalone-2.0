@@ -360,6 +360,9 @@ enum MusicLibraryStore {
 
     static func deleteList(id: String) {
         saveLists(getLists().filter { $0.id != id })
+        // A3: 我的's 歌单 count reloads on this — the pushed list
+        // refreshes itself, the count did not.
+        NotificationCenter.default.post(name: .haoMusicPlaylistChanged, object: nil)
     }
 
     static func updateList(_ updated: UserPlaylist) {
@@ -557,6 +560,9 @@ enum MusicLibraryStore {
 
     static func removeDownload(key: String) {
         saveDownloads(getDownloads().filter { $0.key != key })
+        // A3: 我的's 我的下载 count reloads on this — same
+        // staleness as the playlist count above.
+        NotificationCenter.default.post(name: .haoMusicDownloadChanged, object: nil)
     }
 
     // MARK: - Local music index

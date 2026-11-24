@@ -208,6 +208,16 @@ struct MyView: View {
                     // while this page is on screen.
                     counts = MyEntryCounts.reload()
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .haoMusicPlaylistChanged)) { _ in
+                    // A3: same staleness for the 歌单 count — a
+                    // delete from the pushed playlist list now posts.
+                    counts = MyEntryCounts.reload()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .haoMusicDownloadChanged)) { _ in
+                    // A3: same staleness for the 我的下载 count — a
+                    // download removed from the pushed list now posts.
+                    counts = MyEntryCounts.reload()
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .haoLiveFollowChanged)) { _ in
                 // Same staleness as the music counts above: a
