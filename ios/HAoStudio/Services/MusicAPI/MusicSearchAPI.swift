@@ -398,11 +398,13 @@ final class MusicSearchAPI {
     /// `interval` is seconds too (no script returns ms durations
     /// in search results); "00:00" is nil, not 0.
     static func scriptDurationSeconds(_ map: [String: Any]) -> TimeInterval? {
-        if let seconds = MusicAPIJSON.asDouble(map["duration"]), seconds > 0 {
-            return seconds
+        let durationSeconds = MusicAPIJSON.asDouble(map["duration"])
+        if durationSeconds > 0 {
+            return durationSeconds
         }
-        if let seconds = MusicAPIJSON.asDouble(map["interval"]), seconds > 0 {
-            return seconds
+        let intervalSeconds = MusicAPIJSON.asDouble(map["interval"])
+        if intervalSeconds > 0 {
+            return intervalSeconds
         }
         let interval = MusicAPIJSON.asString(map["interval"])
         let rawParts = interval.split(separator: ":")
