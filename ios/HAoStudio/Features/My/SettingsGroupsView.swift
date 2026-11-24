@@ -62,6 +62,12 @@ struct SettingsSectionHeader: View {
 struct SettingsGroupsView: View {
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var themeStore: ThemeStore
+    /// b35-sweep-settings: 播放音质开关的实时推送目标。
+    /// PlaybackCoordinator.targetQuality 只在 init 读一次 key，
+    /// 设置页只写 UserDefaults 时协调器内存值不变、重启前不生效
+    /// （见 musicSection 的 onChange）。HAoStudioApp 全 app 注入，
+    /// 本页恒在 MainTabView 之下。
+    @EnvironmentObject private var coordinator: PlaybackCoordinator
     @Environment(\.haoTheme) private var theme
 
     /// Emby status for the 源管理 → Emby 连接 row subtitle.
@@ -385,6 +391,13 @@ struct SettingsGroupsView: View {
                     .onSubmit {
                         commitBackgroundHex()
                     }
+                    .onDisappear {
+                        // b35-sweep-settings: 原来只在按 Return 时
+                        // 保存；点别处 / 收起分组 / 返回上一页都会
+                        // 把未提交的草稿静默丢掉。离开行时也提交
+                        // 一次（无效值照旧不保存，见 commit）。
+                        commitBackgroundHex()
+                    }
                 footnote("输入 #RRGGBB，无效值不会保存。")
             }
         }
@@ -419,11 +432,27 @@ struct SettingsGroupsView: View {
                         Text(quality.displayName).tag(quality)
                     }
                 }
+                .onChange(of: settings.musicQuality) { _, newValue in
+                    // b35-sweep-settings: PlaybackCoordinator 只在
+                    // init 读一次 musicQuality（targetQuality），
+                    // 设置页不推就一直是旧档位、重启才生效。播放器内
+                    // 的音质选择走 playerVM.setTargetQuality（已推），
+                    // 这里补上同一推送；key 本身由 SettingsStore 写。
+                    coordinator.targetQuality = newValue
+                }
                 Toggle("触感反馈", isOn: $settings.hapticsEnabled)
                 NavigationLink("均衡器") {
                     MusicEqualizerView()
                 }
                 Toggle("音量归一化", isOn: $settings.normalizationEnabled)
+                    .onChange(of: settings.normalizationEnabled) { _, newValue in
+                        // b35-sweep-settings: NativeMusicPlayer 只在
+                        // init 读一次归一化开关/强度进内存变量，
+                        // setter 全 app 零调用，设置页拨开关要重启
+                        // 才生效。推给 player（下一首起作用，不改
+                        // 正播的歌，与 player 的注释一致）。
+                        NativeMusicPlayer.shared.setNormalizationEnabled(newValue)
+                    }
                 footnote("需开启均衡器才能测量响度")
                 VStack(alignment: .leading, spacing: 8) {
                     Stepper(
@@ -432,6 +461,11 @@ struct SettingsGroupsView: View {
                         in: 0...2,
                         step: 1
                     )
+                    .onChange(of: settings.normalizationStrength) { _, newValue in
+                        // b35-sweep-settings: 同上，强度也只在 init
+                        // 读一次，不推就一直是旧强度。
+                        NativeMusicPlayer.shared.setNormalizationStrength(newValue)
+                    }
                     footnote("当前：\(NormalizationStrengthLabel.label(for: Double(settings.normalizationStrength)))")
                 }
             }
@@ -445,6 +479,14 @@ struct SettingsGroupsView: View {
             if isExpanded(.live) {
                 NavigationLink("弹幕设置") {
                     LiveDanmakuSettingsSheet(settings: $danmakuSettings)
+                        .onAppear {
+                            // b35-sweep-settings: danmakuSettings 是
+                            // 本页 @State、只在首次加载时读一次；直播
+                            // 间里也能改弹幕（LiveRoomView 自己 load +
+                            // persist），旧副本会在本页 onDisappear
+                            // 时把房间里的新值整份盖回去。进页时重读。
+                            danmakuSettings = LiveDanmakuSettings.load()
+                        }
                         .onDisappear {
                             danmakuSettings.persist()
                         }

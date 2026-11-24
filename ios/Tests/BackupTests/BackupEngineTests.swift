@@ -518,6 +518,42 @@ final class BackupEngineTests: XCTestCase {
         XCTAssertEqual(isolated["hao_future_unknown_key"] as? String, "zzz")
     }
 
+    func testUnknownZipEntryWarnsButImports() {
+        // b35-sweep-settings: an unrecognised top-level zip entry
+        // must be ignored with a warning, not fail the import —
+        // and the warning must reach the UI-facing report (the
+        // engine used to produce it but FileBackupEngine dropped it).
+        guard let zipURL = exportZip(using: engine) else { return }
+        guard let entries = ZipArchive.listEntries(at: zipURL) else {
+            return XCTFail("cannot list exported backup")
+        }
+        var newEntries: [ZipEntry] = []
+        for entry in entries {
+            guard let data = ZipArchive.readEntryData(entry, from: zipURL) else {
+                return XCTFail("cannot read entry \(entry.name)")
+            }
+            newEntries.append(.data(name: entry.name, data: data))
+        }
+        newEntries.append(.data(name: "strange.txt", data: "nonsense".data(using: .utf8) ?? Data()))
+        let outURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hao-backup-strange-\(UUID().uuidString).zip")
+        guard ZipArchive.write(entries: newEntries, to: outURL) else {
+            return XCTFail("rewriting the backup failed")
+        }
+        guard let result = importZip(outURL, using: engine) else {
+            return XCTFail("import returned nothing")
+        }
+        switch result {
+        case .success(let report):
+            XCTAssertFalse(report.rolledBack)
+            XCTAssertFalse(report.warnings.isEmpty, "unknown entry must surface as a warning")
+            XCTAssertTrue(report.warnings.contains { $0.contains("strange.txt") })
+            XCTAssertTrue(UpdateCheckLogic.importResultMessage(report: report).contains("strange.txt"))
+        case .failure(let error):
+            XCTFail("import must succeed despite unknown entry: \(error)")
+        }
+    }
+
     // MARK: - ZIP: stored round trip + CRC vector + extract
 
     func testZipStoredRoundTrip() {

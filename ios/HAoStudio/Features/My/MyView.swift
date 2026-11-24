@@ -22,6 +22,7 @@
 // MyBackgroundKind) are static funcs in this file so
 // SettingsTests can cover them without I/O or networking.
 
+import Combine
 import SwiftUI
 
 // MARK: - Entry counts (pure, unit-tested)
@@ -161,6 +162,14 @@ struct MyView: View {
             }
             .onAppear {
                 counts = MyEntryCounts.reload()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .haoBackupImported)) { _ in
+                // b35-sweep-settings: 导入备份后本页不重进，
+                // onAppear 不触发，8 个计数还停在导入前（例如导
+                // 入 5 个歌单仍显示 0）。导入成功即重读计数与
+                // 迁移提示（提示本身的判定见 MigrationStore）。
+                counts = MyEntryCounts.reload()
+                showMigrationNotice = MigrationStore.migrationNoticeNeeded()
             }
         }
     }

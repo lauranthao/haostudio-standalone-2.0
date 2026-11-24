@@ -129,6 +129,18 @@ final class BackupUpdateLogicTests: XCTestCase {
         XCTAssertTrue(UpdateCheckLogic.importResultMessage(report: report).contains("已全部回滚，现有数据未动。"))
     }
 
+    func testImportMessageIncludesWarnings() {
+        // b35-sweep-settings: engine warnings (e.g. ignored zip
+        // entries) must reach the result alert, not be dropped.
+        let report = BackupImportReport(
+            importedCount: 5, skippedKeys: [], rolledBack: false,
+            embyCredentialsMissing: false,
+            warnings: ["忽略了无法识别的备份条目：strange.txt"])
+        let message = UpdateCheckLogic.importResultMessage(report: report)
+        XCTAssertTrue(message.contains("成功导入 5 项。"))
+        XCTAssertTrue(message.contains("忽略了无法识别的备份条目：strange.txt"))
+    }
+
     // MARK: - Update prompt content
 
     private func makeResult(
