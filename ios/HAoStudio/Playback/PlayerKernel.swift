@@ -334,7 +334,11 @@ final class VideoRecoveryLadder {
     }
 
     private func attemptKey(engine: VideoEngine, url: URL) -> String {
-        "\(engine.rawValue)::\(url.absoluteString)"
+        // Redacted: a stream URL carries api_key, and this key
+        // lives in the `tried` set for the ladder's whole run.
+        // Redaction does not merge distinct URLs — two streams
+        // differ in path, never only in the token.
+        "\(engine.rawValue)::\(EmbyClient.redactedURL(url.absoluteString))"
     }
 
     /// Run the ladder. Calls completion exactly once with the

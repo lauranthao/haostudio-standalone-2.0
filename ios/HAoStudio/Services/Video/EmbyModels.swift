@@ -157,9 +157,24 @@ struct EmbyServerConfig: Codable, Equatable {
         useEmbyPrefix = try container.decodeIfPresent(Bool.self, forKey: .useEmbyPrefix) ?? true
     }
 
-    // Deliberately NO CustomStringConvertible: the default
-    // struct dump prints no fields, so the key can never leak
-    // through a debug print of the config.
+    // The default struct dump DOES print every field, including
+    // apiKey / accessToken — the old comment claimed otherwise.
+    // The redacted CustomStringConvertible below is what keeps
+    // the credential out of print() / String(describing:); dump()
+    // still uses Mirror and still exposes it, so never dump a
+    // config. On disk the credential fields are always blank
+    // (see EmbyConfigStore).
+}
+
+/// Redacted debug description: the credential fields never print.
+/// `print(config)` and string interpolation use this; `dump()`
+/// bypasses it (Mirror), so a config must never be dumped.
+extension EmbyServerConfig: CustomStringConvertible {
+    var description: String {
+        let key = apiKey.isEmpty ? "(empty)" : "•••"
+        let token = accessToken.isEmpty ? "(empty)" : "•••"
+        return "EmbyServerConfig(baseUrl: \(baseUrl), username: \(username), userId: \(userId), apiKey: \(key), accessToken: \(token), deviceId: \(deviceId), serverName: \(serverName), enabled: \(enabled))"
+    }
 }
 
 /// Server address split into the connect page's fields.

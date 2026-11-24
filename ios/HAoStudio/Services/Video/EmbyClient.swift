@@ -9,12 +9,15 @@
 //   is stored, the PASSWORD IS NEVER STORED.
 // - API key (fallback, advanced settings): the old X-Emby-Token.
 // Whichever is present rides as `X-Emby-Token` on every API call
-// and as `api_key` on the stream URL. The key enters a URL in
-// exactly ONE place — the playback stream URL (`streamUrl`),
+// and as `api_key` on the stream URL. The key enters a URL only in
+// the three stream builders (`streamUrl`, `subtitleUrl`,
+// `transcodedHlsUrl`) and their static from-URL rebuilders —
 // because the native player kernels take a bare URL and no custom
-// headers. That URL is never logged, never put in an exception
-// message, never used as a cache key (images use the header form
-// instead, see `imageHeaders`).
+// headers — always through `queryValue`, never raw. A URL carrying
+// the key is never logged, never put in an exception message, and
+// never used as a cache key: image URLs carry no key at all (header
+// auth only, see `imageHeaders` / `imageUrl`), and the recovery
+// ladder keys attempts on the redacted URL (see `redactedURL`).
 //
 // API root prefix: the official API lives under `/emby`
 // (http://host:8096/emby/...), but some deployments answer at the
@@ -60,9 +63,9 @@ typealias EmbyFetcher = (URL, [String: String], TimeInterval, @escaping (EmbyRes
 /// Mutating Emby request (POST/DELETE): method + full URL + auth
 /// headers + optional JSON body. Returns the status + decoded JSON
 /// without throwing for an HTTP status (like EmbyFetcher). The API
-/// key NEVER enters the URL here — auth rides the header (the
-/// stream URL is the only key-in-URL place, and it is not built by
-/// this path).
+/// key NEVER enters the URL here — auth rides the header. (The key
+/// does enter URLs, but only in the stream / subtitle / transcode
+/// builders, which are not built by this path.)
 typealias EmbyMutator = (String, URL, [String: String], [String: Any]?, TimeInterval, @escaping (EmbyResponse) -> Void) -> Void
 
 enum EmbyTransport {
@@ -307,8 +310,9 @@ final class EmbyClient {
     /// External subtitle URL (build 36, item 14, G-G): the
     /// standard Emby endpoint
     /// `GET /Videos/{ItemId}/{MediaSourceId}/Subtitles/{Index}`.
-    /// Same auth-in-URL discipline as `streamUrl` — this is the
-    /// only other place the key enters a URL. Never log it.
+    /// Same auth-in-URL discipline as `streamUrl` — one of the
+    /// three places the key enters a URL (with `transcodedHlsUrl`).
+    /// Never log it; use `redactedURL` for any diagnostic copy.
     func subtitleUrl(itemId: String, mediaSourceId: String, index: Int) -> String {
         guard let url = apiUrl("/Videos/\(itemId)/\(mediaSourceId)/Subtitles/\(index)") else { return "" }
         return "\(url.absoluteString)?api_key=\(EmbyClient.queryValue(config.authToken))"
@@ -366,6 +370,21 @@ final class EmbyClient {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")
         return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
+    }
+
+    /// Diagnostic copy of a URL string with the credential
+    /// stripped: the `api_key` query item becomes `•••`, every
+    /// other component untouched. Any log line, diagnostic key or
+    /// error string that carries a stream URL must go through
+    /// this first — the raw URL must never be stored or printed.
+    static func redactedURL(_ urlString: String) -> String {
+        guard var components = URLComponents(string: urlString),
+              let items = components.queryItems, !items.isEmpty else { return urlString }
+        guard items.contains(where: { $0.name == "api_key" }) else { return urlString }
+        components.queryItems = items.map { item in
+            item.name == "api_key" ? URLQueryItem(name: item.name, value: "•••") : item
+        }
+        return components.string ?? urlString
     }
 
     // MARK: Low-level GET
