@@ -201,6 +201,13 @@ struct MyView: View {
                     // updates while this page is on screen.
                     counts = MyEntryCounts.reload()
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .haoLiveHistoryChanged)) { _ in
+                    // A2: same staleness for the 直播历史 count —
+                    // entering a room, or a delete from the pushed
+                    // history list, now posts, so the count updates
+                    // while this page is on screen.
+                    counts = MyEntryCounts.reload()
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .haoLiveFollowChanged)) { _ in
                 // Same staleness as the music counts above: a

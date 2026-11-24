@@ -259,6 +259,10 @@ enum LiveLibraryStore {
 
     static func saveHistory(_ entries: [LiveHistoryEntry]) {
         LocalStore.saveCollection(named: historyCollection, value: entries)
+        // A2: history changed — home 热门直播 and 我的's 直播历史
+        // count reload on this (they used to refresh only on
+        // appear / pop-back).
+        NotificationCenter.default.post(name: .haoLiveHistoryChanged, object: nil)
     }
 
     /// Record entering a room: same room moves to the front with
@@ -354,4 +358,10 @@ enum LiveLibraryStore {
 /// clear-all); views observe and re-read.
 extension Notification.Name {
     static let haoLiveFollowChanged = Notification.Name("haoLiveFollowChanged")
+    /// Posted by `LiveLibraryStore.saveHistory` on every history
+    /// write (room entered, remove, clear-all). saveHistory is the
+    /// single funnel, so every writer is covered. Home's 热门直播
+    /// and 我的's 直播历史 count listen for it; without it they
+    /// only refreshed on appear / pop-back.
+    static let haoLiveHistoryChanged = Notification.Name("haoLiveHistoryChanged")
 }
