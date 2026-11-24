@@ -1038,7 +1038,14 @@ struct VideoPlayerView: View {
                     LongPressGesture(minimumDuration: VodGestureConfig.longPressMinimumDuration)
                         .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
                         .onChanged { value in
-                            if case .second(true, _) = value, !videoPlayer.isDoubleSpeed {
+                            // No 2x while a drag seek is in progress:
+                            // the sequenced drag keeps firing
+                            // onChanged on every move, so a hold
+                            // that became a horizontal drag-seek
+                            // re-engaged 2x on the next move after
+                            // the drag had cancelled it — the badge
+                            // came back and the scrub ran at 2x.
+                            if case .second(true, _) = value, !videoPlayer.isDoubleSpeed, dragSeekTarget == nil {
                                 videoPlayer.setDoubleSpeed(true)
                             }
                         }
