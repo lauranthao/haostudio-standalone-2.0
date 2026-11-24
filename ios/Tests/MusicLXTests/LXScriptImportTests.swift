@@ -72,18 +72,21 @@ final class LXScriptImportTests: XCTestCase {
     }
 
     func testValidatorRejectsEmptyFile() {
-        XCTAssertEqual(
-            LXScriptImportValidator.validate(code: ""),
-            .failure(.emptyFile))
-        XCTAssertEqual(
-            LXScriptImportValidator.validate(code: "  \n\t "),
-            .failure(.emptyFile))
+        if case .failure(.emptyFile) = LXScriptImportValidator.validate(code: "") {
+        } else {
+            XCTFail("empty file must fail with .emptyFile")
+        }
+        if case .failure(.emptyFile) = LXScriptImportValidator.validate(code: "  \n\t ") {
+        } else {
+            XCTFail("whitespace-only file must fail with .emptyFile")
+        }
     }
 
     func testValidatorRejectsNonLXScript() {
-        XCTAssertEqual(
-            LXScriptImportValidator.validate(code: "var x = 1;\n"),
-            .failure(.missingLXMarker))
+        if case .failure(.missingLXMarker) = LXScriptImportValidator.validate(code: "var x = 1;\n") {
+        } else {
+            XCTFail("non-LX script must fail with .missingLXMarker")
+        }
     }
 
     func testValidatorRejectsBrokenScript() {
@@ -101,18 +104,21 @@ final class LXScriptImportTests: XCTestCase {
         } else {
             XCTFail("https .js address must pass")
         }
-        XCTAssertEqual(
-            LXScriptImportValidator.validateRemoteURL(
-                URL(string: "https://example.com/fake.txt")!),
-            .failure(.notJavaScriptFile))
-        XCTAssertEqual(
-            LXScriptImportValidator.validateRemoteURL(
-                URL(string: "ftp://example.com/fake.js")!),
-            .failure(.invalidURL))
-        XCTAssertEqual(
-            LXScriptImportValidator.validateRemoteURL(
-                URL(string: "https:fake.js")!),
-            .failure(.invalidURL))
+        if case .failure(.notJavaScriptFile) = LXScriptImportValidator.validateRemoteURL(
+            URL(string: "https://example.com/fake.txt")!) {
+        } else {
+            XCTFail("non-.js address must fail with .notJavaScriptFile")
+        }
+        if case .failure(.invalidURL) = LXScriptImportValidator.validateRemoteURL(
+            URL(string: "ftp://example.com/fake.js")!) {
+        } else {
+            XCTFail("ftp address must fail with .invalidURL")
+        }
+        if case .failure(.invalidURL) = LXScriptImportValidator.validateRemoteURL(
+            URL(string: "https:fake.js")!) {
+        } else {
+            XCTFail("malformed address must fail with .invalidURL")
+        }
     }
 
     // MARK: - File import
