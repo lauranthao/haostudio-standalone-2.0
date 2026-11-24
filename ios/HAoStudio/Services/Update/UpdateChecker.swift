@@ -413,7 +413,10 @@ final class DefaultUpdateChecker: UpdateChecker {
             latestBuild: manifest.build,
             minOs: manifest.minOs,
             downloadURL: manifest.downloadURL,
-            releaseNotes: manifest.changelog?.localized(for: Locale.current.languageCode),
+            // b36 item 8, F5: preferredLanguages carries the script
+            // subtag ("zh-Hant-TW"), languageCode alone is just
+            // "zh" — Traditional users would get Simplified notes.
+            releaseNotes: manifest.changelog?.localized(for: Locale.preferredLanguages.first ?? Locale.current.languageCode),
             requiresNewerOS: requiresNewerOS,
             isSkipped: isSkipped,
             failureMessage: nil

@@ -403,7 +403,7 @@ struct CmsSourceManagementView: View {
                 reload()
             }
         } message: {
-            Text("将恢复 18 个内置影视源及默认开关状态。")
+            Text("将恢复 13 个内置影视源及默认开关状态。")
         }
     }
 
