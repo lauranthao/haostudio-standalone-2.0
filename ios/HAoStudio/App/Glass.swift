@@ -20,23 +20,22 @@ enum HaoLayout {
     /// Glass tab bar content height (56).
     static let tabBarContentHeight: CGFloat = 56
     /// Inner inset around the tab bar content, top and bottom only
-    /// (4; total 64pt). The inset is INSIDE the glass: the SwiftUI
-    /// bar paints its capsule background OVER the padded area
-    /// (UnionTabView order — padding before glassEffect), so the
-    /// visible bar spans exactly the mini player's width. (The old
-    /// system UITabBar painted its background over its own frame,
-    /// so horizontal padding shrank the visible bar 4pt per side
-    /// and it read 8pt narrower than the mini player above it —
-    /// chen 2026-11-24 build 33. That bar is gone in b38.)
+    /// (4; total 64pt). Vertical only: the system UITabBar paints
+    /// its background over its own frame, so horizontal padding
+    /// would shrink the visible bar 4pt per side and it would read
+    /// 8pt narrower than the mini player above it (chen 2026-11-24
+    /// build 33: mini must be exactly as wide as the bar). The
+    /// visible bar spans exactly the mini player's width (screen
+    /// minus the shared 12pt side margins in MainTabView).
     static let tabBarInnerInset: CGFloat = 4
-    /// Distance from the safe-area bottom edge: 0 (b38). The bar's
-    /// bottom edge sits exactly at the safe-area boundary; the gap
-    /// to the screen edge is the home-indicator zone itself, and
-    /// chromeBottomOffset drops the whole stack down to
-    /// chromeBottomGap above the screen edge (chen 2026-11-24:
-    /// "菜单可以往底下挪一下"). Was 2 — the bar floated 6pt above
-    /// the home-indicator zone and read as hovering too high.
-    static let tabBarBottomMargin: CGFloat = 0
+    /// Distance from the safe-area bottom edge: 2. The bar sits
+    /// 2pt above the safe-area boundary — fully inside the
+    /// hit-testable safe area, never dropped below it (b39: the
+    /// b38 chromeBottomOffset drop pushed the bar 26pt below the
+    /// safe-area edge on Face ID iPhones and taps fell through).
+    /// The gap to the screen edge is the home-indicator zone
+    /// itself.
+    static let tabBarBottomMargin: CGFloat = 2
     /// Horizontal margin of the floating capsule.
     static let tabBarHorizontalMargin: CGFloat = 12
     /// Mini player strip height (Kumone MiniPlayerView: cover 32 +
@@ -94,46 +93,14 @@ enum HaoLayout {
     /// Total height of the glass tab bar as laid out in the floating
     /// stack: content 56 + 4pt inner inset top and bottom (64).
     static let tabBarTotalHeight: CGFloat = tabBarContentHeight + tabBarInnerInset * 2
-    /// Gap between the floating stack's bottom edge and the screen's
-    /// bottom edge (b38): the stack is dropped down so its bottom
-    /// sits this far above the screen edge — the home indicator's
-    /// own space, nothing more (chen 2026-11-24: "菜单可以往底下
-    /// 挪一下"). 8pt: the indicator itself is ~4pt tall and floats
-    /// in this gap, never under the glass.
-    static let chromeBottomGap: CGFloat = 8
-    /// Bottom safe-area inset of the key window (home-indicator
-    /// zone height: 34 on Face ID iPhones, 20 on older, 0 without
-    /// a home indicator). Same key-window read LiveRoomView uses
-    /// for its landscape edge guard.
-    static var deviceBottomSafeInset: CGFloat {
-        UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap { $0.windows }
-            .first(where: { $0.isKeyWindow })?.safeAreaInsets.bottom ?? 0
-    }
-    /// How far the floating stack is dropped below the safe-area
-    /// bottom edge, for a given bottom safe inset (pure, so the
-    /// geometry tests can pin it without a window): the safe-area
-    /// inset parks the stack above the home-indicator zone; this
-    /// offset moves it down so its bottom edge sits
-    /// chromeBottomGap above the screen edge, like Apple Music's
-    /// floating bar. 0 on devices without a bottom safe area
-    /// (nothing to drop into).
-    static func bottomOffset(forSafeBottom safeBottom: CGFloat) -> CGFloat {
-        max(0, safeBottom - chromeBottomGap)
-    }
-    /// The drop for this device (key-window bottom safe inset).
-    static var chromeBottomOffset: CGFloat {
-        bottomOffset(forSafeBottom: deviceBottomSafeInset)
-    }
     /// Height of the floating stack above the safe-area bottom edge:
     /// bottom margin + tab bar + (gap + mini player while one is
     /// showing). This is the clearance a scroll page under the stack
     /// must add so its last row can scroll fully above the stack —
-    /// 64pt idle, 104pt while playing — MINUS chromeBottomOffset:
-    /// the stack is dropped that far below the safe-area edge, so
-    /// its visible top is lower by the same amount. See
-    /// haoBottomChromePadding(). (Build 37: the scroll-minimize
+    /// 66pt idle, 106pt while playing (b39: margin restored to 2).
+    /// The stack is never dropped below the safe-area edge, so the
+    /// clearance is the full stack height — nothing is subtracted.
+    /// See haoBottomChromePadding(). (Build 37: the scroll-minimize
     /// behaviour is gone — chen 2026-11-24 had the menu restored
     /// to its original full tab bar, so there is no minimized form
     /// and no isMinimized parameter any more.)
@@ -141,7 +108,8 @@ enum HaoLayout {
         return tabBarBottomMargin + tabBarTotalHeight
             + (miniPlayerVisible ? floatingStackSpacing + miniPlayerHeight : 0)
     }
-    /// Settle spring for the tab-bar selection pill.
+    /// Settle spring for chrome transitions (full-player fade,
+    /// sidebar, rows).
     static let settleSpring = Animation.spring(response: 0.35, dampingFraction: 0.82)
 }
 
@@ -474,11 +442,13 @@ extension View {
     /// scroll page under the stack therefore adds this clearance
     /// itself, as safeAreaPadding on the scroll view: the value is
     /// the stack height above the safe-area bottom edge (the system
-    /// safe area itself already covers the home indicator), minus
-    /// chromeBottomOffset — the stack is dropped that far below the
-    /// safe-area edge (b38), so its visible top is lower by the
-    /// same amount. It tracks the mini player — 40pt taller while
-    /// something is playing, so there is no dead gap while idle.
+    /// safe area itself already covers the home indicator). The
+    /// stack is never dropped below the safe-area edge, so the
+    /// clearance is the full stack height — nothing is subtracted
+    /// (b39: the b38 subtraction of chromeBottomOffset left the
+    /// last rows 26pt under the bar on Face ID iPhones). It tracks
+    /// the mini player — 40pt taller while something is playing,
+    /// so there is no dead gap while idle.
     /// One source of truth: HaoLayout.floatingStackClearance.
     func haoBottomChromePadding() -> some View {
         modifier(HaoBottomChromePadding())
@@ -503,7 +473,7 @@ private struct HaoBottomChromePadding: ViewModifier {
             HaoLayout.floatingStackClearance(
                 miniPlayerVisible: coordinator.currentItem != nil
                     || musicPlayer.miniFallbackSong != nil
-            ) - HaoLayout.chromeBottomOffset
+            )
         )
     }
 }

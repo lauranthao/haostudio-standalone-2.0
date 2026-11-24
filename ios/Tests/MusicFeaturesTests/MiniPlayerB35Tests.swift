@@ -70,19 +70,25 @@ final class MiniPlayerB35Tests: XCTestCase {
         )
     }
 
-    /// The whole unit is dropped so its bottom edge sits 8pt above
-    /// the screen edge (chromeBottomGap — the home indicator's own
-    /// space). The drop is the bottom safe inset minus that gap:
-    /// 26pt on a 34pt Face ID device, 12pt on a 20pt device, 0
-    /// where there is no bottom safe area. The bar itself has no
-    /// bottom margin any more (the old 2pt + 4pt inner inset left
-    /// it floating 6pt above the home-indicator zone).
-    func testTabBarSitsNearHomeIndicator() {
-        XCTAssertEqual(HaoLayout.tabBarBottomMargin, 0)
-        XCTAssertEqual(HaoLayout.chromeBottomGap, 8)
-        XCTAssertEqual(HaoLayout.bottomOffset(forSafeBottom: 34), 26)
-        XCTAssertEqual(HaoLayout.bottomOffset(forSafeBottom: 20), 12)
-        XCTAssertEqual(HaoLayout.bottomOffset(forSafeBottom: 0), 0)
+    /// b39 regression (chen 2026-11-25, build 38: "菜单太下面了
+    /// 我都滑不了 点不了啦"): the b38 chromeBottomOffset drop
+    /// pushed the whole chrome 26pt below the safe-area edge on
+    /// Face ID iPhones, so the tab bar sat outside its parent's
+    /// hit-testable bounds and taps fell through to the page
+    /// below. The drop is deleted; the bar sits 2pt above the
+    /// safe-area bottom edge (tabBarBottomMargin) and the scroll
+    /// clearance is the FULL stack height — nothing is subtracted,
+    /// so the last row can always scroll fully above the chrome.
+    func testTabBarStaysInsideSafeArea() {
+        XCTAssertEqual(HaoLayout.tabBarBottomMargin, 2)
+        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: false), 66)
+        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: true), 106)
+        XCTAssertEqual(
+            HaoLayout.floatingStackClearance(miniPlayerVisible: true),
+            HaoLayout.tabBarBottomMargin + HaoLayout.tabBarTotalHeight
+                + HaoLayout.floatingStackSpacing + HaoLayout.miniPlayerHeight,
+            "clearance is the full stack height: no drop is subtracted"
+        )
     }
 
     /// One shape, one radius: the mini is a rounded rectangle at
@@ -96,11 +102,11 @@ final class MiniPlayerB35Tests: XCTestCase {
         XCTAssertEqual(HaoLayout.miniPlayerHeight, 40)
     }
 
-    /// Bottom clearance for scroll content under the stack: 64pt
-    /// idle, 104pt while the mini is showing (40pt taller).
+    /// Bottom clearance for scroll content under the stack: 66pt
+    /// idle, 106pt while the mini is showing (40pt taller).
     func testFloatingStackClearance() {
-        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: false), 64)
-        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: true), 104)
+        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: false), 66)
+        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: true), 106)
     }
 
     // MARK: - Fallback: failed / stopped track keeps the mini visible
