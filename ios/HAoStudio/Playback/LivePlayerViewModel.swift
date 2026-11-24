@@ -82,6 +82,12 @@ final class LivePlayerViewModel: ObservableObject {
     /// B-leg transports via `appendDanmaku` (the seam); capped so a
     /// busy room cannot grow the list without bound.
     @Published private(set) var messages: [DanmakuMessage] = []
+    /// Monotonic append counter (build 35 D2): `messages` is capped
+    /// at 200, so its count stops changing once full and the views'
+    /// `onChange(of: messages.count)` never fires again — danmaku
+    /// freezes. The views observe this sequence instead and take
+    /// the newest `appended` messages as a suffix. Never reset.
+    @Published private(set) var danmakuSequence = 0
 
     /// Lines of the current resolution, from the driver (re-read on
     /// every render driven by currentQuality / currentLineIndex).
@@ -97,6 +103,7 @@ final class LivePlayerViewModel: ObservableObject {
     func appendDanmaku(_ message: DanmakuMessage) {
         messages.append(message)
         if messages.count > 200 { messages.removeFirst(messages.count - 200) }
+        danmakuSequence += 1
     }
 
     /// Receive-only danmaku transport for the current room (B leg).

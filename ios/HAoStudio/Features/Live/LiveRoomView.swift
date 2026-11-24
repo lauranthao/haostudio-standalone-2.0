@@ -302,6 +302,7 @@ struct LiveRoomView: View {
             if danmakuEnabledForRoom {
                 LiveDanmakuOverlayView(
                     messages: livePlayer.messages,
+                    sequence: livePlayer.danmakuSequence,
                     settings: danmakuSettings
                 )
             }
@@ -526,6 +527,7 @@ struct LiveRoomView: View {
             .padding(.vertical, 8)
             LiveDanmakuListView(
                 messages: livePlayer.messages,
+                sequence: livePlayer.danmakuSequence,
                 settings: danmakuSettings,
                 platform: currentRoom.platform.flutterSiteId,
                 onOpenSettings: { showDanmakuSettings = true }
@@ -596,6 +598,7 @@ struct LiveRoomView: View {
             if danmakuEnabledForRoom {
                 LiveDanmakuOverlayView(
                     messages: livePlayer.messages,
+                    sequence: livePlayer.danmakuSequence,
                     settings: danmakuSettings
                 )
             }
