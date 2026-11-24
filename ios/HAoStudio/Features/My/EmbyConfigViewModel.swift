@@ -101,7 +101,7 @@ final class EmbyConfigViewModel: ObservableObject {
             return
         }
         status = .testing
-        let config = EmbyServerConfig(baseUrl: address, apiKey: apiKey, username: trimmedUsername)
+        let config = EmbyServerConfig(baseUrl: address, apiKey: apiKey.trimmingCharacters(in: .whitespaces), username: trimmedUsername)
         probe(config: config, completion: completion)
     }
 
@@ -149,6 +149,7 @@ final class EmbyConfigViewModel: ObservableObject {
                 var resolved = config
                 resolved.serverName = result.serverName
                 resolved.serverVersion = result.version
+                resolved.useEmbyPrefix = result.useEmbyPrefix
                 if !result.workingBaseUrl.isEmpty {
                     resolved.baseUrl = result.workingBaseUrl
                 }
@@ -165,11 +166,17 @@ final class EmbyConfigViewModel: ObservableObject {
     /// EmbyConfigStore.save; the JSON file on disk stays
     /// credential-free. Returns false when the write failed (the
     /// in-memory values are kept; the UI never throws for a
-    /// storage failure). Clears the in-memory password on success:
-    /// the token replaces it, and the password must not linger.
+    /// storage failure). Also false — without writing anything —
+    /// when there is nothing worth saving: an empty address, or
+    /// an address with no credential at all (b35 sweep: it used
+    /// to "succeed" and dismiss, leaving the user believing the
+    /// server was configured). Clears the in-memory password on
+    /// success: the token replaces it, and the password must not
+    /// linger.
     @discardableResult
     func save() -> Bool {
         let address = baseUrl.trimmingCharacters(in: .whitespaces)
+        guard !address.isEmpty else { return false }
         var config = resolvedConfig ?? EmbyConfigStore.load() ?? EmbyServerConfig()
         config.baseUrl = address
         config.username = username.trimmingCharacters(in: .whitespaces)
@@ -179,7 +186,12 @@ final class EmbyConfigViewModel: ObservableObject {
             // the user is switching to key auth.
             config.apiKey = typedKey
             config.accessToken = ""
+            // Key auth has no user id: without this, a leftover
+            // user id would make the next load mistake the key
+            // for a password-login token (see EmbyConfigStore).
+            config.userId = ""
         }
+        guard !config.authToken.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
         if config.deviceId.isEmpty {
             config.deviceId = EmbyServerConfig.newDeviceId()
         }

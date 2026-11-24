@@ -49,13 +49,20 @@ struct EmbyServerConfig: Codable, Equatable {
     var fallbackUrls: [String]
     var reminderDays: Int
     var lastPlayedAtMs: Int?
+    /// Which API root answered the last successful probe: true =
+    /// `/emby` (the official root), false = the bare root. The
+    /// client applies it in `init`, so a root-only server keeps
+    /// working across the fresh client every gateway call builds
+    /// (b35 sweep: the prefix used to live only in the probe's
+    /// short-lived client and was lost before the first data call).
+    var useEmbyPrefix: Bool
 
     init(baseUrl: String = "", apiKey: String = "", userId: String = "", enabled: Bool = true,
          movieLibraryId: String? = nil, tvLibraryId: String? = nil, name: String = "Emby",
          note: String = "", username: String = "", accessToken: String = "", deviceId: String = "",
          serverName: String = "", serverVersion: String = "", reportProgress: Bool = true,
          strmDirect: Bool = false, fallbackUrls: [String] = [], reminderDays: Int = 0,
-         lastPlayedAtMs: Int? = nil) {
+         lastPlayedAtMs: Int? = nil, useEmbyPrefix: Bool = true) {
         self.baseUrl = baseUrl
         self.apiKey = apiKey
         self.userId = userId
@@ -74,6 +81,7 @@ struct EmbyServerConfig: Codable, Equatable {
         self.fallbackUrls = fallbackUrls
         self.reminderDays = reminderDays
         self.lastPlayedAtMs = lastPlayedAtMs
+        self.useEmbyPrefix = useEmbyPrefix
     }
 
     /// The credential actually sent on API calls and the stream
@@ -123,7 +131,7 @@ struct EmbyServerConfig: Codable, Equatable {
         case baseUrl, apiKey, userId, enabled, movieLibraryId, tvLibraryId,
              name, note, username, accessToken, deviceId, serverName,
              serverVersion, reportProgress, strmDirect, fallbackUrls,
-             reminderDays, lastPlayedAtMs
+             reminderDays, lastPlayedAtMs, useEmbyPrefix
     }
 
     init(from decoder: Decoder) throws {
@@ -146,6 +154,7 @@ struct EmbyServerConfig: Codable, Equatable {
         fallbackUrls = try container.decodeIfPresent([String].self, forKey: .fallbackUrls) ?? []
         reminderDays = try container.decodeIfPresent(Int.self, forKey: .reminderDays) ?? 0
         lastPlayedAtMs = try container.decodeIfPresent(Int.self, forKey: .lastPlayedAtMs)
+        useEmbyPrefix = try container.decodeIfPresent(Bool.self, forKey: .useEmbyPrefix) ?? true
     }
 
     // Deliberately NO CustomStringConvertible: the default
@@ -266,9 +275,14 @@ struct EmbyProbeResult {
     /// The base URL that actually answered (main address or one of
     /// the fallback lines). "" when nothing answered.
     let workingBaseUrl: String
+    /// The API prefix that answered (`/emby` vs the bare root).
+    /// The config page persists it so data calls start on the
+    /// working prefix instead of re-discovering it per client.
+    let useEmbyPrefix: Bool
 
     init(ok: Bool, serverName: String = "", version: String = "", users: [EmbyUser] = [],
-         errorKind: EmbyErrorKind? = nil, errorMessage: String = "", workingBaseUrl: String = "") {
+         errorKind: EmbyErrorKind? = nil, errorMessage: String = "", workingBaseUrl: String = "",
+         useEmbyPrefix: Bool = true) {
         self.ok = ok
         self.serverName = serverName
         self.version = version
@@ -276,6 +290,7 @@ struct EmbyProbeResult {
         self.errorKind = errorKind
         self.errorMessage = errorMessage
         self.workingBaseUrl = workingBaseUrl
+        self.useEmbyPrefix = useEmbyPrefix
     }
 }
 
@@ -642,10 +657,18 @@ enum EmbyConfigStore {
         guard var config = stored, !config.baseUrl.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
         // The Keychain holds the single active credential
         // (migration wrote the apiKey there; a password login
-        // overwrites it with the user token).
+        // overwrites it with the user token). The on-disk JSON
+        // carries BOTH credential fields blank, so the field is
+        // recovered from the persisted user id: a password login
+        // always returns one (AuthenticateByName fails without
+        // it), key auth never sets one. The old code keyed on the
+        // (always blank) stored accessToken, so the branch was
+        // dead and every token landed in `apiKey` — the 401
+        // wording then said "密钥不对" for password users and the
+        // token showed in the API-key field (b35 sweep).
         if let key = KeychainStore.loadEmbyApiKey(), !key.isEmpty {
-            if !config.accessToken.isEmpty {
-                // A stored token means the last login was by
+            if !config.userId.isEmpty {
+                // A stored user id means the last login was by
                 // password; the Keychain value IS that token.
                 config.accessToken = key
             } else {

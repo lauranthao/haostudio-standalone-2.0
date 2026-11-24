@@ -37,6 +37,9 @@
 // Swift 5.0: completion handlers only, no async/await, no `any`.
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // MARK: - Transport types
 
@@ -172,8 +175,11 @@ final class EmbyClient {
     private let mutator: EmbyMutator
 
     /// Set by probe / ensureApiRoot; default true = try `/emby`
-    /// first (the official API root).
-    private var useEmbyPrefix = true
+    /// first (the official API root). `init` seeds it from the
+    /// stored config (`useEmbyPrefix`, persisted by the last
+    /// successful probe) so a root-only server is not re-tried on
+    /// `/emby` by every fresh client the gateway builds.
+    private(set) var useEmbyPrefix = true
 
     /// Temporary base-URL override, used only while one probe /
     /// login attempt tries a fallback line. Always cleared in a
@@ -185,6 +191,7 @@ final class EmbyClient {
 
     init(config: EmbyServerConfig, fetcher: EmbyFetcher? = nil, mutator: EmbyMutator? = nil) {
         self.config = config
+        self.useEmbyPrefix = config.useEmbyPrefix
         self.fetcher = fetcher ?? EmbyTransport.fetch
         self.mutator = mutator ?? EmbyTransport.mutate
     }
@@ -194,6 +201,7 @@ final class EmbyClient {
     /// caller's job (EmbyConfigStore.save).
     func updateConfig(_ config: EmbyServerConfig) {
         self.config = config
+        self.useEmbyPrefix = config.useEmbyPrefix
     }
 
     private var base: String {
@@ -260,30 +268,91 @@ final class EmbyClient {
             return strmPath
         }
         guard let url = apiUrl("/Videos/\(itemId)/stream") else { return "" }
-        let token = config.authToken.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        // Strict RFC 3986 query-value encoding: `.urlQueryAllowed`
+        // lets `&`, `=` and `+` through, so a token containing any
+        // of them would split the query string and fail auth (b35
+        // sweep — the token is the one value that must survive
+        // verbatim).
+        let token = EmbyClient.queryValue(config.authToken)
         var result = "\(url.absoluteString)?static=true&api_key=\(token)"
         let markers = facts?.toQueryParams() ?? [:]
         if !markers.isEmpty {
-            let qs = markers.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0.value)" }.joined(separator: "&")
+            let qs = markers.map { "\($0.key)=\(EmbyClient.queryValue($0.value))" }.joined(separator: "&")
             result += "&\(qs)"
         }
         return result
     }
 
+    /// Percent-encode one query value: unreserved characters only
+    /// (ALPHA / DIGIT / `-` / `.` / `_` / `~`); everything else —
+    /// including `&`, `=`, `+`, space — is escaped.
+    static func queryValue(_ value: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
+    }
+
     // MARK: Low-level GET
 
-    private func getJSON(url: URL, timeout: TimeInterval = 8, completion: @escaping (Result<[String: Any], EmbyError>) -> Void) {
+    /// One data GET. On a 404 it retries once with the other API
+    /// prefix: a wrong prefix looks exactly like "not found", and
+    /// a config saved before prefix persistence (or a server that
+    /// moved) would otherwise fail every data call while the
+    /// Settings probe still succeeds. The working prefix sticks
+    /// for the rest of this client's life; probe / login /
+    /// ensureApiRoot walk the prefixes themselves, so they pass
+    /// `allowPrefixRetry: false` and must never double-walk.
+    private func getJSON(url: URL, timeout: TimeInterval = 8, allowPrefixRetry: Bool = true, completion: @escaping (Result<[String: Any], EmbyError>) -> Void) {
         fetcher(url, authHeaders, timeout) { response in
             // mapDocument with wantMap: true only succeeds with a map;
             // the cast below therefore always succeeds in practice.
-            completion(self.mapDocument(response, wantMap: true).map { $0 as? [String: Any] ?? [:] })
+            let mapped = self.mapDocument(response, wantMap: true).map { $0 as? [String: Any] ?? [:] }
+            if allowPrefixRetry,
+               case .failure(let error) = mapped, error.kind == .notFound,
+               let retryURL = self.flippedPrefixURL(url) {
+                let original = self.useEmbyPrefix
+                self.useEmbyPrefix.toggle()
+                self.getJSON(url: retryURL, timeout: timeout, allowPrefixRetry: false) { retried in
+                    if case .failure = retried { self.useEmbyPrefix = original }
+                    completion(retried)
+                }
+                return
+            }
+            completion(mapped)
         }
     }
 
-    private func getDocument(url: URL, timeout: TimeInterval = 8, completion: @escaping (Result<Any, EmbyError>) -> Void) {
+    private func getDocument(url: URL, timeout: TimeInterval = 8, allowPrefixRetry: Bool = true, completion: @escaping (Result<Any, EmbyError>) -> Void) {
         fetcher(url, authHeaders, timeout) { response in
-            completion(self.mapDocument(response, wantMap: false))
+            let mapped = self.mapDocument(response, wantMap: false)
+            if allowPrefixRetry,
+               case .failure(let error) = mapped, error.kind == .notFound,
+               let retryURL = self.flippedPrefixURL(url) {
+                let original = self.useEmbyPrefix
+                self.useEmbyPrefix.toggle()
+                self.getDocument(url: retryURL, timeout: timeout, allowPrefixRetry: false) { retried in
+                    if case .failure = retried { self.useEmbyPrefix = original }
+                    completion(retried)
+                }
+                return
+            }
+            completion(mapped)
         }
+    }
+
+    /// The same URL with the other API prefix (`/emby` inserted or
+    /// removed right after the base). Nil when the URL is not one
+    /// of ours (never rewrite an unrelated URL).
+    private func flippedPrefixURL(_ url: URL) -> URL? {
+        let s = url.absoluteString
+        let b = base
+        if s.hasPrefix(b + "/emby/") {
+            return URL(string: b + String(s.dropFirst((b + "/emby").count)))
+        }
+        if s.hasPrefix(b + "/") {
+            return URL(string: b + "/emby" + String(s.dropFirst(b.count)))
+        }
+        return nil
     }
 
     /// Map a raw response to a document or a typed error. 401's
@@ -380,7 +449,8 @@ final class EmbyClient {
                 step()
                 return
             }
-            getJSON(url: url) { result in
+            // Manual prefix walk: no auto-retry inside getJSON.
+            getJSON(url: url, allowPrefixRetry: false) { result in
                 switch result {
                 case .failure(let error):
                     if error.kind == .unauthorized {
@@ -400,7 +470,7 @@ final class EmbyClient {
                     }
                     self.fetchUsersOrEmpty { users in
                         self.baseOverride = nil
-                        completion(EmbyProbeResult(ok: true, serverName: serverName, version: version, users: users, workingBaseUrl: base))
+                        completion(EmbyProbeResult(ok: true, serverName: serverName, version: version, users: users, workingBaseUrl: base, useEmbyPrefix: self.useEmbyPrefix))
                     }
                 }
             }
@@ -450,7 +520,7 @@ final class EmbyClient {
                 return
             }
             let headers = [
-                "X-Emby-Authorization": "MediaBrowser Client=\"HAo Studio\", Device=\"iPhone\", DeviceId=\"\(deviceId)\", Version=\"1.1.6\"",
+                "X-Emby-Authorization": "MediaBrowser Client=\"HAo Studio\", Device=\"iPhone\", DeviceId=\"\(deviceId)\", Version=\"2.0.0\"",
             ]
             mutator("POST", url, headers, ["Username": username, "Pw": password], timeout) { response in
                 if response.statusCode == 401 {
@@ -552,7 +622,8 @@ final class EmbyClient {
                 step()
                 return
             }
-            getJSON(url: url) { result in
+            // Manual prefix walk: no auto-retry inside getJSON.
+            getJSON(url: url, allowPrefixRetry: false) { result in
                 switch result {
                 case .success:
                     completion(nil)
@@ -573,7 +644,8 @@ final class EmbyClient {
             completion(nil)
             return
         }
-        getDocument(url: url) { result in
+        // Probe context: the caller walks prefixes itself.
+        getDocument(url: url, allowPrefixRetry: false) { result in
             switch result {
             case .failure:
                 completion(nil)
@@ -1135,13 +1207,25 @@ final class EmbyClient {
             episodes(seriesId: itemId, seasonId: seasonId) { result in
                 switch result {
                 case .failure:
-                    lines.append(PlayLine(name: lineName, episodes: []))
+                    // A season whose episodes cannot be fetched
+                    // contributes no line: an empty line opens an
+                    // empty grid with a dead play button (b35
+                    // sweep — the same dead-line shape the eager
+                    // fetch fixed for later seasons). When every
+                    // season fails, the step() terminator below
+                    // reports "没有可播的集" instead.
                     step()
                 case .success(let fetched):
                     let eps = EmbyClient.episodesToPlayEpisodes(fetched, streamUrl: { [weak self] id, facts in
                         self?.streamUrl(itemId: id, facts: facts) ?? ""
                     })
-                    if !eps.isEmpty { foundEpisodes = true }
+                    if eps.isEmpty {
+                        // A season the server reports with no
+                        // episodes is not a playable line either.
+                        step()
+                        return
+                    }
+                    foundEpisodes = true
                     lines.append(PlayLine(name: lineName, episodes: eps))
                     step()
                 }

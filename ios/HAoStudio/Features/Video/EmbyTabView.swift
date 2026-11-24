@@ -25,6 +25,14 @@ final class EmbyTabViewModel: ObservableObject {
     private let gateway: VideoDataGateway
     private var page = 0
     private var loadingMore = false
+    /// Load generation: every reload / library switch bumps it.
+    /// A page that lands for an older generation belongs to the
+    /// previous query — it is dropped, and the current query is
+    /// re-issued (b35 sweep: tapping a library chip mid-load used
+    /// to swallow the switch and show the old library's items
+    /// under the new chip, because loadMore() was dropped by the
+    /// loadingMore guard and nothing re-triggered it).
+    private var generation = 0
 
     init(gateway: VideoDataGateway = VideoServices.makeGateway()) {
         self.gateway = gateway
@@ -34,6 +42,7 @@ final class EmbyTabViewModel: ObservableObject {
 
     func reload() {
         guard isConfigured else { return }
+        generation += 1
         page = 0
         hasMore = true
         items = []
@@ -48,6 +57,7 @@ final class EmbyTabViewModel: ObservableObject {
 
     func selectLibrary(_ id: String?) {
         selectedLibraryId = id
+        generation += 1
         page = 0
         hasMore = true
         items = []
@@ -58,10 +68,20 @@ final class EmbyTabViewModel: ObservableObject {
         guard isConfigured, !loadingMore, hasMore else { return }
         loadingMore = true
         isLoading = true
+        let requestGeneration = generation
         gateway.fetchEmbyItems(libraryId: selectedLibraryId, genre: nil, page: page) { [weak self] result in
             guard let self = self else { return }
             self.loadingMore = false
             self.isLoading = false
+            guard requestGeneration == self.generation else {
+                // Stale page: a reload / library switch landed
+                // while it was in flight. Its items belong to the
+                // old query, so drop them; the new query was
+                // dropped by the loadingMore guard above, so
+                // re-issue it now (items is empty after the reset).
+                if self.items.isEmpty { self.loadMore() }
+                return
+            }
             if result.items.isEmpty {
                 self.hasMore = false
             } else {
@@ -88,7 +108,7 @@ struct EmbyTabView: View {
                     MusicEmptyState(
                         icon: "server.rack",
                         title: "未配置 Emby 服务器",
-                        note: "在设置里添加服务器地址并登录后，这里会显示你的媒体库。服务器配置页由设置 slice 接入。"
+                        note: "在设置 → Emby 连接里添加服务器地址并登录后，这里会显示你的媒体库。"
                     )
                     Spacer()
                 }

@@ -22,6 +22,12 @@ struct EmbyPosterImage: View {
 
     @Environment(\.haoTheme) private var theme
     @State private var image: UIImage?
+    /// The URL the in-flight load was started for. Poster cells
+    /// are reused while scrolling: an older load that lands after
+    /// the cell moved to another poster must not overwrite the
+    /// new one (b35 sweep — the old code assigned whatever load
+    /// finished last).
+    @State private var loadingURL: String?
 
     var body: some View {
         Group {
@@ -49,9 +55,13 @@ struct EmbyPosterImage: View {
     private func loadImage() {
         guard !urlString.isEmpty else {
             image = nil
+            loadingURL = nil
             return
         }
+        let requested = urlString
+        loadingURL = requested
         EmbyImageLoader.shared.load(urlString: urlString) { loaded in
+            guard loadingURL == requested else { return }
             image = loaded
         }
     }
