@@ -173,6 +173,11 @@ extension Notification.Name {
     /// MusicNotificationKeys.actualPosition, so the UI can roll the
     /// progress bar back and show a toast.
     static let haoMusicSeekFailed = Notification.Name("haoMusicSeekFailed")
+    /// The recent-plays list changed (a song started playing, or
+    /// the list was cleared). The music home view model reloads
+    /// on this: without it 最近播放 only refreshed when the tab
+    /// re-appeared, not while the user stayed on it.
+    static let haoMusicRecentChanged = Notification.Name("haoMusicRecentChanged")
 }
 
 enum MusicNotificationKeys {
@@ -423,6 +428,10 @@ final class AVPlayerEngine: MusicPlayerEngine {
     private var timeObserver: Any?
     private var loadCompletion: ((Bool) -> Void)?
     private var currentIdentityKey = ""
+    /// URL of the loaded item (nil after unload): the seek
+    /// tolerance depends on it (exact for files, lenient for
+    /// network streams — see seekTolerance(for:)).
+    private var currentURL: URL?
 
     var equalizer: MusicEqualizer?
 
@@ -471,6 +480,7 @@ final class AVPlayerEngine: MusicPlayerEngine {
     func load(url: URL, headers: [String: String]?, identityKey: String, completion: @escaping (Bool) -> Void) {
         finishLoad(false)
         currentIdentityKey = identityKey
+        currentURL = url
         let asset: AVURLAsset
         if let headers = headers, !headers.isEmpty {
             asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
@@ -516,13 +526,29 @@ final class AVPlayerEngine: MusicPlayerEngine {
 
     func seek(to seconds: Double, completion: @escaping (Bool) -> Void) {
         let target = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
-        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+        let tol = Self.seekTolerance(for: currentURL)
+        player.seek(to: target, toleranceBefore: tol, toleranceAfter: tol) { finished in
             completion(finished)
         }
     }
 
+    /// Seek tolerance for a URL. Exact (.zero) for local files
+    /// (cheap, sample-accurate); lenient (0.5 s) for network
+    /// streams. An exact seek on a progressive-download stream
+    /// forces the player to fetch and decode to the exact sample;
+    /// on a slow link the seek stalls past the watchdog's 12 s
+    /// fail line and the track is reopened at the pre-seek
+    /// position — the build-30 "drag seek doesn't load". 0.5 s
+    /// snaps to the nearest sync frame without re-buffering and
+    /// still lands inside the 2 s read-back window.
+    static func seekTolerance(for url: URL?) -> CMTime {
+        if url?.isFileURL == true { return .zero }
+        return CMTime(seconds: 0.5, preferredTimescale: 600)
+    }
+
     func unload() {
         finishLoad(false)
+        currentURL = nil
         if let o = endObserver { NotificationCenter.default.removeObserver(o); endObserver = nil }
         if let o = failObserver { NotificationCenter.default.removeObserver(o); failObserver = nil }
         player.replaceCurrentItem(with: nil)
@@ -911,6 +937,15 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     private var crossfadeTimer: Timer?
     private var fadeTimer: Timer?
     private var watchdogTimer: Timer?
+    /// True while an engine seek is in flight. The watchdog
+    /// ignores ticks while set: a slow seek freezes the position
+    /// by design, and without this the watchdog would declare a
+    /// stall at 12 s and reopen the track at the pre-seek
+    /// position. Cleared by the seek completion; the 20 s safety
+    /// in watchdogTick() covers an engine that never calls its
+    /// completion (a contract violation).
+    private var seekInFlight = false
+    private var seekStartedAt: Date?
     private var interruptionObserver: NSObjectProtocol?
     private var wasPlayingBeforeInterruption: Bool = false
 
@@ -920,6 +955,12 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
 
     private var nowPlayingActive: Bool = false
     private var nowPlayingArtwork: MPMediaItemArtwork?
+    /// Artwork fetch attempts for the current track (reset on a
+    /// track change). The old fetch dropped its error silently
+    /// with no retry, so one failed fetch meant no artwork for
+    /// the whole track.
+    private var nowPlayingArtworkAttempts = 0
+    private var nowPlayingArtworkRetryWork: DispatchWorkItem?
     private var lastNowPlayingElapsedUpdate: Date = .distantPast
 
     init(makeEngine: @escaping () -> MusicPlayerEngine = { AVPlayerEngine() }, defaults: UserDefaults = .standard) {
@@ -1173,7 +1214,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         startWatchdogTimerIfNeeded()
         setupNowPlaying()
         updateNowPlayingInfo()
-        nowPlayingArtwork = nil
+        resetNowPlayingArtwork()
         fetchNowPlayingArtworkIfNeeded()
         if fadeEnabled() && gain > 0 {
             engine.volume = 0
@@ -1314,9 +1355,14 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                 return
             }
             let target = max(0, self.duration > 0 ? min(seconds, self.duration) : seconds)
+            self.seekInFlight = true
+            self.seekStartedAt = Date()
             self.activeEngine.seek(to: target) { [weak self] finished in
                 guard let self = self else { return }
                 self.ensureMain {
+                    self.seekInFlight = false
+                    self.seekStartedAt = nil
+                    self.watchdog.noteBaseline()
                     let actual = self.activeEngine.currentTimeSeconds
                     let landed = finished && abs(actual - target) <= NativeMusicPlayer.seekTolerance
                     self.position = actual
@@ -1541,7 +1587,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         startWatchdogTimerIfNeeded()
         setupNowPlaying()
         updateNowPlayingInfo()
-        nowPlayingArtwork = nil
+        resetNowPlayingArtwork()
         fetchNowPlayingArtworkIfNeeded()
         recomputePlayingState()
         onTrackStarted?(item)
@@ -1611,6 +1657,18 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     }
 
     private func watchdogTick() {
+        // A seek in flight freezes the position by design: never
+        // let the watchdog fail (and reopen) a track for a seek
+        // that is still running. The 20 s safety clears a flag
+        // whose engine never called its seek completion.
+        if seekInFlight {
+            if let started = seekStartedAt, Date().timeIntervalSince(started) > 20 {
+                seekInFlight = false
+                seekStartedAt = nil
+            } else {
+                return
+            }
+        }
         guard currentTrack != nil, activeEngine.hasItem else { return }
         let event = watchdog.tick(
             position: activeEngine.currentTimeSeconds,
@@ -1821,15 +1879,81 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     }
 
     private func fetchNowPlayingArtworkIfNeeded() {
-        guard let coverURL = currentTrack?.coverURL, nowPlayingArtwork == nil else { return }
-        URLSession.shared.dataTask(with: coverURL) { [weak self] data, _, _ in
-            guard let self = self, let data = data, let image = UIImage(data: data) else { return }
-            let art = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-            DispatchQueue.main.async {
-                self.nowPlayingArtwork = art
-                self.updateNowPlayingInfo()
+        guard let coverURL = Self.upgradedArtworkURL(currentTrack?.coverURL),
+              nowPlayingArtwork == nil else { return }
+        guard nowPlayingArtworkAttempts < Self.nowPlayingArtworkMaxAttempts else { return }
+        let trackId = currentTrack?.id
+        let attempt = nowPlayingArtworkAttempts + 1
+        nowPlayingArtworkAttempts = attempt
+        URLSession.shared.dataTask(with: coverURL) { [weak self] data, response, error in
+            guard let self = self else { return }
+            let status = (response as? HTTPURLResponse)?.statusCode
+            if error == nil, (status == nil || status == 200),
+               let data = data, let image = UIImage(data: data) {
+                let art = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    // A slow fetch from the previous track must never
+                    // paint its art onto the new one.
+                    guard self.currentTrack?.id == trackId,
+                          self.nowPlayingArtwork == nil else { return }
+                    self.nowPlayingArtwork = art
+                    self.updateNowPlayingInfo()
+                }
+                return
             }
+            NSLog("[HAoStudio][Music] Now Playing artwork fetch failed (attempt %d/%d) track=%@ status=%@ error=%@",
+                  Int32(attempt), Int32(Self.nowPlayingArtworkMaxAttempts), trackId ?? "",
+                  status.map(String.init) ?? "-", error?.localizedDescription ?? "-")
+            // Retry on the main queue after a backoff, unless the
+            // track already changed (then the next track's own
+            // fetch takes over).
+            let delay = Self.nowPlayingArtworkRetryDelay(forAttempt: attempt)
+            guard delay > 0 else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self = self, self.currentTrack?.id == trackId else { return }
+                self.fetchNowPlayingArtworkIfNeeded()
+            }
+            self.nowPlayingArtworkRetryWork?.cancel()
+            self.nowPlayingArtworkRetryWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
         }.resume()
+    }
+
+    /// Track changed: drop the artwork, its retry state and any
+    /// pending retry, so a late fetch can never paint the old
+    /// track's art onto the new one.
+    private func resetNowPlayingArtwork() {
+        nowPlayingArtwork = nil
+        nowPlayingArtworkAttempts = 0
+        nowPlayingArtworkRetryWork?.cancel()
+        nowPlayingArtworkRetryWork = nil
+    }
+
+    /// Artwork fetch budget: 3 attempts per track.
+    static let nowPlayingArtworkMaxAttempts = 3
+
+    /// Backoff (seconds) before the retry after `attempt`
+    /// (attempts are 1-based; 0 after the last attempt).
+    static func nowPlayingArtworkRetryDelay(forAttempt attempt: Int) -> TimeInterval {
+        switch attempt {
+        case 1: return 1.0
+        case 2: return 3.0
+        default: return 0
+        }
+    }
+
+    /// http -> https for an artwork URL (ATS blocks http under
+    /// NSAllowsArbitraryLoads = false). Same rule as
+    /// MusicText.toHttps, kept local so this file stays
+    /// self-contained for the MusicCore test target (it does not
+    /// compile the MusicResolvers dir).
+    static func upgradedArtworkURL(_ url: URL?) -> URL? {
+        guard let url = url else { return nil }
+        guard url.scheme?.lowercased() == "http" else { return url }
+        var parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        parts?.scheme = "https"
+        return parts?.url ?? url
     }
 
     @objc private func remotePlay() -> MPRemoteCommandHandlerStatus {

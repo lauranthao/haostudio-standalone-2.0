@@ -24,8 +24,10 @@ enum HaoLayout {
     static let tabBarBottomMargin: CGFloat = 6
     /// Horizontal margin of the floating capsule.
     static let tabBarHorizontalMargin: CGFloat = 12
-    /// Mini player strip height (same 56pt rhythm as the tab bar).
-    static let miniPlayerHeight: CGFloat = 56
+    /// Mini player strip height (Beans MiniPlayerView: 42pt content
+    /// + 2 x 4pt vertical padding = 50pt rendered; cover 36,
+    /// control 32, title 12 semibold, subtitle 10).
+    static let miniPlayerHeight: CGFloat = 50
     /// Gap between the mini player strip and the tab bar.
     static let floatingStackSpacing: CGFloat = 8
     /// Settle spring for the tab-bar selection pill.

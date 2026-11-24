@@ -295,8 +295,10 @@ final class MusicPlayerViewModel: ObservableObject {
         } else {
             // The player is playing something outside this queue
             // (another leg started it): show it, do not rewrite the
-            // queue.
-            let song = MusicSong(songId: item.id, title: item.title, artist: item.artist ?? "")
+            // queue. The cover travels with the item: without it the
+            // player page would show no artwork for an outside song.
+            let song = MusicSong(songId: item.id, title: item.title, artist: item.artist ?? "",
+                                 cover: item.coverURL?.absoluteString ?? "")
             setCurrentSong(song)
         }
     }
@@ -499,14 +501,21 @@ final class MusicPlayerViewModel: ObservableObject {
 
     /// Seek to an absolute position (seconds). On failure the bar
     /// rolls back to the player's actual position + a toast.
+    /// The scrub value is held until the seek's completion lands:
+    /// clearing it up front let the 0.5 s position stream push the
+    /// bar back to the pre-seek position mid-seek, so a drag looked
+    /// like it did nothing. The completion clears it only when the
+    /// scrub value is still the one this seek started from — a
+    /// newer drag in flight keeps its own value.
     func seek(to seconds: Double) {
         let target = min(max(0, seconds), max(0, duration))
-        scrubSeconds = nil
         // A manual seek wins over a pending launch-time
         // resume seek: the user just chose where to listen.
         pendingResume = nil
+        let scrubbed = scrubSeconds
         player.seek(to: target) { [weak self] ok in
             guard let self = self else { return }
+            if self.scrubSeconds == scrubbed { self.scrubSeconds = nil }
             if !ok { self.handleSeekFailed() }
         }
     }

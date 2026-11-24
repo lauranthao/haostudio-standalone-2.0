@@ -35,14 +35,15 @@ struct MiniPlayerBar: View {
                         // Real artwork when the item carries a cover
                         // URL; MusicCoverView falls back to the note
                         // placeholder when there is none.
-                        MusicCoverView(urlString: item.coverURL?.absoluteString ?? "", size: 40, cornerRadius: 8)
+                        // Beans MiniPlayerView: cover 36, radius 7.
+                        MusicCoverView(urlString: item.coverURL?.absoluteString ?? "", size: 36, cornerRadius: 7)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.title)
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(.system(size: 12, weight: .semibold))
                                 .foregroundStyle(theme.textPrimary)
                                 .lineLimit(1)
                             Text(item.subtitle)
-                                .font(.system(size: 12))
+                                .font(.system(size: 10))
                                 .foregroundStyle(theme.textSecondary)
                                 .lineLimit(1)
                         }
@@ -69,7 +70,10 @@ struct MiniPlayerBar: View {
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 16)
+            // Beans dock: leading 10 / trailing 6 (was 16 both
+            // sides — the strip read wider than the tab bar).
+            .padding(.leading, 10)
+            .padding(.trailing, 6)
             .frame(height: HaoLayout.miniPlayerHeight)
             .haoGlassCapsule()
             .accessibilityLabel("迷你播放器：\(item.title)，点按打开全屏播放器")

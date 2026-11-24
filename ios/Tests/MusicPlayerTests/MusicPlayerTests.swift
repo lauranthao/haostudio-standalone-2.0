@@ -55,6 +55,11 @@ final class FakeEngine: MusicPlayerEngine {
     var seekSucceeds: Bool = true
     /// Where the playhead lands after a seek (nil: the target).
     var seekLandsAt: Double?
+    /// Hold seek completions until the test releases them: the
+    /// playhead stays frozen while a seek is in flight, which is
+    /// what a slow network seek looks like to the watchdog.
+    var deferSeek = false
+    private var pendingSeekCompletion: ((Bool) -> Void)?
 
     func load(url: URL, headers: [String: String]?, identityKey: String, completion: @escaping (Bool) -> Void) {
         loadedURLs.append(url)
@@ -84,8 +89,22 @@ final class FakeEngine: MusicPlayerEngine {
 
     func seek(to seconds: Double, completion: @escaping (Bool) -> Void) {
         seekCalls.append(seconds)
+        if deferSeek {
+            pendingSeekCompletion = { [weak self] finished in
+                if finished { self?.currentTimeSeconds = self?.seekLandsAt ?? seconds }
+                completion(finished)
+            }
+            return
+        }
         currentTimeSeconds = seekLandsAt ?? seconds
         completion(seekSucceeds)
+    }
+
+    /// Release a deferred seek completion (test only).
+    func completePendingSeek(_ finished: Bool) {
+        let completion = pendingSeekCompletion
+        pendingSeekCompletion = nil
+        completion?(finished)
     }
 
     func unload() {
