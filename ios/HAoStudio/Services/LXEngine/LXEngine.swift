@@ -435,7 +435,21 @@ final class LXEngine {
             }
         }
         guard let code = code else {
-            finishLoad(id: id, result: .failure(LXError.notFound(id)), completion: completion)
+            // Record the failure in the registry: `loadNextBatch`
+            // only queues ids absent from the registry, so without
+            // this entry the same batch would reload forever and
+            // `ensureInitialized` would never complete. (A bundled
+            // script missing from the bundle, or a custom script
+            // whose file was deleted, hung init exactly this way;
+            // the import test's nil `bundleLoader` made all 13
+            // bundled loads take this path, so the test timed out.)
+            // A later successful load overwrites this entry.
+            let error = LXError.notFound(id)
+            let failed = LxScriptInfo(
+                id: id, name: name ?? id, origin: origin,
+                loaded: false, error: error.localizedDescription)
+            stateQueue.async { self.registry[id] = failed }
+            finishLoad(id: id, result: .failure(error), completion: completion)
             return
         }
         let displayName = name ?? LXScriptHeader.parseName(from: code) ?? id
