@@ -197,7 +197,12 @@ final class RealVideoDataGateway: VideoDataGateway {
                 }
                 completion(VideoItemPage(
                     items: result.items,
-                    hasMore: result.page < result.pagecount
+                    // `page` is 0-based, `pagecount` is the TOTAL
+                    // page count: the last page is pagecount - 1,
+                    // so `page < pagecount` stayed true on it and
+                    // every list ended with one wasted empty fetch
+                    // (bottom spinner after the last page).
+                    hasMore: result.page + 1 < result.pagecount
                 ))
             }
         }
