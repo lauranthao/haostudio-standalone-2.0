@@ -1,40 +1,46 @@
 // HAo Studio 2.0 — bottom tab bar.
 //
-// This is a REAL system UITabBar (UIKit), hosted in SwiftUI through a
-// UIViewRepresentable. It is NOT a hand-drawn capsule: there is no
-// floating glass capsule, no sliding pill view, no drag-to-switch-tabs,
-// no settle spring. Tab switching, selection state, VoiceOver and
-// haptics are all the system's own behaviour.
+// A SwiftUI glass bar (b38), NOT a system UITabBar any more. The
+// system bar's default background rendered as a solid slab over the
+// settings list (chen 2026-11-24: "实心白条" — the mini pure white,
+// the menu light-grey solid), and its selection pill was a solid
+// #E4E4E4 grey. The SwiftUI bar paints its own glass
+// (HaoGlassCapsule: .glassEffect .regular on iOS 26+,
+// .ultraThinMaterial below — the same treatment as the mini player),
+// so content scrolled behind it blurs through, and the selection
+// pill is the Apple Music pink, sliding between tabs on the
+// settle spring.
 //
-// Layout contract (MainTabView.swift, untouched): this view sits in the
-// bottom safe-area inset, in the same VStack as the mini player — the
-// mini player is the row above the bar, so the two can never overlap
-// and the mini player never appears twice. The 5 tabs come from
-// HaoTab.allCases in MainTabView's order: 首页/音乐/影视/直播/我的.
-// Tab content switching stays in MainTabView (@State selection +
-// content swap); this file owns only the bar itself.
+// Layout contract (MainTabView.swift): this view sits in the bottom
+// safe-area inset, in the same VStack as the mini player — spacing 0,
+// so the mini's bottom edge touches the bar's top edge: one connected
+// floating unit, same width, same margins (chen 2026-11-24 "你看布局
+// 啊"). The 5 tabs come from HaoTab.allCases in MainTabView's order:
+// 首页/音乐/影视/直播/我的. Tab content switching stays in MainTabView
+// (@State selection + content swap); this file owns only the bar
+// itself.
 //
-// Glass:
-// - iOS 26+: the system tab bar is Liquid Glass from its default
-//   background (configureWithDefaultBackground()). No effect is assigned
-//   explicitly: UITabBarAppearance.backgroundEffect only accepts
-//   UIBlurEffect, so a glass effect cannot go there. No custom opaque
-//   background is painted over it: a custom background would overlay
-//   and kill the glass (Apple: "Any custom backgrounds and appearances
-//   you use in these elements might overlay or interfere with Liquid
-//   Glass"). isTranslucent stays true for the same reason.
-// - iOS 17–25: configureWithDefaultBackground() — the classic
-//   translucent frosted-glass bar. Deployment target is 17.0.
+// Values copied from UnionTabView (MIT,
+// github.com/unionst/union-tab-view — GlassTabBar.swift /
+// AdaptiveTabBar.swift): capsule glass with 4pt inner padding
+// INSIDE the glass, icon .title3, label 10pt medium, item content
+// VStack spacing 4, sliding selection pill (here:
+// matchedGeometryEffect + the settle spring; UnionTabView drives a
+// UISegmentedControl track). iOS 26+ glassEffect / iOS 17–25 material
+// fallback is the dual-track the R1 report records for Muzify /
+// Kumone (the app's deployment target is iOS 17.0).
 //
-// Selection pill (UITabBar.selectionIndicatorImage):
-// - Solid #E4E4E4 in light mode, solid #3A3A3C in dark mode.
-//   Never black, never faint.
-// - Selected icon + label: theme.tabSelected — BLACK (light) / white
-//   (dark) in all four themes. Never red, never the theme accent.
-// - Unselected: primary at 80%, as before.
+// Selection pill colour (chen 2026-11-24, via the Apple Music ref
+// screenshot 0BB2AEAD): the selected tab is a PINK pill (#FA2D48,
+// Apple Music red) with a BLUE glyph (#007AFF system blue) — that
+// is literally what the reference renders; the old #E4E4E4 grey is
+// gone, never purple. A custom tab accent from Settings overrides
+// the pill (through the haoTabTint guard — a near-invisible pick
+// falls back to the theme accent instead of vanishing) and the
+// glyph on it is haoOnAccentFor (white on dark accents, near-black
+// on light ones). Unselected tabs are theme.textSecondary.
 
 import SwiftUI
-import UIKit
 
 /// One tab in the bar.
 struct GlassTabBarItem: Identifiable {
@@ -58,178 +64,88 @@ struct GlassTabBar: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.haoTheme) private var theme
+    @Namespace private var selectionPill
+
+    /// Apple Music's selection treatment, copied from chen's
+    /// reference screenshot (0BB2AEAD): a pink pill (#FA2D48)
+    /// with a blue glyph (#007AFF). This is the default — a custom
+    /// tab accent from Settings overrides the pill (guarded by
+    /// haoTabTint so a near-invisible pick falls back to the theme
+    /// accent instead of vanishing).
+    private static let appleMusicPill = Color(red: 0.98, green: 0.18, blue: 0.28)
+    private static let appleMusicGlyph = Color(red: 0.0, green: 0.48, blue: 1.0)
+
+    /// The selection pill fill: Apple Music pink by default; the
+    /// user's custom tab accent when one is set.
+    private var pillColor: Color {
+        guard let tabAccent else { return Self.appleMusicPill }
+        return haoTabTint(tabAccent, scheme: colorScheme, fallback: theme.accent)
+    }
+
+    /// The glyph colour on the pill: Apple Music blue by default;
+    /// on a custom accent, the legible on-accent colour.
+    private var selectedGlyphColor: Color {
+        guard tabAccent != nil else { return Self.appleMusicGlyph }
+        return haoOnAccentFor(pillColor)
+    }
 
     var body: some View {
-        SystemTabBar(
-            items: items,
-            selection: $selection,
-            onReselect: onReselect,
-            theme: theme,
-            colorScheme: colorScheme,
-            tabAccent: tabAccent
-        )
-        .frame(height: HaoLayout.tabBarContentHeight)
-        // b36-8: the bar is a rounded rectangle like the mini, not
-        // a square slab — the system tab bar paints its background
-        // over its whole rectangular frame, so clip it to the
-        // shared floating-chrome radius and give it the same soft
-        // shadow as the mini (HaoGlassRoundedRect values). If iOS
-        // 26 already rounds the bar, clipping to the same radius
-        // is a visual no-op.
-        .clipShape(RoundedRectangle(
-            cornerRadius: HaoLayout.floatingChromeCornerRadius,
-            style: .continuous))
-        .shadow(
-            color: .black.opacity(colorScheme == .dark ? 0.28 : 0.10),
-            radius: 12, y: 4
-        )
-        // b36-8: a bare UITabBar emits no selection haptic of its
-        // own — the minimized capsule had one, the full bar had
-        // none. The capsule and the bar never render together, so
-        // this never double-fires with the capsule's feedback.
-        .haoSensoryFeedback(.selection, trigger: selection)
-        // Vertical inner inset only (4 top / 4 bottom; total 64pt).
-        // Horizontal padding used to be here too, but the system
-        // tab bar paints its background over its own frame, so it
-        // shrank the visible bar 4pt per side — the bar read 8pt
-        // narrower than the mini player above it (chen 2026-11-24
-        // build 33: mini must be exactly as wide as the bar).
-        // Beans pads all sides only because its capsule background
-        // is painted OVER the padded area. The visible bar now spans
-        // exactly the mini player's width (screen minus the shared
-        // 12pt side margins in MainTabView).
-        .padding(.vertical, HaoLayout.tabBarInnerInset)
-    }
-}
-
-/// The system UITabBar, bridged into SwiftUI.
-///
-/// A bare UITabBar (not a UITabBarController): MainTabView owns the tab
-/// content and switches it by @State, so no view-controller ownership
-/// is needed here — the bar is a control, not a container.
-private struct SystemTabBar: UIViewRepresentable {
-    let items: [GlassTabBarItem]
-    @Binding var selection: HaoTab
-    var onReselect: (HaoTab) -> Void
-    let theme: HaoThemePalette
-    let colorScheme: ColorScheme
-    var tabAccent: Color? = nil
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    func makeUIView(context: Context) -> UITabBar {
-        let tabBar = UITabBar()
-        tabBar.delegate = context.coordinator
-        // Translucent: the glass (iOS 26) / blur (iOS 17–25) must show
-        // the content behind the bar. Setting this false would turn the
-        // bar into a flat opaque slab.
-        tabBar.isTranslucent = true
-        return tabBar
-    }
-
-    func updateUIView(_ tabBar: UITabBar, context: Context) {
-        // Keep the coordinator's copy fresh: it is created once, and the
-        // struct snapshot it was born with goes stale after the first
-        // selection change.
-        context.coordinator.items = items
-        context.coordinator.selection = $selection
-        context.coordinator.onReselect = onReselect
-
-        // Items, in the order MainTabView defines them. Titles + SF
-        // Symbols come from HaoTab, so the bar can never drift from the
-        // tab definitions.
-        tabBar.items = items.enumerated().map { offset, item in
-            UITabBarItem(
-                title: item.title,
-                image: UIImage(systemName: item.icon),
-                tag: offset
-            )
-        }
-
-        // Selected item follows the SwiftUI binding. Setting selectedItem
-        // directly does not call the delegate, so this cannot loop.
-        if let index = items.firstIndex(where: { $0.tab == selection }) {
-            tabBar.selectedItem = tabBar.items?[index]
-        }
-
-        // Selected icon + label: theme.tabSelected (black / white),
-        // or the user's custom tab accent — guarded so a
-        // near-invisible pick (black in dark, white in light)
-        // falls back to tabSelected instead of vanishing (b36-8).
-        tabBar.tintColor = UIColor(haoTabTint(
-            tabAccent, scheme: colorScheme, fallback: theme.tabSelected))
-        // Unselected: primary at 80%.
-        tabBar.unselectedItemTintColor = UIColor.label.withAlphaComponent(0.8)
-
-        // Selection pill: solid #E4E4E4 (light) / #3A3A3C (dark).
-        // Never black, never faint.
-        tabBar.selectionIndicatorImage = Self.selectionPillImage(for: colorScheme)
-
-        Self.configureAppearance(for: tabBar)
-    }
-
-    /// Bar background: glass on iOS 26, classic blur below.
-    ///
-    /// No explicit effect is assigned: `UITabBarAppearance.backgroundEffect`
-    /// only accepts `UIBlurEffect` (assigning `UIGlassEffect()` fails to
-    /// compile), and the system tab bar on iOS 26 already renders with
-    /// Liquid Glass from its default background. No backgroundColor and
-    /// no backgroundImage are set — either would paint over the glass.
-    private static func configureAppearance(for tabBar: UITabBar) {
-        let appearance = UITabBarAppearance()
-        appearance.configureWithDefaultBackground()
-        tabBar.standardAppearance = appearance
-        tabBar.scrollEdgeAppearance = appearance
-    }
-
-    /// Stretchable solid pill for the selected tab.
-    ///
-    /// #E4E4E4 in light mode, #3A3A3C in dark mode — opaque, solid.
-    /// Never black, never faint (the old capsule used black @ 7.5% /
-    /// white @ 10%, which read as a smudge, not a selection).
-    /// Cap insets keep the semicircular ends intact while the middle
-    /// stretches to the tab's width.
-    private static func selectionPillImage(for colorScheme: ColorScheme) -> UIImage {
-        let color: UIColor
-        if colorScheme == .dark {
-            // #3A3A3C, opaque.
-            color = UIColor(red: 0x3A / 255, green: 0x3A / 255, blue: 0x3C / 255, alpha: 1)
-        } else {
-            // #E4E4E4, opaque.
-            color = UIColor(red: 0xE4 / 255, green: 0xE4 / 255, blue: 0xE4 / 255, alpha: 1)
-        }
-        let size = CGSize(width: 60, height: 36)
-        let image = UIGraphicsImageRenderer(size: size).image { _ in
-            let path = UIBezierPath(
-                roundedRect: CGRect(origin: .zero, size: size),
-                cornerRadius: size.height / 2
-            )
-            color.setFill()
-            path.fill()
-        }
-        let inset = UIEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        return image.resizableImage(withCapInsets: inset, resizingMode: .stretch)
-    }
-
-    /// UITabBarDelegate: taps go back to the SwiftUI binding. Tapping
-    /// the already-selected tab reports a reselect instead of a switch.
-    final class Coordinator: NSObject, UITabBarDelegate {
-        var items: [GlassTabBarItem] = []
-        var selection: Binding<HaoTab> = .constant(.home)
-        var onReselect: (HaoTab) -> Void = { _ in }
-
-        func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
-            guard let index = tabBar.items?.firstIndex(where: { $0 === item }),
-                  index < items.count
-            else { return }
-            let tab = items[index].tab
-            if tab == selection.wrappedValue {
-                onReselect(tab)
-            } else {
-                selection.wrappedValue = tab
+        HStack(spacing: 0) {
+            ForEach(items) { item in
+                tabButton(item)
             }
         }
+        .frame(height: HaoLayout.tabBarContentHeight)
+        // UnionTabView: the 4pt inner padding is INSIDE the glass —
+        // the padding is part of the capsule, not dead space below
+        // it (the old system bar padded outside the clip, which
+        // left 4pt of nothing under the visible bar and pushed it
+        // 6pt above the home-indicator zone).
+        .padding(.vertical, HaoLayout.tabBarInnerInset)
+        .padding(.horizontal, HaoLayout.tabBarInnerInset)
+        .haoGlassCapsule()
+        // The pill slides on the settle spring when the selection
+        // changes; the haptic is the bar's own (the old system bar
+        // emitted none).
+        .animation(HaoLayout.settleSpring, value: selection)
+        .haoSensoryFeedback(.selection, trigger: selection)
+    }
+
+    /// One tab: icon (.title3) over label (10pt medium), UnionTabView
+    /// sizes. The selected tab carries the accent pill behind its
+    /// content; tapping the selected tab reselected instead of
+    /// switching (chrome O1: scroll-to-top).
+    private func tabButton(_ item: GlassTabBarItem) -> some View {
+        let isSelected = item.tab == selection
+        Button {
+            if isSelected {
+                onReselect(item.tab)
+            } else {
+                selection = item.tab
+            }
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: item.icon)
+                    .font(.title3)
+                Text(item.title)
+                    .font(.haoTabLabel)
+            }
+            .foregroundStyle(
+                isSelected ? selectedGlyphColor : theme.textSecondary
+            )
+            .padding(.vertical, 4)
+            .padding(.horizontal, 10)
+            .background {
+                if isSelected {
+                    Capsule()
+                        .fill(pillColor)
+                        .matchedGeometryEffect(id: "haoTabSelectionPill", in: selectionPill)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityLabel(item.title)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }

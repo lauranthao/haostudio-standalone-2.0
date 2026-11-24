@@ -71,6 +71,13 @@ final class MusicPlayerViewModel: ObservableObject {
     /// Nil for remote songs and when there is nothing honest to show.
     @Published private(set) var localQualityLabel: String?
 
+    /// True when the current song's manual play request failed and
+    /// there was no next song to advance to (b38, item 1): the
+    /// player shows a persistent "无法播放" state with a retry
+    /// button instead of sitting silently at 0:00. Cleared by any
+    /// new play attempt and by a track that really starts.
+    @Published private(set) var loadFailed = false
+
     /// Badge text under the cover: the ACTUAL tier when the player
     /// reports one, else the local-file derivation. The view reads
     /// this (not actualQuality) so a local file never shows a blank.
@@ -142,6 +149,13 @@ final class MusicPlayerViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var toastTimer: Timer?
     private var expectedItemId: String?
+    /// Consecutive failure-driven skips (b38, item 1): bounds the
+    /// auto-advance on a failed manual request to one pass over
+    /// the queue, so a list of all-dead songs (or a looping mode)
+    /// stops on the persistent error instead of cycling forever.
+    /// Reset whenever a track really starts (duration > 0) and
+    /// when the pass is exhausted.
+    private var consecutiveFailureSkips = 0
     private var lastPosition: Double = 0
     // D3: guards for the position-wrap heuristic below — a
     // backward jump is only a natural completion when it lands
@@ -335,8 +349,13 @@ final class MusicPlayerViewModel: ObservableObject {
             self.updateActiveLyric()
         }.store(in: &cancellables)
         player.$duration.sink { [weak self] value in
-            self?.duration = value
-            self?.applyPendingResumeSeek()
+            guard let self = self else { return }
+            self.duration = value
+            if value > 0 {
+                self.loadFailed = false
+                self.consecutiveFailureSkips = 0
+            }
+            self.applyPendingResumeSeek()
         }.store(in: &cancellables)
         player.$playMode.sink { [weak self] mode in
             guard let self = self else { return }
@@ -361,7 +380,7 @@ final class MusicPlayerViewModel: ObservableObject {
             guard let id = self.player.lastFailedRequestId,
                   let song = self.currentSong,
                   id == song.identityKey || id == song.songId else { return }
-            self.showToast("无法播放：找不到可播放的地址")
+            self.handleCurrentSongFailed(song: song)
         }.store(in: &cancellables)
     }
 
@@ -570,6 +589,9 @@ final class MusicPlayerViewModel: ObservableObject {
 
     private func startPlayback() {
         guard let current = queue.current else { return }
+        // b38, item 1: a new attempt clears the persistent
+        // "无法播放" state — it belongs to the previous attempt.
+        loadFailed = false
         // A1: set the queue WITHOUT playing — requestPlay below is
         // the only play call, so one tap resolves exactly once.
         player.setQueueOnly(queue.toPlaybackItems(), startAt: queue.index)
@@ -682,6 +704,45 @@ final class MusicPlayerViewModel: ObservableObject {
             return
         }
         guard let song = currentSong else { return }
+        if queue.isCurrentTrack(song) {
+            expectedItemId = song.identityKey
+            startPlayback()
+        } else {
+            play(song: song)
+        }
+        hapticTick()
+    }
+
+    /// A manual play request for the current song failed (b38,
+    /// item 1): the old behaviour left the player sitting on the
+    /// dead song at 0:00 with only a 2 s toast. Instead, advance
+    /// to the next queue song — the same skip the engine already
+    /// does for auto-advance failures — bounded to one pass over
+    /// the queue; with no next song (or the pass exhausted) show
+    /// a persistent "无法播放" state with a retry button.
+    private func handleCurrentSongFailed(song: MusicSong) {
+        let nextIndex = queue.nextIndex(mode: playMode, auto: false)
+        if nextIndex >= 0, nextIndex != queue.index,
+           consecutiveFailureSkips < max(1, queue.tracks.count) {
+            consecutiveFailureSkips += 1
+            loadFailed = false
+            showToast("这首歌无法播放，已跳到下一首")
+            playFromQueue(at: nextIndex)
+            return
+        }
+        consecutiveFailureSkips = 0
+        loadFailed = true
+        showToast("无法播放：找不到可播放的地址")
+    }
+
+    /// Retry the current song from the player's "无法播放" state
+    /// (b38, item 1): forces a fresh request through the same
+    /// path as a fresh tap, so a transient failure recovers
+    /// without leaving the player. (A plain toggle would no-op
+    /// here: the engine holds no item after a failed open.)
+    func retryCurrentSong() {
+        guard let song = currentSong else { return }
+        loadFailed = false
         if queue.isCurrentTrack(song) {
             expectedItemId = song.identityKey
             startPlayback()

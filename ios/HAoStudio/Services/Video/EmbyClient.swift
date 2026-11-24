@@ -978,8 +978,12 @@ final class EmbyClient {
 
     /// Server-side "continue watching": GET /Users/{userId}/Items/
     /// Resume. Items in progress (movies + episodes), each carrying
-    /// its UserData (resume position / played / favorite).
-    func resumeItems(limit: Int = 50, completion: @escaping (Result<[VideoItem], EmbyError>) -> Void) {
+    /// its UserData (resume position / played / favorite) and
+    /// RunTimeTicks. The position rides on the entry itself —
+    /// VideoItem has no user-data fields (see the seam note on
+    /// toVideoItem) — so the tab can render a progress bar and
+    /// seed the local resume on tap without a second request.
+    func resumeItems(limit: Int = 50, completion: @escaping (Result<[EmbyResumeItem], EmbyError>) -> Void) {
         guard let url = apiQuery("/Users/\(config.userId)/Items/Resume", query: [
             "MediaTypes": "Video",
             "Recursive": "true",
@@ -994,8 +998,31 @@ final class EmbyClient {
             case .failure(let error):
                 completion(.failure(error))
             case .success(let json):
-                completion(.success(self.pageFromJSON(json).items))
+                completion(.success(self.resumeItemsFromJSON(json)))
             }
+        }
+    }
+
+    /// Parse the Resume list into in-progress entries. An entry
+    /// with no playback position is dropped (not in progress —
+    /// a finished item the server still lists must not render
+    /// as a 0:00 row). Episode entries keep their display name
+    /// ("第N集" / title); films get "正片", matching the detail
+    /// page's episode names so the local resume seed selects
+    /// the right episode.
+    func resumeItemsFromJSON(_ json: [String: Any]) -> [EmbyResumeItem] {
+        VideoJSON.asList(json["Items"]).compactMap { item in
+            let userData = EmbyUserData.fromJSON(item["UserData"])
+            guard userData.playbackPositionSeconds > 0 else { return nil }
+            let runTimeTicks = VideoJSON.asDouble(item["RunTimeTicks"])
+            let duration = runTimeTicks > 0 ? runTimeTicks / Double(EmbyClient.ticksPerSecond) : 0
+            let type = VideoJSON.asString(item["Type"])
+            let episodeName = type == "Episode" ? EmbyClient.episodeDisplayName(item) : "正片"
+            return EmbyResumeItem(
+                item: toVideoItem(item),
+                episodeName: episodeName,
+                positionSeconds: userData.playbackPositionSeconds,
+                durationSeconds: duration)
         }
     }
 

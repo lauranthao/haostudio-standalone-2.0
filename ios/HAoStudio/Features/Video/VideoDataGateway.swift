@@ -111,6 +111,12 @@ protocol VideoDataGateway {
     /// honest offline error, while the CMS search page keeps the
     /// Emby section hidden on failure.
     func searchEmby(keyword: String, completion: @escaping (Result<[VideoItem], EmbyError>) -> Void)
+    /// Server-side continue watching (`/Users/{id}/Items/Resume`):
+    /// in-progress movies + episodes with their positions. A
+    /// failure surfaces as EmbyError; the tab treats it as "no
+    /// resume rows" (the grid still loads — resume is best-effort,
+    /// never a page error).
+    func fetchEmbyResume(completion: @escaping (Result<[EmbyResumeItem], EmbyError>) -> Void)
 
     // MARK: - Download
 
@@ -123,6 +129,16 @@ protocol VideoDataGateway {
         line: PlayLine,
         completion: @escaping (Bool) -> Void
     )
+}
+
+/// Default for the newest gateway method: gateways that predate
+/// it (the test stubs) keep compiling and answer "server
+/// unreachable" — the Emby tab treats that as "no resume rows".
+/// The real gateway overrides it below.
+extension VideoDataGateway {
+    func fetchEmbyResume(completion: @escaping (Result<[EmbyResumeItem], EmbyError>) -> Void) {
+        completion(.failure(.unreachable()))
+    }
 }
 
 /// Real gateway (S3 merge): the C-leg protocol mapped onto the
@@ -416,6 +432,16 @@ final class RealVideoDataGateway: VideoDataGateway {
                     completion(detail)
                 }
             }
+        }
+    }
+
+    func fetchEmbyResume(completion: @escaping (Result<[EmbyResumeItem], EmbyError>) -> Void) {
+        guard let client = embyClient() else {
+            DispatchQueue.main.async { completion(.failure(.unreachable())) }
+            return
+        }
+        client.resumeItems { result in
+            DispatchQueue.main.async { completion(result) }
         }
     }
 

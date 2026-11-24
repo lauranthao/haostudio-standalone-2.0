@@ -19,7 +19,7 @@ final class LiveDanmakuSettingsTests: XCTestCase {
         XCTAssertEqual(settings.maxCount, 80)
         XCTAssertEqual(settings.colorMode, "uniform")
         XCTAssertFalse(settings.occlusionAvoidance)
-        XCTAssertEqual(settings.listStyle, "compact")
+        XCTAssertEqual(settings.listStyle, "card")
         XCTAssertEqual(settings.listSpacing, "standard")
         XCTAssertTrue(settings.showUsernames)
         XCTAssertTrue(settings.similarityEnabled)

@@ -802,6 +802,10 @@ struct LiveRoomView: View {
     /// targets (Beans value); white on a bottom gradient scrim —
     /// the same forced-dark chrome as the VOD / live-landscape
     /// bars, so it reads over any frame in any theme combination.
+    /// Quality + brightness/volume live here now (moved off the
+    /// bottom bar, which is follow / refresh / share): the
+    /// quality name as plain text (Pure Live shows each quality
+    /// as text), the sun opens the brightness/volume sheet.
     private var portraitVideoControls: some View {
         HStack(spacing: 8) {
             Button(action: { livePlayer.togglePlayPause() }) {
@@ -813,7 +817,24 @@ struct LiveRoomView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(livePlayer.isPlaying ? "暂停" : "播放")
             DanmakuToggleButton(isOn: danmakuEnabledForRoom, action: toggleDanmaku)
+            Button(action: { showQualitySheet = true }) {
+                Text(livePlayer.currentQuality?.name ?? "画质")
+                    .font(.haoDenseTitle)
+                    .foregroundStyle(theme.accentOnVideo)
+                    .lineLimit(1)
+                    .frame(height: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("画质")
             Spacer()
+            Button(action: { showBrightnessVolume = true }) {
+                Image(systemName: "sun.max")
+                    .font(.haoSectionTitle)
+                    .foregroundStyle(theme.accentOnVideo)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("亮度与音量")
             Button(action: { isFullscreen = true }) {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
                     .font(.haoSectionTitle)
@@ -833,21 +854,20 @@ struct LiveRoomView: View {
     }
 
     /// Watching-count text ("" when the count is unavailable —
-    /// never invent a number). The portrait tools bar and the
-    /// landscape bottom bar hide the whole flame + count group
+    /// never invent a number). The profile row (portrait) and
+    /// the landscape bottom bar hide the whole flame + count group
     /// when it is empty instead of rendering a dangling label.
     private var watchingText: String { liveWatchingText(watchingCount) }
 
-    /// Room info under the video, Pure Live AppBar-title style:
-    /// title on its own line, then the anchor row — avatar 28 +
-    /// nick 15 semibold + a sub-line carrying the LIVE badge and
-    /// the platform name (Pure Live shows "PLATFORM / AREA"
-    /// there; rooms carry no area, so the platform name alone) —
-    /// then the follow pill. The watching count lives in the
-    /// tools bar below (Pure Live ResolutionsRow), not here, and
-    /// the platform capsule is gone: a quiet caption, not a chip.
+    /// Room info under the video — Dart Simple Live's profile
+    /// row: title on its own line, then avatar 48 + nick 15
+    /// semibold + a sub-line carrying the LIVE badge and the
+    /// platform name, with the flame + watching count on the
+    /// right (fire 20pt orange, count 14pt). Padding 12
+    /// horizontal / 8 vertical (Simple Live A8 + 12h). The
+    /// follow pill lives in the bottom action bar now, not here.
     private var roomInfoSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
                 Text(currentRoom.title.isEmpty ? "直播间" : currentRoom.title)
                     .font(.haoBodyStrong)
@@ -885,23 +905,21 @@ struct LiveRoomView: View {
                     .animation(.easeOut(duration: 0.2), value: isLiveNow)
                 }
                 Spacer()
-                Button(action: toggleFollow) {
-                    Label(
-                        isFollowing ? "已关注" : "关注",
-                        systemImage: isFollowing ? "heart.fill" : "heart")
-                        .font(.haoDenseTitle)
-                        .foregroundStyle(isFollowing ? theme.textPrimary : theme.onAccent)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(
-                            isFollowing ? theme.surface : theme.accent,
-                            in: Capsule())
+                if !watchingText.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "flame.fill")
+                            .font(.system(size: 20, weight: .semibold))  // icon size, not text
+                            .foregroundStyle(.orange)
+                        Text(watchingText)
+                            .font(.haoDenseTitle)
+                            .foregroundStyle(theme.textSecondary)
+                            .lineLimit(1)
+                    }
                 }
-                .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     /// Previous / next room in the current list (Flutter
@@ -934,12 +952,13 @@ struct LiveRoomView: View {
     private var anchorAvatar: some View {
         Group {
             if let url = liveAvatarURL(for: currentRoom) {
-                // Shared loader (build 36 item 10 leg 6): 28pt
-                // avatar — decode 28x28, not the original.
+                // Shared loader (build 36 item 10 leg 6): 48pt
+                // avatar (Dart Simple Live 48x48) — decode 48x48,
+                // not the original.
                 HaoCachedImage(
                     urlString: url.absoluteString,
-                    targetWidth: 28,
-                    targetHeight: 28
+                    targetWidth: 48,
+                    targetHeight: 48
                 ) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
@@ -949,7 +968,7 @@ struct LiveRoomView: View {
                 avatarPlaceholder
             }
         }
-        .frame(width: 28, height: 28)
+        .frame(width: 48, height: 48)
         .clipShape(Circle())
     }
 
@@ -975,9 +994,21 @@ struct LiveRoomView: View {
                         .font(.haoFootnoteMedium)
                         .foregroundStyle(theme.accentText)
                         .buttonStyle(.plain)
+                } else {
+                    // Danmaku settings entry (the bottom bar no
+                    // longer carries it — Dart Simple Live's
+                    // message-area 设置 tab, same place).
+                    Button(action: { showDanmakuSettings = true }) {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 18, weight: .semibold))  // icon size, not text
+                            .foregroundStyle(theme.accentText)
+                            .frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("弹幕设置")
                 }
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 12)
             .padding(.vertical, 8)
             LiveDanmakuListView(
                 messages: livePlayer.messages,
@@ -989,51 +1020,55 @@ struct LiveRoomView: View {
         }
     }
 
-    /// Page tools row (portrait) — Pure Live's ResolutionsRow,
-    /// iOS edition: flame + watching on the left, the quality
-    /// name as a plain text button (the current tier in the
-    /// accent, no capsule — Pure Live shows each quality as
-    /// text), then brightness/volume and danmaku settings as icon
-    /// buttons. Play / danmaku / fullscreen live on the video
-    /// control strip (see portraitVideoControls). One control,
+    /// Shareable room page URL: the resolver's `link` when it is
+    /// a real page URL (Bilibili/Douyu/Huya/Douyin), else the
+    /// platform's room page for this room id (Kuaishou stores
+    /// the liveStreamId in `link`, so it falls back to
+    /// live.kuaishou.com/u/<authorId>).
+    private var shareURL: URL? {
+        let link = currentRoom.link
+        if let url = URL(string: link), url.scheme == "https" {
+            return url
+        }
+        return URL(string: currentRoom.platform.roomLink(roomId: currentRoom.roomId))
+    }
+
+    /// Bottom action bar (portrait) — Dart Simple Live's
+    /// buildBottomActions: three equal TextButton.icon buttons
+    /// (follow / refresh / share), 14pt, bottom padding = home-
+    /// indicator safe area + 4. Refresh re-opens the room
+    /// (openCurrentRoom); share uses the room's page URL.
+    /// Quality lives on the video strip now; brightness/volume
+    /// is the video drag + the sun button on the strip; danmaku
+    /// settings is the gear in the "弹幕" header. One control,
     /// one place.
     private var portraitBottomBar: some View {
-        HStack(spacing: 16) {
-            if !watchingText.isEmpty {
-                HStack(spacing: 4) {
-                    Image(systemName: "flame.fill")
-                        .font(.haoCaption)
-                        .foregroundStyle(theme.textSecondary)
-                    Text(watchingText)
-                        .font(.haoFootnoteMedium)
-                        .foregroundStyle(theme.textSecondary)
-                        .lineLimit(1)
-                }
+        HStack(spacing: 0) {
+            Button(action: toggleFollow) {
+                Label(
+                    isFollowing ? "已关注" : "关注",
+                    systemImage: isFollowing ? "heart.fill" : "heart")
+                    .font(.haoDenseTitle)
+                    .foregroundStyle(isFollowing ? theme.textPrimary : theme.accentText)
             }
-            Button(action: { showQualitySheet = true }) {
-                Text(livePlayer.currentQuality?.name ?? "画质")
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity)
+            Button(action: { openCurrentRoom() }) {
+                Label("刷新", systemImage: "arrow.clockwise")
                     .font(.haoDenseTitle)
                     .foregroundStyle(theme.accentText)
-                    .lineLimit(1)
             }
             .buttonStyle(.plain)
-            Spacer()
-            Button(action: { showBrightnessVolume = true }) {
-                Image(systemName: "sun.max")
-                    .font(.system(size: 18, weight: .semibold))  // icon size, not text
-                    .foregroundStyle(theme.accentText)
-                    .frame(width: 40, height: 40)
+            .frame(maxWidth: .infinity)
+            if let shareURL {
+                ShareLink(item: shareURL) {
+                    Label("分享", systemImage: "square.and.arrow.up")
+                        .font(.haoDenseTitle)
+                        .foregroundStyle(theme.accentText)
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("亮度与音量")
-            Button(action: { showDanmakuSettings = true }) {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 18, weight: .semibold))  // icon size, not text
-                    .foregroundStyle(theme.accentText)
-                    .frame(width: 40, height: 40)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("弹幕设置")
         }
         // The room's stack lays the bar out at the physical screen
         // bottom (the push does not inset it above the shell
@@ -1042,7 +1077,7 @@ struct LiveRoomView: View {
         // pad by the bottom safe area, and let the surface fill
         // down to it like a native toolbar.
         .padding(.horizontal, 16)
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
         .safeAreaPadding(.bottom)
         .background(theme.surface)
     }

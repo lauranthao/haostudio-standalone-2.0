@@ -241,35 +241,45 @@ struct MyView: View {
         Section(header: SettingsSectionHeader(section: .my)) {
             if settings.sectionExpanded(SettingsSection.my.rawValue) {
                 NavigationLink(destination: MyPlaylistsView()) {
-                    entryRow(title: "我的歌单", count: counts.playlists)
+                    entryRow(icon: "music.note.list", title: "我的歌单", count: counts.playlists)
                 }
                 NavigationLink(destination: MusicFavouritesView()) {
-                    entryRow(title: "音乐收藏", count: counts.favourites)
+                    entryRow(icon: "heart.fill", title: "音乐收藏", count: counts.favourites)
                 }
                 NavigationLink(destination: MyRecentPlaysView()) {
-                    entryRow(title: "最近播放", count: counts.recent)
+                    entryRow(icon: "clock.fill", title: "最近播放", count: counts.recent)
                 }
                 NavigationLink(destination: MusicDownloadsView()) {
-                    entryRow(title: "我的下载", count: counts.downloads)
+                    entryRow(icon: "arrow.down.circle.fill", title: "我的下载", count: counts.downloads)
                 }
                 NavigationLink(destination: VideoFavsView()) {
-                    entryRow(title: "影视收藏", count: counts.videoFavourites)
+                    entryRow(icon: "film.fill", title: "影视收藏", count: counts.videoFavourites)
                 }
                 NavigationLink(destination: VideoHistoryView()) {
-                    entryRow(title: "影视历史", count: counts.videoHistory)
+                    entryRow(icon: "clock.arrow.circlepath", title: "影视历史", count: counts.videoHistory)
                 }
                 NavigationLink(destination: LiveFollowsView(onSelect: openLiveRoom)) {
-                    entryRow(title: "我的关注", count: counts.liveFollows)
+                    entryRow(icon: "person.2.fill", title: "我的关注", count: counts.liveFollows)
                 }
                 NavigationLink(destination: LiveHistoryView(onSelect: openLiveRoom)) {
-                    entryRow(title: "直播历史", count: counts.liveHistory)
+                    entryRow(icon: "antenna.radiowaves.left.and.right", title: "直播历史", count: counts.liveHistory)
                 }
             }
         }
     }
 
-    private func entryRow(title: String, count: Int) -> some View {
-        HStack {
+    /// One entry row: a 28pt rounded-square icon chip (accent
+    /// soft fill + accent glyph, the app's own chip language —
+    /// see the video detail action row) + title + count. The
+    /// bare text rows read unfinished; the chip is what makes
+    /// the list look like a finished iOS settings page.
+    private func entryRow(icon: String, title: String, count: Int) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))  // icon size, not text
+                .foregroundStyle(theme.accentText)
+                .frame(width: 28, height: 28)
+                .background(theme.accentSoft, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             Text(title)
                 .foregroundStyle(theme.textPrimary)
             Spacer()

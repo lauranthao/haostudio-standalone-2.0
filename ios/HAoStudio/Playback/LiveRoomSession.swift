@@ -97,14 +97,14 @@ final class LiveStallWatchdog {
 /// lines of a room and expires ~100-130 s after issue — so NEVER
 /// retry the same URL. Fixed order on failure: (1) the held
 /// prefetched plan (costs no request); (2) a live re-parse
-/// (`fetchFresh`, throttled to once per 60 s, 10 s timeout);
+/// (`fetchFresh`, throttled to once per 60 s, 20 s timeout);
 /// (3) the next CDN line. A held plan past its hard expiry is
 /// never served. Lines are identified by URL (CDN + path +
 /// credential family), NOT by index — a refresh can turn a TX FLV
 /// line into TX HLS.
 final class LiveRecovery {
     static let freshFetchThrottle: TimeInterval = 60
-    static let freshFetchTimeout: TimeInterval = 10
+    static let freshFetchTimeout: TimeInterval = 20
     static let prefetchAfterIssue: TimeInterval = 100
     static let hardExpiryAfterIssue: TimeInterval = 125
     static let refreshRetry: TimeInterval = 10
@@ -132,7 +132,10 @@ final class LiveRecovery {
     /// Injectable clock. Production uses the wall clock; tests drive it.
     var now: () -> Date = { Date() }
 
-    /// Test seam: re-parse timeout seconds. Production is 10.
+    /// Test seam: re-parse timeout seconds. Production is 20 — the
+    /// Huya serial chain alone runs ~9–12 s on a slow link (room page
+    /// + 3 serial WUP calls + anonymous login), so 10 s cut off
+    /// successes that arrived just after the timeout.
     var timeoutInterval: TimeInterval = LiveRecovery.freshFetchTimeout
 
     /// Serialises every read/write of the resolution state below.

@@ -65,6 +65,48 @@ final class HuyaSiteTests: XCTestCase {
         XCTAssertEqual(room.onlineCount, 999)
     }
 
+    // b38: real Huya room pages carry 65 CRLF in the header before
+    // any JSON. NSRegularExpression ranges are UTF-16 offsets; the
+    // old extractJsonObject counted them as Character offsets and
+    // landed inside the JSON, returning a nested object with no
+    // `state` / `data` — every room failed with "虎牙房间流数据不可用".
+    // A CRLF-heavy header must parse exactly like the plain fixture.
+    func testParseRoomPageWithCRLFHeader() throws {
+        let padding = String(repeating: "<!-- pad -->\r\n", count: 80)
+        let room = try HuyaLiveSite.parseHuyaRoomPage(html: padding + roomPageHTML, roomId: "123456")
+        XCTAssertEqual(room.roomId, "123456")
+        XCTAssertEqual(room.title, "测试直播")
+        XCTAssertEqual(room.streamer, "主播名")
+        XCTAssertTrue(room.isLive)
+        XCTAssertEqual(room.onlineCount, 1234567)
+        XCTAssertEqual(HuyaUrlData.fromDataMap(room.data)?.lines.count, 2)
+    }
+
+    func testExtractJsonObjectWithCRLFBeforeMatch() {
+        let text = String(repeating: "x\r\n", count: 65)
+            + "var TT_ROOM_DATA = {\"state\":\"ON\",\"profileRoom\":770714};"
+        let object = HuyaLiveSite.extractJsonObject(text, pattern: "var\\s+TT_ROOM_DATA\\s*=\\s*(\\{[\\s\\S]*?\\})")
+        XCTAssertEqual(object?["state"] as? String, "ON")
+        XCTAssertEqual(object?["profileRoom"] as? Int, 770714)
+    }
+
+    // MARK: - Native FLV credential (ctype allowlist)
+
+    // b38: WUP tokens carry the requesting SDK as ctype — huya_ios /
+    // tv_huya_nftv / huya_adr / huya_pc_exe, all with t=100 (real
+    // probe URLs). Only huya_pc_exe was accepted before, so ~3/4 of
+    // native tokens were misjudged as short-lease and refreshed early.
+    func testHasNativeFlvCredentialAcceptsAllSdkClientTypes() {
+        for ctype in ["huya_pc_exe", "huya_ios", "tv_huya_nftv", "huya_adr"] {
+            let url = "https://al.flv.huya.com/src/stream-1.flv?wsSecret=x&wsTime=6b05a576&ctype=\(ctype)&ver=1&fs=gctex&t=100"
+            XCTAssertTrue(HuyaLiveSite.hasNativeFlvCredential(url), ctype)
+        }
+        XCTAssertFalse(HuyaLiveSite.hasNativeFlvCredential("https://al.flv.huya.com/src/stream-1.flv?wsSecret=x&wsTime=6b05a576&ctype=huya_webh5&ver=1&fs=gctex&t=100"))
+        XCTAssertFalse(HuyaLiveSite.hasNativeFlvCredential("https://al.flv.huya.com/src/stream-1.flv?wsSecret=x&wsTime=6b05a576&ctype=huya_ios&ver=1&fs=gctex&t=200"))
+        XCTAssertFalse(HuyaLiveSite.hasNativeFlvCredential("https://al.flv.example.com/src/stream-1.flv?ctype=huya_ios&t=100"))
+        XCTAssertFalse(HuyaLiveSite.hasNativeFlvCredential("https://al.huya.com/stream-1.m3u8?ctype=huya_ios&t=100"))
+    }
+
     // MARK: - Quality menu
 
     func testParsePlayQualitiesExcludes4KAndSortsSourceFirst() {

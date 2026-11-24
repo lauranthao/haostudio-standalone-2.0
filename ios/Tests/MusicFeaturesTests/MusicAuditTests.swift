@@ -49,10 +49,14 @@ final class MusicAuditTests: XCTestCase {
         XCTAssertNil(song.toPlaybackItem().coverURL)
     }
 
-    // MARK: - Mini player height (Beans MiniPlayerView: 50pt)
+    // MARK: - Mini player height (Kumone MiniPlayerView: 40pt)
 
-    func testMiniPlayerHeightMatchesBeans() {
-        XCTAssertEqual(HaoLayout.miniPlayerHeight, 50)
+    /// b38: chen 2026-11-24 "mini 播放器做短一点" — the strip is
+    /// 40pt (cover 32 + 2 x 4pt padding). The b37 44pt was 6pt
+    /// under the b36 50pt and invisible to him; the old Beans-50
+    /// pin is superseded by his direct order.
+    func testMiniPlayerHeightIsKumoneShort() {
+        XCTAssertEqual(HaoLayout.miniPlayerHeight, 40)
     }
 
     // MARK: - 最近播放 reloads on store change (real-time)
