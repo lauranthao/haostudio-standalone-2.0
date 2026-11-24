@@ -169,6 +169,10 @@ struct MainTabView: View {
             }
         }
         .environment(\.haoTheme, palette)
+        // b36-1: each tab has its own scroll rest offset — forget
+        // the previous tab's so the new tab calibrates from scratch
+        // instead of minimizing at its own top.
+        .onChange(of: selectedTab) { _ in bottomChrome.resetRest() }
     }
 
     /// Scaffold background, three-layer priority (S5-C):

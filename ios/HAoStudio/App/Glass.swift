@@ -123,6 +123,10 @@ enum HaoLayout {
 ///   beside it, narrower, without its artist line or next button.
 /// - Scroll up (or back to the top): both spring back — the full
 ///   tab bar and the wide mini above it.
+/// - Thresholds are relative to the tab's own rest offset (b36-1):
+///   every tab uses a large navigation title, so the anchor rests
+///   ~+100, not 0 — absolute thresholds needed ~165pt of scrolling
+///   to fire, or never fired on shorter tabs.
 /// - The state is driven by the visible tab's scroll offset only;
 ///   pushed pages carry no anchor, so scrolling a pushed page leaves
 ///   the chrome exactly as it was (known gap, see the anchor docs).
@@ -136,26 +140,54 @@ final class BottomChromeState: ObservableObject {
     /// boundary never flickers the chrome.
     private var lastOffset: CGFloat?
 
-    /// At or above this offset the content is at the top: always expanded.
-    private static let expandOffset: CGFloat = -16
-    /// At or below this offset the content is clearly scrolled down:
-    /// always minimized.
-    private static let minimizeOffset: CGFloat = -64
+    /// The anchor's offset with the content at the top, for the
+    /// current tab (b36-1: the old code assumed 0, but every tab
+    /// uses a large navigation title, so the anchor rests ~+100,
+    /// not 0 — and the absolute -16 / -64 thresholds needed
+    /// ~165pt of scrolling to fire, or never fired on shorter
+    /// tabs). Learned as the highest offset ever seen (the top is
+    /// the highest the anchor ever gets); seeded at 0, so a tab
+    /// restored mid-scroll behaves exactly as before until the
+    /// top is seen once. Reset on tab change (MainTabView) — each
+    /// tab has its own rest offset, and a stale one from the
+    /// previous tab would minimize the new tab at its own top.
+    private var restOffset: CGFloat = 0
+
+    /// At or above this far below the rest offset the content is
+    /// at the top: always expanded.
+    private static let expandTravel: CGFloat = 16
+    /// At or below this far below the rest offset the content is
+    /// clearly scrolled down: always minimized.
+    private static let minimizeTravel: CGFloat = 64
     /// Inside the band, a downward move of this much minimizes…
     private static let minimizeStep: CGFloat = 6
     /// …and an upward move of this much expands.
     private static let expandStep: CGFloat = 10
 
-    /// Feed the anchor's top offset (0 at the top, negative while
-    /// scrolled down). Only publishes when the minimized flag actually
-    /// flips, so a scroll drag does not re-render the chrome every frame.
+    /// The tab changed: forget the previous tab's rest offset so
+    /// the next anchor report calibrates the new tab from scratch.
+    /// Called from MainTabView's selection change. Never touches
+    /// isMinimized itself — the next report re-derives it.
+    func resetRest() {
+        restOffset = 0
+    }
+
+    /// Feed the anchor's top offset (rest offset at the top,
+    /// decreasing while scrolled down). Only publishes when the
+    /// minimized flag actually flips, so a scroll drag does not
+    /// re-render the chrome every frame.
     func noteScrollOffset(_ minY: CGFloat) {
         let previous = lastOffset
         lastOffset = minY
+        // Learn the top: the highest offset ever seen is the
+        // current tab's rest offset. It only ever grows, so a
+        // mid-scroll first report (tab restored scrolled down)
+        // leaves the 0 seed alone and behaves exactly as before.
+        restOffset = max(restOffset, minY)
         let target: Bool?
-        if minY >= Self.expandOffset {
+        if minY >= restOffset - Self.expandTravel {
             target = false
-        } else if minY <= Self.minimizeOffset {
+        } else if minY <= restOffset - Self.minimizeTravel {
             target = true
         } else if let previous {
             let delta = minY - previous

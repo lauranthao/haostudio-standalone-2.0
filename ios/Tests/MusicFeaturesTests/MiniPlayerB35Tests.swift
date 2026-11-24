@@ -73,10 +73,10 @@ final class MiniPlayerB35Tests: XCTestCase {
     }
 
     /// One shape, one radius: the mini is a rounded rectangle at
-    /// the shared floating-chrome radius (12), not a capsule; its
+    /// the shared floating-chrome radius (24, b35 polish), not a
     /// content padding is symmetric (12 both sides).
     func testMiniCornerRadiusAndPadding() {
-        XCTAssertEqual(HaoLayout.floatingChromeCornerRadius, 12)
+        XCTAssertEqual(HaoLayout.floatingChromeCornerRadius, 24)
         XCTAssertEqual(HaoLayout.miniPlayerContentPadding, 12)
         XCTAssertEqual(HaoLayout.miniPlayerHeight, 50)
     }
@@ -314,5 +314,91 @@ final class BottomChromeB35Tests: XCTestCase {
         XCTAssertEqual(HaoLayout.miniCoverSize, 36)
         XCTAssertEqual(HaoLayout.miniInlineCoverSize, 32)
         XCTAssertFalse(HaoLayout.playerCoverMorphID.isEmpty)
+    }
+}
+
+// MARK: - b36-1: rest-offset calibration (large-title tabs)
+
+/// b36-1: the anchor's rest offset is NOT 0 — every tab uses a
+/// large navigation title, so the anchor rests ~+100. Thresholds
+/// are relative to the learned rest offset, so 64pt of scrolling
+/// from the top minimizes on any tab.
+@MainActor
+final class BottomChromeB36Tests: XCTestCase {
+
+    /// Rest +100 (large title): 64pt of scrolling down minimizes.
+    /// The old absolute thresholds needed minY ≤ -64, i.e. ~164pt
+    /// of scrolling from a +100 rest.
+    func testLargeTitleRestCalibratesMinimize() {
+        let state = BottomChromeState()
+        state.noteScrollOffset(100)
+        XCTAssertFalse(state.isMinimized)
+        // 40pt down in small steps: still expanded.
+        for offset in [96, 92, 88, 84, 80, 76, 72, 68, 64, 60] as [CGFloat] {
+            state.noteScrollOffset(offset)
+        }
+        XCTAssertFalse(state.isMinimized)
+        // 64pt down from the top: minimized.
+        for offset in [56, 52, 48, 44, 40, 36] as [CGFloat] {
+            state.noteScrollOffset(offset)
+        }
+        XCTAssertTrue(state.isMinimized)
+    }
+
+    /// Scroll back up to within 16pt of the rest offset restores.
+    func testScrollUpRestoresToCalibratedTop() {
+        let state = BottomChromeState()
+        state.noteScrollOffset(100)
+        for offset in [96, 92, 88, 84, 80, 76, 72, 68, 64, 60, 56, 52, 48, 44, 40, 36] as [CGFloat] {
+            state.noteScrollOffset(offset)
+        }
+        XCTAssertTrue(state.isMinimized)
+        for offset in [40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 80, 84] as [CGFloat] {
+            state.noteScrollOffset(offset)
+        }
+        XCTAssertFalse(state.isMinimized)
+    }
+
+    /// Tab switch resets the learned rest: a tab whose top is
+    /// lower than the previous tab's must not minimize at its top.
+    func testTabSwitchResetsRestOffset() {
+        let state = BottomChromeState()
+        state.noteScrollOffset(140)
+        state.noteScrollOffset(76)
+        XCTAssertTrue(state.isMinimized)
+        state.resetRest()
+        // New tab at its own top (+56): expanded, not minimized.
+        state.noteScrollOffset(56)
+        XCTAssertFalse(state.isMinimized)
+        // ...and 64pt down from ITS top minimizes.
+        state.noteScrollOffset(-8)
+        XCTAssertTrue(state.isMinimized)
+    }
+
+    /// First report mid-scroll (tab restored scrolled down)
+    /// minimizes from the absolute fallback, as before.
+    func testFirstReportMidScrollMinimizes() {
+        let state = BottomChromeState()
+        state.noteScrollOffset(-200)
+        XCTAssertTrue(state.isMinimized)
+    }
+
+    /// Capsule tap expands without forgetting the tab's rest
+    /// offset: scrolling down again re-minimizes after 64pt.
+    func testTapExpandKeepsRestOffset() {
+        let state = BottomChromeState()
+        state.noteScrollOffset(100)
+        for offset in [96, 92, 88, 84, 80, 76, 72, 68, 64, 60, 56, 52, 48, 44, 40, 36] as [CGFloat] {
+            state.noteScrollOffset(offset)
+        }
+        XCTAssertTrue(state.isMinimized)
+        state.expand()
+        XCTAssertFalse(state.isMinimized)
+        state.noteScrollOffset(90)
+        XCTAssertFalse(state.isMinimized)
+        for offset in [86, 82, 78, 74, 70, 66, 62, 58, 54, 50, 46, 42, 38, 36] as [CGFloat] {
+            state.noteScrollOffset(offset)
+        }
+        XCTAssertTrue(state.isMinimized)
     }
 }
