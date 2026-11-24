@@ -339,6 +339,17 @@ struct LiveRoomView: View {
 
     // MARK: - Portrait (16:9 inline video + info + danmaku list)
 
+    /// The real top safe-area inset (status bar / Dynamic Island).
+    /// A GeometryReader inside portraitBody reads 0: the body
+    /// ignores the top safe area, so the inset is zeroed for its
+    /// descendants. The key window's inset is unaffected.
+    private var topSafeAreaInset: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first(where: { $0.isKeyWindow })?.safeAreaInsets.top ?? 47
+    }
+
     private var portraitBody: some View {
         VStack(spacing: 0) {
             videoArea
@@ -404,36 +415,40 @@ struct LiveRoomView: View {
                 portraitVideoControls
             }
             // Back button over the portrait video (fix 2026-11-24,
-            // build 35): with the nav bar hidden the video reaches
-            // the top edge, so the back button lives here — the
-            // same 36pt black-0.45 circle + 0.55 top gradient as
-            // landscapeTopBar. The GeometryReader only positions
-            // the row below the status bar; the gradient is the
-            // row's own background, so taps still reach the video.
-            GeometryReader { geo in
-                VStack {
-                    HStack {
-                        Button(action: { dismiss() }) {
-                            Image(systemName: "chevron.left")
-                                .font(.haoBodyStrong)
-                                .foregroundStyle(theme.accentOnVideo)
-                                .frame(width: 36, height: 36)
-                                .background(Color.black.opacity(0.45), in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("返回")
-                        Spacer()
+            // build 35); build 37: the row was laid out at +8pt —
+            // geo.safeAreaInsets.top reads 0 here because
+            // portraitBody ignores the top safe area, so the button
+            // sat UNDER the status bar (chen's screenshot) where
+            // the system eats the tap. The inset now comes from
+            // the key window (topSafeAreaInset), which is
+            // unaffected. Same 36pt black-0.45 circle + 0.55 top
+            // gradient as landscapeTopBar; the button's hit
+            // target is 44pt.
+            VStack {
+                HStack {
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "chevron.left")
+                            .font(.haoBodyStrong)
+                            .foregroundStyle(theme.accentOnVideo)
+                            .frame(width: 36, height: 36)
+                            .background(Color.black.opacity(0.45), in: Circle())
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, geo.safeAreaInsets.top + 8)
-                    .background(
-                        LinearGradient(
-                            colors: [Color.black.opacity(0.55), Color.black.opacity(0)],
-                            startPoint: .top, endPoint: .bottom)
-                    )
+                    .buttonStyle(.plain)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+                    .accessibilityLabel("返回")
                     Spacer()
                 }
+                .padding(.horizontal, 20)
+                .padding(.top, topSafeAreaInset + 8)
+                .background(
+                    LinearGradient(
+                        colors: [Color.black.opacity(0.55), Color.black.opacity(0)],
+                        startPoint: .top, endPoint: .bottom)
+                )
+                Spacer()
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
     }
 
@@ -816,7 +831,14 @@ struct LiveRoomView: View {
 
     private var landscapeTopBar: some View {
         HStack(spacing: 12) {
-            Button(action: { dismiss() }) {
+            // Build 37 (L4): this is the LANDSCAPE back button —
+            // it only exits fullscreen, back to the portrait room.
+            // dismiss() here popped the whole room to the lobby
+            // (chen: "直播横屏退出之后直接回到大厅了"). The
+            // portrait back button (videoArea) is the one that
+            // dismisses the room; the [ ] button in the bottom bar
+            // does the same as this one.
+            Button(action: { isFullscreen = false }) {
                 Image(systemName: "chevron.left")
                     .font(.haoBodyStrong)
                     .foregroundStyle(theme.accentOnVideo)
@@ -824,7 +846,7 @@ struct LiveRoomView: View {
                     .background(Color.black.opacity(0.45), in: Circle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("返回")
+            .accessibilityLabel("退出全屏")
             VStack(alignment: .leading, spacing: 2) {
                 Text(currentRoom.title.isEmpty ? "直播间" : currentRoom.title)
                     .font(.haoCalloutStrong)
