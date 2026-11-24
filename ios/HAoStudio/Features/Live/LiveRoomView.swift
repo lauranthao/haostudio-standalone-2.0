@@ -74,6 +74,19 @@ struct LiveRoomView: View {
     @State private var danmakuSettings = LiveDanmakuSettings.load()
     @State private var autoHideWork: DispatchWorkItem?
     @State private var toastWork: DispatchWorkItem?
+    /// Live picture gestures (build 37, L3 — Pure Live parity):
+    /// tap disambiguator (single = play/pause in portrait,
+    /// controls toggle in landscape; double = fullscreen) and
+    /// the vertical-drag brightness/volume state. The drag pill
+    /// shows while `liveDragKind` is set and hides 1 s after
+    /// the last update.
+    @State private var liveTapDisambiguator = VodTapDisambiguator()
+    @State private var pendingLiveSingleTapWork: DispatchWorkItem?
+    @State private var liveDragKind: LiveDragKind?
+    @State private var liveDragLevel: Double = 0
+    @State private var liveDragBaseline: Double = 0
+    @State private var liveDragRejected = false
+    @State private var liveDragHideWork: DispatchWorkItem?
     /// Battery level for the landscape top bar (Pure Live
     /// TopActionBar shows time + battery — the status bar is
     /// hidden in fullscreen, so the room shows them itself).
@@ -122,6 +135,23 @@ struct LiveRoomView: View {
                 portraitBody
             }
         }
+        .background(
+            // Hidden volume driver (build 37, L3): the room page
+            // wires the view model's volumeApplier through the
+            // slider of a 1x1 offscreen MPVolumeView, so a
+            // right-half vertical drag changes the system volume
+            // without a HUD and without a visible slider. Until
+            // this reports, volume drags update state only.
+            HiddenMPVolumeView { slider in
+                livePlayer.volumeApplier = { [weak slider] level in
+                    slider?.setValue(Float(level), animated: false)
+                    slider?.sendActions(for: .touchUpInside)
+                }
+            }
+            .frame(width: 1, height: 1)
+            .offset(x: -1000, y: -1000)
+            .allowsHitTesting(false)
+        )
         .onAppear {
             // Immersive: hide the shell bottom chrome (mini player
             // + glass tab bar) while the room is up, so the room's
@@ -337,7 +367,229 @@ struct LiveRoomView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
     }
 
+    // MARK: - Picture gestures (build 37, L3 — Pure Live parity)
+
+    /// Size of the picture the drag runs on: portrait is 16:9
+    /// of the screen width (the aspectRatio on videoArea);
+    /// landscape fills the screen.
+    private func liveVideoSize(isLandscape: Bool) -> CGSize {
+        let bounds = UIScreen.main.bounds
+        if isLandscape {
+            return CGSize(width: bounds.width, height: bounds.height)
+        }
+        return CGSize(width: bounds.width, height: bounds.width * 9 / 16)
+    }
+
+    /// Bottom safe-area inset (home indicator) from the key
+    /// window — the landscape edge guard reads it, like
+    /// topSafeAreaInset above.
+    private var bottomSafeAreaInset: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first(where: { $0.isKeyWindow })?.safeAreaInsets.bottom ?? 0
+    }
+
+    /// Vertical drag on the picture. One gesture for both
+    /// layouts; `isLandscape` only changes the size math and
+    /// the chrome behaviour (hold the chrome up while dragging
+    /// in landscape, re-arm auto-hide on release).
+    private func liveDragGesture(isLandscape: Bool) -> some Gesture {
+        DragGesture(minimumDistance: 10)
+            .onChanged { value in
+                liveDragChanged(value, isLandscape: isLandscape)
+            }
+            .onEnded { _ in
+                liveDragEnded(isLandscape: isLandscape)
+            }
+    }
+
+    /// Single tap (via the disambiguator) / double-tap on the
+    /// picture. The first tap waits 0.28 s for a second tap —
+    /// the same lag chen accepted on VOD in build 36, and the
+    /// strip play/pause buttons stay instant (direct Buttons).
+    /// Single tap: portrait toggles play/pause, landscape
+    /// toggles the chrome. Double-tap anywhere: fullscreen
+    /// toggle (Pure Live) — portrait enters landscape,
+    /// landscape returns to the portrait room (never the lobby).
+    private func handleLiveTap(at location: CGPoint) {
+        let size = liveVideoSize(isLandscape: isFullscreen)
+        let outcome = liveTapDisambiguator.tap(
+            at: Date().timeIntervalSinceReferenceDate,
+            x: location.x,
+            width: size.width
+        )
+        switch outcome {
+        case .wait:
+            pendingLiveSingleTapWork?.cancel()
+            let work = DispatchWorkItem { [self] in
+                guard self.liveTapDisambiguator.expirePending(
+                    at: Date().timeIntervalSinceReferenceDate
+                ) == .singleTap else { return }
+                if self.isFullscreen {
+                    if self.controlsVisible {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            self.controlsVisible = false
+                        }
+                        self.autoHideWork?.cancel()
+                    } else {
+                        self.showControlsTemporarily()
+                    }
+                } else {
+                    self.livePlayer.togglePlayPause()
+                }
+            }
+            pendingLiveSingleTapWork = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + VodGestureConfig.doubleTapWindowSeconds,
+                execute: work
+            )
+        case .singleTap:
+            break
+        case .doubleTap:
+            pendingLiveSingleTapWork?.cancel()
+            isFullscreen.toggle()
+        }
+    }
+
+    /// One vertical-drag move on the picture. Direction lock
+    /// (VOD pattern): a mostly-horizontal touch is never a
+    /// brightness/volume drag — the latch holds for the whole
+    /// touch, so a vertical swipe that later swings sideways
+    /// cannot become one, and vice versa. The zone is decided
+    /// from the drag START x (left half brightness, right half
+    /// volume); the baseline is the live level at drag start,
+    /// so the drag never jumps.
+    private func liveDragChanged(_ value: DragGesture.Value, isLandscape: Bool) {
+        guard !liveDragRejected else { return }
+        let size = liveVideoSize(isLandscape: isLandscape)
+        // Landscape only: a drag starting in the home-indicator
+        // zone belongs to the system, not the player.
+        if isLandscape, value.startLocation.y > size.height - bottomSafeAreaInset {
+            liveDragRejected = true
+            return
+        }
+        guard !VodGestureMath.isHorizontalDrag(translation: value.translation) else {
+            liveDragRejected = true
+            return
+        }
+        if liveDragKind == nil {
+            liveDragKind = LiveGestureMath.dragKind(x: value.startLocation.x, width: size.width)
+            liveDragBaseline = liveDragKind == .brightness
+                ? livePlayer.brightnessLevel : livePlayer.volumeLevel
+            liveDragLevel = liveDragBaseline
+            // Hold the chrome up while dragging (landscape);
+            // portrait has no auto-hide to cancel.
+            autoHideWork?.cancel()
+            if isLandscape {
+                controlsVisible = true
+            }
+        }
+        let level = LiveGestureMath.dragLevel(
+            baseline: liveDragBaseline,
+            delta: LiveGestureMath.dragDelta(dy: value.translation.height, height: size.height)
+        )
+        liveDragLevel = level
+        if liveDragKind == .brightness {
+            livePlayer.setBrightness(level)
+        } else {
+            livePlayer.setVolume(level)
+        }
+        scheduleLiveDragHide()
+    }
+
+    /// Drag end: the pill hides 1 s after the last update;
+    /// landscape re-arms the chrome auto-hide.
+    private func liveDragEnded(isLandscape: Bool) {
+        defer {
+            liveDragRejected = false
+            if isLandscape {
+                showControlsTemporarily()
+            }
+        }
+        guard liveDragKind != nil else { return }
+        scheduleLiveDragHide()
+    }
+
+    /// The pill hides 1 s after the last drag update (Pure
+    /// Live): every move re-arms the timer.
+    private func scheduleLiveDragHide() {
+        liveDragHideWork?.cancel()
+        let work = DispatchWorkItem { [self] in
+            self.liveDragKind = nil
+        }
+        liveDragHideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    /// Centred drag pill (Pure Live player_gestures.dart:
+    /// black 0.87, radius 10, icon + 100x6 bar + % — white).
+    /// Hit-test transparent: it never eats a tap or a drag.
+    private var liveDragIndicator: some View {
+        Group {
+            if let kind = liveDragKind {
+                HStack(spacing: 10) {
+                    Image(systemName: LiveGestureMath.iconName(kind: kind, level: liveDragLevel))
+                        .font(.system(size: 18))
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Color.white.opacity(0.3))
+                            .frame(width: 100, height: 6)
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Color.white)
+                            .frame(width: max(0, 100 * CGFloat(liveDragLevel)), height: 6)
+                    }
+                    Text("\(Int(liveDragLevel * 100))%")
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color.black.opacity(0.87), in: RoundedRectangle(cornerRadius: 10))
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    /// Failure card under the placeholder (build 37, D10): the
+    /// reason the open failed + a retry button. Shown only when
+    /// the driver reports a failure — while loading, the plain
+    /// placeholder stays. The button re-opens the room from
+    /// scratch (fresh re-parse, not the dead URLs).
+    private var liveFailureCard: some View {
+        Group {
+            if let failure = livePlayer.openFailure {
+                Text(failure.localizedDescription)
+                    .font(.haoFootnote)
+                    .foregroundStyle(.white.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                Button(action: { livePlayer.retryCurrentRoom() }) {
+                    Text("重试")
+                        .font(.haoCalloutStrong)
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 8)
+                        .background(Color.white, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("重试播放")
+            }
+        }
+    }
+
     // MARK: - Portrait (16:9 inline video + info + danmaku list)
+
+    /// The real top safe-area inset (status bar / Dynamic Island).
+    /// A GeometryReader inside portraitBody reads 0: the body
+    /// ignores the top safe area, so the inset is zeroed for its
+    /// descendants. The key window's inset is unaffected.
+    private var topSafeAreaInset: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first(where: { $0.isKeyWindow })?.safeAreaInsets.top ?? 47
+    }
 
     private var portraitBody: some View {
         VStack(spacing: 0) {
@@ -404,36 +656,43 @@ struct LiveRoomView: View {
                 portraitVideoControls
             }
             // Back button over the portrait video (fix 2026-11-24,
-            // build 35): with the nav bar hidden the video reaches
-            // the top edge, so the back button lives here — the
-            // same 36pt black-0.45 circle + 0.55 top gradient as
-            // landscapeTopBar. The GeometryReader only positions
-            // the row below the status bar; the gradient is the
-            // row's own background, so taps still reach the video.
-            GeometryReader { geo in
-                VStack {
-                    HStack {
-                        Button(action: { dismiss() }) {
-                            Image(systemName: "chevron.left")
-                                .font(.haoBodyStrong)
-                                .foregroundStyle(theme.accentOnVideo)
-                                .frame(width: 36, height: 36)
-                                .background(Color.black.opacity(0.45), in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("返回")
-                        Spacer()
+            // build 35); build 37: the row was laid out at +8pt —
+            // geo.safeAreaInsets.top reads 0 here because
+            // portraitBody ignores the top safe area, so the button
+            // sat UNDER the status bar (chen's screenshot) where
+            // the system eats the tap. The inset now comes from
+            // the key window (topSafeAreaInset), which is
+            // unaffected. Same 36pt black-0.45 circle + 0.55 top
+            // gradient as landscapeTopBar; the button's hit
+            // target is 44pt.
+            VStack {
+                HStack {
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "chevron.left")
+                            .font(.haoBodyStrong)
+                            .foregroundStyle(theme.accentOnVideo)
+                            .frame(width: 36, height: 36)
+                            .background(Color.black.opacity(0.45), in: Circle())
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, geo.safeAreaInsets.top + 8)
-                    .background(
-                        LinearGradient(
-                            colors: [Color.black.opacity(0.55), Color.black.opacity(0)],
-                            startPoint: .top, endPoint: .bottom)
-                    )
+                    .buttonStyle(.plain)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+                    .accessibilityLabel("返回")
                     Spacer()
                 }
+                .padding(.horizontal, 20)
+                .padding(.top, topSafeAreaInset + 8)
+                .background(
+                    LinearGradient(
+                        colors: [Color.black.opacity(0.55), Color.black.opacity(0)],
+                        startPoint: .top, endPoint: .bottom)
+                )
+                Spacer()
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            // Drag pill (build 37, L3): centred over the video,
+            // hit-test transparent — it never eats a tap or drag.
+            liveDragIndicator
         }
     }
 
@@ -475,6 +734,7 @@ struct LiveRoomView: View {
                     Text("房间未开播或暂时无法观看")
                         .font(.haoFootnote)
                         .foregroundStyle(.white.opacity(0.7))
+                    liveFailureCard
                 }
             }
             if !livePlayer.isPlaying && livePlayer.videoView != nil {
@@ -484,7 +744,21 @@ struct LiveRoomView: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture { livePlayer.togglePlayPause() }
+        // Tap + drag on the picture (build 37, L3 — Pure Live):
+        // single tap waits 0.28 s for a possible second tap
+        // (double-tap = fullscreen, either layout), vertical
+        // drag = brightness (left half) / volume (right half).
+        // The drag is the view's own gesture (not simultaneous)
+        // so a vertical drag on the video does not also scroll
+        // the page below it. Same sibling discipline as the VOD
+        // gesture layer: this sits on the background only, under
+        // the chrome, so buttons above it never double-fire.
+        .simultaneousGesture(
+            SpatialTapGesture(count: 1).onEnded { value in
+                handleLiveTap(at: value.location)
+            }
+        )
+        .gesture(liveDragGesture(isLandscape: false))
     }
 
     /// On-video control strip (portrait). Buttons are 44pt touch
@@ -771,6 +1045,7 @@ struct LiveRoomView: View {
                     Text("房间未开播或暂时无法观看")
                         .font(.haoFootnote)
                         .foregroundStyle(.white.opacity(0.7))
+                    liveFailureCard
                 }
             }
             if danmakuEnabledForRoom {
@@ -788,16 +1063,16 @@ struct LiveRoomView: View {
             // portrait videoArea before its fix.
             Color.clear
                 .contentShape(Rectangle())
-                .onTapGesture {
-                    if controlsVisible {
-                        withAnimation(.easeOut(duration: 0.3)) {
-                            controlsVisible = false
-                        }
-                        autoHideWork?.cancel()
-                    } else {
-                        showControlsTemporarily()
+                // Tap + drag on the picture (build 37, L3 — same
+                // as portrait: single tap toggles the chrome after
+                // the 0.28 s double-tap window, double-tap exits
+                // fullscreen, vertical drag = brightness/volume).
+                .simultaneousGesture(
+                    SpatialTapGesture(count: 1).onEnded { value in
+                        handleLiveTap(at: value.location)
                     }
-                }
+                )
+                .gesture(liveDragGesture(isLandscape: true))
             if controlsVisible {
                 VStack(spacing: 0) {
                     landscapeTopBar
@@ -807,6 +1082,9 @@ struct LiveRoomView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            // Drag pill (build 37, L3): centred over the video,
+            // hit-test transparent — it never eats a tap or drag.
+            liveDragIndicator
         }
     }
 
@@ -816,7 +1094,14 @@ struct LiveRoomView: View {
 
     private var landscapeTopBar: some View {
         HStack(spacing: 12) {
-            Button(action: { dismiss() }) {
+            // Build 37 (L4): this is the LANDSCAPE back button —
+            // it only exits fullscreen, back to the portrait room.
+            // dismiss() here popped the whole room to the lobby
+            // (chen: "直播横屏退出之后直接回到大厅了"). The
+            // portrait back button (videoArea) is the one that
+            // dismisses the room; the [ ] button in the bottom bar
+            // does the same as this one.
+            Button(action: { isFullscreen = false }) {
                 Image(systemName: "chevron.left")
                     .font(.haoBodyStrong)
                     .foregroundStyle(theme.accentOnVideo)
@@ -824,7 +1109,7 @@ struct LiveRoomView: View {
                     .background(Color.black.opacity(0.45), in: Circle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("返回")
+            .accessibilityLabel("退出全屏")
             VStack(alignment: .leading, spacing: 2) {
                 Text(currentRoom.title.isEmpty ? "直播间" : currentRoom.title)
                     .font(.haoCalloutStrong)

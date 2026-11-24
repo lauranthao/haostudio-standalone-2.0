@@ -696,6 +696,32 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             self.openTimeoutWork?.cancel()
             self.openTimeoutWork = nil
             self.currentURL = url
+            // (b37 D1) DV profile 5 / unknown-profile has no HDR10
+            // base layer: every bundled ffmpeg kernel renders its
+            // IPTPQc2 values as HDR10 and the picture comes out
+            // green, and AVPlayer has no MKV demuxer. If AVPlayer is
+            // not among the candidates (MKV container, TrueHD/DTS
+            // audio, ASS subtitles — any of them), the direct stream
+            // is unplayable-as-is: go to the Emby server transcode
+            // (H.264 HLS, correct colour, SDR) instead of letting
+            // MPV "succeed" green. P7/P8 keep their HDR10 base layer
+            // on the ffmpeg kernels and never reach here. The
+            // transcode URL carries no hao_* markers, so the
+            // recursive open cannot loop back into this branch, and
+            // the flag stops failOrTranscode transcoding twice.
+            // CMS URLs carry no markers, so facts is nil there and
+            // this branch never fires for them (honest limit: CMS DV
+            // P5 in MKV has no detection and no transcode server).
+            if !transcodeAttemptedForRequest,
+               let facts = VideoStreamFacts.parse(url: url),
+               facts.dolbyVision, facts.dvProfile != 7, facts.dvProfile != 8,
+               !PlayerKernel.candidatesFor(url: url, dvDowngradeToHdr: self.dvP8Downgrade).contains(.avplayer),
+               let transcodeURL = EmbyClient.transcodedHlsUrl(fromStreamUrl: url.absoluteString) {
+                transcodeAttemptedForRequest = true
+                NSLog("[HAoStudio][VOD] DV P\(facts.dvProfile ?? -1) MKV: no AVPlayer candidate, redirecting to Emby transcode")
+                open(item: item, url: transcodeURL, completion: completion)
+                return
+            }
             var completed = false
             let finish: (Result<Void, MusicPlayerError>) -> Void = { [weak self] result in
                 guard let self = self, !completed else { return }
@@ -1436,7 +1462,8 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     // MARK: - Breakpoint
 
     /// Build the resume bookmark for the current episode and hand
-    /// it to `onBreakpointSaved`. No-op when nothing is playing
+    /// it to `onBreakpointSaved`, and write the local playback
+    /// record (b37 E1). No-op when nothing is playing
     /// (nothing to resume) or when the position is 0 and no
     /// episode was ever started.
     private func saveBreakpoint() {
@@ -1453,6 +1480,16 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             durationSeconds: duration,
             updatedAt: Date()
         )
+        // (b37 E1) The local playback record. The Emby reporter only
+        // syncs to the server, and this callback had no assignee in
+        // the app, so Emby watches left no local history at all.
+        // savePosition accepts any VideoItem (no source filter), so
+        // the same write covers CMS and Emby; it fires from stop()
+        // and release() — ✕-close, swipe-dismiss, natural end —
+        // and its own >= 5 s guard applies on top of this one.
+        VideoLibraryStore.savePosition(
+            item: detail.item, episodeName: episode.name, episodeIndex: currentEpisodeIndex,
+            lineName: line.name, positionSeconds: position, durationSeconds: duration)
         onBreakpointSaved?(info)
     }
 

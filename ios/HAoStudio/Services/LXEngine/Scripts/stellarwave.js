@@ -1009,6 +1009,18 @@ const getFFAPI = async (songmid, quality, musicInfo) => {
 }
 
 // ==================== QQ 音乐后端池（v4.0.2 落月主线路） ====================
+
+// (b37 M1-b) Trial-only QQ URL: vkeys v2 now returns RS02… trial
+// vkeys (960 KB preview) instead of full-length audio. Same test
+// the QQ官方 backend already uses (`/RS0/i` on the purl), plus the
+// response's own trial markers. A trial URL is not a playable URL.
+function isTrialTxUrl(d, url) {
+  if (!url) return true
+  if (/RS0/i.test(url)) return true
+  if (d?.data?.quality === '音乐试听' || d?.data?.pay === '付费') return true
+  return false
+}
+
 const TX_BACKENDS = [
   // === 主接口: 落月 QQ（api.vkeys.cn，v4.0.2 重写） ===
   {
@@ -1026,7 +1038,10 @@ const TX_BACKENDS = [
         })
         const d = res.body
         const url = d?.data?.url || (typeof d?.data === 'string' && d.data.startsWith('http') ? d.data : '')
-        if (url && isHttpUrl(url)) return url
+        // (b37 M1-b) v2 now mints trial-only vkeys: a trial URL is
+        // not playable — do NOT return it, fall through to v3
+        // song/link instead of short-circuiting the chain.
+        if (url && isHttpUrl(url) && !isTrialTxUrl(d, url)) return url
       } catch (e) {
         DEBUGLog('[落月QQ] v2 geturl 失败:', e.message)
       }
@@ -1038,7 +1053,10 @@ const TX_BACKENDS = [
         })
         const d = res.body
         const url = d?.data?.url || (typeof d?.data === 'string' && d.data.startsWith('http') ? d.data : '')
-        if (url && isHttpUrl(url)) return url
+        // (b37 M1-b) same trial guard as v2: if v3 ever returns a
+        // trial URL, throw to the next backend instead of handing
+        // the player a 30-second preview.
+        if (url && isHttpUrl(url) && !isTrialTxUrl(d, url)) return url
       } catch (e) {
         DEBUGLog('[落月QQ] v3 song/link 失败:', e.message)
       }
@@ -1162,9 +1180,11 @@ const TX_BACKENDS = [
       if (!q) throw new Error('vkeys 不支持的音质')
       const res = await httpFetch(_u('cookn5**\\kd)qf`tn)^i*q-*hpnd^*o`i^`io*b`opmg:hd_8') + songmid + '&quality=' + q, { method: 'GET', timeout: 10000, headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' } })
       const d = res.body
-      if (d?.data?.url) return d.data.url
-      if (d?.url) return d.url
-      throw new Error('vkeys: 无数据')
+      const url = d?.data?.url || d?.url || ''
+      // (b37 M1-b) v2 now mints trial-only vkeys: reject them so the
+      // chain falls through to the next backend (v3 song/link).
+      if (url && !isTrialTxUrl(d, url)) return url
+      throw new Error('vkeys: 无数据或仅试听')
     },
   },
   {

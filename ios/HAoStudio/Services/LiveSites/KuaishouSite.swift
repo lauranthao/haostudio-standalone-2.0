@@ -515,7 +515,7 @@ final class KuaishouLiveSite: LiveSiteResolver {
                 let playUrls = LiveJSON.asMap(room.data)?["playUrls"]
                 let qualities = KuaishouLiveSite.parseKuaishouPlayQualities(playUrls)
                 if qualities.isEmpty {
-                    completion(.failure(LiveError.offline))
+                    completion(.failure(LiveError.noQualities))
                     return
                 }
                 let requested = qualities.first { $0.id == quality?.id } ?? qualities[0]

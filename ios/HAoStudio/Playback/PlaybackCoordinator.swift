@@ -191,6 +191,26 @@ enum MusicPlayerError: Error, Equatable {
     case seekFailed
 }
 
+extension MusicPlayerError: LocalizedError {
+    /// Human-readable reason for the failure card (build 37,
+    /// D10): the room page shows this under the placeholder
+    /// with a retry button. A plain enum has no description of
+    /// its own, so without this the card would show the
+    /// generated "The operation couldn't be completed" text.
+    var errorDescription: String? {
+        switch self {
+        case .timeout:
+            return "打开超时，请检查网络后重试"
+        case .noPlayableURL:
+            return "没有可播放的地址"
+        case .loadFailed:
+            return "播放失败，请检查网络后重试"
+        case .seekFailed:
+            return "跳转失败"
+        }
+    }
+}
+
 /// What PlaybackCoordinator needs from the music player. The
 /// coordinator owns the resolver and the current-item bookkeeping;
 /// the player owns engines, queue and modes. The coordinator wires
@@ -459,6 +479,18 @@ final class PlaybackCoordinator: ObservableObject {
         vodDriver?.stop()
         currentItem = nil
         driver.play(item: item)
+    }
+
+    /// Stop music only — rule 1 for a VOD open that bypasses
+    /// requestVodPlay: the VOD engine path plays through the
+    /// driver directly, so the music stop in requestVodPlay never
+    /// runs and a second-or-later VOD open leaves the song playing
+    /// (build 37, P1). Leaves the VOD/live drivers and currentItem
+    /// untouched: the caller owns the new item (the driver's
+    /// onEpisodeStarted sets currentItem when the episode really
+    /// starts). No auto-resume: exiting never restarts the music.
+    func stopMusic() {
+        musicDriver?.stop()
     }
 
     /// Stop everything. Clears the current item; the player slice also

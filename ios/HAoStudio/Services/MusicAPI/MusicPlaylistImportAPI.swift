@@ -421,13 +421,27 @@ final class MusicPlaylistImportAPI {
             let cdList = MusicAPIJSON.asList(json["cdlist"])
             let cd = cdList.first ?? [:]
             let tracks = MusicAPIJSON.asList(cd["songlist"]).compactMap { s -> MusicTrack? in
+                // (b37 M1-a) `new_format=1` changed the payload shape:
+                // old keys songmid/songname/albumname/albummid are gone;
+                // the new shape is mid, name/title, album: {mid, name},
+                // singer: [{mid, name}]. Parse both shapes (old first)
+                // or every track gets an empty id and is dropped.
                 let singers = MusicAPIJSON.asList(s["singer"])
-                let albumMid = MusicAPIJSON.asString(s["albummid"])
+                let albumDict = MusicAPIJSON.asMap(s["album"])
+                let songmid = MusicAPIJSON.asString(s["songmid"])
+                let trackId = songmid.isEmpty ? MusicAPIJSON.asString(s["mid"]) : songmid
+                let songname = MusicAPIJSON.asString(s["songname"])
+                let name2 = songname.isEmpty ? MusicAPIJSON.asString(s["name"]) : songname
+                let title = name2.isEmpty ? MusicAPIJSON.asString(s["title"]) : name2
+                let albumname = MusicAPIJSON.asString(s["albumname"])
+                let album = albumname.isEmpty ? MusicAPIJSON.asString(albumDict?["name"]) : albumname
+                let albummid = MusicAPIJSON.asString(s["albummid"])
+                let albumMid = albummid.isEmpty ? MusicAPIJSON.asString(albumDict?["mid"]) : albummid
                 let track = MusicTrack(
-                    id: MusicAPIJSON.asString(s["songmid"]),
-                    title: MusicAPIJSON.asString(s["songname"]),
+                    id: trackId,
+                    title: title,
                     artist: singers.map { MusicAPIJSON.asString($0["name"]) }.joined(separator: " / "),
-                    album: MusicAPIJSON.asString(s["albumname"]),
+                    album: album,
                     coverURL: URL(string: albumMid.isEmpty ? "" : MusicText.coverHi(
                         "https://y.gtimg.cn/music/photo_new/T002R300x300M000\(albumMid).jpg", platform: "tx")),
                     duration: TimeInterval(MusicAPIJSON.asInt(s["interval"])),

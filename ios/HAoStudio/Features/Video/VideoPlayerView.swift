@@ -422,6 +422,13 @@ final class VideoPlayerViewModel: ObservableObject {
         skipIntroPill = nil
         skipCreditsPill = false
         skipEpisodeIdentity = nil
+        // Build 37 (P1): rule 1 — opening a video pauses the music.
+        // The engine path below plays through the driver directly
+        // and never reaches requestVodPlay (where the music stop
+        // lives), so a second-or-later VOD open left the song
+        // playing. Stop the music here, on every open, whichever
+        // branch runs.
+        coordinator.stopMusic()
         if let engine = engine {
             engine.play(
                 detail: detail, lineIndex: lineIndex, episodeIndex: episodeIndex,
@@ -482,6 +489,11 @@ final class VideoPlayerViewModel: ObservableObject {
         position = 0
         skipIntroPill = nil
         skipCreditsPill = false
+        // Build 37 (P1): same rule as open() — a switch re-opens
+        // through the driver directly, bypassing requestVodPlay,
+        // so stop the music here too (e.g. resumed from Control
+        // Center mid-VOD, then auto-advance).
+        coordinator.stopMusic()
         if let engine = engine {
             engine.playEpisode(lineIndex: lineIndex, episodeIndex: index, startPositionSeconds: 0)
         } else if let episode = currentEpisode, let line = currentLine {
@@ -518,6 +530,8 @@ final class VideoPlayerViewModel: ObservableObject {
             skipIntroPill = nil
             skipCreditsPill = false
         }
+        // Build 37 (P1): same rule as open() — see selectEpisode.
+        coordinator.stopMusic()
         if let engine = engine {
             engine.playEpisode(
                 lineIndex: index, episodeIndex: targetEpisode,

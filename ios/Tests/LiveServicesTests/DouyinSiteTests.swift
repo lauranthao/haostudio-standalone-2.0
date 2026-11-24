@@ -231,4 +231,83 @@ final class DouyinSiteTests: XCTestCase {
         XCTAssertTrue(resolveFailed)
         XCTAssertEqual(fetcher.count(containing: "room/web/enter"), 1)
     }
+
+    // MARK: - Empty qualities are not offline (build 37, D9)
+
+    /// Room detail for room "123456": a LIVE room carrying no
+    /// `stream_url` at all — the room is up, but no quality
+    /// parsed out. Same shape as `enterJSON` minus the stream.
+    private var enterJSONWithoutStreamURL: String {
+        "{\"data\":{\"data\":[{\"id_str\":\"123456\",\"title\":\"测试\",\"status\":2,\"owner\":{\"nickname\":\"主播\",\"avatar_thumb\":[\"https://a/avatar.jpg\"]},\"cover\":[\"https://a/cover.jpg\"],\"user_count\":100}],\"user\":{\"nickname\":\"主播\",\"avatar_thumb\":[]}}}"
+    }
+
+    /// A live room with no parseable quality must fail as
+    /// `noQualities`, never `offline`: the session only skips
+    /// the list-feed fallback for a definitive offline, and a
+    /// live room with an unparsed stream is a parse failure.
+    func testResolveWithLiveRoomButNoQualitiesIsNoQualities() {
+        let fetcher = CountingRoutingFetcher([
+            ("room/web/enter", jsonData(enterJSONWithoutStreamURL), 200)
+        ])
+        let site = DouyinLiveSite(fetcher: fetcher.fetcher)
+        let expectation = self.expectation(description: "resolve noQualities")
+        site.resolve(roomId: "123456", quality: nil) { result in
+            if case .failure(let error as LiveError) = result, case .noQualities = error {
+                XCTAssertEqual(error.localizedDescription, "房间正在直播，但未解析到可播放的画质")
+            } else {
+                XCTFail("expected noQualities, got \(result)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+    }
+
+    // MARK: - Category rooms fall back to the second host (build 37, D1)
+
+    /// One category room, as `parseCategoryRooms` reads it.
+    private var categoryRoomJSON: String {
+        "{\"web_rid\":\"123456\",\"room\":{\"title\":\"测试直播\",\"cover\":[\"https://a/cover.jpg\"],\"owner\":{\"nickname\":\"主播\",\"web_rid\":\"123456\",\"avatar_thumb\":[\"https://a/avatar.jpg\"]}}}"
+    }
+
+    private var categoryRoomsJSON: String {
+        "{\"status_code\":0,\"data\":{\"data\":[\(categoryRoomJSON)]}}"
+    }
+
+    /// First host refuses (empty data), second host answers:
+    /// the category must come back with rooms, not empty.
+    func testCategoryRoomsFallsBackToSecondHost() {
+        let fetcher = CountingRoutingFetcher([
+            ("live.douyin.com", jsonData("{\"status_code\":0,\"data\":{}}"), 200),
+            ("webcast.amemv.com", jsonData(categoryRoomsJSON), 200),
+        ])
+        let site = DouyinLiveSite(fetcher: fetcher.fetcher)
+        let expectation = self.expectation(description: "category rooms fallback")
+        site.categoryRooms(areaId: "1,1", page: 1, pageSize: 15) { rooms in
+            XCTAssertEqual(rooms.count, 1)
+            XCTAssertEqual(rooms.first?.roomId, "123456")
+            XCTAssertEqual(rooms.first?.title, "测试直播")
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+        XCTAssertEqual(fetcher.count(containing: "live.douyin.com"), 1)
+        XCTAssertEqual(fetcher.count(containing: "webcast.amemv.com"), 1)
+    }
+
+    /// Both hosts refuse: the category is empty, and both hosts
+    /// were actually tried (the fallback is not a dead branch).
+    func testCategoryRoomsEmptyWhenBothHostsRefuse() {
+        let fetcher = CountingRoutingFetcher([
+            ("live.douyin.com", jsonData("{\"status_code\":0,\"data\":{}}"), 200),
+            ("webcast.amemv.com", jsonData("{\"status_code\":0,\"data\":{}}"), 200),
+        ])
+        let site = DouyinLiveSite(fetcher: fetcher.fetcher)
+        let expectation = self.expectation(description: "category rooms empty")
+        site.categoryRooms(areaId: "1,1", page: 1, pageSize: 15) { rooms in
+            XCTAssertTrue(rooms.isEmpty)
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 10)
+        XCTAssertEqual(fetcher.count(containing: "live.douyin.com"), 1)
+        XCTAssertEqual(fetcher.count(containing: "webcast.amemv.com"), 1)
+    }
 }

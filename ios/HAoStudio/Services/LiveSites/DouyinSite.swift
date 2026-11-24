@@ -22,12 +22,13 @@
 // No quality is invented: only keys the server returned become menu
 // entries, and the audio-only `ao` variant is excluded.
 //
-// A-Bogus is NOT ported (743 lines of bit-twiddling; the Flutter
-// repo has only shape tests for it, no deterministic vectors, so a
-// blind port cannot be verified without a compiler). The site uses
-// an injectable request-URL signer defaulting to the unsigned
-// builder below (same params as DouyinUtils.buildRequestUrl minus
-// the A-Bogus step). X-Bogus (WS handshake) IS ported — it lives in
+// A-Bogus IS ported (build 37, D1): `DouyinSigner.swift` is a
+// bit-for-bit port of Pure Live's `douyin_sign.dart`, verified
+// against its 3.x test vectors (`DouyinSignerTests`, plus the
+// standalone swiftc harness). The site uses an injectable
+// request-URL signer defaulting to the signed builder, with the
+// unsigned builder below as the fallback when signing fails.
+// X-Bogus (WS handshake) IS ported — it lives in
 // DouyinDanmaku.swift with the transport that uses it.
 //
 // Swift 5.0: completion handlers only, no async/await, no `any`.
@@ -49,11 +50,14 @@ enum DouyinRequestParams {
     static let defaultAuthority = "live.douyin.com"
 }
 
-// MARK: - Request signing (unsigned default; A-Bogus deferred)
+// MARK: - Request signing (signed default; unsigned fallback)
 
 /// Signs a Douyin request URL: `(baseUrl, params) -> full URL`.
-/// The default is the unsigned builder below; a future A-Bogus
-/// implementation can be injected here without touching the site.
+/// The default is the signed builder (`DouyinSigner`, build 37),
+/// falling back to the unsigned builder below when signing fails
+/// (unparseable base URL), so a request never goes out with
+/// neither. A custom signer can still be injected here without
+/// touching the site.
 typealias DouyinRequestUrlSigner = (String, [String: String]) -> String
 
 enum DouyinUtils {
@@ -608,7 +612,14 @@ final class DouyinLiveSite: LiveSiteResolver {
 
     init(fetcher: LiveDataFetcher? = nil, requestUrlSigner: DouyinRequestUrlSigner? = nil) {
         self.fetcher = fetcher ?? LiveHTTP.defaultFetcher
-        self.requestUrlSigner = requestUrlSigner ?? DouyinUtils.unsignedRequestUrl
+        // Build 37 (D1): signed by default — category/room requests
+        // used to go out unsigned (no a_bogus) and the server refused
+        // them. The unsigned builder stays as the fallback when
+        // signing fails, so a request never goes out with neither.
+        self.requestUrlSigner = requestUrlSigner ?? { baseUrl, params in
+            DouyinSigner.shared.signedUrl(baseUrl: baseUrl, params: params)
+                ?? DouyinUtils.unsignedRequestUrl(baseUrl: baseUrl, params: params)
+        }
     }
 
     func makeDanmakuTransport() -> LiveDanmakuTransport {
@@ -1086,7 +1097,7 @@ final class DouyinLiveSite: LiveSiteResolver {
                 }
                 let qualities = DouyinLiveSite.parseStreamQualities(room.data)
                 if qualities.isEmpty {
-                    completion(.failure(LiveError.offline))
+                    completion(.failure(LiveError.noQualities))
                     return
                 }
                 let requested = qualities.first { $0.id == quality?.id } ?? qualities[0]
@@ -1205,14 +1216,36 @@ extension DouyinLiveSite {
         ]
         requestHeaders { [weak self] headers in
             guard let self = self else { return }
-            let target = self.requestUrlSigner(DouyinLiveSite.partitionRoomsURL, params)
-            guard let url = URL(string: target) else {
-                completion([])
-                return
+            // Build 37 (D1): two hosts, same as partitionRooms —
+            // the first host (live.douyin.com) refuses unsigned
+            // category requests and the category had no fallback
+            // at all, so a refusal became an empty page. A host
+            // only wins when it returns a non-empty room list;
+            // anything else (refusal, empty, bad JSON) moves to
+            // the next host. A genuinely empty category still
+            // ends empty — it just costs one extra request.
+            let hosts = [DouyinLiveSite.partitionRoomsURL, DouyinLiveSite.partitionRoomsFallbackURL]
+            var hostIndex = 0
+            func attempt() {
+                if hostIndex >= hosts.count {
+                    completion([])
+                    return
+                }
+                let target = self.requestUrlSigner(hosts[hostIndex], params)
+                hostIndex += 1
+                guard let url = URL(string: target) else {
+                    attempt()
+                    return
+                }
+                LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
+                    if let rooms = DouyinLiveSite.parseCategoryRooms(json), !rooms.isEmpty {
+                        completion(rooms)
+                        return
+                    }
+                    attempt()
+                }
             }
-            LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
-                completion(DouyinLiveSite.parseCategoryRooms(json) ?? [])
-            }
+            attempt()
         }
     }
 

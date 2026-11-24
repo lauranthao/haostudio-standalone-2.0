@@ -46,8 +46,8 @@
 // settings state, applies brightness through UIScreen only under
 // the rules above, and applies volume through the `volumeApplier`
 // hook — which is nil by default, so this file NEVER touches the
-// system volume on its own. The C leg wires the hook (MPVolumeView
-// / system volume) when the room page lands.
+// system volume on its own. The room page wires the hook
+// (LiveRoomView's hidden MPVolumeView) when the room lands.
 //
 // Swift 5.0: completion handlers only, no async/await, no `any`.
 
@@ -75,6 +75,11 @@ final class LivePlayerViewModel: ObservableObject {
     @Published private(set) var currentLineIndex: Int = 0
     @Published private(set) var currentQuality: LiveQuality?
     @Published private(set) var isAudioOnly = false
+    /// The driver's last open failure (nil while loading or
+    /// playing): the room page renders it under the placeholder
+    /// with a retry button. Mirrored from the driver like the
+    /// rest of the room state above.
+    @Published private(set) var openFailure: MusicPlayerError?
     /// Watching count, mirrored from the session room (0 until the
     /// first room info arrives; the B leg refreshes it).
     @Published private(set) var watching: Int = 0
@@ -336,9 +341,10 @@ final class LivePlayerViewModel: ObservableObject {
     /// (nil by default — see header).
     @Published private(set) var volumeLevel: Double = 1.0
 
-    /// The system volume writer, wired by the C leg when the room
-    /// page lands (MPVolumeView / system volume). Nil until then:
-    /// volume drags update state only and never touch the system.
+    /// The system volume writer, wired by the room page
+    /// (LiveRoomView's hidden MPVolumeView) when the room lands.
+    /// Nil until then: volume drags update state only and never
+    /// touch the system.
     var volumeApplier: ((Double) -> Void)?
 
     /// Gesture state (VodGestures owns the object; this view model
@@ -390,6 +396,9 @@ final class LivePlayerViewModel: ObservableObject {
         driver.$isAudioOnly.sink { [weak self] value in
             self?.isAudioOnly = value
         }.store(in: &cancellables)
+        driver.$openFailure.sink { [weak self] value in
+            self?.openFailure = value
+        }.store(in: &cancellables)
         gestures.isVod = false
         gestures.onSingleTap = { [weak self] in
             self?.toggleControls()
@@ -409,10 +418,22 @@ final class LivePlayerViewModel: ObservableObject {
     func togglePlayPause() {
         if isPlaying {
             driver.pause()
+        } else if openFailure != nil {
+            // The open failed and nothing is playing: the play
+            // button retries the open instead of resuming a dead
+            // backend (resume() no-ops when backend == nil, so
+            // the tap was dead — build 37, D10).
+            driver.retryCurrentRoom()
         } else {
             driver.resume()
         }
         scheduleControlsAutoHide()
+    }
+
+    /// Re-open the room whose open failed (the failure card's
+    /// retry button). A plain pass-through to the driver.
+    func retryCurrentRoom() {
+        driver.retryCurrentRoom()
     }
 
     // MARK: - Controls visibility
@@ -537,7 +558,7 @@ final class LivePlayerViewModel: ObservableObject {
 
     /// Apply a volume level from an explicit user drag (right half
     /// vertical drag, Flutter parity). The system volume is only
-    /// touched when the C leg has wired `volumeApplier`; until
+    /// touched when the room page has wired `volumeApplier`; until
     /// then this updates state only.
     func setVolume(_ level: Double) {
         let clamped = min(1, max(0, level))

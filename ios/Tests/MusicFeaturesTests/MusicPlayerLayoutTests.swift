@@ -37,7 +37,7 @@ final class MusicPlayerLayoutTests: XCTestCase {
             XCTAssertLessThanOrEqual(size, w - 48, "\(w)x\(h)")
         }
         XCTAssertEqual(MusicPlayerLayout.coverSize(screenWidth: 393, screenHeight: 852), 340)
-        XCTAssertEqual(MusicPlayerLayout.coverSize(screenWidth: 375, screenHeight: 667), 197)
+        XCTAssertEqual(MusicPlayerLayout.coverSize(screenWidth: 375, screenHeight: 667), 279)
     }
 
     func testWholePlayerFitsOneScreen() {
@@ -56,13 +56,6 @@ final class MusicPlayerLayoutTests: XCTestCase {
             XCTAssertLessThan(c.next, w, "next off-screen right at \(w)")
             XCTAssertEqual(c.play, w / 2, accuracy: 0.001, "play not centred at \(w)")
             XCTAssertEqual(c.next, w - c.prev, accuracy: 0.001, "not symmetric at \(w)")
-        }
-    }
-
-    func testModeRowFitsNarrowestPhone() {
-        XCTAssertTrue(MusicPlayerLayout.modeRowFits(screenWidth: 320))
-        for w in widths {
-            XCTAssertTrue(MusicPlayerLayout.modeRowFits(screenWidth: w), "mode row overflows at \(w)")
         }
     }
 
@@ -102,14 +95,15 @@ final class MusicPlayerLayoutTests: XCTestCase {
         }
     }
 
-    func testLandscapeRightColumnLeavesRoomForModeRow() {
-        // The right column (all controls) must be narrower than
-        // the safe width minus the cover and the inter-column gap,
-        // with the mode row (~267pt) as the widest single row.
+    func testLandscapeRightColumnLeavesRoomForTransport() {
+        // The right column (all controls) must be wider than the
+        // transport row — the widest fixed-width row now that the
+        // mode row is gone (build 37): 132pt of glyphs + 16pt
+        // side padding on each side = 164pt.
         for (w, h) in landscapeScreens {
             let cover = MusicPlayerLayout.landscapeCoverSize(safeWidth: w, safeHeight: h)
             let rightWidth = w - 48 - cover - 24
-            XCTAssertGreaterThan(rightWidth, 267, "\(w)x\(h): mode row would not fit")
+            XCTAssertGreaterThan(rightWidth, 164, "\(w)x\(h): transport would not fit")
         }
     }
 }

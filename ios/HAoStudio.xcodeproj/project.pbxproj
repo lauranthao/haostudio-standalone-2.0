@@ -171,6 +171,8 @@
 		0000000000000000000001D9 /* VodPlaybackSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001D8 /* VodPlaybackSettings.swift */; };
 		000000000000000000000125 /* VodDanmakuLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000124 /* VodDanmakuLayer.swift */; };
 		000000000000000000000127 /* VodGestures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000126 /* VodGestures.swift */; };
+		000000000000000000000207 /* LiveGestures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000206 /* LiveGestures.swift */; };
+		000000000000000000000209 /* DouyinSigner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000208 /* DouyinSigner.swift */; };
 		00000000000000000000012B /* VodSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000012A /* VodSettingsSheet.swift */; };
 		00000000000000000000015D /* BilibiliDanmaku.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000148 /* BilibiliDanmaku.swift */; };
 		00000000000000000000015E /* BilibiliSite.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000149 /* BilibiliSite.swift */; };
@@ -393,6 +395,8 @@
 		0000000000000000000001D8 /* VodPlaybackSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VodPlaybackSettings.swift; sourceTree = "<group>"; };
 		000000000000000000000124 /* VodDanmakuLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VodDanmakuLayer.swift; sourceTree = "<group>"; };
 		000000000000000000000126 /* VodGestures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VodGestures.swift; sourceTree = "<group>"; };
+		000000000000000000000206 /* LiveGestures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveGestures.swift; sourceTree = "<group>"; };
+		000000000000000000000208 /* DouyinSigner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DouyinSigner.swift; sourceTree = "<group>"; };
 		00000000000000000000012A /* VodSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VodSettingsSheet.swift; sourceTree = "<group>"; };
 		000000000000000000000148 /* BilibiliDanmaku.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BilibiliDanmaku.swift; sourceTree = "<group>"; };
 		000000000000000000000149 /* BilibiliSite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BilibiliSite.swift; sourceTree = "<group>"; };
@@ -544,6 +548,7 @@
 				000000000000000000000112 /* VideoDriver.swift */,
 				000000000000000000000124 /* VodDanmakuLayer.swift */,
 				000000000000000000000126 /* VodGestures.swift */,
+				000000000000000000000206 /* LiveGestures.swift */,
 				00000000000000000000012A /* VodSettingsSheet.swift */,
 			); path = Playback; sourceTree = "<group>"; };
 		000000000000000000000060 /* Storage */ = {isa = PBXGroup; children = (
@@ -571,6 +576,7 @@
 				000000000000000000000149 /* BilibiliSite.swift */,
 				00000000000000000000014A /* BilibiliWbi.swift */,
 				00000000000000000000014B /* DouyinDanmaku.swift */,
+				000000000000000000000208 /* DouyinSigner.swift */,
 				00000000000000000000014C /* DouyinSite.swift */,
 				00000000000000000000014D /* DouyuDanmaku.swift */,
 				00000000000000000000014E /* DouyuSite.swift */,
@@ -1003,11 +1009,13 @@
 				0000000000000000000001D9 /* VodPlaybackSettings.swift in Sources */,
 				000000000000000000000125 /* VodDanmakuLayer.swift in Sources */,
 				000000000000000000000127 /* VodGestures.swift in Sources */,
+				000000000000000000000207 /* LiveGestures.swift in Sources */,
 				00000000000000000000012B /* VodSettingsSheet.swift in Sources */,
 				00000000000000000000015D /* BilibiliDanmaku.swift in Sources */,
 				00000000000000000000015E /* BilibiliSite.swift in Sources */,
 				00000000000000000000015F /* BilibiliWbi.swift in Sources */,
 				000000000000000000000160 /* DouyinDanmaku.swift in Sources */,
+				000000000000000000000209 /* DouyinSigner.swift in Sources */,
 				000000000000000000000161 /* DouyinSite.swift in Sources */,
 				000000000000000000000162 /* DouyuDanmaku.swift in Sources */,
 				000000000000000000000163 /* DouyuSite.swift in Sources */,

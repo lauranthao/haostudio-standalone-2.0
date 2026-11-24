@@ -347,6 +347,12 @@ struct DanmakuMessage: Identifiable {
 enum LiveError: Error {
     case invalidRoomId
     case offline
+    /// The room is live (room info says so) but no playable
+    /// quality parsed out of the response — a parse/signing
+    /// failure, NOT an ended room. Distinct from `offline` so
+    /// the session still tries the list-feed fallback instead
+    /// of treating it as a definitive offline (build 37, D9).
+    case noQualities
     case transportFailed(String)
     case apiRejected(code: Int, message: String)
     case emptyResponse
@@ -361,6 +367,8 @@ extension LiveError: LocalizedError {
             return "房间号为空"
         case .offline:
             return "主播未开播"
+        case .noQualities:
+            return "房间正在直播，但未解析到可播放的画质"
         case .transportFailed(let detail):
             return "网络请求失败：\(detail)"
         case .apiRejected(let code, let message):

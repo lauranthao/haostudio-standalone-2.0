@@ -23,7 +23,6 @@ import SwiftUI
 struct MiniPlayerBar: View {
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var musicPlayer: MusicPlayerViewModel
-    @EnvironmentObject private var bottomChrome: BottomChromeState
     @Environment(\.haoTheme) private var theme
 
     /// Opens the full player for the current item.
@@ -51,13 +50,7 @@ struct MiniPlayerBar: View {
     var body: some View {
         ZStack(alignment: .top) {
             if let item = displayItem {
-                Group {
-                    if bottomChrome.isMinimized {
-                        inlineBody(item: item)
-                    } else {
-                        expandedBody(item: item)
-                    }
-                }
+                expandedBody(item: item)
                 // Build 36, item 8 (item 12 follow-up): row actions
                 // (download / play-next) set playerVM.toast, but
                 // the toast was only rendered inside the full
@@ -102,7 +95,7 @@ struct MiniPlayerBar: View {
     /// The cover with the morph attached when the caller supplied
     /// the namespace. The full player attaches the same id to its
     /// cover, so tapping the strip grows this one cover into the
-    /// full player's cover (36 — or 32 inline — up to 340). The
+    /// full player's cover (36 up to 340). The
     /// corner radius is NOT part of the morph (matchedGeometryEffect
     /// moves the frame only): it snaps at the end of the transition.
     @ViewBuilder
@@ -113,52 +106,6 @@ struct MiniPlayerBar: View {
         } else {
             cover
         }
-    }
-
-    /// Minimized (inline) form: the strip slides down beside the
-    /// minimized tab capsule and narrows to the remaining width.
-    /// iOS 26 NowPlayingTray recipe, applied as written: cover +
-    /// one title line + play/pause only — the artist line, the next
-    /// button and the chevron are dropped while inline (the whole
-    /// strip is still the tap target for the full player). Same
-    /// height as the tab bar content (56) so the row reads as one
-    /// unit with the capsule beside it.
-    private func inlineBody(item: PlaybackItem) -> some View {
-        HStack(spacing: 12) {
-            // b36-1: the strip tap is a gesture, not a Button (see
-            // expandedBody — a Spacer-expanded strip Button can
-            // claim the tap meant for the play/pause button).
-            HStack(spacing: 12) {
-                // Beans MiniPlayerView: cover 36, radius 7 (expanded).
-                // Inline the iOS 26 recipe uses 32 / radius 6.
-                morphCover(
-                    urlString: item.coverURL?.absoluteString ?? "",
-                    size: HaoLayout.miniInlineCoverSize, cornerRadius: 6)
-                Text(item.title)
-                    .font(.haoFootnoteStrong)
-                    .foregroundStyle(theme.textPrimary)
-                    .lineLimit(1)
-                Spacer()
-            }
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onTapFullPlayer)
-            .accessibilityAddTraits(.isButton)
-            if item.kind == .music {
-                Button(action: { musicPlayer.togglePlayPauseOrRetry() }) {
-                    Image(systemName: musicPlayer.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.haoCalloutStrong)
-                        .foregroundStyle(theme.textPrimary)
-                        .frame(width: 44, height: 44)
-                }
-                .buttonStyle(MusicPressScaleStyle())
-                .contentShape(Rectangle())
-                .accessibilityLabel(musicPlayer.isPlaying ? "暂停" : "播放")
-            }
-        }
-        .padding(.horizontal, HaoLayout.miniPlayerContentPadding)
-        .frame(height: HaoLayout.tabBarContentHeight)
-        .haoGlassRoundedRect()
-        .accessibilityLabel("迷你播放器：\(item.title)，点按打开全屏播放器")
     }
 
     /// Expanded form: the wide strip above the full tab bar.

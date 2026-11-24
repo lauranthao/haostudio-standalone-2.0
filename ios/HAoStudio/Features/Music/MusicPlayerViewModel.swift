@@ -62,9 +62,6 @@ final class MusicPlayerViewModel: ObservableObject {
     @Published private(set) var duration: Double = 0
     @Published private(set) var playMode: MusicQueueMode = .sequential
     @Published private(set) var playbackSpeed: Double = 1.0
-    /// Now Playing volume slider (0...1). Mirrors the player's
-    /// userVolume; the view is the only writer (setVolume).
-    @Published private(set) var volume: Double = 1.0
     /// The tier ACTUALLY playing, or nil before the first report.
     /// The badge shows this, never the target tier (Master honesty).
     @Published private(set) var actualQuality: AudioQuality?
@@ -161,17 +158,6 @@ final class MusicPlayerViewModel: ObservableObject {
         self.showLyricTranslation = MusicLibraryStore.lyricShowTranslation()
         self.playMode = MusicQueueMode.fromCode(MusicLibraryStore.playModeCode())
         self.playbackSpeed = MusicLibraryStore.speed()
-        // Volume slider: restore the persisted position and push
-        // it into the player (the player also reads the key at
-        // init, so this is a no-op repeat on a fresh launch — but
-        // the view model is recreated per app launch too, and the
-        // slider must show the stored value, not 1.0). Read the
-        // stored value into a local: `self.volume` cannot be read
-        // here yet — not all stored properties (sleepTimer below)
-        // are initialized at this point.
-        let storedVolume = MusicLibraryStore.musicVolume()
-        self.volume = storedVolume
-        player.setUserVolume(storedVolume)
         // Handlers are attached AFTER the timer exists: capturing
         // self inside its own initializer is a compile error
         // (self.sleepTimer is not initialized yet at that point).
@@ -715,17 +701,6 @@ final class MusicPlayerViewModel: ObservableObject {
         playbackSpeed = clamped
         MusicLibraryStore.setSpeed(clamped)
         player.setSpeed(clamped)
-    }
-
-    /// Now Playing volume slider: clamp, persist, push to the
-    /// player. Live on every drag tick (like Apple Music) — no
-    /// commit-on-release, no rollback: volume has no failure mode
-    /// to roll back from, and the slider must track the finger.
-    func setVolume(_ value: Double) {
-        let clamped = min(1.0, max(0.0, value))
-        volume = clamped
-        MusicLibraryStore.setMusicVolume(clamped)
-        player.setUserVolume(clamped)
     }
 
     func setTargetQuality(_ quality: AudioQuality) {

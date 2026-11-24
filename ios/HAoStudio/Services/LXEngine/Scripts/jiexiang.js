@@ -793,9 +793,12 @@ const TX_BACKENDS = [
         headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' },
       })
       const d = res.body
-      if (d && d.data && d.data.url) return d.data.url
-      if (d && d.url) return d.url
-      throw new Error('vkeys: 无数据')
+      // (b37 M1-b) v2 now mints trial-only vkeys (RS02… / 音乐试听 /
+      // 付费): reject them so the race falls through to vkeys旧版
+      // (v3 song/link), which still serves full-length audio.
+      const url = (d && d.data && d.data.url) || (d && d.url) || ''
+      if (url && !/RS0/i.test(url) && d?.data?.quality !== '音乐试听' && d?.data?.pay !== '付费') return url
+      throw new Error('vkeys: 无数据或仅试听')
     },
   },
 
