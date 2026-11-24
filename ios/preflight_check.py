@@ -186,7 +186,7 @@ check("4l. every Swift file ref resolves to a file on disk", not _missing,
 
 # --- 5. Swift sources: balance + forbidden leftovers ----------------------
 swift_files = sorted(APP_DIR.rglob("*.swift"))
-check("5. Swift file count (final = 160: 157 + HaoImagePolicy.swift + HaoImageLoader.swift [b36-item10-leg6: shared image loader] + LiveGestures.swift [b37-L3: live drag gestures])", len(swift_files) == 160,
+check("5. Swift file count (final = 161: 157 + HaoImagePolicy.swift + HaoImageLoader.swift [b36-item10-leg6: shared image loader] + LiveGestures.swift [b37-L3: live drag gestures] + DouyinSigner.swift [b37-L5: A-Bogus port])", len(swift_files) == 161,
       f"{len(swift_files)}: {[f.name for f in swift_files]}")
 for f in swift_files:
     s = f.read_text()
