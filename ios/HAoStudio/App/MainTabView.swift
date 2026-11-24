@@ -74,7 +74,11 @@ struct MainTabView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: HaoLayout.floatingStackSpacing) {
+                // Beans dock: the mini player shares the tab bar's
+                // 12pt side margins (it used to span full width,
+                // which read wider — and taller — than the bar).
                 MiniPlayerBar(onTapFullPlayer: { showingFullPlayer = true })
+                    .padding(.horizontal, HaoLayout.tabBarHorizontalMargin)
                 GlassTabBar(items: tabBarItems, selection: $selectedTab, tabAccent: settingsStore.tabAccentColor)
                     .padding(.horizontal, HaoLayout.tabBarHorizontalMargin)
             }

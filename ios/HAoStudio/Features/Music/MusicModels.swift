@@ -204,13 +204,16 @@ struct MusicSong: Equatable, Identifiable {
     /// Convert a contract MusicTrack (LX leg) to a local song.
     /// Assumed MusicTrack field types (see the C-leg report):
     /// coverURL is a String, duration is Int seconds.
+    /// The cover is upgraded http -> https at this boundary: ATS
+    /// (NSAllowsArbitraryLoads = false) blocks http fetches, so a
+    /// raw http cover would silently fail everywhere downstream.
     init(from track: MusicTrack) {
         self.init(
             songId: track.id,
             title: track.title,
             artist: track.artist,
             album: track.album,
-            cover: track.coverURL?.absoluteString ?? "",
+            cover: MusicText.toHttps(track.coverURL?.absoluteString ?? ""),
             platform: MusicPlatform.fromSourceID(track.sourceID),
             dur: track.duration.map { Int($0) } ?? 0,
             sourceID: track.sourceID
@@ -218,8 +221,14 @@ struct MusicSong: Equatable, Identifiable {
     }
 
     /// The playback item for this song (coordinator contract).
+    /// The cover MUST travel with the item: the mini player and
+    /// the Now Playing artwork chain read coverURL off this item
+    /// only — dropping it here (as before) left both with no
+    /// artwork at all, whatever the song carried. Upgraded
+    /// http -> https for the same ATS reason as above.
     func toPlaybackItem() -> PlaybackItem {
         PlaybackItem(id: identityKey, kind: .music, title: title, artist: artist,
+                     coverURL: cover.isEmpty ? nil : URL(string: MusicText.toHttps(cover)),
                      localFileURL: localPath.isEmpty ? nil : URL(fileURLWithPath: localPath))
     }
 }

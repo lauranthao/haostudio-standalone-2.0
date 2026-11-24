@@ -371,10 +371,12 @@ enum MusicLibraryStore {
         var list = getRecent().filter { $0.identityKey != song.identityKey }
         list.insert(song, at: 0)
         writeArray(named: recentCollection, Array(list.prefix(maxRecent)).map { $0.toJSON() })
+        NotificationCenter.default.post(name: .haoMusicRecentChanged, object: nil)
     }
 
     static func clearRecent() {
         writeArray(named: recentCollection, [])
+        NotificationCenter.default.post(name: .haoMusicRecentChanged, object: nil)
     }
 
     // MARK: - Listen log

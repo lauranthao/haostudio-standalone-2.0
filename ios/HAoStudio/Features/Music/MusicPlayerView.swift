@@ -46,23 +46,30 @@ struct MusicPlayerView: View {
             playerBackground
             VStack(spacing: 0) {
                 topBar
+                    .frame(maxWidth: .infinity)
                 coverOrLyrics
                     .padding(.top, 8)
                 qualityBadge
                     .padding(.top, 12)
                 titleRow
                     .padding(.top, 10)
+                    .frame(maxWidth: .infinity)
                 progressSection
                     .padding(.top, 14)
+                    .frame(maxWidth: .infinity)
                 transportRow
                     .padding(.top, 6)
+                    .frame(maxWidth: .infinity)
                 modeRow
                     .padding(.top, 10)
+                    .frame(maxWidth: .infinity)
                 Spacer()
                 bottomRow
                     .padding(.bottom, 8)
+                    .frame(maxWidth: .infinity)
             }
             .padding(.horizontal, 24)
+            .frame(maxWidth: .infinity)
             if let toast = playerVM.toast {
                 VStack {
                     Spacer()
@@ -123,8 +130,16 @@ struct MusicPlayerView: View {
             } else {
                 Color.black
             }
+            // Uniform dim + top-to-bottom gradient: the blurred
+            // cover can be LIGHT (the reported song's cover reads
+            // ~137 grey at the top of the screenshot), and white
+            // 0.72-opacity text over it falls below 2:1 contrast —
+            // illegible. The dim guarantees every white text role
+            // stays legible on any cover while the tint still shows
+            // through; on a dark cover it is invisible.
+            Color.black.opacity(0.42)
             LinearGradient(
-                colors: [Color.black.opacity(0.25), Color.black.opacity(0.55)],
+                colors: [Color.black.opacity(0.30), Color.black.opacity(0.45)],
                 startPoint: .top, endPoint: .bottom
             )
         }
@@ -173,11 +188,13 @@ struct MusicPlayerView: View {
     }
 
     private var coverArea: some View {
-        Button(action: { playerVM.toggleLyrics() }) {
+        let size = min(UIScreen.main.bounds.width - 48, 340)
+        return Button(action: { playerVM.toggleLyrics() }) {
             MusicCoverView(
                 urlString: playerVM.currentSong?.cover ?? "",
-                size: min(UIScreen.main.bounds.width - 48, 340),
-                cornerRadius: 12
+                size: size,
+                // Beans PlayerView: min(24, size * 0.08) — 24 at 340.
+                cornerRadius: min(24, size * 0.08)
             )
             .shadow(color: .black.opacity(0.35), radius: 24, y: 12)
         }
@@ -388,6 +405,8 @@ struct MusicPlayerView: View {
                         .font(.system(size: 14, weight: .semibold))
                     Text(playerVM.playMode.label)
                         .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
                 .foregroundStyle(.white.opacity(0.85))
             }
@@ -417,6 +436,8 @@ struct MusicPlayerView: View {
                         .font(.system(size: 14, weight: .semibold))
                     Text(playerVM.sleepActive ? playerVM.sleepRemainingText : "睡眠")
                         .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
                 .foregroundStyle(.white.opacity(0.85))
             }
@@ -428,6 +449,8 @@ struct MusicPlayerView: View {
                         .font(.system(size: 14, weight: .semibold))
                     Text("均衡器")
                         .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
                 .foregroundStyle(.white.opacity(0.85))
             }

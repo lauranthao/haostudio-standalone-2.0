@@ -5,6 +5,7 @@
 // downloads / local files); the shelf tiles navigate to the search,
 // daily, plaza, charts and report pages.
 
+import Combine
 import SwiftUI
 
 @MainActor
@@ -17,12 +18,22 @@ final class MusicHomeViewModel: ObservableObject {
     @Published var playlistsExpanded = true
     @Published var recentExpanded = true
 
+    private var cancellables = Set<AnyCancellable>()
+
     /// Today's date line (Flutter homeDateText).
     var dateText: String { musicHomeDateText(Date()) }
 
     init() {
         playlistsExpanded = MusicLibraryStore.playlistsExpanded()
         recentExpanded = MusicLibraryStore.recentExpanded()
+        // 最近播放实时更新 (chen 2026-11-20): a song can start
+        // from any page while the user stays on this tab, so the
+        // list reloads the moment the store changes — not only
+        // when the tab re-appears (onAppear reload stays as well).
+        NotificationCenter.default.publisher(for: .haoMusicRecentChanged)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.reload() }
+            .store(in: &cancellables)
     }
 
     func reload() {
