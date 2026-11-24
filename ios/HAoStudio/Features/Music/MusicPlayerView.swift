@@ -6,18 +6,14 @@
 // progress (elapsed left, remaining right) -> transport ->
 // bottom row of 3 pure icons (lyrics / AirPlay / queue). No text
 // labels on the bottom controls.
-// - immersive face: blurred cover + cover-tinted gradient
-//   background (Apple Music's album-art-derived gradient — the
-//   dominant cover colour through a darker variant, not a black
-//   wash); white text in opacity levels (1.0 / 0.85 / 0.72 / 0.55).
-//   The dim is light (0.22 + a bottom-weighted gradient) so the
-//   cover tint actually shows — chen's screenshot is a deep blue
-//   cover-tinted gradient — while the bottom-weighted gradient
-//   keeps the transport / bottom rows legible on a light cover.
-// - large square cover, centred, rounded corners (min(16,
-//   size * 0.05)); below it, left-aligned bold title + lighter
-//   artist, star + … on the right; quality badge below the cover
-//   (the ACTUAL tier — a drop-down never shows as Master).
+// - immersive face: the cover's own colours — Muzify's ArtColor
+//   clamps (MIT) for the tint, Kumone's 3-layer backdrop (LGPL,
+//   numbers re-implemented) for the gradient; white text in
+//   opacity levels (1.0 / 0.85 / 0.72 / 0.55).
+// - large square cover, centred, rounded corners 8 (Muzify);
+//   below it, left-aligned bold title + lighter artist, star +
+//   … on the right; quality badge below the cover (the ACTUAL
+//   tier — a drop-down never shows as Master).
 // - thin progress bar (4pt, 10pt white knob), elapsed left,
 //   remaining right; drag changes only local state, seek fires
 //   once on release.
@@ -103,6 +99,12 @@ struct MusicPlayerView: View {
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @Environment(\.dismiss) private var dismiss
 
+    /// Dominant cover colour for the background gradient (b38,
+    /// item 1): the average cover colour, saturation-boosted, so
+    /// the background reads as the cover's tint. Nil while the
+    /// cover loads or when there is no cover — the background
+    /// falls back to black + blurred cover.
+    @State private var coverTint: UIColor?
     @State private var showQueue = false
     @State private var showMore = false
     @State private var showSleep = false
@@ -139,6 +141,19 @@ struct MusicPlayerView: View {
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
+        }
+        // Cover tint follows the song (b38, item 1): the old
+        // tint is cleared synchronously on a song change, so the
+        // previous song's colour never lingers; a stale load
+        // result is dropped when the cover has moved on.
+        .task(id: playerVM.currentSong?.identityKey) {
+            let cover = playerVM.currentSong?.cover ?? ""
+            coverTint = nil
+            guard !cover.isEmpty else { return }
+            HaoImageLoader.shared.load(urlString: cover, targetWidthPoints: 120, targetHeightPoints: 120) { image in
+                guard let image = image, playerVM.currentSong?.cover == cover else { return }
+                coverTint = image.haoAverageTint()
+            }
         }
         .sheet(isPresented: $showQueue) { MusicQueueView() }
         .sheet(isPresented: $showMore) { moreSheet }
@@ -217,30 +232,76 @@ struct MusicPlayerView: View {
     // MARK: - Portrait body (Apple Music Now Playing, top to bottom)
 
     private func portraitBody(geo: GeometryProxy) -> some View {
+        // b38, item 1: the slack is shared across the column
+        // (one Spacer per gap, minLength 0) instead of a single
+        // Spacer above the bottom row — the old layout left one
+        // ~116pt dead gap between transport and bottom row on
+        // chen's phone while the top sat tight. The spacers
+        // collapse to 0 on short phones, so the minimum height
+        // (and fitsOneScreen) is unchanged.
         VStack(spacing: 0) {
             topBar
                 .frame(maxWidth: .infinity)
+            Spacer(minLength: 0)
             coverOrLyrics(size: MusicPlayerLayout.coverSize(
                 screenWidth: geo.size.width, screenHeight: geo.size.height))
                 .padding(.top, 8)
+            Spacer(minLength: 0)
             qualityBadge
                 .padding(.top, 12)
+            Spacer(minLength: 0)
             titleRow
                 .padding(.top, 10)
                 .frame(maxWidth: .infinity)
+            if playerVM.loadFailed {
+                loadFailedBanner
+                    .padding(.top, 10)
+            }
+            Spacer(minLength: 0)
             progressSection
                 .padding(.top, 14)
                 .frame(maxWidth: .infinity)
+            Spacer(minLength: 0)
             transportRow
                 .padding(.top, 6)
                 .frame(maxWidth: .infinity)
-            Spacer()
+            Spacer(minLength: 0)
             bottomRow
                 .padding(.bottom, 8)
                 .frame(maxWidth: .infinity)
         }
         .padding(.horizontal, 24)
         .frame(width: contentWidth(geo: geo))
+    }
+
+    /// Persistent "无法播放" state (b38, item 1): the old player
+    /// sat silently at 0:00 after a failed request — only a 2 s
+    /// toast said anything. The banner names the failure and
+    /// offers a retry in place; the progress bar underneath stays
+    /// an honest 0:00 / -0:00.
+    private var loadFailedBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.white.opacity(0.72))
+            Text("无法播放")
+                .font(.haoSubhead)
+                .foregroundStyle(.white.opacity(0.72))
+            Button("重试") {
+                playerVM.retryCurrentSong()
+            }
+            .font(.haoSubheadStrong)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(.white.opacity(0.35), lineWidth: 0.5)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("重试播放")
+        }
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Landscape body (two columns: cover left, controls right)
@@ -268,6 +329,10 @@ struct MusicPlayerView: View {
                 titleRow
                     .padding(.top, 8)
                     .frame(maxWidth: .infinity)
+                if playerVM.loadFailed {
+                    loadFailedBanner
+                        .padding(.top, 8)
+                }
                 progressSection
                     .padding(.top, 8)
                     .frame(maxWidth: .infinity)
@@ -290,44 +355,67 @@ struct MusicPlayerView: View {
 
     private var playerBackground: some View {
         ZStack {
-            if let cover = playerVM.currentSong?.cover, !cover.isEmpty {
-                // Shared loader (build 36 item 10 leg 6): the same
-                // cover the main cover view loads, downsampled to
-                // screen size — one download for both, via the
-                // disk cache, instead of two independent full-size
-                // fetches. The loader also upgrades http -> https,
-                // which this path never did (an http cover silently
-                // stayed black here while the main cover loaded).
-                let target = HaoImageLoader.fullScreenTargetPoints
-                HaoCachedImage(
-                    urlString: cover,
-                    targetWidth: CGFloat(target.width),
-                    targetHeight: CGFloat(target.height)
-                ) { image in
-                    image.resizable().scaledToFill()
-                        .blur(radius: 60)
-                        .scaleEffect(1.2)
-                } placeholder: {
+            if let tint = coverTint {
+                // Kumone backdrop (LGPL, reference only — numbers
+                // re-implemented, no code copied), three layers:
+                // primary -> secondary diagonal gradient, a white
+                // 0.12 radial lift at the top-left, and a
+                // clear -> black 0.35 bottom press for legibility.
+                // Gradient-only while the tint is known — both
+                // refs (Kumone, Muzify) do the background this
+                // way; the blurred-cover layer underneath used to
+                // mute the tint back to grey.
+                LinearGradient(
+                    colors: [Color(tint), Color(tint.haoSecondary())],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+                RadialGradient(
+                    colors: [.white.opacity(0.12), .clear],
+                    center: .topLeading, startRadius: 0, endRadius: 700
+                )
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.35)],
+                    startPoint: .top, endPoint: .bottom
+                )
+            } else {
+                // No tint yet (cover loading / no cover): the old
+                // blurred-cover backdrop with light veils, so the
+                // screen is never pure black while waiting.
+                if let cover = playerVM.currentSong?.cover, !cover.isEmpty {
+                    // Shared loader (build 36 item 10 leg 6): the same
+                    // cover the main cover view loads, downsampled to
+                    // screen size — one download for both, via the
+                    // disk cache, instead of two independent full-size
+                    // fetches. The loader also upgrades http -> https,
+                    // which this path never did (an http cover silently
+                    // stayed black here while the main cover loaded).
+                    let target = HaoImageLoader.fullScreenTargetPoints
+                    HaoCachedImage(
+                        urlString: cover,
+                        targetWidth: CGFloat(target.width),
+                        targetHeight: CGFloat(target.height)
+                    ) { image in
+                        image.resizable().scaledToFill()
+                            .blur(radius: 60)
+                            .scaleEffect(1.2)
+                    } placeholder: {
+                        Color.black
+                    }
+                } else {
                     Color.black
                 }
-            } else {
-                Color.black
+                Color.black.opacity(0.08)
+                LinearGradient(
+                    colors: [Color.black.opacity(0.0), Color.black.opacity(0.22)],
+                    startPoint: .top, endPoint: .bottom
+                )
             }
-            // Apple Music's Now Playing background is the cover's
-            // own colours (dominant colour through a darker
-            // variant), not a black wash: the dim is light and the
-            // gradient is bottom-weighted, so the tint shows
-            // through (chen's screenshot: deep blue) while the
-            // lower rows — where the white controls sit — stay
-            // dark enough to read on any cover, light or dark.
-            // The old 0.42 uniform dim muted every cover to grey.
-            Color.black.opacity(0.22)
-            LinearGradient(
-                colors: [Color.black.opacity(0.05), Color.black.opacity(0.40)],
-                startPoint: .top, endPoint: .bottom
-            )
         }
         .ignoresSafeArea()
+        // Kumone backdrop animates colour changes over 0.8 s;
+        // keyed on the song so a song change cross-fades the tint
+        // instead of snapping it.
+        .animation(.easeInOut(duration: 0.8), value: playerVM.currentSong?.identityKey ?? "")
     }
 
     // MARK: - Top bar
@@ -388,7 +476,12 @@ struct MusicPlayerView: View {
     private func coverArea(size: CGFloat) -> some View {
         Button(action: { playerVM.toggleLyrics() }) {
             morphCover(size: size)
-            .shadow(color: .black.opacity(0.35), radius: 24, y: 12)
+            // Muzify (MIT): black 45%, radius 24, y 12.
+            .shadow(color: .black.opacity(0.45), radius: 24, y: 12)
+            // Muzify (MIT): the cover breathes with playback —
+            // 1.0 playing, 0.92 paused.
+            .scaleEffect(playerVM.isPlaying ? 1 : 0.92)
+            .animation(.spring(response: 0.45, dampingFraction: 0.75), value: playerVM.isPlaying)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("封面，点按查看歌词")
@@ -407,10 +500,8 @@ struct MusicPlayerView: View {
         let cover = MusicCoverView(
             urlString: playerVM.currentSong?.cover ?? "",
             size: size,
-            // Apple Music Now Playing: 16pt at 340 (was Beans'
-            // min(24, size * 0.08) — 24 read squarer than Apple's
-            // near-square large cover).
-            cornerRadius: min(16, size * 0.05)
+            // Muzify (MIT, MobileNowPlaying L20-25): radius 8.
+            cornerRadius: 8
         )
         if let namespace = coverMorphNamespace {
             cover.matchedGeometryEffect(id: HaoLayout.playerCoverMorphID, in: namespace)
@@ -990,5 +1081,82 @@ enum MusicPlayerLayout {
         landscapeCoverSize(safeWidth: safeWidth, safeHeight: safeHeight)
             + landscapeBadgeHeight + 12 <= safeHeight
             && landscapeRightColumnHeight + 24 <= safeHeight
+    }
+}
+
+/// Cover-tint helpers (b38, item 1): the player background is the
+/// cover's own colour — Apple Music's album-art-derived gradient.
+/// No new dependency: the average is sampled on an 8x8 grid with
+/// Core Graphics, and the clamps are Muzify's ArtColor (MIT,
+/// Sources/Muzify/UI/Theme.swift L372): saturation <0.12 stays,
+/// else 0.45–0.8; brightness 0.38–0.55. The secondary gradient
+/// stop is Kumone's rule (LGPL, reference only — numbers
+/// re-implemented here, no code copied): hue +0.06, brightness
+/// half the primary's, clamped 0.12–0.26.
+private extension UIImage {
+    func haoAverageTint() -> UIColor? {
+        guard let cg = cgImage else { return nil }
+        let w = 8, h = 8
+        guard let ctx = CGContext(
+            data: nil, width: w, height: h, bitsPerComponent: 8,
+            bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        guard let data = ctx.data else { return nil }
+        let px = data.bindMemory(to: UInt8.self, capacity: w * h * 4)
+        var r = 0, g = 0, b = 0, n = 0
+        for i in 0..<(w * h) {
+            guard px[i * 4 + 3] > 16 else { continue }
+            r += Int(px[i * 4])
+            g += Int(px[i * 4 + 1])
+            b += Int(px[i * 4 + 2])
+            n += 1
+        }
+        guard n > 0 else { return nil }
+        let base = UIColor(
+            red: CGFloat(r) / CGFloat(n) / 255,
+            green: CGFloat(g) / CGFloat(n) / 255,
+            blue: CGFloat(b) / CGFloat(n) / 255,
+            alpha: 1
+        )
+        var hue: CGFloat = 0, sat: CGFloat = 0, bri: CGFloat = 0, alpha: CGFloat = 0
+        if base.getHue(&hue, saturation: &sat, brightness: &bri, alpha: &alpha) {
+            // Muzify ArtColor (MIT, Sources/Muzify/UI/Theme.swift
+            // L372): near-grey stays near-grey; otherwise clamp
+            // saturation 0.45–0.8 and brightness 0.38–0.55, so
+            // the tint reads as colour and the white controls
+            // stay legible on any cover.
+            let clampedSat = sat < 0.12 ? sat : min(0.8, max(0.45, sat))
+            return UIColor(
+                hue: hue,
+                saturation: clampedSat,
+                brightness: min(0.55, max(0.38, bri)),
+                alpha: 1
+            )
+        }
+        // Greyscale cover: no hue to boost — keep its lightness.
+        var white: CGFloat = 0
+        base.getWhite(&white, alpha: &alpha)
+        return UIColor(white: min(0.6, max(0.25, white)), alpha: 1)
+    }
+}
+
+private extension UIColor {
+    /// Secondary gradient stop (Kumone ArtworkColors rule, see
+    /// the file header above): hue +0.06, brightness half the
+    /// primary's, clamped 0.12–0.26.
+    func haoSecondary() -> UIColor {
+        var hue: CGFloat = 0, sat: CGFloat = 0, bri: CGFloat = 0, alpha: CGFloat = 0
+        if getHue(&hue, saturation: &sat, brightness: &bri, alpha: &alpha) {
+            let shiftedHue = hue + 0.06 >= 1 ? hue + 0.06 - 1 : hue + 0.06
+            return UIColor(
+                hue: shiftedHue, saturation: sat,
+                brightness: min(0.26, max(0.12, bri * 0.5)), alpha: alpha
+            )
+        }
+        var white: CGFloat = 0
+        getWhite(&white, alpha: &alpha)
+        return UIColor(white: min(0.26, max(0.12, white * 0.5)), alpha: alpha)
     }
 }
