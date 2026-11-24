@@ -35,11 +35,12 @@
 // ticks); the conversion lives in EmbyClient.ticksFromSeconds.
 //
 // Item identity: the driver derives the Emby item id from the
-// stream URL (`EmbyClient.episodeIdFromStreamUrl`) — only Emby
-// direct streams match, so CMS lines never report, and no
-// source flag has to travel through the player. strm-direct
-// streams (remote http(s) target, no Emby URL) cannot be
-// reported this way and are skipped, never faked.
+// playback URL (`EmbyClient.episodeIdFromEmbyPlaybackUrl`) —
+// only Emby direct streams and the transcode master playlist
+// match, so CMS lines never report, and no source flag has
+// to travel through the player. strm-direct streams (remote
+// http(s) target, no Emby URL) cannot be reported this way
+// and are skipped, never faked.
 //
 // The reporter never logs anything: the auth token rides inside
 // the client, and no id, position or URL is ever printed.
