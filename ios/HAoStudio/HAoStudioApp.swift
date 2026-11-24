@@ -109,6 +109,15 @@ struct HAoStudioApp: App {
     /// S6: the launch-time automatic update check runs once per app
     /// launch (the 20 h throttle lives in the checker itself).
     @State private var didTriggerAutoUpdateCheck = false
+    /// The backup + update flow (S6-B, shared singleton). The
+    /// update sheet is attached at this app-root level — NOT in
+    /// the settings page — because the launch-time auto check
+    /// sets `updatePrompt` while the Home tab is up, and the
+    /// settings page only mounts when the My tab is selected
+    /// (MainTabView builds only the selected tab): a sheet
+    /// attached there never presented until the user opened 我的,
+    /// so the update prompt was missed or delayed.
+    @StateObject private var backupFlow = BackupUpdateFlow.shared
     /// S7-C: scenePhase drives the live background-audio handoff
     /// (S4 left `handleBackground` / `handleForeground` with no
     /// caller). The session guards both calls, so the launch-time
@@ -141,6 +150,17 @@ struct HAoStudioApp: App {
                         showingSplash = false
                     }
                 }
+            }
+            // Update sheet at the app root (see backupFlow above):
+            // presents on every tab, including the launch-time
+            // auto-check prompt while the Home tab is up.
+            .sheet(item: $backupFlow.updatePrompt) { result in
+                UpdatePromptSheet(
+                    result: result,
+                    onSkip: { backupFlow.skipPromptedVersion() },
+                    onLater: { backupFlow.dismissPrompt() }
+                )
+                .presentationDragIndicator(.visible)
             }
             .environmentObject(themeStore)
             .environmentObject(settingsStore)

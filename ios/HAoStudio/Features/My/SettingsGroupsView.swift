@@ -140,14 +140,10 @@ struct SettingsGroupsView: View {
                 backupFlow.alert = BackupUpdateAlert(title: "选择文件失败", message: error.localizedDescription)
             }
         }
-        .sheet(item: $backupFlow.updatePrompt) { result in
-            UpdatePromptSheet(
-                result: result,
-                onSkip: { backupFlow.skipPromptedVersion() },
-                onLater: { backupFlow.dismissPrompt() }
-            )
-            .presentationDragIndicator(.visible)
-        }
+        // The update sheet lives at the app root now
+        // (HAoStudioApp, backupFlow): it must present on every
+        // tab, including the launch-time auto-check prompt while
+        // the Home tab is up — this page only mounts on the My tab.
         .alert(
             backupFlow.alert?.title ?? "提示",
             isPresented: alertPresented,
