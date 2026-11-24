@@ -1,6 +1,6 @@
 // HAo Studio 2.0 — video detail page (S3-C leg).
 //
-// Infuse style (Flutter video_detail_page.dart):
+// VidHub style (Flutter video_detail_page.dart):
 // - The top is a clean COVER: large backdrop with a gradient
 //   fade-in animation. There is NO centre play button on the
 //   cover — the old vodBigPlay is deleted, not hidden.
@@ -378,7 +378,7 @@ struct VideoDetailContentView: View {
         .frame(maxWidth: .infinity, alignment: .center)
     }
 
-    // MARK: - Cover (Infuse style, no play button on it)
+    // MARK: - Cover (VidHub style, no play button on it)
 
     private var coverHeader: some View {
         ZStack(alignment: .bottomLeading) {
