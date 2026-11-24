@@ -437,12 +437,42 @@ struct MusicPlayerView: View {
                             .tint(.white)
                             .frame(height: height - 48)
                     } else if playerVM.lyrics.isEmpty {
-                        Text("暂无歌词")
-                            .font(.haoSubhead)
-                            .foregroundStyle(.white.opacity(0.55))
+                        if playerVM.lyricsLoadFailed {
+                            // §3.3 retry: the fetch returned nothing
+                            // on a platform that has a lyrics endpoint
+                            // (network failure or no lyrics published
+                            // — the API cannot tell the two apart, so
+                            // the wording stays neutral). The button is
+                            // the only tap target here: unlike the plain
+                            // empty state it must NOT flip back to the
+                            // cover, or the retry could never be tapped
+                            // without leaving lyrics.
+                            VStack(spacing: 12) {
+                                Text("未能加载歌词")
+                                    .font(.haoSubhead)
+                                    .foregroundStyle(.white.opacity(0.55))
+                                Button("重新加载") {
+                                    playerVM.retryLyrics()
+                                }
+                                .font(.haoSubheadStrong)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .strokeBorder(.white.opacity(0.35), lineWidth: 0.5)
+                                }
+                                .buttonStyle(.plain)
+                            }
                             .frame(height: height - 48)
-                            .contentShape(Rectangle())
-                            .onTapGesture { playerVM.toggleLyrics() }
+                        } else {
+                            Text("暂无歌词")
+                                .font(.haoSubhead)
+                                .foregroundStyle(.white.opacity(0.55))
+                                .frame(height: height - 48)
+                                .contentShape(Rectangle())
+                                .onTapGesture { playerVM.toggleLyrics() }
+                        }
                     } else {
                         ForEach(Array(playerVM.lyrics.enumerated()), id: \.offset) { index, line in
                             Button(action: {

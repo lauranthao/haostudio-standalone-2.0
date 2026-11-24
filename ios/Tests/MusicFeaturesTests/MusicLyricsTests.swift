@@ -124,4 +124,14 @@ final class MusicLyricsTests: XCTestCase {
             translation: "[00:10.00]你好\n[00:20.00]世界")
         XCTAssertEqual(lines.map { $0.translation }, ["你好", "世界"])
     }
+
+    // MARK: - Retry gate (§3.3)
+
+    func testHasLyricsEndpoint() {
+        XCTAssertTrue(MusicLyricsAPI.hasLyricsEndpoint(.wy))
+        XCTAssertTrue(MusicLyricsAPI.hasLyricsEndpoint(.tx))
+        XCTAssertTrue(MusicLyricsAPI.hasLyricsEndpoint(.kw))
+        XCTAssertFalse(MusicLyricsAPI.hasLyricsEndpoint(.kg))
+        XCTAssertFalse(MusicLyricsAPI.hasLyricsEndpoint(.mg))
+    }
 }

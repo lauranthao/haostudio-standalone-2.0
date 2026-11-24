@@ -75,6 +75,20 @@ final class MusicLyricsAPI {
         }
     }
 
+    /// Whether this platform has a lyrics endpoint at all
+    /// (task book §3.3 retry gate). Mirrors the switch in
+    /// `fetchLyricsUncached`: wy / tx / kw fetch, kg / mg
+    /// return nil immediately. The view model shows the retry
+    /// affordance only where a retry could return anything —
+    /// a Kugou / Migu song with no lyrics is an honest empty
+    /// state, not a failed load.
+    static func hasLyricsEndpoint(_ platform: MusicPlatform) -> Bool {
+        switch platform {
+        case .wy, .tx, .kw: return true
+        default: return false
+        }
+    }
+
     private func fetchLyricsUncached(for track: MusicTrack, completion: @escaping (Lyrics?) -> Void) {
         switch track.platform {
         case .wy:

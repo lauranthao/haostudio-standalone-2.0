@@ -84,6 +84,15 @@ final class MusicPlayerViewModel: ObservableObject {
     @Published private(set) var showLyrics = false
     @Published private(set) var lyrics: [LyricsLine] = []
     @Published private(set) var lyricsLoaded = false
+    /// True when the lyrics fetch returned nothing for a song on
+    /// a platform that HAS a lyrics endpoint (task book §3.3):
+    /// the view offers a retry instead of the plain "暂无歌词".
+    /// False for cached hits, for successful fetches, and for
+    /// platforms with no endpoint (kg / mg) — those are honest
+    /// empty states, not failed loads. `fetchLyrics` returns nil
+    /// both when the network fails and when no lyrics exist, so
+    /// the view's wording stays neutral ("未能加载歌词").
+    @Published private(set) var lyricsLoadFailed = false
     @Published private(set) var activeLyricIndex = -1
     @Published var lyricOffsetMs: Int {
         didSet {
@@ -881,10 +890,21 @@ final class MusicPlayerViewModel: ObservableObject {
         hapticTick()
     }
 
+    /// Retry the lyrics fetch (task book §3.3): the empty-lyrics
+    /// view offers this when the fetch returned nothing on a
+    /// platform that has a lyrics endpoint. A no-op without a
+    /// current song; re-runs the same cache-then-fetch path, so
+    /// a lyric cached since the failure loads without network.
+    func retryLyrics() {
+        guard let song = currentSong else { return }
+        loadLyrics(for: song)
+    }
+
     // MARK: - Lyrics
 
     private func loadLyrics(for song: MusicSong, fetchIfMissing: Bool = true) {
         lyricsLoaded = false
+        lyricsLoadFailed = false
         lyrics = []
         activeLyricIndex = -1
         // b36-item10: the lyrics-cache read used to run synchronously
@@ -914,6 +934,11 @@ final class MusicPlayerViewModel: ObservableObject {
             MusicLyricsAPI.shared.fetchLyrics(for: track) { [weak self] result in
                 guard let self = self else { return }
                 guard let result = result else {
+                    // §3.3 retry: nothing came back. Only a
+                    // platform with a lyrics endpoint counts as
+                    // a failed load — kg / mg have no endpoint,
+                    // so their empty state stays "暂无歌词".
+                    self.lyricsLoadFailed = MusicLyricsAPI.hasLyricsEndpoint(song.platform)
                     self.lyricsLoaded = true
                     return
                 }
@@ -1070,6 +1095,7 @@ final class MusicPlayerViewModel: ObservableObject {
         currentSong = nil
         lyrics = []
         lyricsLoaded = true
+        lyricsLoadFailed = false
         activeLyricIndex = -1
         // b36-item10: drop any in-flight background fav check for
         // the removed song — it must not re-light the star.
