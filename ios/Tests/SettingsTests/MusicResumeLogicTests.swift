@@ -133,6 +133,31 @@ final class MusicResumeLogicTests: XCTestCase {
             MusicResumeLogic.validatedResumeSeconds(stored: 120, duration: 0), 120)
     }
 
+    func testEndMarginBoundaryIsExact() {
+        // Exactly 5 s from the end (the margin): finished.
+        XCTAssertNil(MusicResumeLogic.validatedResumeSeconds(stored: 235, duration: 240))
+        // 6 s from the end: still a resume point.
+        XCTAssertEqual(
+            MusicResumeLogic.validatedResumeSeconds(stored: 234, duration: 240), 234)
+    }
+
+    // MARK: - Resume arming (H1: home "继续听" tap)
+
+    func testResumeArmingPassesPositiveValueThrough() {
+        XCTAssertEqual(MusicResumeLogic.resumeSecondsToArm(requested: 120), 120)
+        // Fractional checkpoints truncate to whole seconds,
+        // like the stored checkpoints (Int seconds).
+        XCTAssertEqual(MusicResumeLogic.resumeSecondsToArm(requested: 42.7), 42)
+    }
+
+    func testResumeArmingRejectsNilZeroAndNegative() {
+        // Every other caller passes nil: no seek, play from 0.
+        XCTAssertNil(MusicResumeLogic.resumeSecondsToArm(requested: nil))
+        // 0 / negative never arms a seek to 0.
+        XCTAssertNil(MusicResumeLogic.resumeSecondsToArm(requested: 0))
+        XCTAssertNil(MusicResumeLogic.resumeSecondsToArm(requested: -30))
+    }
+
     // MARK: - Save -> restore round trip (logic only)
 
     func testCheckpointThenRestoreRoundTrip() {

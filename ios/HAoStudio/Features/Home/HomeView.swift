@@ -191,8 +191,12 @@ struct HomeView: View {
                 // 24pt edge as every other section.
                 HStack(spacing: 12) {
                     ForEach(Array(viewModel.continueListening.enumerated()), id: \.element.id) { index, song in
-                        HomeSongCard(song: song) {
-                            playerVM.play(song: song, in: continueListeningQueue(for: song), startAt: 0)
+                        HomeSongCard(song: song, resumeSeconds: viewModel.continueListeningResumeSeconds) {
+                            // H1: the tap resumes from the stored
+                            // checkpoint (nil = recent fallback, from 0).
+                            playerVM.play(
+                                song: song, in: continueListeningQueue(for: song), startAt: 0,
+                                resumeFrom: viewModel.continueListeningResumeSeconds.map { Double($0) })
                         }
                     }
                 }
@@ -363,8 +367,13 @@ fileprivate func homeLivePlatform(from value: String) -> LivePlatform {
 
 /// One song in the horizontal "继续听" shelf: square cover +
 /// title + artist. Tap plays; the card itself holds no playback.
+/// `resumeSeconds` is the stored checkpoint behind this card
+/// (nil = recent-play fallback): shown as "上次听到 m:ss" and
+/// the value the tap seeks to — the label only ever appears
+/// together with the seek, never on its own.
 struct HomeSongCard: View {
     var song: MusicSong
+    var resumeSeconds: Int? = nil
     var onTap: () -> Void
 
     @Environment(\.haoTheme) private var theme
@@ -385,6 +394,12 @@ struct HomeSongCard: View {
                         .font(.haoCaption)
                         .foregroundStyle(theme.textSecondary)
                         .lineLimit(1)
+                    if let resumeSeconds = resumeSeconds {
+                        Text("上次听到 \(musicDurationText(seconds: resumeSeconds))")
+                            .font(.haoCaption)
+                            .foregroundStyle(theme.textSecondary)
+                            .lineLimit(1)
+                    }
                 }
                 .frame(width: 120, alignment: .leading)
             }

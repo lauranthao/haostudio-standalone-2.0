@@ -90,4 +90,18 @@ enum MusicResumeLogic {
         }
         return stored
     }
+
+    /// The seconds a play request arms for the one-shot resume
+    /// seek, from the `resumeFrom` it carries. Only the home
+    /// "继续听" tap passes a value (the stored checkpoint);
+    /// every other caller passes nil. A non-positive value arms
+    /// nothing — 0 / negative means "from the start", never a
+    /// seek to 0. The armed value is still re-validated against
+    /// the loaded duration before the seek lands (see
+    /// validatedResumeSeconds), so an over-long checkpoint
+    /// (track replaced by a shorter version) never seeks.
+    static func resumeSecondsToArm(requested: Double?) -> Int? {
+        guard let requested = requested, requested > 0 else { return nil }
+        return Int(requested)
+    }
 }

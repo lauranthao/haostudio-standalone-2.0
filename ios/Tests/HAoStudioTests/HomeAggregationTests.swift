@@ -212,6 +212,43 @@ final class HomeAggregationTests: XCTestCase {
             HomeViewModel.resumeSong(recent: [], listenLog: [], resumeMap: [:]))
     }
 
+    // MARK: - Continue listening resume seconds (H1)
+
+    /// The reload exposes the checkpoint behind the resume song,
+    /// so the card label and the tap's seek read the same value.
+    func testContinueListeningResumeSecondsExposed() {
+        let viewModel = HomeViewModel(liveStatusChecker: nil)
+        let recent = [song(songId: "1"), song(songId: "2")]
+        viewModel.reload(
+            videoHistory: [], recent: recent, listenLog: [],
+            resumeMap: ["wy|1": 120, "wy|2": 150],
+            follows: [], liveHistory: [], dailyPicks: [])
+        XCTAssertEqual(viewModel.continueListening.map { $0.songId }, ["1"])
+        XCTAssertEqual(viewModel.continueListeningResumeSeconds, 120)
+    }
+
+    /// No valid resume point: the card falls back to the first
+    /// recent play and carries no seconds — no "上次听到" label,
+    /// and the tap plays from 0.
+    func testContinueListeningResumeSecondsNilOnFallback() {
+        let viewModel = HomeViewModel(liveStatusChecker: nil)
+        let recent = [song(songId: "1")]
+        viewModel.reload(
+            videoHistory: [], recent: recent, listenLog: [],
+            resumeMap: ["wy|1": 5],
+            follows: [], liveHistory: [], dailyPicks: [])
+        XCTAssertEqual(viewModel.continueListening.map { $0.songId }, ["1"])
+        XCTAssertNil(viewModel.continueListeningResumeSeconds)
+    }
+
+    /// Nothing at all: no card, no seconds.
+    func testContinueListeningResumeSecondsNilWhenEmpty() {
+        let viewModel = HomeViewModel(liveStatusChecker: nil)
+        emptyReload(on: viewModel)
+        XCTAssertTrue(viewModel.continueListening.isEmpty)
+        XCTAssertNil(viewModel.continueListeningResumeSeconds)
+    }
+
     // MARK: - Hot live
 
     func testHotLiveMergesFollowsAndHistoryDeduped() {
