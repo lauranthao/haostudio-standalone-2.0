@@ -266,6 +266,12 @@ final class MusicPlayerViewModel: ObservableObject {
         }.store(in: &cancellables)
         player.$position.sink { [weak self] value in
             guard let self = self else { return }
+            // D5: the previous position, captured before the wrap
+            // branch below overwrites lastPosition — heardSeconds
+            // accumulates only the time actually heard, not the
+            // absolute position (a forward seek used to inflate
+            // the listen log by the whole jump).
+            let prevPosition = self.lastPosition
             // Sleep wall-clock deadline (S7-A): the 1 s ticker can
             // stall while the app is backgrounded, but position
             // updates keep flowing while audio plays — re-check the
@@ -309,7 +315,12 @@ final class MusicPlayerViewModel: ObservableObject {
                         self.heardTrackKey = song.identityKey
                         self.heardSeconds = 0
                     }
-                    self.heardSeconds = value
+                    // D5: accumulate the time actually heard.
+                    // Backward seeks / track changes contribute 0;
+                    // a forward seek contributes 0 (the jump itself
+                    // is not heard time) — only real playback ticks
+                    // add up.
+                    self.heardSeconds += max(0, value - prevPosition)
                 }
             }
             self.updateActiveLyric()
