@@ -68,6 +68,25 @@ struct GlassTabBar: View {
             tabAccent: tabAccent
         )
         .frame(height: HaoLayout.tabBarContentHeight)
+        // b36-8: the bar is a rounded rectangle like the mini, not
+        // a square slab — the system tab bar paints its background
+        // over its whole rectangular frame, so clip it to the
+        // shared floating-chrome radius and give it the same soft
+        // shadow as the mini (HaoGlassRoundedRect values). If iOS
+        // 26 already rounds the bar, clipping to the same radius
+        // is a visual no-op.
+        .clipShape(RoundedRectangle(
+            cornerRadius: HaoLayout.floatingChromeCornerRadius,
+            style: .continuous))
+        .shadow(
+            color: .black.opacity(colorScheme == .dark ? 0.28 : 0.10),
+            radius: 12, y: 4
+        )
+        // b36-8: a bare UITabBar emits no selection haptic of its
+        // own — the minimized capsule had one, the full bar had
+        // none. The capsule and the bar never render together, so
+        // this never double-fires with the capsule's feedback.
+        .sensoryFeedback(.selection, trigger: selection)
         // Vertical inner inset only (4 top / 4 bottom; total 64pt).
         // Horizontal padding used to be here too, but the system
         // tab bar paints its background over its own frame, so it
@@ -107,12 +126,16 @@ struct MinimizedTabCapsule: View {
 
     @EnvironmentObject private var bottomChrome: BottomChromeState
     @Environment(\.haoTheme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
 
     /// Index the tab drag started from (nil = not dragging).
     @State private var dragBaseIndex: Int? = nil
 
     private var selectedColor: Color {
-        tabAccent ?? theme.tabSelected
+        // b36-8: a near-invisible custom pick (black in dark,
+        // white in light) falls back to the theme's tabSelected
+        // instead of vanishing on the glass.
+        haoTabTint(tabAccent, scheme: colorScheme, fallback: theme.tabSelected)
     }
 
     var body: some View {
@@ -219,9 +242,12 @@ private struct SystemTabBar: UIViewRepresentable {
             tabBar.selectedItem = tabBar.items?[index]
         }
 
-        // Selected icon + label: theme.tabSelected (black / white).
-        // Never red, never the theme accent.
-        tabBar.tintColor = tabAccent.map(UIColor.init) ?? UIColor(theme.tabSelected)
+        // Selected icon + label: theme.tabSelected (black / white),
+        // or the user's custom tab accent — guarded so a
+        // near-invisible pick (black in dark, white in light)
+        // falls back to tabSelected instead of vanishing (b36-8).
+        tabBar.tintColor = UIColor(haoTabTint(
+            tabAccent, scheme: colorScheme, fallback: theme.tabSelected))
         // Unselected: primary at 80%.
         tabBar.unselectedItemTintColor = UIColor.label.withAlphaComponent(0.8)
 

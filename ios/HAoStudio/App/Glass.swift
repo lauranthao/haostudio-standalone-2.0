@@ -145,13 +145,22 @@ final class BottomChromeState: ObservableObject {
     /// uses a large navigation title, so the anchor rests ~+100,
     /// not 0 — and the absolute -16 / -64 thresholds needed
     /// ~165pt of scrolling to fire, or never fired on shorter
-    /// tabs). Learned as the highest offset ever seen (the top is
-    /// the highest the anchor ever gets); seeded at 0, so a tab
-    /// restored mid-scroll behaves exactly as before until the
-    /// top is seen once. Reset on tab change (MainTabView) — each
-    /// tab has its own rest offset, and a stale one from the
-    /// previous tab would minimize the new tab at its own top.
+    /// tabs). Learned from the FIRST report after a reset (b36-8:
+    /// learning it as a running max let a pull-to-refresh /
+    /// overscroll bounce at the top inflate it — the anchor's minY
+    /// briefly rises above the true top — and the chrome then
+    /// wedged minimized at the top, because minY could never
+    /// reach the inflated rest offset - 16 again. A later upward
+    /// move is a bounce, never a new rest: the rest only changes
+    /// on a tab switch, which resets it. A mid-scroll first
+    /// report still behaves as before: max(0, minY) keeps the 0
+    /// seed, so the absolute fallback is unchanged).
     private var restOffset: CGFloat = 0
+
+    /// Whether the rest offset has been learned for the current
+    /// tab. False after init / resetRest, until the first anchor
+    /// report arrives.
+    private var restLearned = false
 
     /// At or above this far below the rest offset the content is
     /// at the top: always expanded.
@@ -166,10 +175,15 @@ final class BottomChromeState: ObservableObject {
 
     /// The tab changed: forget the previous tab's rest offset so
     /// the next anchor report calibrates the new tab from scratch.
-    /// Called from MainTabView's selection change. Never touches
-    /// isMinimized itself — the next report re-derives it.
+    /// Called from MainTabView's selection change. Also forgets
+    /// the last offset (the cross-tab delta is meaningless) — the
+    /// next report re-derives the state from position alone.
+    /// Never touches isMinimized itself — the next report
+    /// re-derives it.
     func resetRest() {
         restOffset = 0
+        restLearned = false
+        lastOffset = nil
     }
 
     /// Feed the anchor's top offset (rest offset at the top,
@@ -179,11 +193,17 @@ final class BottomChromeState: ObservableObject {
     func noteScrollOffset(_ minY: CGFloat) {
         let previous = lastOffset
         lastOffset = minY
-        // Learn the top: the highest offset ever seen is the
-        // current tab's rest offset. It only ever grows, so a
-        // mid-scroll first report (tab restored scrolled down)
-        // leaves the 0 seed alone and behaves exactly as before.
-        restOffset = max(restOffset, minY)
+        // Learn the top once, from the first report after a
+        // reset: the tab's view starts at the top, so that report
+        // IS the rest offset. Later upward moves are overscroll
+        // bounce (pull-to-refresh, rubber-banding), never a new
+        // rest — adopting them wedged the chrome minimized at
+        // the top (b36-8). A mid-scroll first report keeps the 0
+        // seed (max), so the absolute fallback is unchanged.
+        if !restLearned {
+            restOffset = max(restOffset, minY)
+            restLearned = true
+        }
         let target: Bool?
         if minY >= restOffset - Self.expandTravel {
             target = false
