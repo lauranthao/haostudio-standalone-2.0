@@ -13,7 +13,7 @@
 // switch instead of letting the write happen and fail.
 
 import SwiftUI
-import CryptoKit
+import UniformTypeIdentifiers
 
 // MARK: - 音源管理
 
@@ -25,11 +25,20 @@ import CryptoKit
 /// enabled, in seed order; user-imported scripts are kept
 /// (they are user data, not defaults).
 ///
-/// URL add stores ONLY the URL string: the record is saved to
-/// `hao_lx_custom` with an empty file name, so the engine
-/// ignores it until a future import step downloads the code.
-/// Nothing is downloaded or executed here — execution belongs
-/// to the resolver, not to settings.
+/// Import (chen 2026-11-24: build 33 could not upload `.js` at
+/// all — there was no file picker, and URL "add" only saved the
+/// address string, so the script never loaded and never took
+/// part in search or playback, with no error shown):
+/// - "从文件选择" opens the Files picker for a `.js` file;
+/// - pasting a `.js` URL downloads it right away.
+/// Both run the same validation (`LXScriptImportValidator`:
+/// `.js`, readable, non-empty, LX marker, parses clean) and
+/// the same store + load path (`LXEngine.importScript`); a
+/// failure shows its reason, never silently. A script that
+/// loads reports its capabilities to the resolver, so the
+/// first playable source can come from it. Legacy URL-only
+/// records (build 33, no downloaded file) show "未下载" with
+/// a re-download button instead of a dead row.
 struct LXSourceManagementView: View {
     @Environment(\.haoTheme) private var theme
 
@@ -37,10 +46,21 @@ struct LXSourceManagementView: View {
     @State private var enabledIDs: Set<String> = []
     @State private var urlDraft = ""
     @State private var showingRestoreAlert = false
-    @State private var showingInvalidURLAlert = false
+    @State private var showingFileImporter = false
+    @State private var isImporting = false
+    @State private var importAlertTitle = ""
+    @State private var importAlertMessage = ""
+    @State private var showingImportAlert = false
 
     private let scriptStore = LXScriptStore()
-    private let fileStore = LXScriptFileStore()
+
+    /// The Files picker only shows `.js` files; if the system
+    /// has no `.js` type, fall back to any file and let the
+    /// validator reject non-`.js` files with a clear error.
+    private static var jsContentTypes: [UTType] {
+        if let js = UTType(filenameExtension: "js") { return [js] }
+        return [.data]
+    }
 
     var body: some View {
         List {
@@ -62,10 +82,21 @@ struct LXSourceManagementView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 Button("添加") {
-                    addURLScript()
+                    importFromURL()
                 }
                 .font(.system(size: 15))
-                Text("只保存地址，不下载、不执行。导入下载由后续步骤完成。")
+                .disabled(isImporting)
+                Button("从文件选择 .js 导入") {
+                    showingFileImporter = true
+                }
+                .font(.system(size: 15))
+                .disabled(isImporting)
+                if isImporting {
+                    ProgressView("正在导入…")
+                        .font(.system(size: 13))
+                        .foregroundStyle(theme.textMuted)
+                }
+                Text("粘贴 .js 脚本直链，或从文件 App 选择 .js 文件；导入时会先校验，校验通过才加入列表参与搜歌和播放，失败会提示原因。")
                     .font(.system(size: 12))
                     .foregroundStyle(theme.textMuted)
             }
@@ -93,11 +124,25 @@ struct LXSourceManagementView: View {
         } message: {
             Text("将恢复全部 13 个内置脚本并全部启用，顺序回到默认。你导入的自定义脚本会保留。")
         }
-        .alert("地址无效", isPresented: $showingInvalidURLAlert) {
+        .fileImporter(
+            isPresented: $showingFileImporter,
+            allowedContentTypes: Self.jsContentTypes,
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    importFromFile(url)
+                }
+            case .failure(let error):
+                showImportAlert(title: "选择文件失败", message: error.localizedDescription)
+            }
+        }
+        .alert(importAlertTitle, isPresented: $showingImportAlert) {
             Button("好", role: .cancel) {
             }
         } message: {
-            Text("请输入一个有效的 http(s) 脚本地址。")
+            Text(importAlertMessage)
         }
     }
 
@@ -112,8 +157,21 @@ struct LXSourceManagementView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(theme.textMuted)
                 }
+                if let status = statusText(for: row) {
+                    Text(status.text)
+                        .font(.system(size: 12))
+                        .foregroundStyle(status.isFailure ? theme.liveRed : theme.textMuted)
+                }
             }
             Spacer()
+            if row.isCustom && row.fileName.isEmpty {
+                Button("下载") {
+                    downloadLegacyScript(row)
+                }
+                .font(.system(size: 13))
+                .foregroundStyle(theme.accent)
+                .disabled(isImporting)
+            }
             Toggle(
                 "启用",
                 isOn: Binding<Bool>(
@@ -135,6 +193,20 @@ struct LXSourceManagementView: View {
         }
     }
 
+    /// One-line load state for a custom row, read live from the
+    /// engine registry: a legacy URL-only record has no file yet;
+    /// a saved script whose load failed keeps its reason visible
+    /// instead of looking like a working source.
+    private func statusText(for row: LXSourceRow) -> (text: String, isFailure: Bool)? {
+        guard row.isCustom else { return nil }
+        if row.fileName.isEmpty { return ("未下载", false) }
+        if let script = LXEngine.shared.script(row.id),
+           !script.loaded, let error = script.error {
+            return ("加载失败：\(error)", true)
+        }
+        return nil
+    }
+
     private func reload() {
         rows = LXSourceListOrdering.orderedRows(
             bundledIDs: LxBundledScript.allIDs,
@@ -146,16 +218,10 @@ struct LXSourceManagementView: View {
     }
 
     private func deleteScript(_ row: LXSourceRow) {
-        if row.isCustom {
-            let record = scriptStore.customScripts().first(where: { $0.id == row.id })
-            scriptStore.removeCustomScript(row.id)
-            if let fileName = record?.fileName, !fileName.isEmpty {
-                _ = fileStore.deleteFile(named: fileName)
-            }
-        } else {
-            scriptStore.markBundledDeleted(row.id)
-            _ = fileStore.delete(id: row.id)
-        }
+        // The engine owns the full removal: dispose the runtime,
+        // drop the registry entry, delete the file copy and the
+        // record (bundled ids are marked deleted, never re-seeded).
+        LXEngine.shared.removeScript(row.id)
         reload()
     }
 
@@ -170,28 +236,83 @@ struct LXSourceManagementView: View {
         reload()
     }
 
-    private func addURLScript() {
+    private func showImportAlert(title: String, message: String) {
+        importAlertTitle = title
+        importAlertMessage = message
+        showingImportAlert = true
+    }
+
+    /// Shared import outcome: success joins the list and can take
+    /// part in search and playback; any failure shows its reason.
+    /// A re-download replaces the legacy URL-only record for the
+    /// same address (the downloaded copy gets a new content id),
+    /// so the list never keeps both the dead row and the live one.
+    private func handleImportResult(
+        _ result: Result<LxScriptInfo, LXScriptImportError>,
+        sourceURLString: String
+    ) {
+        switch result {
+        case .success(let info):
+            for legacy in scriptStore.customScripts()
+            where legacy.fileName.isEmpty && legacy.url == sourceURLString
+                && legacy.id != info.id {
+                scriptStore.removeCustomScript(legacy.id)
+            }
+            urlDraft = ""
+            showImportAlert(
+                title: "导入成功",
+                message: "\(info.name) 已加入音源列表，可参与搜歌和播放。")
+            reload()
+        case .failure(let error):
+            showImportAlert(title: "导入失败", message: error.localizedDescription)
+            reload()
+        }
+    }
+
+    private func importFromFile(_ url: URL) {
+        isImporting = true
+        LXEngine.shared.importScript(from: url) { result in
+            isImporting = false
+            handleImportResult(result, sourceURLString: url.absoluteString)
+        }
+    }
+
+    private func importFromURL() {
         let trimmed = urlDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: trimmed),
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              url.host != nil
-        else {
-            showingInvalidURLAlert = true
+        guard let url = URL(string: trimmed) else {
+            showImportAlert(
+                title: "导入失败",
+                message: LXScriptImportError.invalidURL.localizedDescription)
             return
         }
-        let digest = Insecure.SHA1.hash(data: Data(trimmed.utf8))
-        let hex = digest.map { String(format: "%02x", $0) }.joined()
-        let record = LxCustomScriptRecord(
-            id: "custom:url:\(hex.prefix(12))",
-            name: url.host ?? trimmed,
-            url: trimmed,
-            fileName: "",
-            addedAt: Date()
-        )
-        scriptStore.saveCustomScript(record)
-        urlDraft = ""
-        reload()
+        switch LXScriptImportValidator.validateRemoteURL(url) {
+        case .failure(let error):
+            showImportAlert(title: "导入失败", message: error.localizedDescription)
+            return
+        case .success:
+            break
+        }
+        isImporting = true
+        LXEngine.shared.importScript(fromRemoteURL: url) { result in
+            isImporting = false
+            handleImportResult(result, sourceURLString: trimmed)
+        }
+    }
+
+    /// Re-download a legacy URL-only record (build 33 saved the
+    /// address without downloading the code).
+    private func downloadLegacyScript(_ row: LXSourceRow) {
+        guard let url = URL(string: row.url) else {
+            showImportAlert(
+                title: "导入失败",
+                message: LXScriptImportError.invalidURL.localizedDescription)
+            return
+        }
+        isImporting = true
+        LXEngine.shared.importScript(fromRemoteURL: url) { result in
+            isImporting = false
+            handleImportResult(result, sourceURLString: row.url)
+        }
     }
 }
 

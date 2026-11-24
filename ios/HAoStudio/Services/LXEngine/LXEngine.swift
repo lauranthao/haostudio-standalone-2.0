@@ -43,10 +43,18 @@
 //     typed convenience, returns `(url, actualQuality)`.
 //   - `search(scriptID:platform:keyword:page:limit:completion:)` —
 //     returns raw result maps.
-//   - `importScript(from:) -> Bool` — sync validate + copy into
+//   - `importScript(from:) -> Result<LxCustomScriptRecord,
+//     LXScriptImportError>` — sync validate + copy into
 //     `Documents/lx_scripts/` + register; async load follows.
 //     Never overwrites a bundled script (custom files carry a
-//     `custom-` prefix).
+//     `custom-` prefix). The `completion:` overload reports the
+//     async load result too, so the UI can say whether the script
+//     actually joined the source list instead of going silent.
+//   - `importScript(fromRemoteURL:session:completion:)` —
+//     download a pasted `.js` URL, then the same validate +
+//     store + load path. A URL-only record with no downloaded
+//     file is never loaded (build 33 saved the address and
+//     stopped there — that was the dead end).
 //
 // Completions are delivered on the main queue. All JS evaluation
 // happens on the script's own serial queue.
@@ -359,7 +367,14 @@ final class LXEngine {
             pending.append((id, id, "", false, nil))
         }
         for record in scriptStore.customScripts() {
-            guard registry[record.id] == nil, scriptStore.isEnabled(record.id) else { continue }
+            guard registry[record.id] == nil, scriptStore.isEnabled(record.id),
+                  !record.fileName.isEmpty
+            else { continue }
+            // A record with no file name is a legacy URL-only
+            // record (build 33 saved the address without
+            // downloading): there is no code to load, so it is
+            // skipped — the list offers a re-download instead of
+            // letting it occupy a batch slot.
             pending.append((record.id, record.name, "custom:file", true, record.fileName))
         }
         let batch = Array(pending.prefix(5))
@@ -405,8 +420,11 @@ final class LXEngine {
     ) {
         // Resolve the code synchronously (file IO is small).
         let code: String?
-        if let fileName = fileName {
+        if let fileName = fileName, !fileName.isEmpty {
             // Custom script: the registered file name is authoritative.
+            // An empty file name is a legacy URL-only record with no
+            // downloaded code — it falls through to the bundled
+            // branch and fails as not found, never as a crash.
             code = fileStore.readFile(named: fileName)
         } else {
             let bundleCode = LxBundledScript.isBundled(id) ? bundleLoader(id) : nil
@@ -960,35 +978,162 @@ final class LXEngine {
 
     // MARK: - Import / removal
 
-    /// Import a user `.js` file: validate it synchronously (must be
-    /// a `.js` file, must contain the `globalThis.lx` marker, must
-    /// parse in a throwaway JSContext), copy it into
+    /// Read a user `.js` file for import. File-picker URLs are
+    /// security-scoped: access is claimed for the read only.
+    private func readScriptFile(at url: URL) -> Result<String, LXScriptImportError> {
+        guard url.pathExtension.lowercased() == "js" else {
+            return .failure(.notJavaScriptFile)
+        }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let code = try? String(contentsOf: url, encoding: .utf8) else {
+            return .failure(.unreadableFile)
+        }
+        return .success(code)
+    }
+
+    /// Import a user `.js` file: validate it synchronously (see
+    /// `LXScriptImportValidator`), copy it into
     /// `Documents/lx_scripts/` under a `custom-` name (never
-    /// overwriting a bundled script), register it, and kick off an
-    /// async load. Returns false on any failure. The async load may
-    /// still fail `inited` — then the script shows as failed in the
-    /// registry, like any other bad script.
+    /// overwriting a bundled script), register it, and kick off
+    /// the load. The returned record means "validated and saved";
+    /// the load result arrives via `loadCompletion` (or the
+    /// `completion:` overload below). A load that fails `inited`
+    /// leaves the script in the registry as failed, like any
+    /// other bad script.
     @discardableResult
-    func importScript(from url: URL) -> Bool {
-        guard url.pathExtension.lowercased() == "js",
-              let code = try? String(contentsOf: url, encoding: .utf8),
-              !code.isEmpty,
-              code.contains("globalThis.lx")
-        else { return false }
-        // Syntax check in a throwaway context (no prelude, no network).
-        let probe = JSContext()
-        probe?.evaluateScript(LXPrelude.source)
-        probe?.evaluateScript(code)
-        if probe?.exception != nil { return false }
+    func importScript(from url: URL) -> Result<LxCustomScriptRecord, LXScriptImportError> {
+        switch readScriptFile(at: url) {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let code):
+            return importScript(code: code, sourceURLString: url.absoluteString)
+        }
+    }
+
+    /// Import already-read script code (file import and URL
+    /// download share this path, so both validate identically).
+    /// `loadCompletion` receives the load result when given.
+    @discardableResult
+    func importScript(
+        code: String,
+        sourceURLString: String,
+        loadCompletion: ((Result<LxScriptInfo, Error>) -> Void)? = nil
+    ) -> Result<LxCustomScriptRecord, LXScriptImportError> {
+        switch LXScriptImportValidator.validate(code: code) {
+        case .failure(let error):
+            return .failure(error)
+        case .success:
+            break
+        }
         let id = LXScriptFileStore.customScriptID(for: code)
         let fileName = LXScriptFileStore.customFileName(for: code)
-        guard fileStore.write(code: code, fileName: fileName) else { return false }
+        guard fileStore.write(code: code, fileName: fileName) else {
+            return .failure(.writeFailed)
+        }
         let name = LXScriptFileStore.displayName(for: code, fileName: fileName)
-        scriptStore.saveCustomScript(LxCustomScriptRecord(
-            id: id, name: name, url: url.absoluteString,
-            fileName: fileName, addedAt: Date()))
-        loadScript(id: id, name: name, origin: "custom:file", isCustom: true, fileName: fileName)
-        return true
+        let record = LxCustomScriptRecord(
+            id: id, name: name, url: sourceURLString,
+            fileName: fileName, addedAt: Date())
+        scriptStore.saveCustomScript(record)
+        loadScript(id: id, name: name, origin: "custom:file",
+                   isCustom: true, fileName: fileName, completion: loadCompletion)
+        return .success(record)
+    }
+
+    /// File import with the load result: `completion` fires once —
+    /// with the validation error right away, or with the load
+    /// result (success = the script joined the source list and
+    /// can take part in search and playback). Completion on the
+    /// main queue.
+    func importScript(
+        from url: URL,
+        completion: @escaping (Result<LxScriptInfo, LXScriptImportError>) -> Void
+    ) {
+        switch readScriptFile(at: url) {
+        case .failure(let error):
+            DispatchQueue.main.async { completion(.failure(error)) }
+        case .success(let code):
+            let result = importScript(
+                code: code, sourceURLString: url.absoluteString,
+                loadCompletion: { loadResult in
+                    completion(Self.mapLoadResult(loadResult))
+                })
+            if case .failure(let error) = result {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+    /// URL import: download a pasted `.js` address, then run the
+    /// same validate + store + load path as file import.
+    /// `completion` fires once, on the main queue, with the load
+    /// result (or the download / validation error). `session` is
+    /// injectable so tests can stub the download.
+    func importScript(
+        fromRemoteURL url: URL,
+        session: URLSession = .shared,
+        completion: @escaping (Result<LxScriptInfo, LXScriptImportError>) -> Void
+    ) {
+        switch LXScriptImportValidator.validateRemoteURL(url) {
+        case .failure(let error):
+            DispatchQueue.main.async { completion(.failure(error)) }
+            return
+        case .success:
+            break
+        }
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.httpMethod = "GET"
+        let task = session.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self else { return }
+            if let error = error {
+                let detail = LXScriptImportValidator.shortDetail(error.localizedDescription)
+                DispatchQueue.main.async { completion(.failure(.downloadFailed(detail))) }
+                return
+            }
+            guard let http = response as? HTTPURLResponse else {
+                DispatchQueue.main.async { completion(.failure(.downloadFailed("无服务器响应"))) }
+                return
+            }
+            guard http.statusCode == 200 else {
+                DispatchQueue.main.async {
+                    completion(.failure(.downloadFailed("服务器返回状态码 \(http.statusCode)")))
+                }
+                return
+            }
+            guard let data = data, !data.isEmpty else {
+                DispatchQueue.main.async { completion(.failure(.emptyFile)) }
+                return
+            }
+            guard let code = String(data: data, encoding: .utf8) else {
+                DispatchQueue.main.async { completion(.failure(.downloadFailed("下载内容无法按 UTF-8 解码"))) }
+                return
+            }
+            let result = self.importScript(
+                code: code, sourceURLString: url.absoluteString,
+                loadCompletion: { loadResult in
+                    completion(Self.mapLoadResult(loadResult))
+                })
+            if case .failure(let error) = result {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+        task.resume()
+    }
+
+    /// Map an engine load result onto the import error type: a
+    /// failed load keeps the saved record and reports the reason,
+    /// so the UI can show it instead of going silent.
+    private static func mapLoadResult(
+        _ result: Result<LxScriptInfo, Error>
+    ) -> Result<LxScriptInfo, LXScriptImportError> {
+        switch result {
+        case .success(let info):
+            return .success(info)
+        case .failure(let error):
+            let detail = (error as? LXError)?.localizedDescription ?? error.localizedDescription
+            return .failure(.loadFailed(detail))
+        }
     }
 
     /// Remove a script: dispose its runtime, drop the registry entry,

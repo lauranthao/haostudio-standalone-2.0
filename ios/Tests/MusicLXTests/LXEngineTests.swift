@@ -152,7 +152,10 @@ final class LXEngineTests: XCTestCase {
         let engine = makeEngine()
         let source = docs.appendingPathComponent("import-me.js")
         try? fakeScript.write(to: source, atomically: true, encoding: .utf8)
-        XCTAssertTrue(engine.importScript(from: source))
+        if case .success = engine.importScript(from: source) {
+        } else {
+            XCTFail("valid script must import")
+        }
         // Registered as a custom script; the load follows async.
         let expectation = self.expectation(description: "import load")
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
@@ -166,11 +169,16 @@ final class LXEngineTests: XCTestCase {
         let engine = makeEngine()
         let txt = docs.appendingPathComponent("not-a-script.txt")
         try? fakeScript.write(to: txt, atomically: true, encoding: .utf8)
-        XCTAssertFalse(engine.importScript(from: txt))
+        XCTAssertEqual(
+            engine.importScript(from: txt),
+            .failure(.notJavaScriptFile))
         let broken = docs.appendingPathComponent("broken.js")
         try? "globalThis.lx.on('musicUrl', function () { let x = ; })".write(
             to: broken, atomically: true, encoding: .utf8)
-        XCTAssertFalse(engine.importScript(from: broken))
+        if case .failure(.syntaxError) = engine.importScript(from: broken) {
+        } else {
+            XCTFail("broken script must fail with .syntaxError")
+        }
     }
 
     func testRemoveScriptDropsRuntimeAndRegistry() {
