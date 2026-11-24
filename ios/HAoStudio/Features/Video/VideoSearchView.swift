@@ -52,7 +52,7 @@ final class VideoSearchViewModel: ObservableObject {
         if gateway.embyConfigured {
             gateway.searchEmby(keyword: query) { [weak self] items in
                 guard let self = self, self.searchGeneration == generation else { return }
-                self?.embyResults = items
+                self.embyResults = items
             }
         }
     }
