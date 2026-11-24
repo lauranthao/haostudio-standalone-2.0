@@ -152,7 +152,7 @@ struct MainTabView: View {
         case .home: HomeView()
         case .music: MusicHomeView()
         case .movies: VideoTabView()
-        case .live: LiveTabView()
+        case .live: LiveTabView(gateway: LiveDataGatewayAdapter.shared)
         case .my: MyView()
         }
     }

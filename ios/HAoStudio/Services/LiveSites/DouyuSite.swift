@@ -589,3 +589,145 @@ final class DouyuLiveSite: LiveSiteResolver {
         .replacingOccurrences(of: "&#39;", with: "'")
     }
 }
+
+// MARK: - Lists (recommend / categories / search)
+//
+// Port of the Flutter `douyu_site.dart` list methods
+// (getCategories / getRecommendRooms / getCategoryRooms /
+// searchRooms). The room-detail leg (S4-B) left these out; the
+// live tab's gateway needs them. Every method completes with []
+// on any failure — a list failure is an empty list, never a throw
+// out of the completion handler. All parsing is pure + static so
+// fixtures can cover it without network.
+
+extension DouyuLiveSite {
+    private static let categoryListURL = "https://m.douyu.com/api/cate/list"
+    private static let searchShowURL = "https://www.douyu.com/japi/search/api/searchShow"
+
+    /// Category names + ids (Dart `getCategories`): flat cate2
+    /// list — this project's area model has no category tree.
+    func listCategories(completion: @escaping ([(id: String, name: String)]) -> Void) {
+        guard let url = URL(string: DouyuLiveSite.categoryListURL) else {
+            completion([])
+            return
+        }
+        LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: DouyuUtils.requestHeaders(deviceId: deviceId), fetcher: fetcher) { json in
+            completion(DouyuLiveSite.parseCategories(json) ?? [])
+        }
+    }
+
+    /// Recommended rooms (Dart `getRecommendRooms`): the "全部"
+    /// all-page feed, page 1-based here.
+    func recommendRooms(page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        let currentPage = max(1, page)
+        guard let url = URL(string: "https://www.douyu.com/japi/weblist/apinc/allpage/6/\(currentPage)") else {
+            completion([])
+            return
+        }
+        LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: DouyuUtils.requestHeaders(deviceId: deviceId), fetcher: fetcher) { json in
+            completion(DouyuLiveSite.parseRoomList(json) ?? [])
+        }
+    }
+
+    /// Rooms of one category (Dart `getCategoryRooms`): the
+    /// mixList feed for `2_<cate2Id>`, same parser as recommend.
+    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        let currentPage = max(1, page)
+        guard let url = URL(string: "https://www.douyu.com/gapi/rkc/directory/mixList/2_\(areaId)/\(currentPage)") else {
+            completion([])
+            return
+        }
+        LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: DouyuUtils.requestHeaders(deviceId: deviceId), fetcher: fetcher) { json in
+            completion(DouyuLiveSite.parseRoomList(json) ?? [])
+        }
+    }
+
+    /// Room search (Dart `searchRooms`): `relateShow` entries.
+    /// A non-zero `error` is a failure, returned as [].
+    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            completion([])
+            return
+        }
+        var headers = DouyuUtils.requestHeaders(deviceId: deviceId)
+        headers["referer"] = "https://www.douyu.com/search/"
+        guard let url = LiveListURL.url(base: DouyuLiveSite.searchShowURL, params: [
+            ("kw", trimmed), ("page", "\(max(1, page))"), ("pageSize", "\(min(50, max(1, pageSize)))")
+        ]) else {
+            completion([])
+            return
+        }
+        LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: fetcher) { json in
+            completion(DouyuLiveSite.parseSearchRooms(json) ?? [])
+        }
+    }
+
+    // MARK: - Pure parsers (fixture-testable, no network)
+
+    /// Parses a `cate/list` response (`data.cate2Info[]`) into
+    /// flat areas. Nil when the response has no category list.
+    static func parseCategories(_ json: [String: Any]?) -> [(id: String, name: String)]? {
+        guard let json = json,
+              let data = LiveJSON.asMap(json["data"]) else { return nil }
+        let subList = LiveJSON.asList(data["cate2Info"])
+        guard !subList.isEmpty else { return nil }
+        var areas: [(id: String, name: String)] = []
+        for item in subList {
+            let areaId = LiveJSON.asString(item["cate2Id"])
+            let areaName = LiveJSON.asString(item["cate2Name"])
+            guard !areaId.isEmpty else { continue }
+            areas.append((id: areaId, name: areaName))
+        }
+        return areas
+    }
+
+    /// Parses `data.rl[]` — shared by recommendRooms and
+    /// categoryRooms. Only `type == 1` entries are live rooms; an
+    /// empty/malformed list is returned as-is, never faked.
+    static func parseRoomList(_ json: [String: Any]?) -> [LiveRoom]? {
+        guard let json = json,
+              let data = LiveJSON.asMap(json["data"]) else { return nil }
+        var rooms: [LiveRoom] = []
+        for item in LiveJSON.asList(data["rl"]) {
+            guard LiveJSON.asInt(item["type"]) == 1 else { continue }
+            let roomId = LiveJSON.asString(item["rid"])
+            guard !roomId.isEmpty else { continue }
+            let avatarRaw = LiveJSON.asString(item["av"])
+            rooms.append(LiveRoom(
+                roomId: roomId, platform: .douyu,
+                title: LiveJSON.asString(item["rn"]),
+                streamer: LiveJSON.asString(item["nn"]),
+                avatar: avatarRaw.isEmpty ? "" : "https://apic.douyucdn.cn/upload/\(avatarRaw)_middle.jpg",
+                cover: LiveJSON.asString(item["rs16"]),
+                onlineCount: LiveJSON.asInt(item["ol"]),
+                isLive: true,
+                link: "https://www.douyu.com/\(roomId)"))
+        }
+        return rooms
+    }
+
+    /// Parses a searchShow response (`data.relateShow[]`). Nil
+    /// when the response is not an object or `error` is non-zero.
+    static func parseSearchRooms(_ json: [String: Any]?) -> [LiveRoom]? {
+        guard let json = json else { return nil }
+        guard LiveJSON.asInt(json["error"]) == 0 else { return nil }
+        guard let data = LiveJSON.asMap(json["data"]) else { return nil }
+        var rooms: [LiveRoom] = []
+        for item in LiveJSON.asList(data["relateShow"]) {
+            let roomId = LiveJSON.asString(item["rid"])
+            guard !roomId.isEmpty else { continue }
+            let isLive = LiveJSON.asInt(item["isLive"]) == 1 && LiveJSON.asInt(item["roomType"]) == 0
+            rooms.append(LiveRoom(
+                roomId: roomId, platform: .douyu,
+                title: LiveJSON.asString(item["roomName"]),
+                streamer: LiveJSON.asString(item["nickName"]),
+                avatar: LiveJSON.asString(item["avatar"]),
+                cover: LiveJSON.asString(item["roomSrc"]),
+                onlineCount: LiveJSON.asInt(item["hot"]),
+                isLive: isLive,
+                link: "https://www.douyu.com/\(roomId)"))
+        }
+        return rooms
+    }
+}

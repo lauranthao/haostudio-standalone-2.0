@@ -118,7 +118,17 @@ final class LiveTabViewModel: ObservableObject {
                 self.loadMoreFailed = true
                 return
             }
-            self.rooms.append(contentsOf: result.rooms)
+            // A platform that repeats a page (or a page that only
+            // overlaps the rooms already shown) appends nothing:
+            // report it as a failed load-more, never duplicate
+            // cards — ForEach(id: roomId) must never see a repeat.
+            let known = Set(self.rooms.map { $0.platform.rawValue + "|" + $0.roomId })
+            let fresh = result.rooms.filter { !known.contains($0.platform.rawValue + "|" + $0.roomId) }
+            if fresh.isEmpty {
+                self.loadMoreFailed = true
+                return
+            }
+            self.rooms.append(contentsOf: fresh)
             self.hasMore = result.hasMore
             self.page = nextPage
         }
@@ -137,10 +147,17 @@ final class LiveTabViewModel: ObservableObject {
 }
 
 struct LiveTabView: View {
-    @StateObject private var viewModel = LiveTabViewModel()
+    @StateObject private var viewModel: LiveTabViewModel
     @State private var path: [LiveDestination] = []
 
     @Environment(\.haoTheme) private var theme
+
+    /// `gateway` nil = no live source wired (the tab then shows
+    /// the honest empty state for recommend + search). Production
+    /// passes `LiveDataGatewayAdapter.shared` (MainTabView).
+    init(gateway: LiveDataGateway? = nil) {
+        _viewModel = StateObject(wrappedValue: LiveTabViewModel(gateway: gateway))
+    }
 
     var body: some View {
         NavigationStack(path: $path) {

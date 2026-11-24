@@ -82,6 +82,8 @@ let package = Package(
                 "Playback/LiveRoomSession.swift",
                 "Features/Video/VideoLibraryStore.swift",
                 "Features/Live/LiveLibraryStore.swift",
+                "Features/Live/LiveDataGateway.swift",
+                "Features/Live/LiveDataGatewayAdapter.swift",
                 // S5: settings pure logic (Foundation-only) — the
                 // SettingsTests target covers it under `swift
                 // test`. The SwiftUI settings files in the same
