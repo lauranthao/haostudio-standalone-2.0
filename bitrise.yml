@@ -107,5 +107,11 @@ workflows:
             zip -r HAoStudio.ipa Payload
             ls -lh HAoStudio.ipa
             mkdir -p "$BITRISE_DEPLOY_DIR"
-            cp HAoStudio.ipa "$BITRISE_DEPLOY_DIR/HAoStudio.ipa"
+            # Deploy-to-Bitrise parses *.ipa for its provisioning
+            # profile and fails on unsigned builds (no
+            # embedded.mobileprovision). Ship the same bytes as a
+            # .zip — an IPA is a zip — so the step uploads it as a
+            # generic file; it is renamed back to .ipa after download.
+            cp HAoStudio.ipa "$BITRISE_DEPLOY_DIR/HAoStudio-standalone-v2.0.0.zip"
+            ls -lh "$BITRISE_DEPLOY_DIR/"
     - deploy-to-bitrise-io@2: {}
