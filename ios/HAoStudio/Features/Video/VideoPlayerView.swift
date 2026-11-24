@@ -572,7 +572,14 @@ final class VideoPlayerViewModel: ObservableObject {
     /// not a hardcoded 1.0 (a 1.5x user must not drop to 1.0
     /// because they long-pressed once).
     func setDoubleSpeed(_ on: Bool) {
-        guard let engine = engine else { return }
+        guard let engine = engine else {
+            // No engine, no badge — and a release must clear a
+            // badge left over from a hold that ended with the
+            // engine detached. The view model is app-level, so a
+            // stuck flag would survive into the next play.
+            isDoubleSpeed = false
+            return
+        }
         isDoubleSpeed = on
         engine.setSpeed(on ? 2.0 : settings.playbackSpeed)
     }
@@ -629,6 +636,10 @@ final class VideoPlayerViewModel: ObservableObject {
     /// VOD has no background-audio path (live only), so closing
     /// stops the driver and clears the current item.
     func close() {
+        // A hold abandoned by closing must not leave the 2x badge
+        // (and speed) behind for the next play — the view model
+        // is app-level and outlives the player view.
+        isDoubleSpeed = false
         saveCurrentPosition()
         danmaku.clear()
         pollTimer?.invalidate()
@@ -843,9 +854,31 @@ struct VideoPlayerView: View {
                         }
                     }
                 }
-                .onLongPressGesture(minimumDuration: VodGestureConfig.longPressMinimumDuration, pressing: { pressing in
-                    videoPlayer.setDoubleSpeed(pressing)
-                }, perform: {})
+                // Long-press 2x (VOD only). NOT wired through
+                // SwiftUI's `pressing` callback: `pressing` fires
+                // true on touch-down and false the moment
+                // minimumDuration elapses — while the finger is
+                // still down — so the old `.onLongPressGesture
+                // (pressing:)` wiring engaged 2x on EVERY tap and
+                // dropped it 0.5 s into a real hold. The sequenced
+                // drag keeps the gesture alive until the finger
+                // genuinely lifts: `.second(true, _)` is "hold
+                // succeeded, finger still down", `onEnded(.second)`
+                // is the real finger-up.
+                .gesture(
+                    LongPressGesture(minimumDuration: VodGestureConfig.longPressMinimumDuration)
+                        .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+                        .onChanged { value in
+                            if case .second(true, _) = value, !videoPlayer.isDoubleSpeed {
+                                videoPlayer.setDoubleSpeed(true)
+                            }
+                        }
+                        .onEnded { value in
+                            if case .second = value {
+                                videoPlayer.setDoubleSpeed(false)
+                            }
+                        }
+                )
                 // S7 wiring: double-tap seek (left third back,
                 // right third forward, middle third no seek — the
                 // two single taps underneath toggle the controls
@@ -967,6 +1000,10 @@ struct VideoPlayerView: View {
         }
         .onDisappear {
             autoHideWork?.cancel()
+            // A hold abandoned by dismissing mid-press must not
+            // leave the 2x badge (or 2x speed) behind: the view
+            // model is app-level and outlives this view.
+            videoPlayer.setDoubleSpeed(false)
             videoPlayer.disarmBrightness()
             VideoOrientation.unlockPortrait()
         }

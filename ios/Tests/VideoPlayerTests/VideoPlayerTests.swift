@@ -1190,6 +1190,36 @@ final class VideoPlayerSpeedTests: XCTestCase {
         viewModel.setDoubleSpeed(true)
         XCTAssertFalse(viewModel.isDoubleSpeed)
     }
+
+    @MainActor
+    func testDoubleSpeedReleaseAfterEngineDetachedClearsBadge() {
+        // Build 36, item 9: the view model is app-level, so a 2x
+        // badge left over from a hold that ended with the engine
+        // detached must not survive into the next play. Before the
+        // fix, the release no-op'd on the nil engine and the badge
+        // stuck on.
+        let viewModel = VideoPlayerViewModel(coordinator: PlaybackCoordinator())
+        let engine = FakePlayerEngine()
+        viewModel.attachEngine(engine)
+        viewModel.setDoubleSpeed(true)
+        XCTAssertTrue(viewModel.isDoubleSpeed)
+        viewModel.attachEngine(nil)
+        viewModel.setDoubleSpeed(false)
+        XCTAssertFalse(viewModel.isDoubleSpeed)
+    }
+
+    @MainActor
+    func testCloseClearsDoubleSpeedBadge() {
+        // Build 36, item 9: closing mid-hold must not leave the
+        // 2x badge behind for the next play.
+        let viewModel = VideoPlayerViewModel(coordinator: PlaybackCoordinator())
+        let engine = FakePlayerEngine()
+        viewModel.attachEngine(engine)
+        viewModel.setDoubleSpeed(true)
+        XCTAssertTrue(viewModel.isDoubleSpeed)
+        viewModel.close()
+        XCTAssertFalse(viewModel.isDoubleSpeed)
+    }
 }
 
 // MARK: - Build 36, item 14: format support (G-E / G-F / G-G / G-H / G-J)

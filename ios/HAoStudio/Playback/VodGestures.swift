@@ -86,6 +86,15 @@ final class VodGestureState: ObservableObject {
 
     /// Called by the long-press gesture when the press starts.
     /// VOD only: a live player ignores the press entirely.
+    /// WARNING — do not wire this to SwiftUI's `pressing`
+    /// callback (`.onLongPressGesture(pressing:)`): `pressing`
+    /// fires true on touch-down and false the moment
+    /// minimumDuration elapses, while the finger is still down.
+    /// That wiring engaged 2x on every tap and dropped it 0.5 s
+    /// into a real hold (build 36, item 9). The VOD view uses a
+    /// LongPressGesture sequenced before a zero-distance
+    /// DragGesture instead, and calls began/ended from the
+    /// sequence's `.second` phase only.
     func longPressBegan() {
         guard isVod, !isLongPressSpeeding else { return }
         isLongPressSpeeding = true
