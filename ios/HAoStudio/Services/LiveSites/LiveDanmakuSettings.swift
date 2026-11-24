@@ -183,8 +183,8 @@ struct LiveDanmakuSettings {
     /// Danmaku occlusion avoidance (MPV only), default off.
     /// 防遮挡未实现：Swift 2.0 无 MPV 取帧接口与 Vision 分割管线；字段保留只为与 Flutter 配置兼容，不上 UI。
     var occlusionAvoidance: Bool
-    /// Chat-list style: compact (one line per message, default) or
-    /// card (one card per message).
+    /// Chat-list style: card (one bubble per message, default —
+    /// Dart Simple Live) or compact (one plain line per message).
     var listStyle: String
     /// Chat-list line spacing: compact / standard (default) / loose.
     var listSpacing: String
@@ -227,7 +227,7 @@ struct LiveDanmakuSettings {
         maxCount: Int = defaultMaxCount,
         colorMode: String = "uniform",
         occlusionAvoidance: Bool = false,
-        listStyle: String = "compact",
+        listStyle: String = "card",
         listSpacing: String = "standard",
         showUsernames: Bool = true,
         similarityEnabled: Bool = true,
@@ -333,7 +333,7 @@ struct LiveDanmakuSettings {
             maxCount: LiveDanmakuSettings.intValue(dictionary[LiveDanmakuSettings.keyMaxCount]) ?? LiveDanmakuSettings.defaultMaxCount,
             colorMode: LiveDanmakuSettings.stringValue(dictionary[LiveDanmakuSettings.keyColorMode]) ?? "uniform",
             occlusionAvoidance: LiveDanmakuSettings.boolValue(dictionary[LiveDanmakuSettings.keyOcclusionAvoidance]) ?? false,
-            listStyle: LiveDanmakuSettings.stringValue(dictionary[LiveDanmakuSettings.keyListStyle]) ?? "compact",
+            listStyle: LiveDanmakuSettings.stringValue(dictionary[LiveDanmakuSettings.keyListStyle]) ?? "card",
             listSpacing: LiveDanmakuSettings.stringValue(dictionary[LiveDanmakuSettings.keyListSpacing]) ?? "standard",
             showUsernames: LiveDanmakuSettings.boolValue(dictionary[LiveDanmakuSettings.keyShowUsernames]) ?? true,
             similarityEnabled: LiveDanmakuSettings.boolValue(dictionary[LiveDanmakuSettings.keySimilarityEnabled]) ?? true,
@@ -424,7 +424,7 @@ struct LiveDanmakuSettings {
             maxCount: (defaults.object(forKey: keyMaxCount) as? Int) ?? defaultMaxCount,
             colorMode: (defaults.object(forKey: keyColorMode) as? String) ?? "uniform",
             occlusionAvoidance: (defaults.object(forKey: keyOcclusionAvoidance) as? Bool) ?? false,
-            listStyle: (defaults.object(forKey: keyListStyle) as? String) ?? "compact",
+            listStyle: (defaults.object(forKey: keyListStyle) as? String) ?? "card",
             listSpacing: (defaults.object(forKey: keyListSpacing) as? String) ?? "standard",
             showUsernames: (defaults.object(forKey: keyShowUsernames) as? Bool) ?? true,
             similarityEnabled: (defaults.object(forKey: keySimilarityEnabled) as? Bool) ?? true,

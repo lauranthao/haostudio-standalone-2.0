@@ -317,7 +317,7 @@ struct LiveDanmakuListView: View {
                         danmakuRow(message)
                     }
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 8)
             }
             .onChange(of: shownVersion) { _, _ in
@@ -355,13 +355,23 @@ struct LiveDanmakuListView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
+    /// One chat row. The "card" style is Dart Simple Live's chat
+    /// bubble: blue-grey 10% fill, asymmetric corners (top-left
+    /// square, the other three 12pt), padding 4 vertical / 12
+    /// horizontal — a bubble, not a plain text line. It is the
+    /// default list style (see LiveDanmakuSettings); "compact"
+    /// stays available for a plain-line list.
     @ViewBuilder
     private func danmakuRow(_ message: DanmakuMessage) -> some View {
         if settings.listStyle == "card" {
             danmakuText(message)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(theme.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(
+                    theme.surface,
+                    in: UnevenRoundedRectangle(
+                        topLeadingRadius: 0, bottomLeadingRadius: 12,
+                        bottomTrailingRadius: 12, topTrailingRadius: 12))
         } else {
             danmakuText(message)
         }
