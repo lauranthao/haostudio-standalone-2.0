@@ -282,7 +282,36 @@ enum BackupEngineCore {
             return .rejected("备份信封损坏")
         }
         let current = currentVersion ?? BackupEnvelope.currentAppVersion(bundle: bundle)
-        return BackupEnvelope.validate(dictionary: root, currentVersion: current)
+        let validation = BackupEnvelope.validate(dictionary: root, currentVersion: current)
+        guard case .valid(let envelope) = validation else {
+            return validation
+        }
+        // The manifest is the import's verification source: every
+        // entry it promises must be present in the zip at the
+        // promised size. A zip that lost an entry (truncated or
+        // hand-built) used to import "successfully" with the data
+        // silently missing; refuse it before anything is written.
+        // The envelope row itself is excluded: backup.json is
+        // re-encoded whenever it is rewritten, so its own row
+        // legitimately disagrees after a rewrite.
+        guard manifestMatchesContents(envelope: envelope, entries: entries) else {
+            return .rejected("备份内容不完整，缺少部分数据")
+        }
+        return .valid(envelope)
+    }
+
+    /// True when every manifest entry the envelope promises
+    /// (except the envelope itself, see above) exists in the zip
+    /// at exactly the promised byte count.
+    static func manifestMatchesContents(envelope: BackupEnvelope, entries: [ZipEntryInfo]) -> Bool {
+        for content in envelope.contents {
+            guard content.path != envelopeFileName else { continue }
+            guard content.bytes >= 0,
+                  let entry = entries.first(where: { $0.name == content.path }),
+                  entry.uncompressedSize == UInt32(content.bytes)
+            else { return false }
+        }
+        return true
     }
 }
 

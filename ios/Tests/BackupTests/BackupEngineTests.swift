@@ -626,6 +626,73 @@ final class BackupEngineTests: XCTestCase {
         }
     }
 
+    // MARK: - Manifest: a backup missing a promised entry is refused
+
+    func testImportRejectsBackupMissingManifestEntry() {
+        // The envelope manifest promises every collection; a zip
+        // that lost one entry must be refused before anything is
+        // written, not imported "successfully" with data missing.
+        defaults.set("keep-me", forKey: "musicQuality")
+        let favBytes = "[{\"songId\":\"9\"}]".data(using: .utf8) ?? Data()
+        writeFile("hao_fav.json", bytes: favBytes, into: docs)
+        guard let zipURL = exportZip(using: engine) else { return }
+        guard let entries = ZipArchive.listEntries(at: zipURL) else {
+            return XCTFail("cannot list exported backup")
+        }
+        var newEntries: [ZipEntry] = []
+        for entry in entries where entry.name != "collections/hao_fav.json" {
+            guard let data = ZipArchive.readEntryData(entry, from: zipURL) else {
+                return XCTFail("cannot read entry \(entry.name)")
+            }
+            newEntries.append(.data(name: entry.name, data: data))
+        }
+        let outURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hao-backup-dropped-\(UUID().uuidString).zip")
+        guard ZipArchive.write(entries: newEntries, to: outURL) else {
+            return XCTFail("rewriting the backup failed")
+        }
+        guard let result = importZip(outURL, using: engine) else {
+            return XCTFail("import returned nothing")
+        }
+        switch result {
+        case .failure(let error):
+            XCTAssertTrue(error.localizedDescription.contains("不完整"))
+        case .success:
+            XCTFail("a backup missing a manifest entry must be refused")
+        }
+        XCTAssertEqual(defaults.string(forKey: "musicQuality"), "keep-me")
+        XCTAssertEqual(readFile("hao_fav.json", from: docs), favBytes)
+    }
+
+    func testImportRejectsManifestByteCountMismatch() {
+        // Same promise, other direction: the manifest says an
+        // entry has N bytes but the zip carries fewer/more.
+        defaults.set("keep-me", forKey: "musicQuality")
+        let favBytes = "[{\"songId\":\"9\"}]".data(using: .utf8) ?? Data()
+        writeFile("hao_fav.json", bytes: favBytes, into: docs)
+        guard let zipURL = exportZip(using: engine) else { return }
+        guard let rewritten = rewriteBackupJSON(in: zipURL, mutate: { root in
+            guard var contents = root["contents"] as? [[String: Any]],
+                  let index = contents.firstIndex(where: { ($0["path"] as? String)?.hasPrefix("collections/") == true })
+            else { return }
+            contents[index]["bytes"] = 999_999_999
+            root["contents"] = contents
+        }) else {
+            return XCTFail("rewriting the backup failed")
+        }
+        guard let result = importZip(rewritten, using: engine) else {
+            return XCTFail("import returned nothing")
+        }
+        switch result {
+        case .failure(let error):
+            XCTAssertTrue(error.localizedDescription.contains("不完整"))
+        case .success:
+            XCTFail("a backup whose manifest byte count mismatches must be refused")
+        }
+        XCTAssertEqual(defaults.string(forKey: "musicQuality"), "keep-me")
+        XCTAssertEqual(readFile("hao_fav.json", from: docs), favBytes)
+    }
+
     // MARK: - ZIP: stored round trip + CRC vector + extract
 
     func testZipStoredRoundTrip() {
