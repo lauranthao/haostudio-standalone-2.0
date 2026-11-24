@@ -129,6 +129,72 @@ enum MusicLibraryStore {
         try? data.write(to: url, options: [.atomic])
     }
 
+    // MARK: - Background song-switch I/O (build 36, item 10)
+    //
+    // A song switch used to do four synchronous JSON file operations
+    // on the main thread (fav read, lyrics-cache read, recent
+    // read+write, queue write). The files are small, but the cost
+    // grows with the favourites / recent lists and it ran on every
+    // switch. These wrappers move the disk work onto one serial
+    // background queue, so rapid switches keep write order and the
+    // main thread never blocks on disk. Completions run on the main
+    // thread; a failed write stays silent, exactly like the sync
+    // versions (they already swallow errors with try?).
+    //
+    // DispatchWorkItem — not trailing .async closures — is deliberate:
+    // Xcode 26 types DispatchQueue.async closures @Sendable, and the
+    // captured MusicSong / completion values are not Sendable under
+    // SWIFT_VERSION 5.0 (same trap AGENTS.md records for
+    // DispatchQueue.main.async).
+
+    /// Serial background queue for song-switch persistence.
+    private static let songSwitchIOQueue = DispatchQueue(
+        label: "studio.hao.musicLibraryStore.songSwitchIO", qos: .utility)
+
+    /// Favourite check off the main thread; `completion` runs on main.
+    static func isFavAsync(_ song: MusicSong, completion: @escaping (Bool) -> Void) {
+        let work = DispatchWorkItem {
+            let fav = isFav(song)
+            let back = DispatchWorkItem { completion(fav) }
+            DispatchQueue.main.async(execute: back)
+        }
+        songSwitchIOQueue.async(execute: work)
+    }
+
+    /// Lyrics-cache read off the main thread; `completion` runs on main.
+    static func cachedLyricsAsync(for identityKey: String, completion: @escaping ([StoredLyricLine]?) -> Void) {
+        let work = DispatchWorkItem {
+            let cached = cachedLyrics(for: identityKey)
+            let back = DispatchWorkItem { completion(cached) }
+            DispatchQueue.main.async(execute: back)
+        }
+        songSwitchIOQueue.async(execute: work)
+    }
+
+    /// Recent write off the main thread. The change notification is
+    /// posted on main after the write lands, so observers that reload
+    /// (getRecent) always read the new list.
+    static func addRecentAsync(_ song: MusicSong) {
+        let work = DispatchWorkItem {
+            writeRecent(song)
+            let back = DispatchWorkItem {
+                NotificationCenter.default.post(name: .haoMusicRecentChanged, object: nil)
+            }
+            DispatchQueue.main.async(execute: back)
+        }
+        songSwitchIOQueue.async(execute: work)
+    }
+
+    /// Queue write off the main thread. Every queue write in the
+    /// player view model goes through here so rapid switches and
+    /// queue edits serialize in call order on the one queue — a
+    /// later edit can never be overwritten by an earlier switch's
+    /// still-pending write.
+    static func saveQueueAsync(_ queue: MusicQueueData) {
+        let work = DispatchWorkItem { saveQueue(queue) }
+        songSwitchIOQueue.async(execute: work)
+    }
+
     // MARK: - UserDefaults accessors
 
     private static func defaults(_ suite: UserDefaults = .standard) -> UserDefaults { suite }
@@ -390,10 +456,17 @@ enum MusicLibraryStore {
     }
 
     static func addRecent(_ song: MusicSong) {
+        writeRecent(song)
+        NotificationCenter.default.post(name: .haoMusicRecentChanged, object: nil)
+    }
+
+    /// File part of addRecent, without the notification: the
+    /// background wrapper posts on the main thread after the write
+    /// lands, so observers that reload always read the new list.
+    private static func writeRecent(_ song: MusicSong) {
         var list = getRecent().filter { $0.identityKey != song.identityKey }
         list.insert(song, at: 0)
         writeArray(named: recentCollection, Array(list.prefix(maxRecent)).map { $0.toJSON() })
-        NotificationCenter.default.post(name: .haoMusicRecentChanged, object: nil)
     }
 
     static func clearRecent() {

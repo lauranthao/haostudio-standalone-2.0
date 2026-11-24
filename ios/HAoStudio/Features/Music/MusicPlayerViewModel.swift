@@ -124,6 +124,13 @@ final class MusicPlayerViewModel: ObservableObject {
 
     @Published private(set) var isCurrentFav = false
 
+    /// Generation counter for in-flight background favourite checks
+    /// (b36-item10): a check started for song A must not overwrite
+    /// the star after the user toggled it, after another song
+    /// started, or after the queue was cleared. Bumped on every
+    /// toggle / fav-change notification / clear, and per new check.
+    private var favCheckGeneration = 0
+
     private let player = NativeMusicPlayer.shared
     private let coordinator: PlaybackCoordinator
     private var cancellables = Set<AnyCancellable>()
@@ -235,6 +242,9 @@ final class MusicPlayerViewModel: ObservableObject {
         // stale favourite state while the song is playing.
         _ = NotificationCenter.default.addObserver(forName: .haoMusicFavChanged, object: nil, queue: .main) { [weak self] _ in
             guard let self = self, let song = self.currentSong else { return }
+            // b36-item10: invalidate any in-flight background fav
+            // check — its result predates this toggle.
+            self.favCheckGeneration += 1
             self.isCurrentFav = MusicLibraryStore.isFav(song)
         }
     }
@@ -388,11 +398,29 @@ final class MusicPlayerViewModel: ObservableObject {
 
     private func setCurrentSong(_ song: MusicSong) {
         currentSong = song
-        isCurrentFav = MusicLibraryStore.isFav(song)
+        // b36-item10: the star keeps the previous song's state until
+        // the background fav read lands — never flash a wrong state,
+        // never block the switch on disk I/O.
+        refreshCurrentFav(for: song)
         loadLyrics(for: song)
         heardTrackKey = song.identityKey
         heardSeconds = 0
         refreshLocalQualityBadge()
+    }
+
+    /// Favourite state for `song`, read off the main thread. Applies
+    /// only when this check is still the newest one and the song is
+    /// still current — a toggle or a newer switch in between wins.
+    private func refreshCurrentFav(for song: MusicSong) {
+        favCheckGeneration += 1
+        let generation = favCheckGeneration
+        let key = song.identityKey
+        MusicLibraryStore.isFavAsync(song) { [weak self] fav in
+            guard let self = self else { return }
+            guard self.favCheckGeneration == generation,
+                  self.currentSong?.identityKey == key else { return }
+            self.isCurrentFav = fav
+        }
     }
 
     /// Derive the player badge for a local file (S7-A). Remote songs
@@ -492,8 +520,12 @@ final class MusicPlayerViewModel: ObservableObject {
         coordinator.requestPlay(current.toPlaybackItem())
         setCurrentSong(current)
         miniFallbackSong = current
-        MusicLibraryStore.addRecent(current)
-        MusicLibraryStore.saveQueue(queue.toQueueData())
+        // b36-item10: recent + queue persistence runs on the store's
+        // serial background queue — the switch no longer blocks on
+        // disk I/O. Writes keep call order; the recent-change
+        // notification fires on main after the write lands.
+        MusicLibraryStore.addRecentAsync(current)
+        MusicLibraryStore.saveQueueAsync(queue.toQueueData())
     }
 
     // MARK: - Auto-resume checkpoints
@@ -715,6 +747,9 @@ final class MusicPlayerViewModel: ObservableObject {
 
     func toggleFavourite() {
         guard let song = currentSong else { return }
+        // b36-item10: invalidate any in-flight background fav check
+        // — its result predates this toggle.
+        favCheckGeneration += 1
         isCurrentFav = MusicLibraryStore.toggleFav(song)
         hapticTick()
     }
@@ -811,36 +846,46 @@ final class MusicPlayerViewModel: ObservableObject {
         lyricsLoaded = false
         lyrics = []
         activeLyricIndex = -1
-        if let cached = MusicLibraryStore.cachedLyrics(for: song.identityKey) {
-            lyrics = MusicLyrics.toContractLines(cached)
-            lyricsLoaded = true
-            updateActiveLyric()
-            return
-        }
-        guard fetchIfMissing else {
-            lyricsLoaded = true
-            return
-        }
-        let track = MusicTrack(
-            id: song.songId, title: song.title, artist: song.artist,
-            album: song.album, coverURL: URL(string: song.cover), duration: TimeInterval(song.dur),
-            sourceID: song.platform.rawValue
-        )
-        MusicLyricsAPI.shared.fetchLyrics(for: track) { [weak self] result in
+        // b36-item10: the lyrics-cache read used to run synchronously
+        // on the main thread on every song switch; it now runs on
+        // the store's serial background queue and publishes on main.
+        // The network fetch below is unchanged, still guarded on
+        // the song still being current.
+        let key = song.identityKey
+        MusicLibraryStore.cachedLyricsAsync(for: key) { [weak self] cached in
             guard let self = self else { return }
-            guard let result = result else {
+            guard self.currentSong?.identityKey == key else { return }
+            if let cached = cached {
+                self.lyrics = MusicLyrics.toContractLines(cached)
+                self.lyricsLoaded = true
+                self.updateActiveLyric()
+                return
+            }
+            guard fetchIfMissing else {
                 self.lyricsLoaded = true
                 return
             }
-            // Only keep the result if the song is still current.
-            guard self.currentSong?.identityKey == song.identityKey else { return }
-            self.lyrics = result.lines
-            self.lyricsLoaded = true
-            // A11: keep the translation in the cache too — the old
-            // mapping dropped it, so a cached song never showed one.
-            let stored = result.lines.map { StoredLyricLine(t: $0.time, text: $0.text, translation: $0.translation) }
-            MusicLibraryStore.putLyrics(stored, for: song.identityKey)
-            self.updateActiveLyric()
+            let track = MusicTrack(
+                id: song.songId, title: song.title, artist: song.artist,
+                album: song.album, coverURL: URL(string: song.cover), duration: TimeInterval(song.dur),
+                sourceID: song.platform.rawValue
+            )
+            MusicLyricsAPI.shared.fetchLyrics(for: track) { [weak self] result in
+                guard let self = self else { return }
+                guard let result = result else {
+                    self.lyricsLoaded = true
+                    return
+                }
+                // Only keep the result if the song is still current.
+                guard self.currentSong?.identityKey == song.identityKey else { return }
+                self.lyrics = result.lines
+                self.lyricsLoaded = true
+                // A11: keep the translation in the cache too — the old
+                // mapping dropped it, so a cached song never showed one.
+                let stored = result.lines.map { StoredLyricLine(t: $0.time, text: $0.text, translation: $0.translation) }
+                MusicLibraryStore.putLyrics(stored, for: song.identityKey)
+                self.updateActiveLyric()
+            }
         }
     }
 
@@ -924,7 +969,10 @@ final class MusicPlayerViewModel: ObservableObject {
             return
         }
         queue.insert(song, at: queue.index + 1)
-        MusicLibraryStore.saveQueue(queue.toQueueData())
+        // b36-item10: same serial background queue as the switch
+        // path, so this edit can never be overwritten by a switch's
+        // still-pending queue write.
+        MusicLibraryStore.saveQueueAsync(queue.toQueueData())
         showToast("下一首播放")
     }
 
@@ -939,7 +987,7 @@ final class MusicPlayerViewModel: ObservableObject {
     func removeFromQueue(at index: Int) {
         let wasCurrent = index == queue.index
         queue.remove(at: index)
-        MusicLibraryStore.saveQueue(queue.toQueueData())
+        MusicLibraryStore.saveQueueAsync(queue.toQueueData())
         if wasCurrent {
             // L1 (build 36, item 8): deleting the playing song
             // used to stop playback and only DISPLAY the next song
@@ -965,7 +1013,7 @@ final class MusicPlayerViewModel: ObservableObject {
 
     func clearQueue() {
         queue.clear()
-        MusicLibraryStore.saveQueue(queue.toQueueData())
+        MusicLibraryStore.saveQueueAsync(queue.toQueueData())
         player.pause()
         coordinator.stop()
         // A7: same as above — clearing the queue must also clear
@@ -982,6 +1030,9 @@ final class MusicPlayerViewModel: ObservableObject {
         lyrics = []
         lyricsLoaded = true
         activeLyricIndex = -1
+        // b36-item10: drop any in-flight background fav check for
+        // the removed song — it must not re-light the star.
+        favCheckGeneration += 1
         isCurrentFav = false
         localQualityLabel = nil
         heardTrackKey = ""
