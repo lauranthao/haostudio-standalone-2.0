@@ -93,7 +93,7 @@ enum LXScriptImportValidator {
         probe?.evaluateScript(LXPrelude.source)
         probe?.evaluateScript(code)
         if let exception = probe?.exception {
-            let detail = exception.toString()
+            let detail = exception.toString() ?? ""
             let short = String(detail.prefix(120))
             return .failure(.syntaxError(short.isEmpty ? "脚本执行出错" : short))
         }
