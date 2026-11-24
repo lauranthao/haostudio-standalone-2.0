@@ -92,6 +92,13 @@ final class HaoSidebarDragState: ObservableObject {
             }
             .onEnded { [weak self] value in
                 guard let self = self else { return }
+                // Never-engaged drags decide nothing: onChanged only
+                // engages once horizontal clearly dominates, but
+                // onEnded used to run the settle decision for every
+                // touch — a fast diagonal vertical fling (velocity.x
+                // past the 500 flick threshold) flipped the sidebar
+                // even though the user was scrolling the poster grid.
+                guard self.dragEngaged else { return }
                 let total = Double((self.isOpen ? self.width : 0) + self.dragOffset)
                 let totalMovement = Double(hypot(value.translation.width, value.translation.height))
                 self.dragEngaged = false
