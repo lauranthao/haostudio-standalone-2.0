@@ -118,6 +118,12 @@ final class URLSessionLiveDanmakuSocket: LiveDanmakuSocket {
         closed = true
         task?.cancel(with: .normalClosure, reason: nil)
         task = nil
+        // The session is invalidated here, not only in close():
+        // a dropped socket reconnects with a fresh socket +
+        // session, and an un-invalidated URLSession is never
+        // deallocated — every danmaku disconnect leaked one.
+        session?.invalidateAndCancel()
+        session = nil
         onDisconnected?()
     }
 }
