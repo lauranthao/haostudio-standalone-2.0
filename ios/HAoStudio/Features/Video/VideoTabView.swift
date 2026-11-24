@@ -48,10 +48,35 @@ final class VideoTabViewModel: ObservableObject {
         Set(continueWatching.map { $0.id })
     }
 
+    /// Throttle for `loadFresh()` on tab re-entry (build 36 item 10):
+    /// returning to the tab re-reads the local cache, but only
+    /// re-fetches when there is nothing cached or the last
+    /// successful fetch is older than this. Pull-to-refresh
+    /// calls `loadFresh()` directly and bypasses the throttle.
+    private static let freshInterval: TimeInterval = 5 * 60
+
+    /// Set when a home fetch completes without failing
+    /// (see `loadFresh()`); nil = never fetched successfully.
+    private var lastFreshFetch: Date?
+
     func reload() {
         rows = VideoLibraryStore.cachedHome()
         continueWatching = VideoLibraryStore.history()
+        reloadIfNeeded()
+    }
+
+    /// Local rows always refresh; the network fetch only runs
+    /// when there is nothing cached or the last successful fetch
+    /// is older than `freshInterval` (mirrors
+    /// `LiveTabViewModel.loadIfNeeded`).
+    func reloadIfNeeded() {
+        guard rows.isEmpty || isFreshFetchStale else { return }
         loadFresh()
+    }
+
+    private var isFreshFetchStale: Bool {
+        guard let last = lastFreshFetch else { return true }
+        return Date().timeIntervalSince(last) >= Self.freshInterval
     }
 
     func loadFresh() {
@@ -63,9 +88,12 @@ final class VideoTabViewModel: ObservableObject {
             self.isLoading = false
             if fresh.isEmpty && self.rows.isEmpty {
                 self.loadFailed = true
-            } else if !fresh.isEmpty {
-                self.rows = fresh
-                VideoLibraryStore.saveHomeCache(fresh)
+            } else {
+                if !fresh.isEmpty {
+                    self.rows = fresh
+                    VideoLibraryStore.saveHomeCache(fresh)
+                }
+                self.lastFreshFetch = Date()
             }
         }
         gateway.fetchTypeNames { [weak self] names in
@@ -141,10 +169,20 @@ struct VideoTabView: View {
             .onAppear {
                 // The browse page can change the persisted tab mode
                 // (its 影视/Emby switch writes hao_video_tab_mode);
-                // re-read it so popping back shows the mode the
-                // user actually left the browse page in.
+                // re-read it when switching back to this tab so the
+                // picker shows the mode the user left the browse
+                // page in.
                 mode = VideoLibraryStore.tabMode()
                 viewModel.reload()
+            }
+            .onChange(of: path) { _, newPath in
+                // Popping back from a pushed page does NOT re-trigger
+                // onAppear (the tab root never disappeared), so a mode
+                // change made in the browse page is re-read here when
+                // the stack returns to its root.
+                if newPath.isEmpty {
+                    mode = VideoLibraryStore.tabMode()
+                }
             }
         }
     }
