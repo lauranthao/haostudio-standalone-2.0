@@ -1,10 +1,6 @@
-# DRAFT ONLY — 未提交、未推送、未启用。
-# HAo Studio 2.0 Swift 应用的 GitHub Actions 构建草稿，
+# HAo Studio 2.0 Swift 应用的 GitHub Actions 构建，
 # 1:1 对照 codemagic.yaml 的 ios-unsigned 工作流。
-# 启用方法：把本文件复制为仓库里的 .github/workflows/ios-unsigned.yml，
-# 提交并推送到 main，然后在 GitHub 仓库的 Actions 页手动点 Run workflow。
-# 不要用 push 触发：仓库是公开的，任何人 push 都会烧免费额度——
-# 虽然公开仓库标准 runner 免费，但 push 触发等于把构建开关交给全世界。
+# 手动触发（workflow_dispatch），默认 main。
 
 name: iOS Unsigned IPA
 
@@ -22,8 +18,6 @@ permissions:
 jobs:
   build-unsigned-ipa:
     name: iOS Unsigned IPA
-    # 标准 runner：公开仓库免费。绝对不要换成 macos-26-large / macos-26-xlarge，
-    # 大号 runner 即使在公开仓库也要按分钟收费。
     runs-on: macos-26
     timeout-minutes: 60
     steps:
@@ -33,9 +27,6 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Select Xcode 26.2
-        # 关键：macos-26 镜像默认 Xcode 是 26.6，26.2 必须显式选。
-        # 当前镜像（20261117.0516.1）确认有 /Applications/Xcode_26.2.app（build 17C52），
-        # 与 Codemagic 用的 26.2 完全一致，带 iOS 26.2 SDK。
         run: |
           sudo xcode-select -s /Applications/Xcode_26.2.app
           xcodebuild -version
@@ -62,7 +53,6 @@ jobs:
           ls
 
       - name: Install CocoaPods dependencies
-        # 镜像预装 CocoaPods 1.17.0；保留 gem 安装兜底（与 codemagic.yaml 相同逻辑）。
         run: |
           cd ios
           if [ ! -f Podfile ]; then
@@ -116,9 +106,3 @@ jobs:
           name: HAoStudio-ipa
           path: ios/HAoStudio.ipa
           retention-days: 30
-
-# 未包含：ios-simulator 工作流。模拟器构建本身和 Codemagic 是一样的步骤
-# （-sdk iphonesimulator + 打包 .app.zip），但已知 IJKMediaFramework 只有
-# 真机 arm64 切片，模拟器链接会失败——这是项目现状，与 CI 无关。
-# 等 IJK 重编带模拟器切片或 IJKPlayerBackend 做模拟器条件编译后，
-# 再把上面这个 job 复制一份改 SDK 即可。
