@@ -259,11 +259,14 @@ struct MyView: View {
 
 // MARK: - Playlist list (new: no playlist-list view existed)
 
-/// Minimal read-only playlist list. Rows open the existing
-/// MusicPlaylistDetailView; nothing here creates, renames or
-/// deletes (the detail page already owns those actions).
+/// Minimal playlist list. Rows open the existing
+/// MusicPlaylistDetailView; swipe-to-delete asks first (same
+/// confirmation as the detail page — a deleted list is gone
+/// for good, never silently).
 private struct MyPlaylistsView: View {
     @State private var lists: [UserPlaylist] = MusicLibraryStore.getLists()
+    @State private var deleteTarget: UserPlaylist?
+    @State private var showDeleteList = false
 
     @Environment(\.haoTheme) private var theme
 
@@ -294,8 +297,8 @@ private struct MyPlaylistsView: View {
                         .listRowSeparatorTint(theme.hairline)
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button(role: .destructive) {
-                                MusicLibraryStore.deleteList(id: list.id)
-                                lists = MusicLibraryStore.getLists()
+                                deleteTarget = list
+                                showDeleteList = true
                             } label: {
                                 Label("删除", systemImage: "trash")
                             }
@@ -312,6 +315,18 @@ private struct MyPlaylistsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             lists = MusicLibraryStore.getLists()
+        }
+        .alert("删除歌单", isPresented: $showDeleteList) {
+            Button("删除", role: .destructive) {
+                if let target = deleteTarget {
+                    MusicLibraryStore.deleteList(id: target.id)
+                    lists = MusicLibraryStore.getLists()
+                }
+                deleteTarget = nil
+            }
+            Button("取消", role: .cancel) { deleteTarget = nil }
+        } message: {
+            Text("删除后歌单里的歌曲不会从收藏或本地删除。")
         }
     }
 }
