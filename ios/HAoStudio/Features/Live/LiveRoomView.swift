@@ -803,9 +803,11 @@ struct LiveRoomView: View {
     /// the same forced-dark chrome as the VOD / live-landscape
     /// bars, so it reads over any frame in any theme combination.
     /// Quality + brightness/volume live here now (moved off the
-    /// bottom bar, which is follow / refresh / share): the
-    /// quality name as plain text (Pure Live shows each quality
-    /// as text), the sun opens the brightness/volume sheet.
+    /// bottom bar, which is follow / refresh / share). b39
+    /// (AngelLive FullUIPlayerChrome): the on-video controls are
+    /// glass, not bare glyphs on a gradient — 44pt glass circles
+    /// for the icon buttons, a 32pt glass pill for the quality
+    /// text (the bottom gradient scrim stays underneath).
     private var portraitVideoControls: some View {
         HStack(spacing: 8) {
             Button(action: { livePlayer.togglePlayPause() }) {
@@ -813,6 +815,7 @@ struct LiveRoomView: View {
                     .font(.haoSectionTitle)
                     .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 44, height: 44)
+                    .haoGlassCircle()
             }
             .buttonStyle(.plain)
             .accessibilityLabel(livePlayer.isPlaying ? "暂停" : "播放")
@@ -822,9 +825,12 @@ struct LiveRoomView: View {
                     .font(.haoDenseTitle)
                     .foregroundStyle(theme.accentOnVideo)
                     .lineLimit(1)
-                    .frame(height: 44)
+                    .padding(.horizontal, 14)
+                    .frame(height: 32)
+                    .haoGlassCapsule()
             }
             .buttonStyle(.plain)
+            .frame(height: 44)
             .accessibilityLabel("画质")
             Spacer()
             Button(action: { showBrightnessVolume = true }) {
@@ -832,6 +838,7 @@ struct LiveRoomView: View {
                     .font(.haoSectionTitle)
                     .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 44, height: 44)
+                    .haoGlassCircle()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("亮度与音量")
@@ -840,6 +847,7 @@ struct LiveRoomView: View {
                     .font(.haoSectionTitle)
                     .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 44, height: 44)
+                    .haoGlassCircle()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("全屏")

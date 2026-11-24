@@ -195,6 +195,12 @@ struct DanmakuToggleButton: View {
                 .font(.system(size: 18, weight: .semibold))  // icon size, not text
                 .foregroundStyle(isOn ? theme.accentOnVideo : .white.opacity(0.5))
                 .frame(width: 44, height: 44)
+                // b39 (AngelLive FullUIPlayerChrome): the toggle
+                // is a 44pt glass circle like the other on-video
+                // controls, not a bare glyph. This button is shared
+                // by the portrait and landscape control rows, so
+                // both get the treatment.
+                .haoGlassCircle()
         }
         .buttonStyle(.plain)
         .accessibilityLabel(isOn ? "关闭弹幕" : "开启弹幕")
