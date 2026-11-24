@@ -574,6 +574,19 @@ final class DouyinLiveSite: LiveSiteResolver {
     private var anonymousCookieInFlight = false
     private var anonymousCookieCompletions: [([String: String]) -> Void] = []
 
+    /// Guards the anonymous-cookie cache + in-flight dedup above:
+    /// headers are built from URLSession background callbacks and
+    /// two concurrent calls used to mutate the same cache/array
+    /// with no lock — a data race that traps. The lock is only
+    /// ever held for the state touch, never across a network call
+    /// or a completion.
+    private let stateLock = NSLock()
+    private func locked<T>(_ body: () -> T) -> T {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return body()
+    }
+
     /// Current web clients use a 19-digit anonymous visitor ID. One
     /// ID per process so switching rooms does not create a new
     /// viewer identity.
@@ -613,31 +626,41 @@ final class DouyinLiveSite: LiveSiteResolver {
     /// cookie fetch is best-effort: headers without a Cookie are
     /// returned when it fails.
     private func requestHeaders(completion: @escaping ([String: String]) -> Void) {
-        if !cookie.isEmpty {
+        let cachedCookie = locked { cookie }
+        if !cachedCookie.isEmpty {
             var headers = baseHeaders
-            headers["Cookie"] = cookie
+            headers["Cookie"] = cachedCookie
             completion(headers)
             return
         }
-        anonymousCookieCompletions.append(completion)
-        if anonymousCookieInFlight {
+        let alreadyInFlight = locked {
+            anonymousCookieCompletions.append(completion)
+            if anonymousCookieInFlight {
+                return true
+            }
+            anonymousCookieInFlight = true
+            return false
+        }
+        if alreadyInFlight {
             return
         }
-        anonymousCookieInFlight = true
         fetchAnonymousCookie { [weak self] value in
             guard let self = self else {
                 return
             }
-            self.anonymousCookieInFlight = false
-            if !value.isEmpty {
-                self.cookie = value
+            let (completions, cookieValue) = self.locked {
+                self.anonymousCookieInFlight = false
+                if !value.isEmpty {
+                    self.cookie = value
+                }
+                let completions = self.anonymousCookieCompletions
+                self.anonymousCookieCompletions = []
+                return (completions, self.cookie)
             }
-            let completions = self.anonymousCookieCompletions
-            self.anonymousCookieCompletions = []
             for item in completions {
                 var headers = self.baseHeaders
-                if !self.cookie.isEmpty {
-                    headers["Cookie"] = self.cookie
+                if !cookieValue.isEmpty {
+                    headers["Cookie"] = cookieValue
                 }
                 item(headers)
             }

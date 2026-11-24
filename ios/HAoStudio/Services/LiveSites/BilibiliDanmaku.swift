@@ -466,7 +466,10 @@ final class BilibiliDanmaku: LiveDanmakuTransportBase {
                 return
             }
             let meta = info[0] as? [Any] ?? []
-            let color = meta.isEmpty ? 0 : LiveJSON.asInt(meta[3])
+            // meta[3] is the colour, but a short/truncated meta
+            // array must not trap here: default to 0 (white) when
+            // the server sends fewer than 4 elements.
+            let color = meta.count > 3 ? LiveJSON.asInt(meta[3]) : 0
             let user = info[2] as? [Any] ?? []
             let userName = user.count > 1 ? LiveJSON.asString(user[1]) : ""
             onMessage?(DanmakuMessage(

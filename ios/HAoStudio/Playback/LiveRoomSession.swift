@@ -119,7 +119,15 @@ final class LiveRecovery {
     /// The quality the current lines were resolved for. Mutable on
     /// purpose: every fresh re-parse (prefetch / recovery / manual
     /// retry) must use the CURRENT quality.
-    var quality: LiveQuality?
+    ///
+    /// Locked accessor (see `stateLock`): the quality is read on
+    /// the resolver callback thread and written from the room
+    /// session, while the driver reads it on main.
+    private var _quality: LiveQuality?
+    var quality: LiveQuality? {
+        get { locked { _quality } }
+        set { locked { _quality = newValue } }
+    }
 
     /// Injectable clock. Production uses the wall clock; tests drive it.
     var now: () -> Date = { Date() }
@@ -127,8 +135,27 @@ final class LiveRecovery {
     /// Test seam: re-parse timeout seconds. Production is 10.
     var timeoutInterval: TimeInterval = LiveRecovery.freshFetchTimeout
 
+    /// Serialises every read/write of the resolution state below.
+    /// Resolver callbacks arrive on URLSession background threads
+    /// (`adopt` / the held plan run there) while the driver reads
+    /// the same lines/qualities/index on main — unguarded that is
+    /// a data race on the stored arrays. The lock is only ever
+    /// held for the state touch, never across a network call or a
+    /// completion; and a locked block never calls another locked
+    /// accessor (backing vars are used inside — see `facts(for:)`).
+    private let stateLock = NSLock()
+    private func locked<T>(_ body: () -> T) -> T {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return body()
+    }
+
     /// Current resolved lines, in platform order.
-    private(set) var lines: [LiveLine] = []
+    private var _lines: [LiveLine] = []
+    private(set) var lines: [LiveLine] {
+        get { locked { _lines } }
+        set { locked { _lines = newValue } }
+    }
     /// Declared format per flattened URL, same order as `urls`
     /// (the line's own format, repeated per URL on that line).
     /// Computed from `urlFacts` together with `urls`, so the two
@@ -137,17 +164,37 @@ final class LiveRecovery {
         return urlFacts.map { $0.format }
     }
     /// Qualities the room offers, from the last resolution.
-    private(set) var qualities: [LiveQuality] = []
+    private var _qualities: [LiveQuality] = []
+    private(set) var qualities: [LiveQuality] {
+        get { locked { _qualities } }
+        set { locked { _qualities = newValue } }
+    }
     /// Index of the line currently playing (indexes `urls`).
-    var currentLineIndex: Int = 0
+    private var _currentLineIndex: Int = 0
+    var currentLineIndex: Int {
+        get { locked { _currentLineIndex } }
+        set { locked { _currentLineIndex = newValue } }
+    }
     /// When the current resolution was issued (for 100 s / 125 s math).
-    private(set) var issuedAt: Date?
+    private var _issuedAt: Date?
+    private(set) var issuedAt: Date? {
+        get { locked { _issuedAt } }
+        set { locked { _issuedAt = newValue } }
+    }
     /// Lease deadlines of the CURRENT resolution, when the platform
     /// reports them (Huya/Douyu do; Douyin leaves them nil — no
     /// lease, no prefetch, exactly like Pure Live's `lease == null`
     /// early-out).
-    private(set) var refreshAt: Date?
-    private(set) var invalidAt: Date?
+    private var _refreshAt: Date?
+    private(set) var refreshAt: Date? {
+        get { locked { _refreshAt } }
+        set { locked { _refreshAt = newValue } }
+    }
+    private var _invalidAt: Date?
+    private(set) var invalidAt: Date? {
+        get { locked { _invalidAt } }
+        set { locked { _invalidAt = newValue } }
+    }
 
     /// The held prefetched resolution: fetched at refreshAt, spent
     /// by the next recovery, never opened on its own.
@@ -155,6 +202,10 @@ final class LiveRecovery {
     private var lastFreshFetchAt: Date?
     private var prefetchTimer: Timer?
     private var disposed = false
+    /// Bumps on every `schedulePrefetch` (inside the lock): a
+    /// main-queued timer creation whose generation is stale was
+    /// superseded by a newer schedule and must not create a timer.
+    private var prefetchGeneration = 0
 
     init(roomId: String, resolver: LiveSiteResolver?, quality: LiveQuality? = nil, now: @escaping () -> Date = { Date() }) {
         self.roomId = roomId
@@ -164,14 +215,14 @@ final class LiveRecovery {
     }
 
     deinit {
-        prefetchTimer?.invalidate()
+        locked { prefetchTimer?.invalidate() }
     }
 
-    /// (URL, format) pairs, one per playable URL string, in line
-    /// order. B leg's `LiveLine.urls` are strings, so a string that
-    /// is not a valid URL is dropped here — together with its
-    /// format — which keeps `urls` and `formats` aligned.
-    var urlFacts: [(url: URL, format: String)] {
+    /// (URL, format) pairs for the given lines — the pure core of
+    /// `urlFacts`. Takes the lines as a parameter so locked blocks
+    /// can compute from the stored `_lines` without re-entering
+    /// the lock through the `urlFacts` accessor.
+    private static func facts(for lines: [LiveLine]) -> [(url: URL, format: String)] {
         return lines.flatMap { line in
             line.urls.compactMap { raw -> (URL, String)? in
                 guard let url = URL(string: raw) else { return nil }
@@ -180,52 +231,74 @@ final class LiveRecovery {
         }
     }
 
+    /// (URL, format) pairs, one per playable URL string, in line
+    /// order. B leg's `LiveLine.urls` are strings, so a string that
+    /// is not a valid URL is dropped here — together with its
+    /// format — which keeps `urls` and `formats` aligned.
+    var urlFacts: [(url: URL, format: String)] {
+        return locked { LiveRecovery.facts(for: _lines) }
+    }
+
     /// All stream URLs, flattened from `lines` in platform order.
     var urls: [URL] {
         return urlFacts.map { $0.url }
     }
 
     var currentUrl: URL? {
-        guard !urls.isEmpty else {
-            return nil
+        return locked {
+            let facts = LiveRecovery.facts(for: _lines)
+            guard !facts.isEmpty else {
+                return nil
+            }
+            return facts[_currentLineIndex % facts.count].url
         }
-        return urls[currentLineIndex % urls.count]
     }
 
     /// The next line, wrapping around. Nil when there is only one URL.
     var nextLineUrl: URL? {
-        guard urls.count >= 2 else {
-            return nil
+        return locked {
+            let facts = LiveRecovery.facts(for: _lines)
+            guard facts.count >= 2 else {
+                return nil
+            }
+            return facts[(_currentLineIndex + 1) % facts.count].url
         }
-        return urls[(currentLineIndex + 1) % urls.count]
     }
 
     /// Advance to the next line WITHOUT a network request. Returns
     /// the URL to open, or nil when there is no other line.
     @discardableResult
     func advanceLine() -> URL? {
-        guard let next = nextLineUrl else {
-            return nil
+        return locked {
+            let facts = LiveRecovery.facts(for: _lines)
+            guard facts.count >= 2 else {
+                return nil
+            }
+            _currentLineIndex = (_currentLineIndex + 1) % facts.count
+            return facts[_currentLineIndex].url
         }
-        currentLineIndex = (currentLineIndex + 1) % urls.count
-        return next
     }
 
     /// Declared format for one flattened URL index ("other" when
     /// the platform declared nothing for that line).
     func factsFor(index: Int) -> String {
-        guard index >= 0 && index < formats.count else {
-            return "other"
+        return locked {
+            let formats = LiveRecovery.facts(for: _lines).map { $0.format }
+            guard index >= 0 && index < formats.count else {
+                return "other"
+            }
+            return formats[index]
         }
-        return formats[index]
     }
 
     /// True when a `fetchFresh` right now would be throttled.
     var isFetchFreshThrottled: Bool {
-        guard let last = lastFreshFetchAt else {
-            return false
+        return locked {
+            guard let last = lastFreshFetchAt else {
+                return false
+            }
+            return now().timeIntervalSince(last) < LiveRecovery.freshFetchThrottle
         }
-        return now().timeIntervalSince(last) < LiveRecovery.freshFetchThrottle
     }
 
     /// Install a resolution as the current lines: replaces lines /
@@ -233,15 +306,24 @@ final class LiveRecovery {
     /// identity (not by index), and re-arms the hold timer at the
     /// new resolution's refreshAt.
     func adopt(resolution: LivePlayUrlResolution, previousUrl: URL?) {
-        let previous = previousUrl ?? currentUrl
-        lines = resolution.lines
-        qualities = resolution.qualities
-        quality = resolution.quality
-        issuedAt = resolution.issuedAt
-        refreshAt = resolution.refreshAt
-        invalidAt = resolution.invalidAt
-        currentLineIndex = matchLineIndex(urls: urls, previousUrl: previous)
-        schedulePrefetch()
+        // One locked install: the resolver callback thread writes
+        // while the driver reads on main. The prefetch target is
+        // captured here and the timer is armed after the lock is
+        // released (schedulePrefetch hops to main on its own).
+        let target: Date? = locked {
+            let facts = LiveRecovery.facts(for: _lines)
+            let previous = previousUrl ?? (facts.isEmpty ? nil : facts[_currentLineIndex % facts.count].url)
+            _lines = resolution.lines
+            _qualities = resolution.qualities
+            _quality = resolution.quality
+            _issuedAt = resolution.issuedAt
+            _refreshAt = resolution.refreshAt
+            _invalidAt = resolution.invalidAt
+            let freshFacts = LiveRecovery.facts(for: _lines)
+            _currentLineIndex = matchLineIndex(urls: freshFacts.map { $0.url }, previousUrl: previous)
+            return _refreshAt
+        }
+        schedulePrefetch(at: target)
     }
 
     /// The initial resolve for a room. NOT throttled (the happy path
@@ -274,11 +356,17 @@ final class LiveRecovery {
     /// mismatch without ever touching the playing lines.
     func fetchFresh(adopting: Bool = true, completion: @escaping (LivePlayUrlResolution?) -> Void) {
         let current = now()
-        if let last = lastFreshFetchAt, current.timeIntervalSince(last) < LiveRecovery.freshFetchThrottle {
+        let throttled = locked {
+            if let last = lastFreshFetchAt, current.timeIntervalSince(last) < LiveRecovery.freshFetchThrottle {
+                return true
+            }
+            lastFreshFetchAt = current
+            return false
+        }
+        if throttled {
             completion(nil)
             return
         }
-        lastFreshFetchAt = current
         fetchFromResolver { [weak self] resolution in
             guard let self = self else {
                 completion(nil)
@@ -305,24 +393,39 @@ final class LiveRecovery {
     /// there is nothing worth holding: the stall watchdog owns
     /// recovery from there.
     func performPrefetch() {
-        guard !disposed, !isExpired else {
+        guard !isDisposed, !isExpired else {
             return
         }
         fetchFromResolver { [weak self] resolution in
             guard let self = self else {
                 return
             }
-            guard !self.disposed else {
+            guard !self.isDisposed else {
                 return
             }
             guard let resolution = resolution, !resolution.appliedUrls.isEmpty else {
                 self.schedulePrefetch(at: self.now().addingTimeInterval(LiveRecovery.refreshRetry))
                 return
             }
-            self.held = resolution
-            let next = resolution.refreshAt ?? resolution.issuedAt.addingTimeInterval(LiveRecovery.prefetchAfterIssue)
+            let next = self.locked {
+                self.held = resolution
+                return resolution.refreshAt ?? resolution.issuedAt.addingTimeInterval(LiveRecovery.prefetchAfterIssue)
+            }
             self.schedulePrefetch(at: next ?? self.now().addingTimeInterval(LiveRecovery.refreshRetry))
         }
+    }
+
+    /// The held plan when it is usable (the state lock is already
+    /// held by the caller — never call the locked `peekHeld`
+    /// from inside a locked block).
+    private func heldIfUsable() -> LivePlayUrlResolution? {
+        guard let held = held, !held.appliedUrls.isEmpty else {
+            return nil
+        }
+        if let invalid = held.invalidAt, invalid <= now() {
+            return nil
+        }
+        return held
     }
 
     /// Take the held prefetched resolution for recovery (first
@@ -333,32 +436,42 @@ final class LiveRecovery {
     /// resolution's refreshAt. Costs no request and no throttle
     /// stamp: the hold was fetched earlier, taking it is free.
     func takeHeld() -> LivePlayUrlResolution? {
-        guard let held = peekHeld() else {
+        // Peek + clear + adopt in one locked step, so a concurrent
+        // prefetch cannot replace the hold between the peek and
+        // the adopt; the adopt itself runs after the lock is out.
+        let heldPlan: LivePlayUrlResolution? = locked {
+            guard let held = heldIfUsable() else {
+                return nil
+            }
+            self.held = nil
+            return held
+        }
+        guard let heldPlan = heldPlan else {
             return nil
         }
-        self.held = nil
         let previousUrl = currentUrl
-        adopt(resolution: held, previousUrl: previousUrl)
-        return held
+        adopt(resolution: heldPlan, previousUrl: previousUrl)
+        return heldPlan
     }
 
     /// Look at the held plan WITHOUT spending it. Nil when nothing
     /// usable is held (nothing held, empty, or past hard expiry).
     func peekHeld() -> LivePlayUrlResolution? {
-        guard let held = held, !held.appliedUrls.isEmpty else {
-            return nil
-        }
-        if let invalid = held.invalidAt, invalid <= now() {
-            return nil
-        }
-        return held
+        return locked { heldIfUsable() }
     }
 
     /// Drop the held plan (a NEW resolution was adopted — initial
     /// resolve or quality switch — and a hold fetched for the old
     /// quality must never be served for the new one).
     func discardHeld() {
-        held = nil
+        locked { held = nil }
+    }
+
+    /// Locked read of `disposed` for the prefetch guards (the
+    /// stored flag itself is only ever touched inside `locked`
+    /// blocks).
+    private var isDisposed: Bool {
+        return locked { disposed }
     }
 
     /// Arm the lease prefetch (Pure Live `_schedulePrefetch`): at
@@ -367,16 +480,37 @@ final class LiveRecovery {
     /// (`refreshAt` nil, e.g. Douyin) means no prefetch at all. A
     /// deadline already past fires in 1 s instead of never firing.
     func schedulePrefetch(at target: Date? = nil) {
-        prefetchTimer?.invalidate()
-        prefetchTimer = nil
-        guard !disposed else {
+        // The delay is computed under the lock (disposed + the
+        // current refreshAt), but the Timer itself is created on
+        // the main queue: Timer.scheduledTimer on a URLSession
+        // background thread (where adopt/prefetch run) schedules
+        // onto a runloop that never runs, so the prefetch never
+        // fired. The generation drops a creation already queued
+        // when a newer schedule (or dispose) superseded it.
+        let (delay, generation): (TimeInterval?, Int) = locked {
+            // Always drop the previous timer first (old behaviour):
+            // a new resolution without a lease must not leave the
+            // previous resolution's prefetch armed.
+            prefetchTimer?.invalidate()
+            prefetchTimer = nil
+            guard !disposed else {
+                return (nil, prefetchGeneration)
+            }
+            prefetchGeneration += 1
+            return (prefetchDelay(at: target ?? _refreshAt, from: now()), prefetchGeneration)
+        }
+        guard let delay = delay else {
             return
         }
-        guard let delay = prefetchDelay(at: target ?? refreshAt, from: now()) else {
-            return
-        }
-        prefetchTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-            self?.performPrefetch()
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.locked {
+                guard !self.disposed, generation == self.prefetchGeneration else { return }
+                self.prefetchTimer?.invalidate()
+                self.prefetchTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+                    self?.performPrefetch()
+                }
+            }
         }
     }
 
@@ -396,19 +530,23 @@ final class LiveRecovery {
 
     /// True when the current URL is past its hard expiry (~125 s).
     var isExpired: Bool {
-        if let invalid = invalidAt {
-            return now() > invalid
+        return locked {
+            if let invalid = _invalidAt {
+                return now() > invalid
+            }
+            guard let issued = _issuedAt else {
+                return false
+            }
+            return now() > issued.addingTimeInterval(LiveRecovery.hardExpiryAfterIssue)
         }
-        guard let issued = issuedAt else {
-            return false
-        }
-        return now() > issued.addingTimeInterval(LiveRecovery.hardExpiryAfterIssue)
     }
 
     func dispose() {
-        disposed = true
-        prefetchTimer?.invalidate()
-        prefetchTimer = nil
+        locked {
+            disposed = true
+            prefetchTimer?.invalidate()
+            prefetchTimer = nil
+        }
     }
 
     // MARK: - Private
@@ -423,13 +561,25 @@ final class LiveRecovery {
             completion(nil)
             return
         }
+        // `finish` is reached from two threads — the resolver
+        // callback (URLSession background) and the timeout work
+        // item (main) — so exactly-once needs a lock, not a bare
+        // Bool. The lock guards only the flag; the completion
+        // itself runs outside it.
+        let finishLock = NSLock()
         var completed = false
         var timeoutWork: DispatchWorkItem?
         let finish: (LivePlayUrlResolution?) -> Void = { result in
-            guard !completed else {
+            let shouldRun: Bool = {
+                finishLock.lock()
+                defer { finishLock.unlock() }
+                guard !completed else { return false }
+                completed = true
+                return true
+            }()
+            guard shouldRun else {
                 return
             }
-            completed = true
             timeoutWork?.cancel()
             completion(result)
         }
@@ -550,14 +700,58 @@ final class LiveRoomSession {
         }
     }
 
-    private(set) var state: State = .idle
-    private(set) var room: LiveRoom?
-    private(set) var currentQuality: LiveQuality?
-    private(set) var consecutiveFailures: Int = 0
-    private(set) var isBackgroundAudioOnly: Bool = false
-    private(set) var stallWarning: Bool = false
+    /// Serialises every read/write of the session state below.
+    /// The initial resolve / quality switch complete on URLSession
+    /// background threads while the driver reads the same state on
+    /// main — unguarded that is a data race on the stored values.
+    /// The lock is only ever held for the state touch, never
+    /// across a network call or a completion; a locked block never
+    /// calls another locked accessor of THIS class (backing vars
+    /// are used inside). Lock order, where a block also touches
+    /// the recovery: session lock first, recovery lock second.
+    private let stateLock = NSLock()
+    private func locked<T>(_ body: () -> T) -> T {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return body()
+    }
 
-    private(set) var recovery: LiveRecovery?
+    private var _state: State = .idle
+    private(set) var state: State {
+        get { locked { _state } }
+        set { locked { _state = newValue } }
+    }
+    private var _room: LiveRoom?
+    private(set) var room: LiveRoom? {
+        get { locked { _room } }
+        set { locked { _room = newValue } }
+    }
+    private var _currentQuality: LiveQuality?
+    private(set) var currentQuality: LiveQuality? {
+        get { locked { _currentQuality } }
+        set { locked { _currentQuality = newValue } }
+    }
+    private var _consecutiveFailures: Int = 0
+    private(set) var consecutiveFailures: Int {
+        get { locked { _consecutiveFailures } }
+        set { locked { _consecutiveFailures = newValue } }
+    }
+    private var _isBackgroundAudioOnly: Bool = false
+    private(set) var isBackgroundAudioOnly: Bool {
+        get { locked { _isBackgroundAudioOnly } }
+        set { locked { _isBackgroundAudioOnly = newValue } }
+    }
+    private var _stallWarning: Bool = false
+    private(set) var stallWarning: Bool {
+        get { locked { _stallWarning } }
+        set { locked { _stallWarning = newValue } }
+    }
+
+    private var _recovery: LiveRecovery?
+    private(set) var recovery: LiveRecovery? {
+        get { locked { _recovery } }
+        set { locked { _recovery = newValue } }
+    }
     let stallWatchdog = LiveStallWatchdog()
 
     private var resolver: LiveSiteResolver?
@@ -589,19 +783,21 @@ final class LiveRoomSession {
     /// this room, and go to `.loading` (the driver resolves and
     /// opens from here).
     func enterRoom(room: LiveRoom, resolver: LiveSiteResolver) {
-        self.room = room
-        self.resolver = resolver
-        self.consecutiveFailures = 0
-        self.isBackgroundAudioOnly = false
-        self.stallWarning = false
-        self.currentQuality = nil
-        self.pendingQuality = nil
-        self.previousQuality = nil
-        let recovery = LiveRecovery(roomId: room.roomId, resolver: resolver, quality: nil, now: now)
-        recovery.sourceRoom = room
-        self.recovery = recovery
+        locked {
+            _room = room
+            self.resolver = resolver
+            _consecutiveFailures = 0
+            _isBackgroundAudioOnly = false
+            _stallWarning = false
+            _currentQuality = nil
+            pendingQuality = nil
+            previousQuality = nil
+            let recovery = LiveRecovery(roomId: room.roomId, resolver: resolver, quality: nil, now: now)
+            recovery.sourceRoom = room
+            _recovery = recovery
+            _state = .loading
+        }
         stallWatchdog.reset()
-        state = .loading
     }
 
     /// The initial resolve for the room (not throttled — the happy
@@ -636,20 +832,26 @@ final class LiveRoomSession {
     /// the consecutive-failure budget resets, so the bound covers
     /// one episode of consecutive failures only.
     func notePlaybackStarted() {
-        consecutiveFailures = 0
-        stallWarning = false
-        state = .playing
+        locked {
+            _consecutiveFailures = 0
+            _stallWarning = false
+            _state = .playing
+        }
     }
 
     func notePlaybackPaused() {
-        if state == .playing {
-            state = .paused
+        locked {
+            if _state == .playing {
+                _state = .paused
+            }
         }
     }
 
     func noteResumed() {
-        if state == .paused {
-            state = .playing
+        locked {
+            if _state == .paused {
+                _state = .playing
+            }
         }
     }
 
@@ -660,9 +862,9 @@ final class LiveRoomSession {
         let event = stallWatchdog.tick(position: position, isPlaying: isPlaying)
         switch event {
         case .warn:
-            stallWarning = true
+            locked { _stallWarning = true }
         case .failed:
-            stallWarning = false
+            locked { _stallWarning = false }
         case .none:
             break
         }
@@ -678,9 +880,12 @@ final class LiveRoomSession {
     /// return `.exhausted` — the room then shows the failure card
     /// instead of retrying lines forever.
     func noteFailure() -> RecoveryStep {
-        consecutiveFailures += 1
         let lineCount = recovery?.urls.count ?? 0
-        if consecutiveFailures > LiveRoomSession.autoRecoveryBudget(lineCount: lineCount) {
+        let exceeded = locked {
+            _consecutiveFailures += 1
+            return _consecutiveFailures > LiveRoomSession.autoRecoveryBudget(lineCount: lineCount)
+        }
+        if exceeded {
             state = .failed("播放失败，请检查网络后重试")
             return .exhausted
         }
@@ -742,8 +947,10 @@ final class LiveRoomSession {
             completion(true)
             return
         }
-        previousQuality = currentQuality
-        pendingQuality = quality
+        locked {
+            previousQuality = _currentQuality
+            pendingQuality = quality
+        }
         recovery.quality = quality
         recovery.fetchFresh(adopting: false) { [weak self] resolution in
             guard let self = self else {
@@ -757,17 +964,21 @@ final class LiveRoomSession {
             }
             self.recovery?.adopt(resolution: resolution, previousUrl: nil)
             self.recovery?.discardHeld()
-            self.currentQuality = quality
-            self.pendingQuality = nil
-            self.previousQuality = nil
+            self.locked {
+                self._currentQuality = quality
+                self.pendingQuality = nil
+                self.previousQuality = nil
+            }
             completion(true)
         }
     }
 
     private func rollbackQuality() {
-        recovery?.quality = previousQuality
-        pendingQuality = nil
-        previousQuality = nil
+        locked {
+            _recovery?.quality = previousQuality
+            pendingQuality = nil
+            previousQuality = nil
+        }
     }
 
     // MARK: - Background audio (live only)
@@ -777,12 +988,14 @@ final class LiveRoomSession {
     /// stays paused, and an error room has nothing to keep alive.
     /// Returns true when the driver should drop to audio-only.
     func enterBackground() -> Bool {
-        switch state {
-        case .playing, .buffering, .loading:
-            isBackgroundAudioOnly = true
-            return true
-        case .idle, .paused, .reconnecting, .failed, .exited:
-            return false
+        return locked {
+            switch _state {
+            case .playing, .buffering, .loading:
+                _isBackgroundAudioOnly = true
+                return true
+            case .idle, .paused, .reconnecting, .failed, .exited:
+                return false
+            }
         }
     }
 
@@ -790,11 +1003,13 @@ final class LiveRoomSession {
     /// and the driver should restore the video track (and resume if
     /// the engine paused natively anyway).
     func enterForeground() -> Bool {
-        guard isBackgroundAudioOnly else {
-            return false
+        return locked {
+            guard _isBackgroundAudioOnly else {
+                return false
+            }
+            _isBackgroundAudioOnly = false
+            return true
         }
-        isBackgroundAudioOnly = false
-        return true
     }
 
     // MARK: - Exit
@@ -804,16 +1019,18 @@ final class LiveRoomSession {
     /// does NOT resume music: exiting a room never auto-resumes
     /// music (music has its own background logic).
     func exit() {
-        recovery?.dispose()
-        recovery = nil
-        room = nil
-        resolver = nil
-        currentQuality = nil
-        pendingQuality = nil
-        previousQuality = nil
-        consecutiveFailures = 0
-        isBackgroundAudioOnly = false
-        stallWarning = false
-        state = .exited
+        locked {
+            _recovery?.dispose()
+            _recovery = nil
+            _room = nil
+            resolver = nil
+            _currentQuality = nil
+            pendingQuality = nil
+            previousQuality = nil
+            _consecutiveFailures = 0
+            _isBackgroundAudioOnly = false
+            _stallWarning = false
+            _state = .exited
+        }
     }
 }

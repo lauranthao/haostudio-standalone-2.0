@@ -43,6 +43,28 @@ final class LiveGatewayAdapterTests: XCTestCase {
         """
     }
 
+    /// Same room twice in one page (the server repeats hot rooms):
+    /// the gateway must hand out one copy, never two — the grids
+    /// render with ForEach(id: roomId) and a repeat traps there.
+    private var bilibiliRecommendWithDuplicateJSON: String {
+        """
+        {"code":0,"data":{"recommend_room_list":[
+        {"roomid":6,"title":"测试直播","cover":"//i0.hdslb.com/bfs/live/cover.jpg","uname":"主播A","face":"//i0.hdslb.com/bfs/face/1.jpg","online":"1234"},
+        {"roomid":6,"title":"测试直播","cover":"//i0.hdslb.com/bfs/live/cover.jpg","uname":"主播A","face":"//i0.hdslb.com/bfs/face/1.jpg","online":"1234"},
+        {"roomid":7,"title":"第二间","cover":"https://i0.hdslb.com/bfs/live/c2.jpg","uname":"主播B","face":"https://i0.hdslb.com/bfs/face/2.jpg","online":9999}
+        ]}}
+        """
+    }
+
+    private var bilibiliSearchWithDuplicateJSON: String {
+        """
+        {"code":0,"data":{"result":{"live_room":[
+        {"roomid":21,"title":"<em class=\\"keyword\\">测试</em>直播","cover":"//i0.hdslb.com/bfs/live/s.jpg","uname":"搜主播","uface":"//i0.hdslb.com/bfs/face/3.jpg","online":321,"live_status":1},
+        {"roomid":21,"title":"<em class=\\"keyword\\">测试</em>直播","cover":"//i0.hdslb.com/bfs/live/s.jpg","uname":"搜主播","uface":"//i0.hdslb.com/bfs/face/3.jpg","online":321,"live_status":1}
+        ]}}}
+        """
+    }
+
     private var bilibiliCategoriesJSON: String {
         """
         {"code":0,"data":[
@@ -114,6 +136,43 @@ final class LiveGatewayAdapterTests: XCTestCase {
             expectation.fulfill()
         }
         waitForExpectations(timeout: 5)
+    }
+
+    // MARK: - Duplicate room ids never reach the grids
+
+    func testAdapterRecommendDedupsRepeatedRooms() {
+        let adapter = LiveDataGatewayAdapter(fetcher: routingFetcher([("getListByAreaID", jsonData(bilibiliRecommendWithDuplicateJSON), 200)]))
+        let expectation = self.expectation(description: "adapter recommend dedup")
+        adapter.fetchRecommended(platform: "bili", area: nil, page: 0) { page in
+            XCTAssertEqual(page.rooms.count, 2)
+            XCTAssertEqual(page.rooms[0].roomId, "7")
+            XCTAssertEqual(page.rooms[1].roomId, "6")
+            XCTAssertFalse(page.hasMore)
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+    }
+
+    func testAdapterSearchDedupsRepeatedRooms() {
+        let adapter = LiveDataGatewayAdapter(fetcher: routingFetcher([("search/type", jsonData(bilibiliSearchWithDuplicateJSON), 200)]))
+        let expectation = self.expectation(description: "adapter search dedup")
+        adapter.searchRooms(query: "测试", platform: "bili") { rooms in
+            XCTAssertEqual(rooms.count, 1)
+            XCTAssertEqual(rooms[0].roomId, "21")
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+    }
+
+    func testDeduplicatedKeepsFirstAndOrder() {
+        let rooms = [
+            LiveRoom(roomId: "6", platform: .bilibili),
+            LiveRoom(roomId: "6", platform: .douyu),
+            LiveRoom(roomId: "6", platform: .bilibili),
+            LiveRoom(roomId: "7", platform: .bilibili),
+        ]
+        let unique = LiveDataGatewayAdapter.deduplicated(rooms)
+        XCTAssertEqual(unique.map { $0.platform.rawValue + "|" + $0.roomId }, ["bili|6", "douyu|6", "bili|7"])
     }
 
     func testAdapterCategoriesDouyuViaStub() {

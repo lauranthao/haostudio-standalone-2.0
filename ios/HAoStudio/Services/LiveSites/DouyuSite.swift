@@ -137,6 +137,19 @@ final class DouyuLiveSite: LiveSiteResolver {
     private var encryptionKeyRefreshInFlight: Bool = false
     private var encryptionKeyCompletions: [(Result<Void, Error>) -> Void] = []
 
+    /// Guards the encryption-key cache + in-flight dedup above:
+    /// signing runs from URLSession background callbacks and two
+    /// concurrent resolves used to mutate the same cache/array
+    /// with no lock — a data race that traps. The lock is only
+    /// ever held for the state touch, never across a network call
+    /// or a completion.
+    private let stateLock = NSLock()
+    private func locked<T>(_ body: () -> T) -> T {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return body()
+    }
+
     init(fetcher: LiveDataFetcher? = nil, deviceId: String? = nil) {
         self.fetcher = fetcher ?? LiveHTTP.defaultFetcher
         self.deviceId = deviceId ?? DouyuUtils.generateDeviceId()
@@ -332,8 +345,9 @@ final class DouyuLiveSite: LiveSiteResolver {
             switch result {
                 case .success:
                     do {
+                        let key = self.locked { self.encryptionKey }
                         let body = try DouyuUtils.buildSignedData(
-                            encryptionKey: self.encryptionKey,
+                            encryptionKey: key,
                             roomId: roomId,
                             timestampSeconds: Int(Date().timeIntervalSince1970),
                             rate: rate,
@@ -352,17 +366,27 @@ final class DouyuLiveSite: LiveSiteResolver {
 
     private func refreshEncryptionKey(forceRefresh: Bool, completion: @escaping (Result<Void, Error>) -> Void) {
         let nowSeconds = Int(Date().timeIntervalSince1970)
-        if !forceRefresh, let fetchedAt = encryptionKeyFetchedAtSeconds, encryptionKeyDeviceId == deviceId {
-            if nowSeconds - fetchedAt < DouyuUtils.maximumCacheAgeSeconds && DouyuUtils.isEncryptionKeyUsable(encryptionKey, nowSeconds: nowSeconds) {
-                completion(.success(()))
-                return
+        let cachedUsable = locked {
+            if !forceRefresh, let fetchedAt = encryptionKeyFetchedAtSeconds, encryptionKeyDeviceId == deviceId {
+                return nowSeconds - fetchedAt < DouyuUtils.maximumCacheAgeSeconds && DouyuUtils.isEncryptionKeyUsable(encryptionKey, nowSeconds: nowSeconds)
             }
+            return false
         }
-        encryptionKeyCompletions.append(completion)
-        if encryptionKeyRefreshInFlight {
+        if cachedUsable {
+            completion(.success(()))
             return
         }
-        encryptionKeyRefreshInFlight = true
+        let alreadyInFlight = locked {
+            encryptionKeyCompletions.append(completion)
+            if encryptionKeyRefreshInFlight {
+                return true
+            }
+            encryptionKeyRefreshInFlight = true
+            return false
+        }
+        if alreadyInFlight {
+            return
+        }
         guard let url = URL(string: DouyuUtils.encryptionUrl) else {
             finishEncryptionKeyRefresh(result:.failure(LiveError.parseFailed("Douyu encryption url 无效")))
             return
@@ -382,17 +406,22 @@ final class DouyuLiveSite: LiveSiteResolver {
                 self.finishEncryptionKeyRefresh(result:.failure(LiveError.parseFailed("Douyu encryption descriptor is incomplete or expired")))
                 return
             }
-            self.encryptionKey = rawData
-            self.encryptionKeyFetchedAtSeconds = Int(Date().timeIntervalSince1970)
-            self.encryptionKeyDeviceId = self.deviceId
+            self.locked {
+                self.encryptionKey = rawData
+                self.encryptionKeyFetchedAtSeconds = Int(Date().timeIntervalSince1970)
+                self.encryptionKeyDeviceId = self.deviceId
+            }
             self.finishEncryptionKeyRefresh(result:.success(()))
         }
     }
 
     private func finishEncryptionKeyRefresh(result: Result<Void, Error>) {
-        encryptionKeyRefreshInFlight = false
-        let completions = encryptionKeyCompletions
-        encryptionKeyCompletions = []
+        let completions = locked {
+            encryptionKeyRefreshInFlight = false
+            let completions = encryptionKeyCompletions
+            encryptionKeyCompletions = []
+            return completions
+        }
         for item in completions {
             item(result)
         }
