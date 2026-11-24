@@ -129,5 +129,11 @@ enum LxBundledScript {
     /// Mirrors Flutter's `lxDeletedBundled`.
     static let deletedBundledKey = "hao_lx_deleted_bundled"
 
+    /// Bundled ids that no longer ship. A stale `<id>.js` left in
+    /// Documents by an older build is deleted on startup, never
+    /// re-seeded (build 36 item 6): `tang` shipped in an early
+    /// build; its resolver host never answers (deleted 2026-11-24).
+    static let removedBundledIDs: [String] = ["tang"]
+
     static func isBundled(_ id: String) -> Bool { allIDs.contains(id) }
 }

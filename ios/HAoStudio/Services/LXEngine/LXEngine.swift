@@ -352,7 +352,23 @@ final class LXEngine {
             self.pendingInitCompletions.append(completion)
             guard !self.initializing else { return }
             self.initializing = true
+            // Build 36 item 6: drop orphan files for bundled ids
+            // that no longer ship (e.g. `tang.js` left by an older
+            // build). Never re-seeded; user-deleted bundled ids
+            // are untouched here — their files were already deleted
+            // by `removeScript`, and `seedOrRefresh` never runs
+            // for them (loadNextBatch skips `deletedBundledIds`).
+            self.removeOrphanBundledFiles()
             self.loadNextBatch()
+        }
+    }
+
+    /// Delete on-disk copies of bundled ids that no longer ship
+    /// (`LxBundledScript.removedBundledIDs`). Runs once per
+    /// initialisation, on the state queue; the file IO is small.
+    private func removeOrphanBundledFiles() {
+        for id in LxBundledScript.removedBundledIDs {
+            _ = fileStore.removeOrphanBundledFile(id: id)
         }
     }
 
@@ -428,7 +444,7 @@ final class LXEngine {
             code = fileStore.readFile(named: fileName)
         } else {
             let bundleCode = LxBundledScript.isBundled(id) ? bundleLoader(id) : nil
-            if let fileURL = fileStore.seedIfMissing(id: id, bundleCode: bundleCode) {
+            if let fileURL = fileStore.seedOrRefresh(id: id, bundleCode: bundleCode) {
                 code = try? String(contentsOf: fileURL, encoding: .utf8)
             } else {
                 code = nil
