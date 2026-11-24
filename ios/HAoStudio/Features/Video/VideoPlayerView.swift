@@ -427,6 +427,27 @@ final class VideoPlayerViewModel: ObservableObject {
         startPolling()
     }
 
+    /// Re-fetch danmaku for the episode already playing, using
+    /// the currently saved API address + token (b36 item 11,
+    /// leg 3 — the player sheet's "重新加载弹幕" row, after the
+    /// address was changed in Settings). Playback is untouched:
+    /// no engine call, no seek, no re-open, no position reset —
+    /// only the danmaku client is rebuilt and the layer reloaded.
+    /// A reload already in flight is superseded by a newer one:
+    /// the layer's generation guard discards the stale
+    /// completion. A failed reload is silent like any other
+    /// fetch failure (empty list → the sheet's danmaku section
+    /// hides); it never pops an alert and never reverts the
+    /// saved address.
+    func reloadDanmaku() {
+        guard let detail = detail, let episode = currentEpisode else { return }
+        let danmakuApi = VodDanmakuApiConfig.load()
+        danmakuProvider = VodDanmakuClient(
+            title: detail.item.title, year: detail.item.year ?? "",
+            baseUrl: danmakuApi.effectiveBaseUrl, token: danmakuApi.apiToken)
+        danmaku.reload(for: episode, provider: danmakuProvider)
+    }
+
     /// Attach the A-leg engine (called by the player view on
     /// appear). Attaching never restarts playback — it only starts
     /// the position poll.
@@ -1160,6 +1181,8 @@ struct VideoPlayerView: View {
                 detail: videoPlayer.detail,
                 lineIndex: videoPlayer.lineIndex,
                 episodeIndex: videoPlayer.episodeIndex,
+                isCustomDanmakuAddress: VodDanmakuApiConfig.load().isCustomAddress,
+                onReloadDanmaku: { videoPlayer.reloadDanmaku() },
                 onSelectLine: { videoPlayer.selectLine($0) },
                 onSelectEpisode: { videoPlayer.selectEpisode($0) }
             )

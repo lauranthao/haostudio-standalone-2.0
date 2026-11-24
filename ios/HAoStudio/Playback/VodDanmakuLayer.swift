@@ -56,15 +56,40 @@ final class VodDanmakuLayerState: ObservableObject {
     static let laneCount: Int = 4
 
     private var loadedEpisodeId: String?
+    /// Generation of the in-flight fetch. Every `load` that starts
+    /// a fetch bumps it and the completion only applies when its
+    /// captured generation is still current: a reload (or an
+    /// episode change, or a `clear`) supersedes an older fetch,
+    /// and the older completion arriving late must not overwrite
+    /// the newer result. The second reload cancels the first in
+    /// effect — the network request itself has no cancel handle,
+    /// but its result is discarded.
+    private var loadGeneration = 0
 
     /// Fetch danmaku for `episode` through `provider`. A nil
     /// provider (Leg B not wired yet) leaves the layer empty —
     /// never a crash, never a fake list. Re-loading the same
     /// episode is a no-op.
     func load(for episode: PlayEpisode, provider: VodDanmakuProvider?) {
-        guard loadedEpisodeId != episode.id else { return }
+        load(for: episode, provider: provider, forceReload: false)
+    }
+
+    /// Re-fetch danmaku for `episode` even when it is already the
+    /// loaded episode (b36 item 11, leg 3: the player sheet's
+    /// "重新加载弹幕" row). Clears the current items, so the
+    /// sheet shows "弹幕加载中…" until the new fetch lands, and
+    /// bumps the generation so a still-running older fetch cannot
+    /// overwrite the new result.
+    func reload(for episode: PlayEpisode, provider: VodDanmakuProvider?) {
+        load(for: episode, provider: provider, forceReload: true)
+    }
+
+    private func load(for episode: PlayEpisode, provider: VodDanmakuProvider?, forceReload: Bool) {
+        guard forceReload || loadedEpisodeId != episode.id else { return }
         loadedEpisodeId = episode.id
         items = []
+        loadGeneration += 1
+        let generation = loadGeneration
         guard let provider = provider else {
             isLoading = false
             didLoad = true
@@ -75,6 +100,8 @@ final class VodDanmakuLayerState: ObservableObject {
         provider.fetchDanmaku(for: episode) { [weak self] fetched in
             guard let self = self else { return }
             DispatchQueue.main.async {
+                guard generation == self.loadGeneration,
+                      self.loadedEpisodeId == episode.id else { return }
                 self.items = fetched.sorted { $0.timeSeconds < $1.timeSeconds }
                 self.isLoading = false
                 self.didLoad = true
@@ -83,7 +110,10 @@ final class VodDanmakuLayerState: ObservableObject {
     }
 
     /// Clear the layer (episode changed / player released).
+    /// Bumps the generation too, so a fetch still in flight when
+    /// the player closes cannot refill the layer after the clear.
     func clear() {
+        loadGeneration += 1
         loadedEpisodeId = nil
         items = []
         isLoading = false

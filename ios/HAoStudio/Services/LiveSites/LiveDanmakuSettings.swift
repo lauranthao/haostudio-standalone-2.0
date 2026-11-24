@@ -181,6 +181,7 @@ struct LiveDanmakuSettings {
     /// colour, where the transport provides one).
     var colorMode: String
     /// Danmaku occlusion avoidance (MPV only), default off.
+    /// 防遮挡未实现：Swift 2.0 无 MPV 取帧接口与 Vision 分割管线；字段保留只为与 Flutter 配置兼容，不上 UI。
     var occlusionAvoidance: Bool
     /// Chat-list style: compact (one line per message, default) or
     /// card (one card per message).
