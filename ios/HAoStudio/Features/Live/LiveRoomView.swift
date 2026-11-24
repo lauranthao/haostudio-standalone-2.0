@@ -152,6 +152,9 @@ struct LiveRoomView: View {
             .offset(x: -1000, y: -1000)
             .allowsHitTesting(false)
         )
+        // Build 37 (L5): disable the navigation-stack edge-swipe
+        // pop while fullscreen — see LiveFullscreenPopGuard below.
+        .background(LiveFullscreenPopGuard(disabled: isFullscreen))
         .onAppear {
             // Immersive: hide the shell bottom chrome (mini player
             // + glass tab bar) while the room is up, so the room's
@@ -1322,6 +1325,46 @@ struct LiveRoomView: View {
                 colors: [Color.black.opacity(0), Color.black.opacity(0.55)],
                 startPoint: .top, endPoint: .bottom)
         )
+    }
+}
+
+/// Disables the navigation-stack edge-swipe pop while the room is
+/// fullscreen (build 37, L5). The room is a NavigationStack push
+/// with a hidden back button — but hiding the button does NOT
+/// disable the swipe-back gesture, so in landscape a left-edge
+/// swipe popped the whole room to the lobby: the same symptom L4
+/// fixed for the back button, through the gesture instead. The
+/// guard walks the responder chain to the UINavigationController
+/// and toggles its interactivePopGestureRecognizer; with no
+/// navigation controller (mini-player full-screen re-open) it is
+/// a no-op. Portrait swipe-back stays enabled — it is the
+/// legitimate back action there, same as the back button.
+/// Dismantle restores the gesture so a stale disable can never
+/// leak into the next page.
+private struct LiveFullscreenPopGuard: UIViewRepresentable {
+    var disabled: Bool
+
+    func makeUIView(context: Context) -> UIView {
+        UIView()
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        Self.setPopGestureEnabled(!disabled, from: uiView)
+    }
+
+    static func dismantleUIView(_ uiView: UIView, coordinator: ()) {
+        setPopGestureEnabled(true, from: uiView)
+    }
+
+    private static func setPopGestureEnabled(_ enabled: Bool, from view: UIView) {
+        var responder: UIResponder? = view
+        while let current = responder {
+            if let nav = current as? UINavigationController {
+                nav.interactivePopGestureRecognizer?.isEnabled = enabled
+                return
+            }
+            responder = current.next
+        }
     }
 }
 
