@@ -51,7 +51,7 @@ struct SettingsSectionHeader: View {
                     .foregroundStyle(theme.textSecondary)
                 Spacer()
                 Image(systemName: settings.sectionExpanded(section.rawValue) ? "chevron.down" : "chevron.right")
-                    .font(.haoCaption2Strong)
+                    .font(.haoFootnoteStrong)
                     .foregroundStyle(theme.textMuted)
                     .animation(HaoLayout.settleSpring, value: settings.sectionExpanded(section.rawValue))
             }
@@ -262,6 +262,7 @@ struct SettingsGroupsView: View {
                     settings.accentOverride = nil
                 }
                 .font(.haoBody)
+                .foregroundStyle(theme.accent)
             }
         }
     }
@@ -329,7 +330,7 @@ struct SettingsGroupsView: View {
                     if selected {
                         Circle()
                             .strokeBorder(theme.textPrimary, lineWidth: 2)
-                            .frame(width: 34, height: 34)
+                            .frame(width: 36, height: 36)
                     }
                 }
                 Text(choice.label)
@@ -385,6 +386,7 @@ struct SettingsGroupsView: View {
                 ),
                 in: 0.3...1.0
             )
+            .tint(theme.accent)
         }
     }
 
@@ -476,6 +478,7 @@ struct SettingsGroupsView: View {
                             .foregroundStyle(theme.textSecondary)
                     }
                 }
+                .tint(theme.accent)
                 .onChange(of: settings.normalizationStrength) { _, newValue in
                     // b35-sweep-settings: 同上，强度也只在 init
                     // 读一次，不推就一直是旧强度。
@@ -517,7 +520,7 @@ struct SettingsGroupsView: View {
             if isExpanded(.video) {
                 engineRow
                 lastUsedEngineRow
-                footnote("下次打开生效；梯子胜出不改变偏好")
+                footnote("下次打开生效；自动切换引擎时不改变偏好")
                 Toggle("自动连播下一集", isOn: $settings.autoNextEpisode)
                 doubleTapRow
                 Toggle("对白增强", isOn: $settings.dialogueBoost)
@@ -538,10 +541,10 @@ struct SettingsGroupsView: View {
                 footnote("仅 MPV；三选一，互斥；着色器未打包，当前无实际效果")
                 Toggle("插帧", isOn: $settings.interpolation)
                     .disabled(settings.superResolution || settings.sdrToHDR)
-                footnote("仅 MPV，立即生效；三选一，互斥；真机效果待验证")
+                footnote("仅 MPV，立即生效；三选一，互斥")
                 Toggle("SDR 转 HDR", isOn: $settings.sdrToHDR)
                     .disabled(settings.superResolution || settings.interpolation)
-                footnote("仅 MPV，立即生效；三选一，互斥；真机效果待验证")
+                footnote("仅 MPV，立即生效；三选一，互斥")
                 Toggle("杜比视界 Profile 8 降级 HDR", isOn: $settings.dvP8Downgrade)
                 footnote("开：P8 可走系统播放器；关：P8 只走 MPV / IJK")
                 skipIntroRow
@@ -586,6 +589,7 @@ struct SettingsGroupsView: View {
                     .foregroundStyle(theme.textSecondary)
             }
         }
+        .tint(theme.accent)
     }
 
     private var videoFitRow: some View {
@@ -744,6 +748,7 @@ struct SettingsGroupsView: View {
                         showingClearCacheAlert = true
                     }
                     .font(.haoBody)
+                    .foregroundStyle(theme.accent)
                 }
                 .alert("清理缓存", isPresented: $showingClearCacheAlert) {
                     Button("取消", role: .cancel) {
@@ -785,6 +790,7 @@ struct SettingsGroupsView: View {
                         backupFlow.beginExport()
                     }
                     .font(.haoBody)
+                    .foregroundStyle(theme.accent)
                 }
             }
             if let exportedURL = backupFlow.exportedURL {
@@ -828,6 +834,7 @@ struct SettingsGroupsView: View {
                         backupFlow.beginImport()
                     }
                     .font(.haoBody)
+                    .foregroundStyle(theme.accent)
                 }
             }
             footnote("从 .zip 备份文件导入；导入失败会自动回滚，现有数据不受影响。")
@@ -887,6 +894,7 @@ struct SettingsGroupsView: View {
                     backupFlow.checkForUpdate()
                 }
                 .font(.haoBody)
+                .foregroundStyle(theme.accent)
             }
         }
     }
@@ -906,6 +914,7 @@ struct SettingsGroupsView: View {
                     backupFlow.clearSkippedVersion()
                 }
                 .font(.haoBody)
+                .foregroundStyle(theme.accent)
             }
         }
     }
@@ -954,6 +963,7 @@ struct WallpaperManagementView: View {
                     selection: $photoItem,
                     matching: .images
                 )
+                .tint(theme.accent)
             }
         }
         .haoBottomChromePadding()

@@ -54,6 +54,7 @@ struct EmbyConfigView: View {
                     }
                 }
                 .font(.haoBody)
+                .foregroundStyle(theme.accent)
                 .disabled(viewModel.status == .testing)
                 Button("保存") {
                     if viewModel.save() {
@@ -63,6 +64,7 @@ struct EmbyConfigView: View {
                     }
                 }
                 .font(.haoBody)
+                .foregroundStyle(theme.accent)
                 .disabled(viewModel.status == .testing)
                 Button("清除配置", role: .destructive) {
                     showingClearAlert = true
