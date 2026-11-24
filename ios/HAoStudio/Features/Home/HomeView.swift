@@ -118,6 +118,18 @@ struct HomeView: View {
                 .onReceive(NotificationCenter.default.publisher(for: .haoLiveFollowChanged)) { _ in
                     viewModel.refreshHotLiveForFollowChange()
                 }
+                // Recent-play change (chen 2026-11-20: 最近播放实时更新):
+                // a song can start from any page while the user stays
+                // on home (tap a 每日推荐 row, the mini player, an
+                // auto-advance), and the store posts
+                // haoMusicRecentChanged — the music tab and 我的 both
+                // reload on it, home never did, so 最近播放 / 继续听
+                // stayed stale until the next tab switch. Direct
+                // reload(), not reloadForAppearance(): the data
+                // actually changed, so it must not be coalesced away.
+                .onReceive(NotificationCenter.default.publisher(for: .haoMusicRecentChanged)) { _ in
+                    viewModel.reload()
+                }
                 // Return-to-home refresh: NavigationStack's own
                 // onAppear does not re-fire when a pushed detail or
                 // room pops (the stack itself never disappears), so
