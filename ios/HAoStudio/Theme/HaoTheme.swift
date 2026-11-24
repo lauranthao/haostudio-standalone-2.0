@@ -325,19 +325,30 @@ func haoRelativeLuminance(red: Double, green: Double, blue: Double) -> Double {
     return 0.2126 * linearised(red) + 0.7152 * linearised(green) + 0.0722 * linearised(blue)
 }
 
+/// Relative luminance of an accent colour — the shared prelude of
+/// `haoOnAccentFor` / `haoAccentOnBlack` (build 36, item 8, smell 2):
+/// UIColor RGBA read + `haoRelativeLuminance`. Returns nil when the
+/// RGBA cannot be read; both callers fall back to white on nil,
+/// exactly as their inlined `guard ... else { return .white }` did.
+/// No behaviour change: same read, same luminance, same thresholds
+/// in the callers — only the duplication is gone.
+func accentLuminance(_ accent: Color) -> Double? {
+    let ui = UIColor(accent)
+    var r: CGFloat = 0
+    var g: CGFloat = 0
+    var b: CGFloat = 0
+    var a: CGFloat = 0
+    guard ui.getRed(&r, green: &g, blue: &b, alpha: &a) else { return nil }
+    return haoRelativeLuminance(red: Double(r), green: Double(g), blue: Double(b))
+}
+
 /// Text/icon colour on top of a custom accent (Flutter
 /// `_onAccentFor`): white on dark accents, near-black on light
 /// ones. The light/dark split is Flutter's
 /// `ThemeData.estimateBrightnessForColor` — relative luminance L
 /// (linearised sRGB) with (L + 0.05)^2 > 0.15 meaning light.
 func haoOnAccentFor(_ accent: Color) -> Color {
-    let ui = UIColor(accent)
-    var r: CGFloat = 0
-    var g: CGFloat = 0
-    var b: CGFloat = 0
-    var a: CGFloat = 0
-    guard ui.getRed(&r, green: &g, blue: &b, alpha: &a) else { return .white }
-    let luminance = haoRelativeLuminance(red: Double(r), green: Double(g), blue: Double(b))
+    guard let luminance = accentLuminance(accent) else { return .white }
     let light = (luminance + 0.05) * (luminance + 0.05) > 0.15
     return light ? Color(hex: 0x0B0B0F) : .white
 }
@@ -353,13 +364,7 @@ func haoOnAccentFor(_ accent: Color) -> Color {
 /// pick. A custom pick flows through the same `theme.accent`, so a
 /// near-black pick also falls back to white automatically.
 func haoAccentOnBlack(_ accent: Color) -> Color {
-    let ui = UIColor(accent)
-    var r: CGFloat = 0
-    var g: CGFloat = 0
-    var b: CGFloat = 0
-    var a: CGFloat = 0
-    guard ui.getRed(&r, green: &g, blue: &b, alpha: &a) else { return .white }
-    let luminance = haoRelativeLuminance(red: Double(r), green: Double(g), blue: Double(b))
+    guard let luminance = accentLuminance(accent) else { return .white }
     let contrastVsBlack = (luminance + 0.05) / 0.05
     return contrastVsBlack >= 3 ? accent : .white
 }
