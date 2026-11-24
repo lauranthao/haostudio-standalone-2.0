@@ -130,6 +130,7 @@
 		0000000000000000000001E7 /* EmbyPlaybackReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001E6 /* EmbyPlaybackReporter.swift */; };
 		0000000000000000000000F9 /* EmbyDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F8 /* EmbyDetailView.swift */; };
 		0000000000000000000000FB /* EmbyModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000FA /* EmbyModels.swift */; };
+		0000000000000000000001F3 /* EmbySearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001F2 /* EmbySearchView.swift */; };
 		0000000000000000000000FD /* EmbyTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000FC /* EmbyTabView.swift */; };
 		0000000000000000000000FF /* IJKPlayerBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000FE /* IJKPlayerBackend.swift */; };
 		000000000000000000000136 /* LiveDanmakuSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000135 /* LiveDanmakuSettingsSheet.swift */; };
@@ -341,6 +342,7 @@
 		0000000000000000000001E6 /* EmbyPlaybackReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbyPlaybackReporter.swift; sourceTree = "<group>"; };
 		0000000000000000000000F8 /* EmbyDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbyDetailView.swift; sourceTree = "<group>"; };
 		0000000000000000000000FA /* EmbyModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbyModels.swift; sourceTree = "<group>"; };
+		0000000000000000000001F2 /* EmbySearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbySearchView.swift; sourceTree = "<group>"; };
 		0000000000000000000000FC /* EmbyTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbyTabView.swift; sourceTree = "<group>"; };
 		0000000000000000000000FE /* IJKPlayerBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IJKPlayerBackend.swift; sourceTree = "<group>"; };
 		000000000000000000000135 /* LiveDanmakuSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveDanmakuSettingsSheet.swift; sourceTree = "<group>"; };
@@ -734,6 +736,7 @@
 		00000000000000000000012C /* Video */ = {isa = PBXGroup; children = (
 				0000000000000000000000F4 /* EmbyCategoryView.swift */,
 				0000000000000000000000F8 /* EmbyDetailView.swift */,
+				0000000000000000000001F2 /* EmbySearchView.swift */,
 				0000000000000000000000FC /* EmbyTabView.swift */,
 				00000000000000000000010E /* VideoDataGateway.swift */,
 				000000000000000000000110 /* VideoDetailView.swift */,
@@ -866,6 +869,7 @@
 				0000000000000000000001E7 /* EmbyPlaybackReporter.swift in Sources */,
 				0000000000000000000000F9 /* EmbyDetailView.swift in Sources */,
 				0000000000000000000000FB /* EmbyModels.swift in Sources */,
+				0000000000000000000001F3 /* EmbySearchView.swift in Sources */,
 				0000000000000000000000FD /* EmbyTabView.swift in Sources */,
 				000000000000000000000007 /* Glass.swift in Sources */,
 				000000000000000000000009 /* GlassTabBar.swift in Sources */,

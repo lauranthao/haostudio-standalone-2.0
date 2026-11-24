@@ -15,6 +15,7 @@ import SwiftUI
 /// Video tab navigation destinations.
 enum VideoDestination: Hashable {
     case search
+    case embySearch
     case category(String)
     case history
     case favourites
@@ -92,7 +93,8 @@ struct VideoTabView: View {
                 if mode == "emby" {
                     EmbyTabView(
                         onSelect: { path.append(.embyDetail($0)) },
-                        onSelectGenre: { path.append(.embyGenre($0)) }
+                        onSelectGenre: { path.append(.embyGenre($0)) },
+                        onSearch: { path.append(.embySearch) }
                     )
                 } else {
                     cmsHome
@@ -105,6 +107,8 @@ struct VideoTabView: View {
                 switch destination {
                 case .search:
                     VideoSearchView(onSelect: { path.append(.detail($0)) })
+                case .embySearch:
+                    EmbySearchView(onSelect: { path.append(.embyDetail($0)) })
                 case .category(let type):
                     VideoCategoryView(type: type, onSelect: { path.append(.detail($0)) })
                 case .history:

@@ -180,4 +180,141 @@ final class EmbyClientTests: XCTestCase {
         XCTAssertTrue(url.contains("api_key=a%26b%3Dc%2Bd%20e"), "token must not split the query: \(url)")
         XCTAssertFalse(url.contains("api_key=a&b"), "raw & must not appear in the token")
     }
+
+    // MARK: - Search (build 36, item 17)
+
+    func testSearchSendsSearchTermAndFiltersTrailer() {
+        var requestCount = 0
+        let fetcher: EmbyFetcher = { url, _, _, completion in
+            requestCount += 1
+            XCTAssertEqual(url.path, "/emby/Users/u1/Items")
+            let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            func value(_ name: String) -> String? {
+                query.first(where: { $0.name == name })?.value
+            }
+            XCTAssertEqual(value("searchTerm"), "731")
+            XCTAssertEqual(value("IncludeItemTypes"), "Movie,Series,Episode,Video")
+            XCTAssertEqual(value("Recursive"), "true")
+            completion(EmbyResponse(statusCode: 200, json: [
+                "Items": [
+                    ["Id": "m1", "Name": "731", "Type": "Movie"],
+                    ["Id": "s1", "Name": "剧", "Type": "Series"],
+                    ["Id": "e1", "Name": "第1集", "Type": "Episode"],
+                    ["Id": "t1", "Name": "预告", "Type": "Trailer"],
+                ],
+                "TotalRecordCount": 4,
+            ]))
+        }
+        let client = client(fetcher: fetcher)
+        var result: Result<EmbyItemsPage, EmbyError>?
+        client.search(query: "731") { result = $0 }
+        XCTAssertEqual(requestCount, 1)
+        guard case .success(let page) = result else {
+            return XCTFail("expected search success, got \(String(describing: result))")
+        }
+        // Trailer is dropped by pageFromJSON; the server's total
+        // still counts it.
+        XCTAssertEqual(page.items.count, 3)
+        XCTAssertEqual(page.items.map { $0.title }, ["731", "剧", "第1集"])
+        XCTAssertEqual(page.totalCount, 4)
+    }
+
+    func testSearchEmptyReturnsEmptyPage() {
+        let fetcher: EmbyFetcher = { _, _, _, completion in
+            completion(EmbyResponse(statusCode: 200, json: [
+                "Items": [] as [Any],
+                "TotalRecordCount": 0,
+            ]))
+        }
+        let client = client(fetcher: fetcher)
+        var result: Result<EmbyItemsPage, EmbyError>?
+        client.search(query: "nonsense") { result = $0 }
+        guard case .success(let page) = result else {
+            return XCTFail("expected search success, got \(String(describing: result))")
+        }
+        XCTAssertTrue(page.items.isEmpty)
+        XCTAssertEqual(page.totalCount, 0)
+    }
+
+    func testSearchFailureMapsToError() {
+        // 401 (wrong key) -> unauthorized; transport failure
+        // (status 0) -> unreachable. Neither is swallowed to [].
+        let unauthorizedFetcher: EmbyFetcher = { _, _, _, completion in
+            completion(EmbyResponse(statusCode: 401, json: nil))
+        }
+        var result: Result<EmbyItemsPage, EmbyError>?
+        client(fetcher: unauthorizedFetcher).search(query: "731") { result = $0 }
+        guard case .failure(let error) = result else {
+            return XCTFail("expected 401 failure, got \(String(describing: result))")
+        }
+        XCTAssertEqual(error.kind, .unauthorized)
+
+        let unreachableFetcher: EmbyFetcher = { _, _, _, completion in
+            completion(EmbyResponse(statusCode: 0, json: nil))
+        }
+        result = nil
+        client(fetcher: unreachableFetcher).search(query: "731") { result = $0 }
+        guard case .failure(let unreachableError) = result else {
+            return XCTFail("expected status-0 failure, got \(String(describing: result))")
+        }
+        XCTAssertEqual(unreachableError.kind, .unreachable)
+    }
+
+    func testSearchEpisodeResultPlaysAsSingleEpisode() {
+        let fetcher: EmbyFetcher = { url, _, _, completion in
+            if url.path.contains("ep1") {
+                completion(EmbyResponse(statusCode: 200, json: [
+                    "Id": "ep1", "Name": "第5集", "Type": "Episode",
+                ]))
+                return
+            }
+            completion(EmbyResponse(statusCode: 200, json: [
+                "Id": "mov1", "Name": "731", "Type": "Movie",
+            ]))
+        }
+        let client = client(fetcher: fetcher)
+        // An episode hit plays that episode directly: one line,
+        // one episode, named after the episode itself.
+        var episodeResult: Result<VideoDetail, EmbyError>?
+        client.detail(itemId: "ep1") { episodeResult = $0 }
+        guard case .success(let episodeDetail) = episodeResult else {
+            return XCTFail("expected episode detail success, got \(String(describing: episodeResult))")
+        }
+        XCTAssertEqual(episodeDetail.lines.count, 1)
+        XCTAssertEqual(episodeDetail.lines[0].episodes.count, 1)
+        XCTAssertEqual(episodeDetail.lines[0].episodes[0].name, "第5集")
+        // A movie hit: one line ("直链") + one episode ("正片").
+        var movieResult: Result<VideoDetail, EmbyError>?
+        client.detail(itemId: "mov1") { movieResult = $0 }
+        guard case .success(let movieDetail) = movieResult else {
+            return XCTFail("expected movie detail success, got \(String(describing: movieResult))")
+        }
+        XCTAssertEqual(movieDetail.lines.count, 1)
+        XCTAssertEqual(movieDetail.lines[0].name, "直链")
+        XCTAssertEqual(movieDetail.lines[0].episodes.count, 1)
+        XCTAssertEqual(movieDetail.lines[0].episodes[0].name, "正片")
+    }
+
+    func testSearchUsesStoredRootPrefix() {
+        var firstPath: String?
+        var requestCount = 0
+        let fetcher: EmbyFetcher = { url, _, _, completion in
+            requestCount += 1
+            if firstPath == nil { firstPath = url.path }
+            completion(EmbyResponse(statusCode: 200, json: [
+                "Items": [["Id": "m1", "Name": "731", "Type": "Movie"]],
+                "TotalRecordCount": 1,
+            ]))
+        }
+        let client = client(useEmbyPrefix: false, fetcher: fetcher)
+        var result: Result<EmbyItemsPage, EmbyError>?
+        client.search(query: "731") { result = $0 }
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertEqual(firstPath, "/Users/u1/Items")
+        guard case .success(let page) = result else {
+            return XCTFail("expected search success, got \(String(describing: result))")
+        }
+        XCTAssertEqual(page.items.count, 1)
+        XCTAssertEqual(page.items[0].title, "731")
+    }
 }
