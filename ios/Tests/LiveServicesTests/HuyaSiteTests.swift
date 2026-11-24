@@ -99,12 +99,12 @@ final class HuyaSiteTests: XCTestCase {
     func testHasNativeFlvCredentialAcceptsAllSdkClientTypes() {
         for ctype in ["huya_pc_exe", "huya_ios", "tv_huya_nftv", "huya_adr"] {
             let url = "https://al.flv.huya.com/src/stream-1.flv?wsSecret=x&wsTime=6b05a576&ctype=\(ctype)&ver=1&fs=gctex&t=100"
-            XCTAssertTrue(HuyaLiveSite.hasNativeFlvCredential(url), ctype)
+            XCTAssertTrue(HuyaTransportPolicy.hasNativeFlvCredential(url), ctype)
         }
-        XCTAssertFalse(HuyaLiveSite.hasNativeFlvCredential("https://al.flv.huya.com/src/stream-1.flv?wsSecret=x&wsTime=6b05a576&ctype=huya_webh5&ver=1&fs=gctex&t=100"))
-        XCTAssertFalse(HuyaLiveSite.hasNativeFlvCredential("https://al.flv.huya.com/src/stream-1.flv?wsSecret=x&wsTime=6b05a576&ctype=huya_ios&ver=1&fs=gctex&t=200"))
-        XCTAssertFalse(HuyaLiveSite.hasNativeFlvCredential("https://al.flv.example.com/src/stream-1.flv?ctype=huya_ios&t=100"))
-        XCTAssertFalse(HuyaLiveSite.hasNativeFlvCredential("https://al.huya.com/stream-1.m3u8?ctype=huya_ios&t=100"))
+        XCTAssertFalse(HuyaTransportPolicy.hasNativeFlvCredential("https://al.flv.huya.com/src/stream-1.flv?wsSecret=x&wsTime=6b05a576&ctype=huya_webh5&ver=1&fs=gctex&t=100"))
+        XCTAssertFalse(HuyaTransportPolicy.hasNativeFlvCredential("https://al.flv.huya.com/src/stream-1.flv?wsSecret=x&wsTime=6b05a576&ctype=huya_ios&ver=1&fs=gctex&t=200"))
+        XCTAssertFalse(HuyaTransportPolicy.hasNativeFlvCredential("https://al.flv.example.com/src/stream-1.flv?ctype=huya_ios&t=100"))
+        XCTAssertFalse(HuyaTransportPolicy.hasNativeFlvCredential("https://al.huya.com/stream-1.m3u8?ctype=huya_ios&t=100"))
     }
 
     // MARK: - Quality menu
