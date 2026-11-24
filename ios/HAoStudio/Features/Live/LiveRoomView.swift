@@ -147,6 +147,11 @@ struct LiveRoomView: View {
             autoHideWork?.cancel()
             toastWork?.cancel()
             VideoOrientation.unlockPortrait()
+            // Battery monitoring was enabled on appear for the
+            // landscape clock/battery readout; switch it off
+            // again on exit (b36 item 5: it was left on after
+            // every room visit).
+            UIDevice.current.isBatteryMonitoringEnabled = false
             livePlayer.stopDanmaku()
             livePlayer.disarmBrightness()
             coordinator.stop()

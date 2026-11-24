@@ -415,12 +415,21 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         self.pendingItem = item
         self.stallFailed = false
         self.isLoading = true
+        // B36 item 5: the resolve answers later, on another
+        // callback — capture the attempt token now and require
+        // it to still match when the resolve answers. A
+        // back-out bumps the token (release()/stop()), so a
+        // late resolve from the exited room cannot open against
+        // the fresh session: a re-entry for the SAME room
+        // re-sets pendingItem to the same id, so the id check
+        // alone cannot tell it apart.
+        let token = openAttemptToken
         self.session.resolveInitial { [weak self] resolution in
             guard let self = self else {
                 return
             }
             self.ensureMain {
-                guard self.pendingItem?.id == item.id else {
+                guard token == self.openAttemptToken, self.pendingItem?.id == item.id else {
                     return
                 }
                 guard let resolution = resolution, let url = resolution.appliedUrls.compactMap({ URL(string: $0) }).first else {
@@ -439,7 +448,7 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                     self.session.requestQualityChange(to: resolution.qualities[target]) { [weak self] ok in
                         guard let self = self else { return }
                         self.ensureMain {
-                            guard self.pendingItem?.id == item.id else { return }
+                            guard token == self.openAttemptToken, self.pendingItem?.id == item.id else { return }
                             if ok {
                                 self.currentQuality = self.session.currentQuality
                             } else {
@@ -496,7 +505,7 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                         return
                     }
                     self.ensureMain {
-                        guard self.pendingItem?.id == item.id else {
+                        guard token == self.openAttemptToken, self.pendingItem?.id == item.id else {
                             return
                         }
                         guard let nextURL = nextURL else {
@@ -902,6 +911,9 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     func stop() {
         ensureMain {
             self.nextGeneration()
+            // B36 item 5: invalidate in-flight attemptOpen
+            // completions too (see release() — same hole).
+            self.openAttemptToken += 1
             self.activeLadder = nil
             self.openTimeoutWork?.cancel()
             self.openTimeoutWork = nil
@@ -936,6 +948,17 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     func release(completion: @escaping () -> Void) {
         ensureMain {
             self.nextGeneration()
+            // B36 item 5: invalidate in-flight attemptOpen
+            // completions. stop()/release() already bump the
+            // generation, but the attempt token is the guard
+            // attemptOpen's completion checks — and a re-entry
+            // for the SAME room re-sets pendingItem to the same
+            // id, so without this a late failure from the
+            // exited room's open passes both guards and runs
+            // its fallback against the fresh session: it
+            // reports the re-entered room failed (and clears
+            // its pendingItem) before the new resolve answers.
+            self.openAttemptToken += 1
             self.activeLadder = nil
             self.openTimeoutWork?.cancel()
             self.openTimeoutWork = nil
@@ -1048,6 +1071,11 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         guard let item = currentRoom else {
             return
         }
+        // B36 item 5: same token rule as the entry resolve — a
+        // back-out bumps the token, so a late re-parse from the
+        // exited room cannot reopen against a fresh re-entry
+        // for the same room id.
+        let token = openAttemptToken
         stallFailed = true
         stallWarning = false
         let step = session.noteFailure()
@@ -1067,7 +1095,7 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                     return
                 }
                 self.ensureMain {
-                    guard self.currentRoom?.id == item.id else {
+                    guard token == self.openAttemptToken, self.currentRoom?.id == item.id else {
                         return
                     }
                     if let resolution = resolution, let url = self.session.recovery?.currentUrl, !resolution.appliedUrls.isEmpty {

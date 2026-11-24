@@ -86,6 +86,23 @@ final class MpvPlayerBackend: NSObject, VideoPlayerBackend, LiveAudioOnlyCapable
     private let eventQueue = DispatchQueue(label: "studio.hao.mpv-event", qos: .userInitiated)
     private let renderQueue = DispatchQueue(label: "studio.hao.mpv-render", qos: .userInitiated)
 
+    /// Queue-identity keys for the shutdown drain (b36 item 5):
+    /// `queue.sync {}` from the queue itself deadlocks, so the
+    /// drain skips a queue this thread is already running on.
+    /// The drain is what makes tearing the core down safe: the
+    /// event loop and the render work are the only threads that
+    /// ever call mpv on this backend's handle/context.
+    private static let eventQueueKey = DispatchSpecificKey<Void>()
+    private static let renderQueueKey = DispatchSpecificKey<Void>()
+
+    /// Retained context pointer handed to mpv as the render
+    /// update-callback context (b36 item 5): `passUnretained`
+    /// let a late callback dereference a backend freed by a
+    /// back-out. The retain keeps the backend alive until
+    /// shutdown() releases it after clearing the callback and
+    /// draining the render queue.
+    private var renderCallbackToken: UnsafeMutableRawPointer?
+
     // Video size in pixels (dwidth/dheight), capped for the SW renderer.
     private var videoSize = CGSize.zero
     // Triple pixel-buffer pool (media_kit TextureSW pattern).
@@ -96,6 +113,8 @@ final class MpvPlayerBackend: NSObject, VideoPlayerBackend, LiveAudioOnlyCapable
 
     override init() {
         super.init()
+        eventQueue.setSpecific(key: Self.eventQueueKey, value: ())
+        renderQueue.setSpecific(key: Self.renderQueueKey, value: ())
         containerView.backgroundColor = .black
         containerView.displayLayer?.videoGravity = .resizeAspect
         NotificationCenter.default.addObserver(self, selector: #selector(appDidEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
@@ -408,24 +427,79 @@ final class MpvPlayerBackend: NSObject, VideoPlayerBackend, LiveAudioOnlyCapable
         finishOpen(false)
         NotificationCenter.default.removeObserver(self, name: UIApplication.didEnterBackgroundNotification, object: nil)
         NotificationCenter.default.removeObserver(self, name: UIApplication.willEnterForegroundNotification, object: nil)
-        // Render context first (it must be freed before the core),
-        // then the core. terminate_destroy wakes the event loop's
-        // mpv_wait_event so the loop thread exits on its own.
-        if let ctx = renderContext {
+        // Ordered teardown (b36 item 5 — the back-out crash):
+        // the old code freed the render context and destroyed
+        // the core while the event loop could still be inside
+        // handleEvent and a render block inside
+        // mpv_render_context_render on them — a use-after-free
+        // inside libmpv on every FLV room exit (MPV is the FLV
+        // engine, so most live rooms). Nothing below touches
+        // the handle/context after this point except the
+        // drains, which wait the in-flight work out first:
+        // 1. Drop the stored references: every mpv call in
+        //    this file guards on mpvHandle/renderContext, so
+        //    no NEW mpv call can start after this.
+        // 2. Clear the render update callback: no new frame
+        //    callback can enqueue render work after this.
+        // 3. Drain the render queue: a block already past
+        //    renderIfNeeded's guard finishes its render call
+        //    on the still-alive context.
+        // 4. Free the render context (it must go before the
+        //    core, as before).
+        // 5. terminate_destroy: wakes the event loop's
+        //    mpv_wait_event with MPV_EVENT_SHUTDOWN, so the
+        //    loop exits at once instead of after its 0.5 s
+        //    wait timeout. Safe now: the only thread that
+        //    could still be in an mpv call on the handle is
+        //    the event loop's wait itself, which this wakes.
+        // 6. Drain the event queue: the loop has exited and
+        //    no thread can touch the handle any more.
+        // 7. Release the retained update-callback context.
+        // The drains skip a queue this thread is already on
+        // (deinit can land on either queue when a queued block
+        // drops the last reference — a sync there would
+        // deadlock). No mpv call in this file blocks on the
+        // main thread, so draining from main cannot deadlock.
+        let ctx = renderContext
+        let handle = mpvHandle
+        renderContext = nil
+        mpvHandle = nil
+        if let ctx = ctx {
             mpv_render_context_set_update_callback(ctx, nil, nil)
-            mpv_render_context_free(ctx)
-            renderContext = nil
         }
-        if let handle = mpvHandle {
-            mpvHandle = nil
+        drainQueue(renderQueue, key: Self.renderQueueKey)
+        if let ctx = ctx {
+            mpv_render_context_free(ctx)
+        }
+        if let handle = handle {
             mpv_terminate_destroy(handle)
         }
+        drainQueue(eventQueue, key: Self.eventQueueKey)
+        releaseRenderCallbackToken()
         pixelBuffers.removeAll()
         formatDescription = nil
         poolSize = .zero
         DispatchQueue.main.async { [weak self] in
             self?.containerView.displayLayer?.flush()
         }
+    }
+
+    /// Wait for all work already queued on `queue` to finish,
+    /// unless this thread is already running on that queue (a
+    /// sync from the queue to itself deadlocks — skip it: the
+    /// caller is then the in-flight work itself).
+    private func drainQueue(_ queue: DispatchQueue, key: DispatchSpecificKey<Void>) {
+        guard DispatchQueue.getSpecific(key: key) == nil else { return }
+        queue.sync {}
+    }
+
+    /// Drop the retained render update-callback context (see the
+    /// property note). Only ever called from shutdown(), after
+    /// the callback is cleared and the render queue drained.
+    private func releaseRenderCallbackToken() {
+        guard let token = renderCallbackToken else { return }
+        renderCallbackToken = nil
+        Unmanaged<MpvPlayerBackend>.fromOpaque(token).release()
     }
 
     deinit {
@@ -494,11 +568,13 @@ final class MpvPlayerBackend: NSObject, VideoPlayerBackend, LiveAudioOnlyCapable
         ]
         guard mpv_render_context_create(&ctx, handle, &params) >= 0, let ctx = ctx else { return false }
         renderContext = ctx
+        let token = Unmanaged.passRetained(self)
+        renderCallbackToken = token.toOpaque()
         mpv_render_context_set_update_callback(ctx, { cb in
             guard let cb = cb else { return }
             let backend = Unmanaged<MpvPlayerBackend>.fromOpaque(cb).takeUnretainedValue()
             backend.renderQueue.async { backend.renderIfNeeded() }
-        }, Unmanaged.passUnretained(self).toOpaque())
+        }, token.toOpaque())
         return true
     }
 
