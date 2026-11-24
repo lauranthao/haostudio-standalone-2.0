@@ -33,10 +33,10 @@
 // 4K HEVC / Dolby Vision to IJK first, so the unverified state
 // can never hide a soft decode on a high-demand stream.
 //
-// VOD policy (S3): VOD NEVER drops frames (`framedrop=0` — the
-// old live-tuned `framedrop=1` drops non-reference frames when
-// behind so the picture stays LIVE; VOD must keep every frame).
-// Live (S4) restores framedrop=1 + packet-buffering.
+// Framedrop is 0 for VOD and live alike: no backend exposes a
+// framedrop knob, so the live edge is kept by the stall watchdog
+// + recovery loop, not by dropping frames (the old live-tuned
+// `framedrop=1` was never re-applied for live in this backend).
 //
 // Swift 5.0: completion handlers only, no async/await, no `any`.
 
@@ -185,8 +185,9 @@ final class IJKPlayerBackend: NSObject, VideoPlayerBackend {
         // Explicit on iOS: the Flutter side only set mediacodec=1
         // (Android-only, inert here), so IJK on iOS never asked.
         options.setPlayerOptionIntValue(1, forKey: "videotoolbox")
-        // VOD: never drop frames. (Live uses framedrop=1 so a
-        // lagging decoder stays live; VOD keeps every frame.)
+        // Never drop frames — for live too: no backend exposes a
+        // framedrop knob; the live edge is kept by the stall
+        // watchdog + recovery loop, not by dropping frames.
         options.setPlayerOptionIntValue(0, forKey: "framedrop")
         options.setPlayerOptionIntValue(1, forKey: "packet-buffering")
         options.setPlayerOptionIntValue(32 * 1024 * 1024, forKey: "max-buffer-size")

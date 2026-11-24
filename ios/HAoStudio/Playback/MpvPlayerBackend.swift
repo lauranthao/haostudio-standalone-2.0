@@ -32,8 +32,9 @@
 // verified hard decode, `no`/empty means verified software
 // decode. The state is exposed, never assumed.
 //
-// VOD policy (S3): VOD NEVER drops frames (`framedrop=no` —
-// live drops late frames to stay live, VOD must not). Cache /
+// Framedrop is `no` for VOD and live alike (no backend exposes
+// a framedrop knob — the live edge is kept by the stall watchdog
+// + recovery loop, not by dropping frames). Cache /
 // probe values are the Pure Live 3.x base table (30 s / 96 MB /
 // 8 s readahead, 2 MB probe / 2 s analyze), not the old
 // live-tuned 6 s / 32 MB / 2 s.
@@ -244,8 +245,9 @@ final class MpvPlayerBackend: NSObject, VideoPlayerBackend, LiveAudioOnlyCapable
             setOption(handle, "audio-buffer", "0.4")
             setOption(handle, "stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=2")
         }
-        // VOD NEVER drops frames. Live (S4) uses decoder+vo so a
-        // lagging decoder stays live; VOD keeps every frame.
+        // Framedrop stays `no` for live too: no backend exposes
+        // a framedrop knob, so the live edge is kept by the
+        // stall watchdog + recovery loop, not by dropping frames.
         setOption(handle, "framedrop", "no")
         // Dolby Vision base layer (build 36, item 13): a DV stream
         // that reaches this engine is one AVPlayer cannot take

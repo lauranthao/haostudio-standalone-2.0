@@ -12,8 +12,9 @@
 // - Music uses AVPlayer only and never reads this selector; this
 //   kernel is video (and, in S4, live) only.
 // - VOD and live are different players: this kernel serves VOD in
-//   S3; live gets its own driver in S4 (different framedrop policy
-//   — VOD never drops frames, live drops late frames to stay live).
+//   S3; live gets its own driver in S4. Both run framedrop off
+//   (no backend exposes a framedrop knob): the live edge is kept
+//   by the stall watchdog + recovery loop, not by dropping frames.
 // - First playable source plays immediately; a failed engine falls
 //   to the next candidate, never to an error dialog.
 //
