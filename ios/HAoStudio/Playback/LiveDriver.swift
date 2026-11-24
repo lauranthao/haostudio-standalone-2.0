@@ -126,6 +126,13 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     /// finishes or a newer open supersedes it.
     private var activeLadder: VideoRecoveryLadder?
     private var generation: Int = 0
+    /// attemptOpen token (build 35 #11): bumped by every
+    /// attemptOpen, including retries. A superseded attempt's
+    /// completion must not clear the new attempt's state or retry
+    /// the stale item — the token (not just the room id) tells a
+    /// stale failure apart, because a line/quality switch opens
+    /// the SAME room id again.
+    private var openAttemptToken = 0
     private var pendingItem: PlaybackItem?
     private var playRequested: Bool = false
     private var stallFailed: Bool = false
@@ -460,8 +467,18 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     /// bounds the fresh-URL recursion inside `open` (at most 2
     /// fresh re-parses per open).
     private func attemptOpen(item: PlaybackItem, url: URL, tried: [URL], freshRounds: Int) {
+        openAttemptToken += 1
+        let token = openAttemptToken
         open(item: item, url: url, freshRounds: freshRounds) { [weak self] result in
             guard let self = self else {
+                return
+            }
+            // A newer attempt superseded this one (line/quality
+            // switch, re-entry): its failure belongs to the old
+            // attempt and must not clear the new attempt's loading
+            // state, report the old room as failed, or retry the
+            // stale item. The new attempt owns the state now.
+            guard token == self.openAttemptToken, self.pendingItem?.id == item.id else {
                 return
             }
             switch result {
@@ -566,6 +583,14 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                 self.ensureMain {
                     self.activeLadder = nil
                     guard gen == self.generation, !completed else {
+                        // Superseded by a newer open: the attempt
+                        // must still settle its completion as
+                        // failed, or attemptOpen's completion is
+                        // dropped and `isLoading` stays true
+                        // forever (build 35 #11). finish() is a
+                        // no-op if it already fired; attemptOpen
+                        // ignores the stale failure via its token.
+                        finish(.failure(.loadFailed))
                         return
                     }
                     guard winner != nil, let backend = self.backend else {
@@ -684,6 +709,9 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         finish: @escaping (Result<Void, MusicPlayerError>) -> Void
     ) {
         guard gen == generation else {
+            // Superseded: settle the attempt as failed so the
+            // completion is not dropped (build 35 #11).
+            finish(.failure(.loadFailed))
             return
         }
         // Software-decode fallback (plan §四 4.2, same as VOD):
@@ -727,6 +755,9 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             }
             self.ensureMain {
                 guard gen == self.generation else {
+                    // Superseded: settle the attempt as failed so
+                    // the completion is not dropped (build 35 #11).
+                    finish(.failure(.loadFailed))
                     return
                 }
                 guard ok else {
@@ -750,6 +781,9 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         finish: @escaping (Result<Void, MusicPlayerError>) -> Void
     ) {
         guard gen == generation else {
+            // Superseded: settle the attempt as failed so the
+            // completion is not dropped (build 35 #11).
+            finish(.failure(.loadFailed))
             return
         }
         playRequested = true

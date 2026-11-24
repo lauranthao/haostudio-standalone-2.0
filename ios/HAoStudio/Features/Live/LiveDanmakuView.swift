@@ -191,6 +191,10 @@ struct DanmakuToggleButton: View {
 /// similarity window).
 struct LiveDanmakuListView: View {
     var messages: [DanmakuMessage]
+    /// Monotonic append counter from the view model (build 35 D2):
+    /// observed alongside `messages.count`, because the count stops
+    /// changing once the 200-message window is full.
+    var sequence: Int
     var settings: LiveDanmakuSettings
     var platform: String
     var onOpenSettings: () -> Void
@@ -199,6 +203,7 @@ struct LiveDanmakuListView: View {
     @State private var shown: [DanmakuMessage] = []
     @State private var recentTexts: [String] = []
     @State private var lastSeenCount = 0
+    @State private var lastSeenSequence = 0
 
     private var isEnabled: Bool {
         settings.enabled[platform] ?? true
@@ -217,6 +222,7 @@ struct LiveDanmakuListView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { ingestNewMessages() }
         .onChange(of: messages.count) { _, _ in ingestNewMessages() }
+        .onChange(of: sequence) { _, _ in ingestNewMessages() }
         .onChange(of: settings.enabled[platform] ?? true) { _, _ in
             if isEnabled {
                 ingestNewMessages()
@@ -298,6 +304,13 @@ struct LiveDanmakuListView: View {
 
     /// Take newly arrived messages through the filter. A replaced
     /// stream (room switch: count drops) resets the list.
+    /// Build 35 D2: `messages` is capped at 200, so once full its
+    /// count stops changing and the count observation never fires
+    /// again. The view also observes `sequence` (one per append)
+    /// and, when the window slid, takes the newest `appended`
+    /// messages as a suffix — those are exactly the ones that
+    /// arrived since the last ingest (truncation only drops the
+    /// oldest).
     private func ingestNewMessages() {
         guard isEnabled else { return }
         if messages.count < lastSeenCount {
@@ -305,8 +318,16 @@ struct LiveDanmakuListView: View {
             recentTexts = []
             lastSeenCount = 0
         }
-        guard messages.count > lastSeenCount else { return }
-        let fresh = messages[lastSeenCount..<messages.count]
+        let appended = sequence - lastSeenSequence
+        lastSeenSequence = sequence
+        let fresh: ArraySlice<DanmakuMessage>
+        if messages.count > lastSeenCount {
+            fresh = messages[lastSeenCount..<messages.count]
+        } else if appended > 0, !messages.isEmpty {
+            fresh = messages.suffix(min(appended, messages.count))
+        } else {
+            return
+        }
         lastSeenCount = messages.count
         for message in fresh {
             guard LiveDanmakuFilter.shouldShow(
@@ -378,11 +399,16 @@ struct LiveDanmakuOverlayView: View {
     }
 
     var messages: [DanmakuMessage]
+    /// Monotonic append counter from the view model (build 35 D2):
+    /// observed alongside `messages.count`, because the count stops
+    /// changing once the 200-message window is full.
+    var sequence: Int
     var settings: LiveDanmakuSettings
 
     @State private var flying: [LiveFlyingItem] = []
     @State private var recentTexts: [String] = []
     @State private var lastSeenCount = 0
+    @State private var lastSeenSequence = 0
     @State private var nextLane = 0
 
     var body: some View {
@@ -406,6 +432,7 @@ struct LiveDanmakuOverlayView: View {
         .allowsHitTesting(false)
         .onAppear { ingestNewMessages() }
         .onChange(of: messages.count) { _, _ in ingestNewMessages() }
+        .onChange(of: sequence) { _, _ in ingestNewMessages() }
     }
 
     private func laneY(_ lane: Int, areaHeight: CGFloat) -> CGFloat {
@@ -426,8 +453,21 @@ struct LiveDanmakuOverlayView: View {
             lastSeenCount = Self.startIndexForFreshMount(
                 messageCount: messages.count, maxBacklog: Self.maxBacklogOnAppear)
         }
-        guard messages.count > lastSeenCount else { return }
-        let fresh = messages[lastSeenCount..<messages.count]
+        // Build 35 D2: see LiveDanmakuListView — once `messages`
+        // is capped at 200 its count stops changing, so the count
+        // observation never fires again. Observe `sequence` too
+        // and take the newest `appended` messages as a suffix when
+        // the window slid.
+        let appended = sequence - lastSeenSequence
+        lastSeenSequence = sequence
+        let fresh: ArraySlice<DanmakuMessage>
+        if messages.count > lastSeenCount {
+            fresh = messages[lastSeenCount..<messages.count]
+        } else if appended > 0, !messages.isEmpty {
+            fresh = messages.suffix(min(appended, messages.count))
+        } else {
+            return
+        }
         lastSeenCount = messages.count
         for message in fresh {
             guard LiveDanmakuFilter.shouldShow(
