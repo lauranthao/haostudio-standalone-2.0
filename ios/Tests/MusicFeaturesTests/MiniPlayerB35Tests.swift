@@ -24,11 +24,13 @@ import XCTest
 private final class StubMusicDriver: MusicPlaybackDriver {
     var currentTrack: PlaybackItem?
     var isPlaying = false
+    var pauseCalled = false
     var resolveURL: ((PlaybackItem, [URL], @escaping (URL?, AudioQuality?) -> Void) -> Void)?
     var onTrackStarted: ((PlaybackItem) -> Void)?
     var onTrackFailed: ((PlaybackItem, MusicPlayerError) -> Void)?
     func play(item: PlaybackItem) {}
     func open(item: PlaybackItem, url: URL, completion: @escaping (Result<Void, MusicPlayerError>) -> Void) {}
+    func pause() { pauseCalled = true }
     func stop() {}
     func resume() {}
 }
@@ -308,5 +310,36 @@ final class BottomChromeB36Tests: XCTestCase {
             state.noteScrollOffset(offset)
         }
         XCTAssertFalse(state.isAtTop)
+    }
+
+    // MARK: - Headphone unplug (§6.3, Phase 5): pausePlaying()
+
+    /// A playing driver is paused; the item is NOT stopped or
+    /// cleared — pausePlaying never touches currentItem, so the
+    /// mini player stays and one tap resumes.
+    func testPausePlayingPausesPlayingDriver() {
+        let coordinator = PlaybackCoordinator(
+            defaults: UserDefaults(suiteName: "MiniPlayerB35Tests") ?? .standard)
+        let driver = StubMusicDriver()
+        driver.isPlaying = true
+        driver.currentTrack = PlaybackItem(
+            id: "wy|123", kind: .music, title: "认了吧", artist: "陈奕迅",
+            coverURL: nil)
+        coordinator.musicDriver = driver
+        coordinator.pausePlaying()
+        XCTAssertTrue(driver.pauseCalled)
+    }
+
+    /// Nothing playing: pausePlaying is a no-op and never calls
+    /// pause on an idle driver (no state churn, no Now Playing
+    /// refresh for a route change that needs no action).
+    func testPausePlayingIsNoopWhenNothingPlaying() {
+        let coordinator = PlaybackCoordinator(
+            defaults: UserDefaults(suiteName: "MiniPlayerB35Tests") ?? .standard)
+        let driver = StubMusicDriver()
+        driver.isPlaying = false
+        coordinator.musicDriver = driver
+        coordinator.pausePlaying()
+        XCTAssertFalse(driver.pauseCalled)
     }
 }

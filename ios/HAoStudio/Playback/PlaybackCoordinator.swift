@@ -230,6 +230,7 @@ protocol MusicPlaybackDriver: AnyObject {
     var onTrackFailed: ((PlaybackItem, MusicPlayerError) -> Void)? { get set }
     func play(item: PlaybackItem)
     func open(item: PlaybackItem, url: URL, completion: @escaping (Result<Void, MusicPlayerError>) -> Void)
+    func pause()
     func stop()
     func resume()
 }
@@ -254,6 +255,7 @@ protocol VideoPlaybackDriver: AnyObject {
     var onEpisodeFailed: ((PlaybackItem, MusicPlayerError) -> Void)? { get set }
     func play(item: PlaybackItem)
     func open(item: PlaybackItem, url: URL, completion: @escaping (Result<Void, MusicPlayerError>) -> Void)
+    func pause()
     func stop()
     func resume()
     func seek(to seconds: Double, completion: @escaping (Bool) -> Void)
@@ -282,6 +284,7 @@ protocol LivePlaybackDriver: AnyObject {
     var onRoomFailed: ((PlaybackItem, MusicPlayerError) -> Void)? { get set }
     func play(item: PlaybackItem)
     func open(item: PlaybackItem, url: URL, completion: @escaping (Result<Void, MusicPlayerError>) -> Void)
+    func pause()
     func stop()
     func resume()
     func seek(to seconds: Double, completion: @escaping (Bool) -> Void)
@@ -525,6 +528,27 @@ final class PlaybackCoordinator: ObservableObject {
     /// auto-resume.
     func stopLive() {
         liveDriver?.stop()
+    }
+
+    /// Pause whatever is playing right now, without clearing
+    /// anything (build 37, Phase 5, §6.3: 耳机拔出后的暂停行为).
+    /// The app root calls this when the audio route loses its
+    /// output device (headphones unplugged / Bluetooth headset
+    /// disconnected — AVAudioSession `.oldDeviceUnavailable`):
+    /// without it the song / episode / room kept sounding
+    /// through the speaker. Pause, not stop: the item stays
+    /// loaded, the mini player stays, and one tap resumes —
+    /// the same behaviour as the pause button. Only drivers
+    /// that report isPlaying are paused, so a route change
+    /// while nothing plays is a no-op; each driver's own
+    /// pause() updates its state (music recomputes isPlaying
+    /// and refreshes Now Playing; VOD reports the pause to
+    /// Emby; live notes it in the session), exactly like a
+    /// manual pause. No auto-resume: the user resumes.
+    func pausePlaying() {
+        if musicDriver?.isPlaying == true { musicDriver?.pause() }
+        if vodDriver?.isPlaying == true { vodDriver?.pause() }
+        if liveDriver?.isPlaying == true { liveDriver?.pause() }
     }
 
     /// Stop everything. Clears the current item; the player slice also

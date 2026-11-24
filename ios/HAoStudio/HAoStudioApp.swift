@@ -6,6 +6,7 @@
 // is removed for the same reason — a SwiftUI @main app must not
 // declare a scene delegate class that does not exist.
 
+import AVFoundation
 import SwiftUI
 
 @main
@@ -144,6 +145,25 @@ struct HAoStudioApp: App {
                                 }
                             }
                         }
+                    }
+                    // Phase 5, §6.3: headphones unplugged (or a
+                    // Bluetooth headset disconnected) — the audio
+                    // route lost its output device
+                    // (.oldDeviceUnavailable). Pause whatever is
+                    // playing instead of letting it carry on
+                    // through the speaker; the coordinator pauses
+                    // only drivers that report isPlaying, so this
+                    // is a no-op while nothing plays. Other route
+                    // reasons (a device plugged in, a Control
+                    // Center switch) never pause. No auto-resume:
+                    // the user taps play again.
+                    .onReceive(NotificationCenter.default.publisher(
+                        for: AVAudioSession.routeChangeNotification
+                    )) { notification in
+                        guard let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                              AVAudioSession.RouteChangeReason(rawValue: reasonValue) == .oldDeviceUnavailable
+                        else { return }
+                        coordinator.pausePlaying()
                     }
                 if showingSplash {
                     SplashView(isReady: $splashReady) {
