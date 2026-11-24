@@ -90,7 +90,7 @@ struct MainTabView: View {
     }
 
     /// The bottom chrome (b39: restored to the original system
-    /// UITabBar menu from build 34/35, commit 40d5bf6 — chen
+    /// UITabBar menu from build 34/35, commit 40d5bf6) — chen
     /// 2026-11-25: "菜单栏就用之前刚开发的时候那样子不就好了吗".
     /// The b38 SwiftUI UnionTabView bar is gone: its chromeBottomOffset
     /// drop pushed the whole unit 26pt below the safe-area edge on
