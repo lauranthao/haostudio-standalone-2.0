@@ -38,6 +38,15 @@ final class VodDanmakuLayerState: ObservableObject {
     @Published var isEnabled: Bool = true
     /// Text opacity 0.3-1.0 (bound to the settings sheet).
     @Published var opacity: Double = 1.0
+    /// A fetch is in flight for the current episode. The player
+    /// page reads this (with `didLoad`) to decide whether the
+    /// danmaku switch is real yet: a switch shown while the fetch
+    /// is still running would be a fake switch when the episode
+    /// turns out to have no danmaku source.
+    @Published private(set) var isLoading = false
+    /// A fetch finished for the current episode (items or empty).
+    /// False before the first load and while a reload is running.
+    @Published private(set) var didLoad = false
 
     /// How long a scrolling line takes to cross the screen.
     static let scrollDuration: Double = 8
@@ -56,11 +65,19 @@ final class VodDanmakuLayerState: ObservableObject {
         guard loadedEpisodeId != episode.id else { return }
         loadedEpisodeId = episode.id
         items = []
-        guard let provider = provider else { return }
+        guard let provider = provider else {
+            isLoading = false
+            didLoad = true
+            return
+        }
+        isLoading = true
+        didLoad = false
         provider.fetchDanmaku(for: episode) { [weak self] fetched in
             guard let self = self else { return }
             DispatchQueue.main.async {
                 self.items = fetched.sorted { $0.timeSeconds < $1.timeSeconds }
+                self.isLoading = false
+                self.didLoad = true
             }
         }
     }
@@ -69,6 +86,8 @@ final class VodDanmakuLayerState: ObservableObject {
     func clear() {
         loadedEpisodeId = nil
         items = []
+        isLoading = false
+        didLoad = false
     }
 
     /// Items visible at `position` (seconds), each with a stable
@@ -92,6 +111,32 @@ final class VodDanmakuLayerState: ObservableObject {
             }
         }
         return out
+    }
+}
+
+// MARK: - Availability (switch gating)
+
+/// Whether the current episode has danmaku to switch. The player
+/// page shows the danmaku switch only when there is something to
+/// switch: a switch over an empty layer would be a fake control.
+/// - loading: the fetch is still running (or never started) — the
+///   page shows "弹幕加载中", never a switch.
+/// - available: items arrived — the switch is real.
+/// - unavailable: the fetch finished with nothing — the switch
+///   stays hidden.
+enum VodDanmakuAvailability {
+    case loading
+    case available
+    case unavailable
+
+    /// Pure derivation from the layer state, so tests can drive it
+    /// without a view. Items win over loading: while a new episode
+    /// reloads, the old items are already cleared by `load`, so a
+    /// non-empty list always means switchable danmaku.
+    static func resolve(isLoading: Bool, didLoad: Bool, itemCount: Int) -> VodDanmakuAvailability {
+        if itemCount > 0 { return .available }
+        if isLoading || !didLoad { return .loading }
+        return .unavailable
     }
 }
 

@@ -683,9 +683,11 @@ struct VideoPlayerView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var controlsVisible = true
-    @State private var showingEpisodes = false
-    @State private var showingSettings = false
-    @State private var showingBrightnessVolume = false
+    @State private var showingMore = false
+    /// A seek drag is in progress: the auto-hide timer is paused
+    /// until release (the bar must not vanish mid-drag).
+    @State private var isSeekDragging = false
+    @State private var autoHideWork: DispatchWorkItem?
     /// Landscape state. Only the [ ] button changes it — turning
     /// the phone never does (live parity: LiveRoomView
     /// isFullscreen). Starts true: tap-play enters landscape.
@@ -706,7 +708,11 @@ struct VideoPlayerView: View {
                 .contentShape(Rectangle())
                 .onTapGesture {
                     withAnimation(.easeInOut(duration: 0.2)) {
-                        controlsVisible.toggle()
+                        if controlsVisible {
+                            hideControls()
+                        } else {
+                            showControlsTemporarily()
+                        }
                     }
                 }
                 .onLongPressGesture(minimumDuration: 0.4, pressing: { pressing in
@@ -795,8 +801,10 @@ struct VideoPlayerView: View {
             isLandscape = true
             videoPlayer.notePlayerEntry()
             videoPlayer.attachEngine(coordinator.vodDriver as? VideoPlayerEngine)
+            showControlsTemporarily()
         }
         .onDisappear {
+            autoHideWork?.cancel()
             videoPlayer.disarmBrightness()
             VideoOrientation.unlockPortrait()
         }
@@ -807,22 +815,33 @@ struct VideoPlayerView: View {
                 VideoOrientation.unlockPortrait()
             }
         }
-        .sheet(isPresented: $showingBrightnessVolume) {
-            VodBrightnessVolumeSheet(
-                brightness: Binding(
-                    get: { videoPlayer.brightnessLevel },
-                    set: { videoPlayer.setBrightness($0) }
-                )
-            )
+        .onChange(of: videoPlayer.isPlaying) { _, playing in
+            if playing {
+                showControlsTemporarily()
+            } else {
+                autoHideWork?.cancel()
+            }
         }
-        .sheet(isPresented: $showingEpisodes) {
-            VideoPlayerEpisodeSheet()
+        .onChange(of: showingMore) { _, showing in
+            if !showing {
+                showControlsTemporarily()
+            }
         }
-        .sheet(isPresented: $showingSettings) {
+        .sheet(isPresented: $showingMore) {
             VodSettingsSheet(
                 state: $videoPlayer.settings,
                 engine: videoPlayer.currentEngine ?? .avplayer,
-                diagnostics: videoPlayer.diagnostics
+                diagnostics: videoPlayer.diagnostics,
+                brightness: Binding(
+                    get: { videoPlayer.brightnessLevel },
+                    set: { videoPlayer.setBrightness($0) }
+                ),
+                danmaku: videoPlayer.danmaku,
+                detail: videoPlayer.detail,
+                lineIndex: videoPlayer.lineIndex,
+                episodeIndex: videoPlayer.episodeIndex,
+                onSelectLine: { videoPlayer.selectLine($0) },
+                onSelectEpisode: { videoPlayer.selectEpisode($0) }
             )
         }
         .onChange(of: videoPlayer.settings) { _, _ in
@@ -903,29 +922,19 @@ struct VideoPlayerView: View {
                     .lineLimit(1)
             }
             Spacer()
-            Button(action: { showingBrightnessVolume = true }) {
-                Image(systemName: "sun.max")
+            // The single "更多" entry: brightness / volume, speed
+            // (VOD only), danmaku switch, episode picker all live
+            // in one sheet — no button pile-up on the bar. No
+            // quality button anywhere on VOD (iron law: one play
+            // URL per episode, no quality tiers).
+            Button(action: { showingMore = true }) {
+                Image(systemName: "ellipsis")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 36, height: 36)
                     .background(Color.black.opacity(0.45), in: Circle())
             }
             .buttonStyle(.plain)
-            Button(action: { showingSettings = true }) {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(Color.black.opacity(0.45), in: Circle())
-            }
-            .buttonStyle(.plain)
-            Button("选集") { showingEpisodes = true }
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(Color.black.opacity(0.45), in: Capsule())
-                .buttonStyle(.plain)
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
@@ -936,13 +945,44 @@ struct VideoPlayerView: View {
         )
     }
 
+    // MARK: - Controls auto-hide (3 s while playing, live parity)
+
+    /// Show the controls and hide them again 3 s later while
+    /// playing. Paused playback keeps the controls up; a seek drag
+    /// pauses the timer until release (the bar must not vanish
+    /// mid-drag). A no-op when the player is paused.
+    private func showControlsTemporarily() {
+        autoHideWork?.cancel()
+        controlsVisible = true
+        guard videoPlayer.isPlaying, !isSeekDragging else { return }
+        let work = DispatchWorkItem { [self] in
+            guard self.videoPlayer.isPlaying, !self.isSeekDragging else { return }
+            self.controlsVisible = false
+        }
+        autoHideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
+    }
+
+    private func hideControls() {
+        autoHideWork?.cancel()
+        controlsVisible = false
+    }
+
     private var bottomControls: some View {
         VStack(spacing: 10) {
             VideoSeekBar(
                 position: videoPlayer.dragPosition ?? videoPlayer.position,
                 duration: videoPlayer.duration,
                 onDrag: { value in videoPlayer.dragPosition = value },
-                onSeek: { value in videoPlayer.seek(to: value) }
+                onSeek: { value in videoPlayer.seek(to: value) },
+                onDraggingChanged: { dragging in
+                    isSeekDragging = dragging
+                    if dragging {
+                        autoHideWork?.cancel()
+                    } else {
+                        showControlsTemporarily()
+                    }
+                }
             )
             HStack(spacing: 20) {
                 Text(videoTimeText(seconds: videoPlayer.dragPosition ?? videoPlayer.position))
@@ -994,131 +1034,108 @@ func videoRemainingText(position: Double, duration: Double) -> String {
     return "-\(videoTimeText(seconds: max(0, duration - position)))"
 }
 
+/// Pure seek-bar math (see VideoSeekBar): position from a touch
+/// x, fill width from a position, and the preview bubble's centre
+/// — all clamped, all testable without a view.
+enum VideoSeekBarMath {
+    /// Target seconds for a touch at `x` in a bar `totalWidth`
+    /// wide, clamped to [0, duration]. Zero width / duration is
+    /// 0, never NaN.
+    static func position(forX x: CGFloat, totalWidth: CGFloat, duration: Double) -> Double {
+        guard totalWidth > 0, duration > 0 else { return 0 }
+        return max(0, min(duration, duration * Double(x / totalWidth)))
+    }
+
+    /// Fill width for `position` in a bar `totalWidth` wide.
+    static func fillWidth(position: Double, duration: Double, totalWidth: CGFloat) -> CGFloat {
+        guard duration > 0 else { return 0 }
+        return max(0, min(totalWidth, totalWidth * CGFloat(position / duration)))
+    }
+
+    /// Bubble centre for a knob at `knobX`: the bubble stays
+    /// fully inside the bar (its centre never closer to an edge
+    /// than half its width). A bar narrower than the bubble
+    /// centres it.
+    static func previewCenterX(knobX: CGFloat, totalWidth: CGFloat, bubbleWidth: CGFloat) -> CGFloat {
+        let half = bubbleWidth / 2
+        guard totalWidth > bubbleWidth else { return totalWidth / 2 }
+        return min(max(knobX, half), totalWidth - half)
+    }
+}
+
 /// Thin progress bar, present from the start of playback. Drag
 /// changes local state only; seek fires once on release.
+/// Touch area is 44pt (the visual bar stays 4/6pt): the old 20pt
+/// strip was too thin to grab in fullscreen, so a finger landing
+/// just off it hit the tap-to-hide gesture instead and the bar
+/// vanished. The drag is high-priority, so it outranks the
+/// full-screen tap / long-press / double-tap layer underneath.
+/// While dragging, a time bubble previews the target and the
+/// controls auto-hide timer is paused (see onDraggingChanged).
 struct VideoSeekBar: View {
     var position: Double
     var duration: Double
     var onDrag: (Double) -> Void
     var onSeek: (Double) -> Void
+    var onDraggingChanged: (Bool) -> Void
 
     @State private var dragging = false
 
     var body: some View {
         GeometryReader { geometry in
+            let fill = VideoSeekBarMath.fillWidth(
+                position: position, duration: duration, totalWidth: geometry.size.width)
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(Color.white.opacity(0.35))
                     .frame(height: dragging ? 6 : 4)
                 Capsule()
                     .fill(Color.white)
-                    .frame(width: fillWidth(total: geometry.size.width), height: dragging ? 6 : 4)
+                    .frame(width: fill, height: dragging ? 6 : 4)
                 Circle()
                     .fill(Color.white)
-                    .frame(width: 14, height: 14)
-                    .offset(x: max(0, fillWidth(total: geometry.size.width) - 7))
+                    .frame(width: dragging ? 16 : 14, height: dragging ? 16 : 14)
+                    .offset(x: max(0, fill - (dragging ? 8 : 7)))
             }
-            .frame(height: 20)
+            .frame(height: 44)
             .contentShape(Rectangle())
-            .gesture(
+            .highPriorityGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        dragging = true
-                        onDrag(position(for: value.location.x, total: geometry.size.width))
+                        if !dragging {
+                            dragging = true
+                            onDraggingChanged(true)
+                        }
+                        onDrag(VideoSeekBarMath.position(
+                            forX: value.location.x,
+                            totalWidth: geometry.size.width,
+                            duration: duration))
                     }
                     .onEnded { value in
                         dragging = false
-                        onSeek(position(for: value.location.x, total: geometry.size.width))
+                        onDraggingChanged(false)
+                        onSeek(VideoSeekBarMath.position(
+                            forX: value.location.x,
+                            totalWidth: geometry.size.width,
+                            duration: duration))
                     }
             )
-        }
-        .frame(height: 20)
-        .padding(.horizontal, 20)
-    }
-
-    private func fillWidth(total: CGFloat) -> CGFloat {
-        guard duration > 0 else { return 0 }
-        return max(0, min(total, total * CGFloat(position / duration)))
-    }
-
-    private func position(for x: CGFloat, total: CGFloat) -> Double {
-        guard total > 0, duration > 0 else { return 0 }
-        return max(0, min(duration, duration * Double(x / total)))
-    }
-}
-
-/// Episode / line picker sheet inside the player.
-struct VideoPlayerEpisodeSheet: View {
-    @EnvironmentObject private var videoPlayer: VideoPlayerViewModel
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.haoTheme) private var theme
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if let detail = videoPlayer.detail {
-                        Text("线路")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(theme.textPrimary)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(Array(detail.lines.enumerated()), id: \.element.id) { index, line in
-                                    Button(action: { videoPlayer.selectLine(index) }) {
-                                        Text(line.name)
-                                            .font(.system(size: 14, weight: .medium))
-                                            .foregroundStyle(
-                                                index == videoPlayer.lineIndex
-                                                    ? theme.onAccent : theme.textPrimary)
-                                            .padding(.horizontal, 14)
-                                            .padding(.vertical, 8)
-                                            .background(
-                                                index == videoPlayer.lineIndex
-                                                    ? theme.accent : theme.surface,
-                                                in: Capsule())
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-                        Text("选集")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(theme.textPrimary)
-                        LazyVGrid(
-                            columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4),
-                            spacing: 8
-                        ) {
-                            ForEach(Array((videoPlayer.currentLine?.episodes ?? []).enumerated()), id: \.element.id) { index, episode in
-                                Button(action: {
-                                    videoPlayer.selectEpisode(index)
-                                    dismiss()
-                                }) {
-                                    Text(episode.displayName)
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundStyle(
-                                            index == videoPlayer.episodeIndex
-                                                ? theme.onAccent : theme.textPrimary)
-                                        .lineLimit(1)
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 10)
-                                        .background(
-                                            index == videoPlayer.episodeIndex
-                                                ? theme.accent : theme.surface,
-                                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                    Spacer(minLength: 16)
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 12)
+            if dragging {
+                Text(videoTimeText(seconds: position))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .monospacedDigit()
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.black.opacity(0.7), in: Capsule())
+                    .position(
+                        x: VideoSeekBarMath.previewCenterX(
+                            knobX: fill, totalWidth: geometry.size.width, bubbleWidth: 72),
+                        y: 6)
             }
-            .background(theme.scaffoldBackground)
-            .navigationTitle("选集")
-            .navigationBarTitleDisplayMode(.inline)
         }
+        .frame(height: 44)
+        .padding(.horizontal, 20)
     }
 }
 
@@ -1215,66 +1232,56 @@ enum VideoOrientation {
     }
 }
 
-/// Brightness / volume sheet (VOD player only — the live room's
-/// LiveBrightnessVolumeSheet, same shape). Brightness is a
-/// user-driven slider: it reads the system value when the player
-/// opens and writes it only while the user drags; leaving the
-/// player never restores or overrides it. Volume is the system
-/// MPVolumeView slider (public API) — the sheet never invents a
-/// volume value.
-struct VodBrightnessVolumeSheet: View {
+/// Brightness + volume rows — the ONE implementation both
+/// players share (the live room's LiveBrightnessVolumeSheet and
+/// the VOD "更多" sheet use these rows: "同一套"). Brightness is
+/// a user-driven slider: it reads the system value when the
+/// player opens and writes it only while the user drags; leaving
+/// the player never restores or overrides it. Volume is the
+/// system MPVolumeView slider (public API) — the sheet never
+/// invents a volume value. The notes name the player, so each
+/// call site passes its own wording.
+struct PlayerBrightnessVolumeRows: View {
     @Binding var brightness: Double
+    var brightnessNote: String
+    var volumeNote: String
 
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.haoTheme) private var theme
 
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Image(systemName: "sun.max")
-                            .foregroundStyle(theme.textSecondary)
-                        Text("亮度")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(theme.textPrimary)
-                        Spacer()
-                        Text("\(Int(brightness * 100))%")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(theme.textSecondary)
-                    }
-                    Slider(value: $brightness, in: 0...1)
-                        .tint(theme.accent)
-                    Text("只在视频播放器里调节；退出播放器不恢复、不覆盖系统亮度。")
-                        .font(.system(size: 12))
-                        .foregroundStyle(theme.textMuted)
+        VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "sun.max")
+                        .foregroundStyle(theme.textSecondary)
+                    Text("亮度")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(theme.textPrimary)
+                    Spacer()
+                    Text("\(Int(brightness * 100))%")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(theme.textSecondary)
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Image(systemName: "speaker.wave.2")
-                            .foregroundStyle(theme.textSecondary)
-                        Text("音量")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(theme.textPrimary)
-                        Spacer()
-                    }
-                    VodVolumeSliderView()
-                        .frame(height: 30)
-                    Text("系统音量；只在视频播放器里调节。")
-                        .font(.system(size: 12))
-                        .foregroundStyle(theme.textMuted)
-                }
-                Spacer()
+                Slider(value: $brightness, in: 0...1)
+                    .tint(theme.accent)
+                Text(brightnessNote)
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.textMuted)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 16)
-            .background(theme.scaffoldBackground)
-            .navigationTitle("亮度与音量")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("完成") { dismiss() }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "speaker.wave.2")
+                        .foregroundStyle(theme.textSecondary)
+                    Text("音量")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(theme.textPrimary)
+                    Spacer()
                 }
+                PlayerVolumeSliderView()
+                    .frame(height: 30)
+                Text(volumeNote)
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.textMuted)
             }
         }
     }
@@ -1283,7 +1290,7 @@ struct VodBrightnessVolumeSheet: View {
 /// The system volume slider (MPVolumeView, public API). It
 /// reflects the device volume and changes it when dragged —
 /// there is no app-side volume value to keep in sync.
-private struct VodVolumeSliderView: UIViewRepresentable {
+struct PlayerVolumeSliderView: UIViewRepresentable {
     func makeUIView(context: Context) -> MPVolumeView {
         let volumeView = MPVolumeView()
         volumeView.showsRouteButton = false

@@ -151,4 +151,19 @@ final class LiveDanmakuSettingsTests: XCTestCase {
         XCTAssertEqual(fromIsUser.blockedEntries.count, 1)
         XCTAssertTrue(fromIsUser.blockedEntries[0].isUser)
     }
+
+    /// The room page's danmaku switch (2026-11-24 round, item 3):
+    /// flipping the per-platform flag twice returns to the
+    /// original state, one platform never moves another, and VOD
+    /// defaults off (opt-in — its title guess can be wrong).
+    func testToggleFlipsPerPlatformSwitch() {
+        var settings = LiveDanmakuSettings()
+        XCTAssertTrue(settings.isEnabled(for: .bilibili))
+        settings.setEnabled(!settings.isEnabled(for: .bilibili), for: .bilibili)
+        XCTAssertFalse(settings.isEnabled(for: .bilibili))
+        settings.setEnabled(!settings.isEnabled(for: .bilibili), for: .bilibili)
+        XCTAssertTrue(settings.isEnabled(for: .bilibili))
+        XCTAssertTrue(settings.isEnabled(for: .douyu))
+        XCTAssertFalse(settings.isEnabled(LiveDanmakuSettings.vodSiteId))
+    }
 }

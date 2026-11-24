@@ -280,9 +280,63 @@ struct LiveRoomView: View {
                     .font(.system(size: 34))
                     .foregroundStyle(.white.opacity(0.9))
             }
+            // Flying danmaku over the portrait video (same layer
+            // as landscape, same switch): the portrait room used
+            // to show danmaku only as the list below, so the
+            // toggle had no layer to control on the video.
+            if danmakuEnabledForRoom {
+                LiveDanmakuOverlayView(
+                    messages: livePlayer.messages,
+                    settings: danmakuSettings
+                )
+            }
+            // On-video control strip: play/pause, danmaku toggle,
+            // [] fullscreen. This IS the player control bar — it
+            // lives on the video, not in the page bottom bar:
+            // chen's 2026-11-24 screenshot shows the page bottom
+            // bar half-covered by the tab bar, so player controls
+            // must not depend on it. Always visible in portrait
+            // (the page is not immersive — nothing auto-hides
+            // here). No speed control: live is real-time.
+            VStack {
+                Spacer()
+                portraitVideoControls
+            }
         }
         .contentShape(Rectangle())
         .onTapGesture { livePlayer.togglePlayPause() }
+    }
+
+    /// On-video control strip (portrait). Buttons are 44pt touch
+    /// targets (Beans value); white on a bottom gradient scrim —
+    /// the same forced-dark chrome as the VOD / live-landscape
+    /// bars, so it reads over any frame in any theme combination.
+    private var portraitVideoControls: some View {
+        HStack(spacing: 8) {
+            Button(action: { livePlayer.togglePlayPause() }) {
+                Image(systemName: livePlayer.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            DanmakuToggleButton(isOn: danmakuEnabledForRoom, action: toggleDanmaku)
+            Spacer()
+            Button(action: { isFullscreen = true }) {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 4)
+        .background(
+            LinearGradient(
+                colors: [Color.black.opacity(0), Color.black.opacity(0.55)],
+                startPoint: .top, endPoint: .bottom)
+        )
     }
 
     private var roomInfoSection: some View {
@@ -425,15 +479,12 @@ struct LiveRoomView: View {
         }
     }
 
+    /// Page tools row (portrait). Play / danmaku / fullscreen
+    /// live on the video control strip now (see portraitVideoControls),
+    /// so this row holds only the room tools: quality (live only),
+    /// brightness/volume, danmaku settings. One control, one place.
     private var portraitBottomBar: some View {
         HStack(spacing: 16) {
-            Button(action: { livePlayer.togglePlayPause() }) {
-                Image(systemName: livePlayer.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(theme.textPrimary)
-                    .frame(width: 40, height: 40)
-            }
-            .buttonStyle(.plain)
             Button(action: { showQualitySheet = true }) {
                 Text(livePlayer.currentQuality?.name ?? "画质")
                     .font(.system(size: 14, weight: .semibold))
@@ -446,13 +497,6 @@ struct LiveRoomView: View {
                     }
             }
             .buttonStyle(.plain)
-            Button(action: toggleDanmaku) {
-                Image(systemName: danmakuEnabledForRoom ? "message.fill" : "message")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(danmakuEnabledForRoom ? theme.textPrimary : theme.textMuted)
-                    .frame(width: 40, height: 40)
-            }
-            .buttonStyle(.plain)
             Spacer()
             Button(action: { showBrightnessVolume = true }) {
                 Image(systemName: "sun.max")
@@ -463,13 +507,6 @@ struct LiveRoomView: View {
             .buttonStyle(.plain)
             Button(action: { showDanmakuSettings = true }) {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(theme.textPrimary)
-                    .frame(width: 40, height: 40)
-            }
-            .buttonStyle(.plain)
-            Button(action: { isFullscreen = true }) {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(theme.textPrimary)
                     .frame(width: 40, height: 40)
@@ -598,13 +635,7 @@ struct LiveRoomView: View {
                     .background(Color.black.opacity(0.45), in: Capsule())
             }
             .buttonStyle(.plain)
-            Button(action: toggleDanmaku) {
-                Image(systemName: danmakuEnabledForRoom ? "message.fill" : "message")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(danmakuEnabledForRoom ? .white : .white.opacity(0.5))
-                    .frame(width: 40, height: 40)
-            }
-            .buttonStyle(.plain)
+            DanmakuToggleButton(isOn: danmakuEnabledForRoom, action: toggleDanmaku)
             Spacer()
             Text("\(liveWatchingText(watchingCount)) 人在看")
                 .font(.system(size: 13, weight: .medium))
@@ -753,11 +784,13 @@ struct LiveQualityLineSheet: View {
     }
 }
 
-/// Brightness / volume sheet (live player only). Brightness is
-/// a user-driven slider: it reads the system value when the
-/// sheet opens and writes it only while the user drags. Volume
-/// is the system MPVolumeView slider (public API) — the sheet
-/// never invents a volume value.
+/// Brightness / volume sheet (live player only). The rows are the
+/// shared player rows (PlayerBrightnessVolumeRows — the same
+/// implementation the VOD "更多" sheet uses): brightness is a
+/// user-driven slider that reads the system value when the sheet
+/// opens and writes it only while the user drags; volume is the
+/// system MPVolumeView slider (public API) — the sheet never
+/// invents a volume value.
 struct LiveBrightnessVolumeSheet: View {
     @Binding var brightness: Double
 
@@ -767,39 +800,10 @@ struct LiveBrightnessVolumeSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Image(systemName: "sun.max")
-                            .foregroundStyle(theme.textSecondary)
-                        Text("亮度")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(theme.textPrimary)
-                        Spacer()
-                        Text("\(Int(brightness * 100))%")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(theme.textSecondary)
-                    }
-                    Slider(value: $brightness, in: 0...1)
-                        .tint(theme.accent)
-                    Text("只在直播播放器里调节；退出房间不恢复、不覆盖系统亮度。")
-                        .font(.system(size: 12))
-                        .foregroundStyle(theme.textMuted)
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Image(systemName: "speaker.wave.2")
-                            .foregroundStyle(theme.textSecondary)
-                        Text("音量")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(theme.textPrimary)
-                        Spacer()
-                    }
-                    LiveVolumeSliderView()
-                        .frame(height: 30)
-                    Text("系统音量；只在直播播放器里调节。")
-                        .font(.system(size: 12))
-                        .foregroundStyle(theme.textMuted)
-                }
+                PlayerBrightnessVolumeRows(
+                    brightness: $brightness,
+                    brightnessNote: "只在直播播放器里调节；退出房间不恢复、不覆盖系统亮度。",
+                    volumeNote: "系统音量；只在直播播放器里调节。")
                 Spacer()
             }
             .padding(.horizontal, 24)
@@ -813,20 +817,5 @@ struct LiveBrightnessVolumeSheet: View {
                 }
             }
         }
-    }
-}
-
-/// The system volume slider (MPVolumeView, public API). It
-/// reflects the device volume and changes it when dragged —
-/// there is no app-side volume value to keep in sync.
-private struct LiveVolumeSliderView: UIViewRepresentable {
-    func makeUIView(context: Context) -> MPVolumeView {
-        let volumeView = MPVolumeView()
-        volumeView.showsRouteButton = false
-        volumeView.showsVolumeSlider = true
-        return volumeView
-    }
-
-    func updateUIView(_ uiView: MPVolumeView, context: Context) {
     }
 }
