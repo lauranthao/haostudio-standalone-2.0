@@ -13,7 +13,6 @@ import SwiftUI
 struct MusicFavouritesView: View {
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
     @StateObject private var libraryVM = MusicLibraryViewModel()
-    @State private var showAddToPlaylistFor: MusicSong?
 
     @Environment(\.haoTheme) private var theme
 
@@ -29,12 +28,6 @@ struct MusicFavouritesView: View {
                             isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
                             onTap: {
                                 playerVM.play(song: song, in: libraryVM.favSongs, startAt: index)
-                            },
-                            onToggleFav: {
-                                libraryVM.toggleFav(song)
-                            },
-                            onAddToPlaylist: {
-                                showAddToPlaylistFor = song
                             }
                         )
                         .listRowBackground(theme.scaffoldBackground)
@@ -56,10 +49,13 @@ struct MusicFavouritesView: View {
                 }
             }
         }
-        .sheet(item: $showAddToPlaylistFor) { song in
-            MusicAddToPlaylistSheet(song: song) { showAddToPlaylistFor = nil }
-        }
         .onAppear { libraryVM.reload() }
+        // Favourite sync (build 36, item 12): a toggle from any
+        // row posts haoMusicFavChanged — reload so an unfavourite
+        // drops the row here without reopening the page.
+        .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { _ in
+            libraryVM.reload()
+        }
     }
 }
 
@@ -70,7 +66,6 @@ struct MusicPlaylistDetailView: View {
 
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
     @StateObject private var libraryVM = MusicLibraryViewModel()
-    @State private var showAddToPlaylistFor: MusicSong?
     @State private var showDeleteList = false
     @State private var showRename = false
     @State private var renameText = ""
@@ -89,12 +84,6 @@ struct MusicPlaylistDetailView: View {
                             isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
                             onTap: {
                                 playerVM.play(song: song, in: list.tracks, startAt: index)
-                            },
-                            onToggleFav: {
-                                _ = MusicLibraryStore.toggleFav(song)
-                            },
-                            onAddToPlaylist: {
-                                showAddToPlaylistFor = song
                             }
                         )
                         .listRowBackground(theme.scaffoldBackground)
@@ -147,9 +136,6 @@ struct MusicPlaylistDetailView: View {
             Button("保存") { libraryVM.renamePlaylist(id: listId, name: renameText) }
             Button("取消", role: .cancel) { }
         }
-        .sheet(item: $showAddToPlaylistFor) { song in
-            MusicAddToPlaylistSheet(song: song) { showAddToPlaylistFor = nil }
-        }
         .onAppear { libraryVM.reload() }
     }
 }
@@ -170,41 +156,50 @@ struct MusicDownloadsView: View {
                 List {
                     ForEach(libraryVM.downloads, id: \.key) { download in
                         let fileExists = libraryVM.downloadedFileURL(for: download) != nil
-                        HStack(spacing: 12) {
-                            MusicCoverView(urlString: download.song.cover, size: 56, cornerRadius: 10)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(download.song.title.isEmpty ? "未知歌曲" : download.song.title)
-                                    .font(.haoSubheadStrong)
-                                    .foregroundStyle(theme.textPrimary)
-                                    .lineLimit(1)
-                                HStack(spacing: 6) {
-                                    Text(MusicLibraryStore.badgeLabel(for: download.quality))
-                                        .font(.haoCaption2Strong)
-                                        .foregroundStyle(theme.textSecondary)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .overlay {
-                                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                                .strokeBorder(theme.hairline, lineWidth: 0.5)
+                        // Same shared menu as every other song row
+                        // (no 下载 — already downloaded). The whole
+                        // row taps to play, like every other list;
+                        // the "…" button is a sibling, never nested
+                        // inside the play button.
+                        MusicSongMenuHost(song: download.song, showDownload: false) { menu in
+                            HStack(spacing: 8) {
+                                Button(action: {
+                                    if fileExists {
+                                        playerVM.playLocal(song: download.song, fileURL: libraryVM.downloadedFileURL(for: download))
+                                    }
+                                }) {
+                                    HStack(spacing: 12) {
+                                        MusicCoverView(urlString: download.song.cover, size: 56, cornerRadius: 10)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(download.song.title.isEmpty ? "未知歌曲" : download.song.title)
+                                                .font(.haoSubheadStrong)
+                                                .foregroundStyle(theme.textPrimary)
+                                                .lineLimit(1)
+                                            HStack(spacing: 6) {
+                                                Text(MusicLibraryStore.badgeLabel(for: download.quality))
+                                                    .font(.haoCaption2Strong)
+                                                    .foregroundStyle(theme.textSecondary)
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .overlay {
+                                                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                                            .strokeBorder(theme.hairline, lineWidth: 0.5)
+                                                    }
+                                                Text(fileExists ? formattedSize(download.sizeBytes) : "文件已丢失")
+                                                    .font(.haoFootnote)
+                                                    .foregroundStyle(fileExists ? theme.textSecondary : theme.textMuted)
+                                            }
                                         }
-                                    Text(fileExists ? formattedSize(download.sizeBytes) : "文件已丢失")
-                                        .font(.haoFootnote)
-                                        .foregroundStyle(fileExists ? theme.textSecondary : theme.textMuted)
+                                        Spacer()
+                                    }
+                                    .contentShape(Rectangle())
                                 }
+                                .buttonStyle(.plain)
+                                .disabled(!fileExists)
+                                .accessibilityLabel(fileExists ? "播放" : "文件已丢失，无法播放")
+                                MusicSongMenuButton(handle: menu)
                             }
-                            Spacer()
-                            Button(action: {
-                                if fileExists {
-                                    playerVM.playLocal(song: download.song, fileURL: libraryVM.downloadedFileURL(for: download))
-                                }
-                            }) {
-                                Image(systemName: "play.fill")
-                                    .font(.haoSubheadStrong)
-                                    .foregroundStyle(fileExists ? theme.accent : theme.textMuted)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!fileExists)
-                            .accessibilityLabel(fileExists ? "播放" : "文件已丢失，无法播放")
+                            .contextMenu { menu.menuContent() }
                         }
                         .listRowBackground(theme.scaffoldBackground)
                         .listRowSeparatorTint(theme.hairline)

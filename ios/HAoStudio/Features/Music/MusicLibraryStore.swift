@@ -366,14 +366,17 @@ enum MusicLibraryStore {
     static func toggleFav(_ song: MusicSong) -> Bool {
         var entries = favEntries()
         let key = song.identityKey
+        let added: Bool
         if let index = entries.firstIndex(where: { $0.key == key }) {
             entries.remove(at: index)
-            writeArray(named: favCollection, entries.map { $0.toJSON() })
-            return false
+            added = false
+        } else {
+            entries.insert(MusicFavEntry(key: key, song: song), at: 0)
+            added = true
         }
-        entries.insert(MusicFavEntry(key: key, song: song), at: 0)
         writeArray(named: favCollection, entries.map { $0.toJSON() })
-        return true
+        NotificationCenter.default.post(name: .haoMusicFavChanged, object: nil)
+        return added
     }
 
     static func isFav(_ song: MusicSong) -> Bool {

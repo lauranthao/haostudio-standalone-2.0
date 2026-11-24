@@ -303,31 +303,29 @@ struct MusicHomeView: View {
     /// One recent-play card on the horizontal shelf: square cover
     /// (148, radius 12), title 15 semibold + artist 13 below —
     /// Apple Music's 最近播放 card. The playing song's title takes
-    /// the accent; the favourite action survives as a context menu
-    /// (the old row's context menu did the same job).
+    /// the accent. Long-press opens the same shared song menu as
+    /// the rows (build 36, item 12); a "…" button does not fit
+    /// the card layout.
     private func recentCard(song: MusicSong, index: Int, isPlaying: Bool) -> some View {
-        Button(action: {
-            playerVM.play(song: song, in: homeVM.recent, startAt: index)
-        }) {
-            VStack(alignment: .leading, spacing: 6) {
-                MusicCoverView(urlString: song.cover, size: 148, cornerRadius: 12)
-                Text(song.title.isEmpty ? "未知歌曲" : song.title)
-                    .font(.haoSubheadStrong)
-                    .foregroundStyle(isPlaying ? theme.accent : theme.textPrimary)
-                    .lineLimit(1)
-                Text(song.artist.isEmpty ? "未知艺人" : song.artist)
-                    .font(.haoFootnote)
-                    .foregroundStyle(theme.textSecondary)
-                    .lineLimit(1)
+        MusicSongMenuHost(song: song, onFavToggled: { homeVM.reload() }) { menu in
+            Button(action: {
+                playerVM.play(song: song, in: homeVM.recent, startAt: index)
+            }) {
+                VStack(alignment: .leading, spacing: 6) {
+                    MusicCoverView(urlString: song.cover, size: 148, cornerRadius: 12)
+                    Text(song.title.isEmpty ? "未知歌曲" : song.title)
+                        .font(.haoSubheadStrong)
+                        .foregroundStyle(isPlaying ? theme.accent : theme.textPrimary)
+                        .lineLimit(1)
+                    Text(song.artist.isEmpty ? "未知艺人" : song.artist)
+                        .font(.haoFootnote)
+                        .foregroundStyle(theme.textSecondary)
+                        .lineLimit(1)
+                }
+                .frame(width: 148, alignment: .leading)
             }
-            .frame(width: 148, alignment: .leading)
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button("收藏 / 取消收藏") {
-                _ = MusicLibraryStore.toggleFav(song)
-                homeVM.reload()
-            }
+            .buttonStyle(.plain)
+            .contextMenu { menu.menuContent() }
         }
     }
 

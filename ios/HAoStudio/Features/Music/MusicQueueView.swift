@@ -26,6 +26,10 @@ struct MusicQueueView: View {
                                 isPlaying: index == playerVM.queue.index && playerVM.isPlaying,
                                 onTap: {
                                     playerVM.playFromQueue(at: index)
+                                },
+                                onDislike: {
+                                    MusicLibraryStore.addFMDisliked(key: song.identityKey)
+                                    playerVM.removeFromQueue(at: index)
                                 }
                             )
                             .listRowBackground(theme.scaffoldBackground)
@@ -35,12 +39,6 @@ struct MusicQueueView: View {
                                     playerVM.removeFromQueue(at: index)
                                 } label: {
                                     Label("删除", systemImage: "trash")
-                                }
-                            }
-                            .contextMenu {
-                                Button("不喜欢（私人漫游不再推）") {
-                                    MusicLibraryStore.addFMDisliked(key: song.identityKey)
-                                    playerVM.removeFromQueue(at: index)
                                 }
                             }
                         }

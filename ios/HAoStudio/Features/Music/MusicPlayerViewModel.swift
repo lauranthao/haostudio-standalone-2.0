@@ -229,6 +229,14 @@ final class MusicPlayerViewModel: ObservableObject {
         _ = NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
             self?.sleepTimer.checkFire()
         }
+        // Favourite sync (build 36, item 12): a toggle from any
+        // row or card posts haoMusicFavChanged — refresh the
+        // current song's star so the full player never shows a
+        // stale favourite state while the song is playing.
+        _ = NotificationCenter.default.addObserver(forName: .haoMusicFavChanged, object: nil, queue: .main) { [weak self] _ in
+            guard let self = self, let song = self.currentSong else { return }
+            self.isCurrentFav = MusicLibraryStore.isFav(song)
+        }
     }
 
     // MARK: - Observation
@@ -700,6 +708,13 @@ final class MusicPlayerViewModel: ObservableObject {
     /// gate), never just the target.
     func downloadCurrent() {
         guard let song = currentSong else { return }
+        download(song: song)
+    }
+
+    /// Download any song (row menu "下载", build 36 item 12).
+    /// Same body as downloadCurrent, parameterised so a row can
+    /// download a song that isn't playing.
+    func download(song: MusicSong) {
         if MusicLibraryStore.getDownloads().contains(where: { $0.key == song.identityKey }) {
             showToast("已下载")
             return
@@ -870,6 +885,27 @@ final class MusicPlayerViewModel: ObservableObject {
     }
 
     // MARK: - Queue management (queue sheet)
+
+    /// Play `song` right after the current track (row menu
+    /// "下一首播放", build 36 item 12). Empty queue: play it now.
+    /// Otherwise dedupe by identityKey and insert at the current
+    /// index + 1, persist, toast. The native player's queue is
+    /// driven track-by-track from this queue (see startPlayback),
+    /// so no setQueueOnly call is needed here — same as
+    /// removeFromQueue.
+    func playNext(song: MusicSong) {
+        if queue.isEmpty {
+            play(song: song)
+            return
+        }
+        if queue.isCurrentTrack(song) {
+            showToast("正在播放")
+            return
+        }
+        queue.insert(song, at: queue.index + 1)
+        MusicLibraryStore.saveQueue(queue.toQueueData())
+        showToast("下一首播放")
+    }
 
     func playFromQueue(at index: Int) {
         guard index >= 0 && index < queue.tracks.count else { return }

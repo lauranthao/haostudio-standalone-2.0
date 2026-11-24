@@ -187,6 +187,12 @@ extension Notification.Name {
     /// on this: without it 最近播放 only refreshed when the tab
     /// re-appeared, not while the user stayed on it.
     static let haoMusicRecentChanged = Notification.Name("haoMusicRecentChanged")
+    /// The favourites list changed (a song was favourited or
+    /// unfavourited from any row, card, or the full player).
+    /// Rows, the player view model (current-song star) and the
+    /// favourites view reload on this, so the star never goes
+    /// stale while the song is playing.
+    static let haoMusicFavChanged = Notification.Name("haoMusicFavChanged")
 }
 
 enum MusicNotificationKeys {
