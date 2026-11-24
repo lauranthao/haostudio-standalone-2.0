@@ -186,7 +186,7 @@ check("4l. every Swift file ref resolves to a file on disk", not _missing,
 
 # --- 5. Swift sources: balance + forbidden leftovers ----------------------
 swift_files = sorted(APP_DIR.rglob("*.swift"))
-check("5. Swift file count (final = 151: 150 + EmbyPlaybackReporter.swift [b36-item13: Emby playback reporting])", len(swift_files) == 151,
+check("5. Swift file count (final = 152: 151 + EmbySearchView.swift [b36-item17: Emby search])", len(swift_files) == 152,
       f"{len(swift_files)}: {[f.name for f in swift_files]}")
 for f in swift_files:
     s = f.read_text()
