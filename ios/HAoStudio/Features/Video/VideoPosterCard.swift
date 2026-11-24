@@ -129,7 +129,10 @@ struct VideoPosterCard: View {
             .fill(theme.surfaceStrong)
             .overlay {
                 Image(systemName: "film")
-                    .font(.system(size: 28, weight: .regular))
+                    // .title is 28pt regular: pixel-identical to the
+                    // old literal, same fix as D7 (EmbyPosterImage)
+                    // and MusicEmptyState.
+                    .font(.title)
                     .foregroundStyle(theme.textSecondary)
             }
     }
