@@ -52,6 +52,7 @@ enum MusicLibraryStore {
     static let plazaPlatformKey = "musicPlazaPf"         // 'wy' default
     static let searchPlatformKey = "musicSearchPlatform" // 'wy' default
     static let speedKey = "musicSpeed"                   // double 1.0, 0.6–2.0
+    static let musicVolumeKey = "hao_music_volume"       // double 1.0, 0–1 (Now Playing slider)
     static let currentListIdKey = "curListId"
     static let playModeKey = "playMode"                  // 'seq' default
     static let playlistsExpandedKey = "musicPlaylistsExpanded"
@@ -183,6 +184,18 @@ enum MusicLibraryStore {
 
     static func setSpeed(_ value: Double, defaults: UserDefaults = .standard) {
         defaults.set(min(2.0, max(0.6, value)), forKey: speedKey)
+    }
+
+    /// Now Playing volume slider (0...1, default 1.0). The player
+    /// reads the same key at init, so the slider position survives
+    /// a relaunch; the view model is the only writer after that.
+    static func musicVolume(defaults: UserDefaults = .standard) -> Double {
+        let value = defaults.object(forKey: musicVolumeKey) as? Double ?? 1.0
+        return min(1.0, max(0.0, value))
+    }
+
+    static func setMusicVolume(_ value: Double, defaults: UserDefaults = .standard) {
+        defaults.set(min(1.0, max(0.0, value)), forKey: musicVolumeKey)
     }
 
     static func playModeCode(defaults: UserDefaults = .standard) -> String {

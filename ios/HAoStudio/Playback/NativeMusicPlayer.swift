@@ -922,6 +922,16 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         didSet { defaults.set(playMode.code, forKey: "playMode") }
     }
     @Published private(set) var playbackSpeed: Double = 1.0
+    /// App-internal volume (0...1, default 1.0) from the Now Playing
+    /// volume slider — a MULTIPLIER on the track gain, never a
+    /// replacement for it: every engine.volume assignment goes
+    /// through appliedVolume(userVolume:gain:), so normalisation
+    /// and the crossfade/fade-in ramps keep working and a volume
+    /// drag mid-ramp lands on the next timer tick (the ramps read
+    /// userVolume live). This is AVPlayer volume only — it never
+    /// touches the system volume, so the hardware buttons and
+    /// Control Center keep behaving as the user expects.
+    @Published private(set) var userVolume: Float = 1.0
     @Published private(set) var actualQuality: AudioQuality?
     @Published private(set) var currentTrack: PlaybackItem?
 
@@ -1011,6 +1021,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         self.standbyEngine = engineBRef
         self.playMode = MusicPlayMode.fromCode(defaults.string(forKey: "playMode"))
         self.playbackSpeed = NativeMusicPlayer.clampSpeed(defaults.double(forKey: "musicSpeed") == 0 ? 1.0 : defaults.double(forKey: "musicSpeed"))
+        self.userVolume = NativeMusicPlayer.clampVolume(defaults.object(forKey: "hao_music_volume") == nil ? 1.0 : defaults.double(forKey: "hao_music_volume"))
         self.normalizationEnabled = defaults.bool(forKey: "hao_music_normalization_enabled")
         self.normalizationStrength = defaults.object(forKey: "hao_music_normalization_strength") == nil ? 1 : min(2, max(0, defaults.integer(forKey: "hao_music_normalization_strength")))
         super.init()
@@ -1065,6 +1076,21 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
 
     static func clampSpeed(_ value: Double) -> Double {
         return min(maxSpeed, max(minSpeed, value))
+    }
+
+    /// Clamp a user volume to 0...1 (pure, MusicPlayerVolumeTests).
+    static func clampVolume(_ value: Double) -> Float {
+        return Float(min(1.0, max(0.0, value)))
+    }
+
+    /// The engine volume for a user volume and a track gain: the
+    /// user slider scales the gain, it never replaces it (pure,
+    /// MusicPlayerVolumeTests). Gain is the normalisation gain
+    /// (targetGain, ~1.0 when normalisation is off), so at full
+    /// slider the sound is exactly what it was before the slider
+    /// existed.
+    static func appliedVolume(userVolume: Float, gain: Float) -> Float {
+        return userVolume * gain
     }
 
     /// Recompute the published playing flag from real engine state.
@@ -1272,7 +1298,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             engine.volume = 0
             rampVolume(engine: engine, from: 0, to: Float(gain), duration: 0.6, gen: gen, completion: nil)
         } else {
-            engine.volume = Float(gain)
+            engine.volume = NativeMusicPlayer.appliedVolume(userVolume: userVolume, gain: Float(gain))
         }
         recomputePlayingState()
         finish(.success(()))
@@ -1319,7 +1345,9 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                 let to = Float(self.targetGain(for: self.currentTrack))
                 self.rampVolume(engine: self.activeEngine, from: from, to: to, duration: 0.4, gen: self.generation, completion: nil)
             } else {
-                self.activeEngine.volume = Float(self.targetGain(for: self.currentTrack))
+                self.activeEngine.volume = NativeMusicPlayer.appliedVolume(
+                    userVolume: self.userVolume,
+                    gain: Float(self.targetGain(for: self.currentTrack)))
             }
             self.recomputePlayingState()
             self.updateNowPlayingInfo()
@@ -1386,6 +1414,28 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                 self.standbyEngine.rate = Float(clamped)
             }
             self.updateNowPlayingInfo()
+        }
+    }
+
+    /// Set the user volume from the Now Playing slider (0...1).
+    /// Persisted like speed, so the slider position survives a
+    /// relaunch. Applies to the live engine at once — unless a
+    /// fade / crossfade is in flight, in which case the ramp
+    /// timers pick the new value up on their next tick (they read
+    /// userVolume live) and a direct write here would only fight
+    /// the ramp for one tick. The standby engine needs nothing:
+    /// every load / crossfade entry writes its volume through
+    /// appliedVolume.
+    func setUserVolume(_ volume: Double) {
+        ensureMain {
+            let clamped = NativeMusicPlayer.clampVolume(volume)
+            self.userVolume = clamped
+            self.defaults.set(Double(clamped), forKey: "hao_music_volume")
+            if self.crossfadeTimer == nil && self.fadeTimer == nil && self.playRequested {
+                self.activeEngine.volume = NativeMusicPlayer.appliedVolume(
+                    userVolume: clamped,
+                    gain: Float(self.targetGain(for: self.currentTrack)))
+            }
         }
     }
 
@@ -1595,7 +1645,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                 self.playRequested = true
                 self.stallFailed = false
                 if outgoingDone {
-                    incoming.volume = target
+                    incoming.volume = NativeMusicPlayer.appliedVolume(userVolume: self.userVolume, gain: target)
                     incoming.play()
                     incoming.rate = Float(self.playbackSpeed)
                     self.finishCrossfade(item: item, gen: gen)
@@ -1626,7 +1676,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             step += 1
             let t = Float(step) / Float(steps)
             outgoing.volume = outgoingStartVolume * (1 - t)
-            incoming.volume = target * t
+            incoming.volume = NativeMusicPlayer.appliedVolume(userVolume: self.userVolume, gain: target) * t
             if step >= steps {
                 timer.invalidate()
                 self.crossfadeTimer = nil
@@ -1667,11 +1717,17 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     /// Volume ramp helper (manual-open fade-in, resume fade-in).
     /// Generation-guarded: a newer load stops the stale ramp so it
     /// can never fight the new song's volume.
+    /// `to` is the UNscaled track gain; `from` is the engine's
+    /// current (already user-scaled) volume. The target is scaled
+    /// by userVolume live on every tick, so a slider drag mid-ramp
+    /// lands on the next tick instead of being overwritten when
+    /// the ramp finishes at the old value.
     private func rampVolume(engine: MusicPlayerEngine, from: Float, to: Float, duration: TimeInterval, gen: Int, completion: (() -> Void)?) {
         fadeTimer?.invalidate()
         fadeTimer = nil
-        guard duration > 0, from != to else {
-            engine.volume = to
+        let scaledTo = NativeMusicPlayer.appliedVolume(userVolume: userVolume, gain: to)
+        guard duration > 0, from != scaledTo else {
+            engine.volume = scaledTo
             completion?()
             return
         }
@@ -1686,7 +1742,8 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             }
             step += 1
             let t = Float(step) / Float(steps)
-            engine.volume = from + (to - from) * t
+            let liveTo = NativeMusicPlayer.appliedVolume(userVolume: self.userVolume, gain: to)
+            engine.volume = from + (liveTo - from) * t
             if step >= steps {
                 timer.invalidate()
                 self.fadeTimer = nil

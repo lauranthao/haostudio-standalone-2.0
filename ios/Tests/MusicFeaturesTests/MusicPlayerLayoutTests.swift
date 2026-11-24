@@ -37,7 +37,7 @@ final class MusicPlayerLayoutTests: XCTestCase {
             XCTAssertLessThanOrEqual(size, w - 48, "\(w)x\(h)")
         }
         XCTAssertEqual(MusicPlayerLayout.coverSize(screenWidth: 393, screenHeight: 852), 340)
-        XCTAssertEqual(MusicPlayerLayout.coverSize(screenWidth: 375, screenHeight: 667), 207)
+        XCTAssertEqual(MusicPlayerLayout.coverSize(screenWidth: 375, screenHeight: 667), 197)
     }
 
     func testWholePlayerFitsOneScreen() {
@@ -63,6 +63,53 @@ final class MusicPlayerLayoutTests: XCTestCase {
         XCTAssertTrue(MusicPlayerLayout.modeRowFits(screenWidth: 320))
         for w in widths {
             XCTAssertTrue(MusicPlayerLayout.modeRowFits(screenWidth: w), "mode row overflows at \(w)")
+        }
+    }
+
+    // MARK: - Landscape (build 36 item 2)
+
+    /// Safe sizes (screen minus safe-area insets): notched phones
+    /// lose ~44pt each side and ~21pt at the bottom in landscape;
+    /// the SE has no insets.
+    private let landscapeScreens: [(w: CGFloat, h: CGFloat)] = [
+        (764, 372), // iPhone 16 Pro landscape
+        (692, 339), // 780x360 landscape (shortest modern)
+        (667, 375), // iPhone SE landscape (no notch)
+        (756, 369), // 844x390 landscape
+        (568, 320), // iPhone SE 1st gen landscape
+    ]
+
+    func testLandscapeCoverSizeIsBounded() {
+        for (w, h) in landscapeScreens {
+            let size = MusicPlayerLayout.landscapeCoverSize(safeWidth: w, safeHeight: h)
+            XCTAssertLessThanOrEqual(size, 340, "\(w)x\(h)")
+            XCTAssertGreaterThan(size, 0, "\(w)x\(h)")
+            XCTAssertLessThanOrEqual(size, w * 0.42 + 0.001, "\(w)x\(h)")
+        }
+        XCTAssertEqual(MusicPlayerLayout.landscapeCoverSize(safeWidth: 764, safeHeight: 372), 276)
+        XCTAssertEqual(MusicPlayerLayout.landscapeCoverSize(safeWidth: 692, safeHeight: 339), 243)
+        XCTAssertEqual(MusicPlayerLayout.landscapeCoverSize(safeWidth: 667, safeHeight: 375), 279)
+    }
+
+    func testLandscapePlayerFitsOneScreen() {
+        // Build 35 left the landscape player overflowing (the
+        // portrait column cannot fit ~390pt of height). Both
+        // landscape columns must fit the safe height.
+        for (w, h) in landscapeScreens {
+            XCTAssertTrue(
+                MusicPlayerLayout.landscapeFitsOneScreen(safeWidth: w, safeHeight: h),
+                "\(w)x\(h)")
+        }
+    }
+
+    func testLandscapeRightColumnLeavesRoomForModeRow() {
+        // The right column (all controls) must be narrower than
+        // the safe width minus the cover and the inter-column gap,
+        // with the mode row (~267pt) as the widest single row.
+        for (w, h) in landscapeScreens {
+            let cover = MusicPlayerLayout.landscapeCoverSize(safeWidth: w, safeHeight: h)
+            let rightWidth = w - 48 - cover - 24
+            XCTAssertGreaterThan(rightWidth, 267, "\(w)x\(h): mode row would not fit")
         }
     }
 }
