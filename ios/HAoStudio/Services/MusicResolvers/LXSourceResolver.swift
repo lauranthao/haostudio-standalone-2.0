@@ -9,8 +9,12 @@
 //   2026-11-17 铁律). A below-target URL plays now as a per-song
 //   downgrade (the target tier persists to the next track), labelled
 //   with its REAL tier.
-// - 10 built-in resolvers (`huibq` disabled — its service returns
-//   503 "Service Suspended" since 2026-11-16) + LX script jobs.
+// - 9 built-in resolvers (`huibq` disabled — its service returns
+//   503 "Service Suspended" since 2026-11-16; `oiapi_kw` deleted
+//   2026-11-24 — its oiapi.net Kuwo endpoint answers code -2
+//   "歌曲搜索失败" while the same host's NetEase leg still works,
+//   so the endpoint is dead, not the host; Kuwo is still served by
+//   xinghai / zddyr_kw / wwwweb + the LX scripts) + LX script jobs.
 // - Per-job 3 s timeout, whole resolve 8 s (P0-16: first tier pass
 //   capped at 5 s, 3 s reserved for lower tiers, later passes at
 //   most 2 s each — see `ResolverBudget`).
@@ -762,31 +766,6 @@ extension LXSourceResolver {
                     done(url.isEmpty ? .empty : .url(url, nil))
                 }
             },
-            BuiltInResolver(key: "oiapi_kw", name: "oiapi-酷我", order: 100, platforms: [.kw]) { resolver, _, _, tier, title, artist, token, done in
-                guard !title.isEmpty else { done(.empty); return }
-                let br: Int
-                switch tier {
-                case .master, .hiRes, .flac: br = 1
-                case .high320: br = 2
-                case .standard128: br = 3
-                }
-                let urlString = "https://oiapi.net/api/Kuwo?msg=\(resolver.urlEncode(title))&n=1&br=\(br)"
-                resolver.fetchJson(urlString, headers: ["User-Agent": Self.musicUserAgent], cancelToken: token) { json in
-                    let data = json?["data"] as? [String: Any]
-                    let url = (data?["url"] as? String) ?? ""
-                    guard !url.isEmpty else { done(.empty); return }
-                    // Title-only request: the API's first hit can be
-                    // a different song with the same title. The
-                    // response names its singer — when the expected
-                    // artist is known, require a match.
-                    if !artist.isEmpty,
-                       !LXSourceResolver.singerMatches((data?["singer"] as? String) ?? "", artist) {
-                        done(.empty)
-                        return
-                    }
-                    done(.url(url, nil))
-                }
-            },
             BuiltInResolver(key: "wwwweb", name: "wwwweb", order: 120, platforms: [.wy, .kw]) { resolver, songId, platform, tier, _, _, token, done in
                 let quality = LXSourceResolver.wwwwebQuality(tier, platform: platform)
                 let body = MusicJSON.string(from: [
@@ -843,20 +822,6 @@ extension LXSourceResolver {
             return (quality == .hiRes || quality == .flac) ? "320k" : quality.lxCode
         }
         return (quality == .hiRes || quality == .flac) ? "flac" : quality.lxCode
-    }
-
-    /// Singer-name containment check: normalize case + whitespace,
-    /// then either side must contain the other. An empty reported
-    /// singer cannot verify — the API names its singer, so a missing
-    /// name means the hit is unusable for a title-only lookup.
-    static func singerMatches(_ reported: String, _ expected: String) -> Bool {
-        func norm(_ s: String) -> String {
-            s.lowercased().components(separatedBy: .whitespacesAndNewlines).joined()
-        }
-        let r = norm(reported)
-        let e = norm(expected)
-        guard !r.isEmpty, !e.isEmpty else { return false }
-        return r.contains(e) || e.contains(r)
     }
 
     func urlEncode(_ value: String) -> String {
