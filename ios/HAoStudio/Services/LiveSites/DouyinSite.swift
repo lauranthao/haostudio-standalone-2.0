@@ -1086,7 +1086,7 @@ final class DouyinLiveSite: LiveSiteResolver {
                 }
                 let qualities = DouyinLiveSite.parseStreamQualities(room.data)
                 if qualities.isEmpty {
-                    completion(.failure(LiveError.offline))
+                    completion(.failure(LiveError.noQualities))
                     return
                 }
                 let requested = qualities.first { $0.id == quality?.id } ?? qualities[0]
@@ -1205,14 +1205,36 @@ extension DouyinLiveSite {
         ]
         requestHeaders { [weak self] headers in
             guard let self = self else { return }
-            let target = self.requestUrlSigner(DouyinLiveSite.partitionRoomsURL, params)
-            guard let url = URL(string: target) else {
-                completion([])
-                return
+            // Build 37 (D1): two hosts, same as partitionRooms —
+            // the first host (live.douyin.com) refuses unsigned
+            // category requests and the category had no fallback
+            // at all, so a refusal became an empty page. A host
+            // only wins when it returns a non-empty room list;
+            // anything else (refusal, empty, bad JSON) moves to
+            // the next host. A genuinely empty category still
+            // ends empty — it just costs one extra request.
+            let hosts = [DouyinLiveSite.partitionRoomsURL, DouyinLiveSite.partitionRoomsFallbackURL]
+            var hostIndex = 0
+            func attempt() {
+                if hostIndex >= hosts.count {
+                    completion([])
+                    return
+                }
+                let target = self.requestUrlSigner(hosts[hostIndex], params)
+                hostIndex += 1
+                guard let url = URL(string: target) else {
+                    attempt()
+                    return
+                }
+                LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
+                    if let rooms = DouyinLiveSite.parseCategoryRooms(json), !rooms.isEmpty {
+                        completion(rooms)
+                        return
+                    }
+                    attempt()
+                }
             }
-            LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
-                completion(DouyinLiveSite.parseCategoryRooms(json) ?? [])
-            }
+            attempt()
         }
     }
 

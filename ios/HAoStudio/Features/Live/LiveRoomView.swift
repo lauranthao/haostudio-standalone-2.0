@@ -551,6 +551,33 @@ struct LiveRoomView: View {
         }
     }
 
+    /// Failure card under the placeholder (build 37, D10): the
+    /// reason the open failed + a retry button. Shown only when
+    /// the driver reports a failure — while loading, the plain
+    /// placeholder stays. The button re-opens the room from
+    /// scratch (fresh re-parse, not the dead URLs).
+    private var liveFailureCard: some View {
+        Group {
+            if let failure = livePlayer.openFailure {
+                Text(failure.localizedDescription)
+                    .font(.haoFootnote)
+                    .foregroundStyle(.white.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                Button(action: { livePlayer.retryCurrentRoom() }) {
+                    Text("重试")
+                        .font(.haoCalloutStrong)
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 8)
+                        .background(Color.white, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("重试播放")
+            }
+        }
+    }
+
     // MARK: - Portrait (16:9 inline video + info + danmaku list)
 
     /// The real top safe-area inset (status bar / Dynamic Island).
@@ -707,6 +734,7 @@ struct LiveRoomView: View {
                     Text("房间未开播或暂时无法观看")
                         .font(.haoFootnote)
                         .foregroundStyle(.white.opacity(0.7))
+                    liveFailureCard
                 }
             }
             if !livePlayer.isPlaying && livePlayer.videoView != nil {
@@ -1017,6 +1045,7 @@ struct LiveRoomView: View {
                     Text("房间未开播或暂时无法观看")
                         .font(.haoFootnote)
                         .foregroundStyle(.white.opacity(0.7))
+                    liveFailureCard
                 }
             }
             if danmakuEnabledForRoom {

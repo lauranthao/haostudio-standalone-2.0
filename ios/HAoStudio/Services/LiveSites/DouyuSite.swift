@@ -225,7 +225,7 @@ final class DouyuLiveSite: LiveSiteResolver {
                     }
                     let qualities = DouyuLiveSite.parsePlayQualities(playData, cdns: cdns)
                     if qualities.isEmpty {
-                        completion(.failure(LiveError.offline))
+                        completion(.failure(LiveError.noQualities))
                         return
                     }
                     let requested = qualities.first { $0.id == quality?.id } ?? qualities[0]

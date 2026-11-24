@@ -75,6 +75,11 @@ final class LivePlayerViewModel: ObservableObject {
     @Published private(set) var currentLineIndex: Int = 0
     @Published private(set) var currentQuality: LiveQuality?
     @Published private(set) var isAudioOnly = false
+    /// The driver's last open failure (nil while loading or
+    /// playing): the room page renders it under the placeholder
+    /// with a retry button. Mirrored from the driver like the
+    /// rest of the room state above.
+    @Published private(set) var openFailure: MusicPlayerError?
     /// Watching count, mirrored from the session room (0 until the
     /// first room info arrives; the B leg refreshes it).
     @Published private(set) var watching: Int = 0
@@ -391,6 +396,9 @@ final class LivePlayerViewModel: ObservableObject {
         driver.$isAudioOnly.sink { [weak self] value in
             self?.isAudioOnly = value
         }.store(in: &cancellables)
+        driver.$openFailure.sink { [weak self] value in
+            self?.openFailure = value
+        }.store(in: &cancellables)
         gestures.isVod = false
         gestures.onSingleTap = { [weak self] in
             self?.toggleControls()
@@ -410,10 +418,22 @@ final class LivePlayerViewModel: ObservableObject {
     func togglePlayPause() {
         if isPlaying {
             driver.pause()
+        } else if openFailure != nil {
+            // The open failed and nothing is playing: the play
+            // button retries the open instead of resuming a dead
+            // backend (resume() no-ops when backend == nil, so
+            // the tap was dead — build 37, D10).
+            driver.retryCurrentRoom()
         } else {
             driver.resume()
         }
         scheduleControlsAutoHide()
+    }
+
+    /// Re-open the room whose open failed (the failure card's
+    /// retry button). A plain pass-through to the driver.
+    func retryCurrentRoom() {
+        driver.retryCurrentRoom()
     }
 
     // MARK: - Controls visibility

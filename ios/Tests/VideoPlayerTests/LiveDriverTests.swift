@@ -409,4 +409,113 @@ final class LiveDriverTests: XCTestCase {
         XCTAssertTrue(driver.isPlaying)
         XCTAssertEqual(driver.currentRoom?.id, item.id)
     }
+
+    // MARK: - Build 37 (D2 / D10 / D11)
+
+    func testOpenWalksEveryResolvedLineBeforeFailing() {
+        // D2: a room whose first two lines are dead but whose
+        // third plays must PLAY — the old cap (2 tries) failed
+        // it after the second line. FLV candidates are MPV then
+        // IJK, so each dead line costs one MPV + one IJK attempt;
+        // the third line opens on MPV.
+        let factory = FakeBackendFactory()
+        let mpvFail1 = FakeVideoBackend(engine: .mpv)
+        mpvFail1.openResults = [false]
+        let mpvFail2 = FakeVideoBackend(engine: .mpv)
+        mpvFail2.openResults = [false]
+        let mpvGood = FakeVideoBackend(engine: .mpv)
+        let ijkFail1 = FakeVideoBackend(engine: .ijk)
+        ijkFail1.openResults = [false]
+        let ijkFail2 = FakeVideoBackend(engine: .ijk)
+        ijkFail2.openResults = [false]
+        factory.fakes = [
+            .mpv: [mpvFail1, mpvFail2, mpvGood],
+            .ijk: [ijkFail1, ijkFail2],
+        ]
+        let resolver = LiveDriverFakeResolver()
+        resolver.resolutionsToReturn = [makeResolution(urls: [
+            URL(string: "https://tx1.flv.huya.com/room/1.flv")!,
+            URL(string: "https://tx2.flv.huya.com/room/1.flv")!,
+            URL(string: "https://tx3.flv.huya.com/room/1.flv")!,
+        ])]
+        let driver = makeDriver(factory: factory, resolver: resolver)
+        let started = expectation(description: "room started on third line")
+        playRoom(driver: driver, started: started)
+        waitForExpectations(timeout: 2)
+        XCTAssertTrue(driver.isPlaying)
+        XCTAssertEqual(mpvGood.openCount, 1)
+        XCTAssertEqual(mpvGood.openedURLs, [URL(string: "https://tx3.flv.huya.com/room/1.flv")!])
+        XCTAssertNil(driver.openFailure)
+    }
+
+    func testOpenFailureIsPublishedAndRetryReopens() {
+        // D10: every line dead — the driver must publish the
+        // failure (the room page renders it with a retry button)
+        // instead of failing silently, and the retry must
+        // re-open the room from a fresh resolve.
+        let factory = FakeBackendFactory()
+        let mpvFail = FakeVideoBackend(engine: .mpv)
+        mpvFail.openResults = [false]
+        let mpvGood = FakeVideoBackend(engine: .mpv)
+        let ijkFail = FakeVideoBackend(engine: .ijk)
+        ijkFail.openResults = [false]
+        factory.fakes = [.mpv: [mpvFail, mpvGood], .ijk: [ijkFail]]
+        let resolver = LiveDriverFakeResolver()
+        let deadURL = URL(string: "https://tx.flv.huya.com/room/1.flv")!
+        resolver.resolutionsToReturn = [
+            makeResolution(urls: [deadURL]),
+            makeResolution(urls: [deadURL]),
+            makeResolution(urls: [deadURL]),
+        ]
+        let driver = makeDriver(factory: factory, resolver: resolver)
+        let failed = expectation(description: "room failed")
+        var failure: MusicPlayerError?
+        driver.onRoomFailed = { _, error in
+            failure = error
+            failed.fulfill()
+        }
+        driver.play(item: LiveDriver.playbackItem(room: makeRoom()))
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(failure, .loadFailed)
+        XCTAssertEqual(driver.openFailure, .loadFailed)
+        XCTAssertEqual(driver.openFailure?.localizedDescription, "播放失败，请检查网络后重试")
+        XCTAssertNil(driver.currentRoom)
+        // Retry: a fresh resolve answers and the room starts.
+        let started = expectation(description: "room started on retry")
+        driver.onRoomStarted = { _ in started.fulfill() }
+        driver.retryCurrentRoom()
+        waitForExpectations(timeout: 2)
+        XCTAssertTrue(driver.isPlaying)
+        XCTAssertNil(driver.openFailure)
+        XCTAssertEqual(mpvGood.openCount, 1)
+    }
+
+    func testConfigureResetsQualityAndLine() {
+        // D11: entering a room must clear the previous room's
+        // tier — the footer showed the old room's quality and
+        // the sheet highlighted a tier never resolved for the
+        // new room.
+        let factory = FakeBackendFactory()
+        let mpv = FakeVideoBackend(engine: .mpv)
+        factory.fakes = [.mpv: [mpv]]
+        let resolver = LiveDriverFakeResolver()
+        let quality = LiveQuality(id: "1000", name: "超清")
+        resolver.resolutionsToReturn = [makeResolution(
+            urls: [URL(string: "https://tx.flv.huya.com/room/1.flv")!],
+            quality: quality
+        )]
+        let driver = makeDriver(factory: factory, resolver: resolver)
+        let started = expectation(description: "room A started")
+        playRoom(driver: driver, started: started)
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(driver.currentQuality?.id, "1000")
+        XCTAssertEqual(driver.currentLineIndex, 0)
+        driver.configure(
+            room: LiveRoom(roomId: "456", platform: .huya, title: "B", streamer: "主播", onlineCount: 1, isLive: true),
+            resolver: resolver
+        )
+        XCTAssertNil(driver.currentQuality)
+        XCTAssertEqual(driver.currentLineIndex, 0)
+        XCTAssertNil(driver.openFailure)
+    }
 }

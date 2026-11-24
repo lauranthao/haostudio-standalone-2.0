@@ -78,12 +78,23 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     @Published private(set) var currentLineIndex: Int = 0
     @Published private(set) var currentQuality: LiveQuality?
     @Published private(set) var isAudioOnly: Bool = false
+    /// The last open failure for the current room, if the open
+    /// exhausted every resolved line (D2) or the resolve returned
+    /// nothing: the room page renders it under the placeholder
+    /// with a retry button. Nil while loading or playing, and
+    /// cleared on success / configure / stop / release — it
+    /// always names the CURRENT room's failure, never a stale one.
+    @Published private(set) var openFailure: MusicPlayerError?
 
     // Driver wiring, set by the coordinator (callbacks) and by the
     // room page / app entry (room + resolver via `configure`).
     var resolveURL: ((PlaybackItem, [URL], @escaping (URL?) -> Void) -> Void)?
     var onRoomStarted: ((PlaybackItem) -> Void)?
     var onRoomFailed: ((PlaybackItem, MusicPlayerError) -> Void)?
+    /// The item whose open failed (for retryCurrentRoom): the
+    /// driver drops currentItem/pendingItem on failure, so the
+    /// retry needs its own handle. Cleared with openFailure.
+    private var lastFailedItem: PlaybackItem?
 
     /// The room session: state machine + fetch-and-hold recovery.
     /// Owned here (one driver, one room); the room page configures
@@ -272,7 +283,19 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     /// Set the room context (room page calls this before asking the
     /// coordinator to play). The resolver is B leg's
     /// LiveSiteResolver for this room's platform.
+    /// Build 37 (D11): the published room state is reset here —
+    /// the driver's own `currentQuality` was never cleared on
+    /// entering a room (only the session's was), so the footer
+    /// kept showing the previous room's tier and the quality
+    /// sheet highlighted a tier never resolved for this room.
+    /// The failure state goes with it: a new room never inherits
+    /// the old room's failure card.
     func configure(room: LiveRoom, resolver: LiveSiteResolver) {
+        currentQuality = nil
+        currentLineIndex = 0
+        isLoading = false
+        openFailure = nil
+        lastFailedItem = nil
         session.enterRoom(room: room, resolver: resolver)
     }
 
@@ -420,6 +443,24 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         }
     }
 
+    /// Re-open the room whose open failed (the room page's retry
+    /// button, and the play button after a failure — see
+    /// LivePlayerViewModel.togglePlayPause): re-runs the resolve
+    /// + open walk from scratch. No-op when nothing failed.
+    /// `resolveInitial` re-parses directly (it does not go
+    /// through the throttled fetchFresh), so a retry gets fresh
+    /// URLs even inside the 60 s recovery throttle.
+    func retryCurrentRoom() {
+        ensureMain {
+            guard let item = self.lastFailedItem else {
+                return
+            }
+            self.lastFailedItem = nil
+            self.openFailure = nil
+            self.play(item: item)
+        }
+    }
+
     /// Start playback of a new room (no same-room check — callers
     /// that already decided this is a new request use this
     /// directly, e.g. `switchLine`, where the id is unchanged but
@@ -450,6 +491,8 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                 guard let resolution = resolution, let url = resolution.appliedUrls.compactMap({ URL(string: $0) }).first else {
                     self.isLoading = false
                     self.pendingItem = nil
+                    self.openFailure = .noPlayableURL
+                    self.lastFailedItem = item
                     self.onRoomFailed?(item, .noPlayableURL)
                     return
                 }
@@ -509,9 +552,23 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             case .success:
                 return
             case .failure(let error):
-                guard tried.count < 2 else {
+                // Build 37 (D2): walk EVERY resolved line before
+                // giving up — the session holds all of them
+                // (recovery.urls) and the first one is often a
+                // dead CDN / expired anti-code while another line
+                // plays. The old cap (2 tries) failed rooms that
+                // had a playable line. The walk is bounded by the
+                // resolved list itself (resolveURL hands out only
+                // URLs the session holds and never repeats one),
+                // and fresh re-parses are bounded by the session's
+                // 60 s fetchFresh throttle (a throttled fetch
+                // returns nil at once, no request).
+                let maxTries = max(2, self.session.recovery?.urls.count ?? 0)
+                guard tried.count < maxTries else {
                     self.isLoading = false
                     self.pendingItem = nil
+                    self.openFailure = error
+                    self.lastFailedItem = item
                     self.onRoomFailed?(item, error)
                     return
                 }
@@ -526,6 +583,8 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                         guard let nextURL = nextURL else {
                             self.isLoading = false
                             self.pendingItem = nil
+                            self.openFailure = error
+                            self.lastFailedItem = item
                             self.onRoomFailed?(item, error)
                             return
                         }
@@ -545,6 +604,8 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                 if self.resolveURL == nil {
                     self.isLoading = false
                     self.pendingItem = nil
+                    self.openFailure = error
+                    self.lastFailedItem = item
                     self.onRoomFailed?(item, error)
                 }
             }
@@ -893,6 +954,11 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         position = 0
         currentLineIndex = session.recovery?.currentLineIndex ?? 0
         currentQuality = session.currentQuality
+        // The open succeeded: any earlier failure for this room
+        // is stale (a retry that landed, or a quality/line switch
+        // after a failure) — the failure card must go.
+        openFailure = nil
+        lastFailedItem = nil
         session.stallWatchdog.reset()
         session.notePlaybackStarted()
         startPositionTimerIfNeeded()
@@ -998,6 +1064,13 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             self.isAudioOnly = false
             self.fellBackForSoftwareDecode = false
             self.lastFps = 0
+            // D11: the published room state is reset on exit too,
+            // so a stale tier / failure never survives into the
+            // next room even if configure is not reached first.
+            self.currentQuality = nil
+            self.currentLineIndex = 0
+            self.openFailure = nil
+            self.lastFailedItem = nil
             self.lastDroppedFrames = 0
             self.diagnostics = .empty
             self.recomputePlayingState()
@@ -1043,6 +1116,12 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             self.fellBackForSoftwareDecode = false
             self.diagnostics = .empty
             self.session.exit()
+            // D11: same reset as stop() — the room is gone, so
+            // its tier / failure must not survive the exit.
+            self.currentQuality = nil
+            self.currentLineIndex = 0
+            self.openFailure = nil
+            self.lastFailedItem = nil
             self.recomputePlayingState()
             completion()
         }
@@ -1197,6 +1276,11 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             attemptOpen(item: item, url: url, tried: [url], freshRounds: 2)
         case .exhausted:
             stop()
+            // The stall walk is spent: the room failed, and the
+            // page must show why with a retry (D10) — set after
+            // stop(), which clears the failure state.
+            self.openFailure = .timeout
+            self.lastFailedItem = item
             onRoomFailed?(item, .timeout)
         }
     }

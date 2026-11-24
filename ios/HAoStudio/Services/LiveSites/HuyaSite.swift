@@ -697,7 +697,7 @@ final class HuyaLiveSite: LiveSiteResolver {
                 }
                 let qualities = HuyaLiveSite.parseHuyaPlayQualities(lines: data.lines, bitRates: data.bitRates)
                 if qualities.isEmpty {
-                    completion(.failure(LiveError.offline))
+                    completion(.failure(LiveError.noQualities))
                     return
                 }
                 let requested = qualities.first { $0.id == quality?.id } ?? qualities[0]
