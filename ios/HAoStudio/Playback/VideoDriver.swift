@@ -696,6 +696,32 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             self.openTimeoutWork?.cancel()
             self.openTimeoutWork = nil
             self.currentURL = url
+            // (b37 D1) DV profile 5 / unknown-profile has no HDR10
+            // base layer: every bundled ffmpeg kernel renders its
+            // IPTPQc2 values as HDR10 and the picture comes out
+            // green, and AVPlayer has no MKV demuxer. If AVPlayer is
+            // not among the candidates (MKV container, TrueHD/DTS
+            // audio, ASS subtitles — any of them), the direct stream
+            // is unplayable-as-is: go to the Emby server transcode
+            // (H.264 HLS, correct colour, SDR) instead of letting
+            // MPV "succeed" green. P7/P8 keep their HDR10 base layer
+            // on the ffmpeg kernels and never reach here. The
+            // transcode URL carries no hao_* markers, so the
+            // recursive open cannot loop back into this branch, and
+            // the flag stops failOrTranscode transcoding twice.
+            // CMS URLs carry no markers, so facts is nil there and
+            // this branch never fires for them (honest limit: CMS DV
+            // P5 in MKV has no detection and no transcode server).
+            if !transcodeAttemptedForRequest,
+               let facts = VideoStreamFacts.parse(url: url),
+               facts.dolbyVision, facts.dvProfile != 7, facts.dvProfile != 8,
+               !PlayerKernel.candidatesFor(url: url, dvDowngradeToHdr: self.dvP8Downgrade).contains(.avplayer),
+               let transcodeURL = EmbyClient.transcodedHlsUrl(fromStreamUrl: url.absoluteString) {
+                transcodeAttemptedForRequest = true
+                NSLog("[HAoStudio][VOD] DV P\(facts.dvProfile ?? -1) MKV: no AVPlayer candidate, redirecting to Emby transcode")
+                open(item: item, url: transcodeURL, completion: completion)
+                return
+            }
             var completed = false
             let finish: (Result<Void, MusicPlayerError>) -> Void = { [weak self] result in
                 guard let self = self, !completed else { return }
