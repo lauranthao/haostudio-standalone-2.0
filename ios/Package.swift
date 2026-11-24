@@ -79,6 +79,7 @@ let package = Package(
                 "Services/DownloadEngine",
                 "Services/LiveSites",
                 "Playback/PlaybackCoordinator.swift",
+                "Playback/GestureMath.swift",
                 "Playback/LiveRoomSession.swift",
                 "Features/Video/VideoLibraryStore.swift",
                 // Build 36, item 19: sidebar drag math (Foundation-only).

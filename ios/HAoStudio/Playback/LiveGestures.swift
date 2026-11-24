@@ -23,55 +23,8 @@ import MediaPlayer
 import SwiftUI
 import UIKit
 
-/// Which half of the picture a vertical drag controls.
-enum LiveDragKind {
-    case brightness
-    case volume
-}
-
-/// Pure live-gesture math, so tests can drive it without a view.
-enum LiveGestureMath {
-    /// Full-height drag change (Pure Live player_gestures.dart:
-    /// delta = -dy / height * 1.2 — up increases, down decreases).
-    static let fullHeightDragLevels: Double = 1.2
-
-    /// Brightness (left half) or volume (right half) for a drag
-    /// starting at `x` in a view `width` wide. A zero-width view
-    /// has no halves — brightness is the safe default.
-    static func dragKind(x: CGFloat, width: CGFloat) -> LiveDragKind {
-        guard width > 0 else { return .brightness }
-        return x < width / 2 ? .brightness : .volume
-    }
-
-    /// Signed level change for a vertical drag of `dy` points in
-    /// a view `height` tall. Up (negative dy) is positive.
-    /// Zero height holds the level (never NaN).
-    static func dragDelta(dy: CGFloat, height: CGFloat) -> Double {
-        guard height > 0 else { return 0 }
-        return -Double(dy / height) * fullHeightDragLevels
-    }
-
-    /// Level after applying `delta` to `baseline`, clamped 0...1.
-    static func dragLevel(baseline: Double, delta: Double) -> Double {
-        min(1, max(0, baseline + delta))
-    }
-
-    /// SF Symbol for the drag pill, by kind + level (Pure Live
-    /// gestureLevelIcon: volume <= 0 mute, < 0.5 down, else up;
-    /// brightness <= 0 low, < 0.5 medium, else high).
-    static func iconName(kind: LiveDragKind, level: Double) -> String {
-        switch kind {
-        case .volume:
-            if level <= 0 { return "speaker.slash" }
-            if level < 0.5 { return "speaker.wave.1" }
-            return "speaker.wave.3"
-        case .brightness:
-            if level <= 0 { return "sun.min" }
-            if level < 0.5 { return "sun.max" }
-            return "sun.max.fill"
-        }
-    }
-}
+// Pure gesture math moved to GestureMath.swift (AppCore) —
+// see the note in VodGestures.swift.
 
 /// Hidden system-volume driver: a 1x1 MPVolumeView placed
 /// offscreen. Its UISlider changes the system volume without
