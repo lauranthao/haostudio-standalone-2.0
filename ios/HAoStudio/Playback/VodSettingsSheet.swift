@@ -142,6 +142,7 @@ struct VodSettingsSheet: View {
                             .foregroundColor(theme.textSecondary)
                     }
                     Slider(value: $state.playbackSpeed, in: 0.5...2.0, step: 0.25)
+                        .tint(theme.accent)
                 } header: {
                     Text("倍速")
                 } footer: {
@@ -160,6 +161,7 @@ struct VodSettingsSheet: View {
                             }
                         case .available:
                             Toggle("弹幕", isOn: $state.danmakuEnabled)
+                                .tint(theme.accent)
                             if state.danmakuEnabled {
                                 HStack {
                                     Text("弹幕不透明度")
@@ -168,6 +170,7 @@ struct VodSettingsSheet: View {
                                         .foregroundColor(theme.textSecondary)
                                 }
                                 Slider(value: $state.danmakuOpacity, in: 0.3...1.0, step: 0.1)
+                                    .tint(theme.accent)
                             }
                         case .unavailable:
                             EmptyView()
@@ -244,6 +247,7 @@ struct VodSettingsSheet: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    .tint(theme.accent)
                 } header: {
                     Text("画面")
                 }
@@ -277,6 +281,7 @@ struct VodSettingsSheet: View {
                 if engine == .mpv {
                     Section {
                         Toggle("对白增强", isOn: $state.dialogueBoostEnabled)
+                            .tint(theme.accent)
                     } header: {
                         Text("音频")
                     } footer: {
@@ -303,6 +308,7 @@ struct VodSettingsSheet: View {
                 }
             }
         }
+        .tint(theme.accent)
     }
 
     /// Episodes of the selected line (empty when the line index
