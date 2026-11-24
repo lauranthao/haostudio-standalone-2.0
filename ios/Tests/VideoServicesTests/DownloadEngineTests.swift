@@ -69,7 +69,8 @@ final class DownloadEngineTests: XCTestCase {
         let fileName = "test-\(UUID().uuidString).bin"
         let done = expectation(description: "download completes")
         var sawProgress = false
-        engine.enqueue(request: request(key: key, source: source, fileName: fileName), progress: { _, _ in
+        let req = request(key: key, source: source, fileName: fileName)
+        engine.enqueue(request: req, progress: { _, _ in
             sawProgress = true
         }) { info in
             XCTAssertEqual(info.state, .completed)
@@ -83,7 +84,7 @@ final class DownloadEngineTests: XCTestCase {
         let landed = downloadsDir().appendingPathComponent(fileName)
         XCTAssertTrue(FileManager.default.fileExists(atPath: landed.path))
         XCTAssertEqual((try? Data(contentsOf: landed))?.count, 256 * 1024)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: landed.appendingPathExtension("part").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: downloadsDir().appendingPathComponent(DownloadEngine.partFileName(for: req)).path))
     }
 
     // MARK: - Duplicate key
@@ -112,7 +113,8 @@ final class DownloadEngineTests: XCTestCase {
         engine.testChunkDelay = 0.05
         let progressSeen = expectation(description: "first progress then pause")
         var didPause = false
-        engine.enqueue(request: request(key: key, source: source, fileName: fileName), progress: { [weak self] downloaded, _ in
+        let req = request(key: key, source: source, fileName: fileName)
+        engine.enqueue(request: req, progress: { [weak self] downloaded, _ in
             guard let self = self, !didPause, downloaded > 0 else { return }
             didPause = true
             self.engine.pause(key: key)
@@ -123,7 +125,7 @@ final class DownloadEngineTests: XCTestCase {
         // Paused mid-file: part file exists, partial, no final file.
         let info = engine.taskInfo(for: key)
         XCTAssertEqual(info?.state, .paused)
-        let part = downloadsDir().appendingPathComponent(fileName).appendingPathExtension("part")
+        let part = downloadsDir().appendingPathComponent(DownloadEngine.partFileName(for: req))
         XCTAssertTrue(FileManager.default.fileExists(atPath: part.path))
         let partSize = (try? FileManager.default.attributesOfItem(atPath: part.path)[.size] as? NSNumber)?.int64Value ?? 0
         XCTAssertGreaterThan(partSize, 0)
@@ -150,7 +152,8 @@ final class DownloadEngineTests: XCTestCase {
         engine.testChunkDelay = 0.05
         let cancelled = expectation(description: "cancel completes")
         var didCancel = false
-        engine.enqueue(request: request(key: key, source: source, fileName: fileName), progress: { [weak self] downloaded, _ in
+        let req = request(key: key, source: source, fileName: fileName)
+        engine.enqueue(request: req, progress: { [weak self] downloaded, _ in
             guard let self = self, !didCancel, downloaded > 0 else { return }
             didCancel = true
             self.engine.cancel(key: key)
@@ -159,7 +162,7 @@ final class DownloadEngineTests: XCTestCase {
             cancelled.fulfill()
         }
         wait(for: [cancelled], timeout: 10)
-        let part = downloadsDir().appendingPathComponent(fileName).appendingPathExtension("part")
+        let part = downloadsDir().appendingPathComponent(DownloadEngine.partFileName(for: req))
         XCTAssertFalse(FileManager.default.fileExists(atPath: part.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: downloadsDir().appendingPathComponent(fileName).path))
     }
@@ -204,5 +207,158 @@ final class DownloadEngineTests: XCTestCase {
         XCTAssertEqual(DownloadEngine.sanitisedFileName("../evil.mp3", fallbackKey: "k"), "evil.mp3")
         XCTAssertEqual(DownloadEngine.sanitisedFileName("", fallbackKey: "k"), "k.bin")
         XCTAssertEqual(DownloadEngine.sanitisedFileName("  song.mp3  ", fallbackKey: "k"), "song.mp3")
+    }
+
+    // MARK: - §2.1 Problem A: malicious fallbackKey
+
+    func testSanitisedFileNameMaliciousFallbackKey() {
+        XCTAssertEqual(DownloadEngine.sanitisedFileName("", fallbackKey: "../../evil"), "evil.bin")
+        XCTAssertEqual(DownloadEngine.sanitisedFileName("", fallbackKey: "a/b"), "a_b.bin")
+        XCTAssertEqual(DownloadEngine.sanitisedFileName("", fallbackKey: "/abs"), "abs.bin")
+        XCTAssertEqual(DownloadEngine.sanitisedFileName("", fallbackKey: "x:y"), "x_y.bin")
+        XCTAssertEqual(DownloadEngine.sanitisedFileName("...", fallbackKey: "../../evil"), "evil.bin")
+        XCTAssertEqual(DownloadEngine.sanitisedFileName("", fallbackKey: "..."), "download.bin")
+        // A flat name must never contain a separator, whatever the key.
+        for key in ["../../evil", "a/b/c", "/tmp/x", "a:b:c", "..", "."] {
+            let name = DownloadEngine.sanitisedFileName("", fallbackKey: key)
+            XCTAssertFalse(name.contains("/"))
+            XCTAssertFalse(name.contains("\\"))
+            XCTAssertFalse(name.hasPrefix("."))
+        }
+    }
+
+    // MARK: - §2.1 Problem B: Content-Range validation
+
+    func testParseContentRange() {
+        let range = DownloadEngine.parseContentRange("bytes 0-1023/4096")
+        XCTAssertEqual(range?.start, 0)
+        XCTAssertEqual(range?.end, 1023)
+        XCTAssertEqual(range?.total, 4096)
+        XCTAssertEqual(DownloadEngine.parseContentRange("bytes 512-1023/*")?.total, nil)
+        XCTAssertNil(DownloadEngine.parseContentRange("bytes 10-5/100"))
+        XCTAssertNil(DownloadEngine.parseContentRange("items 0-9/10"))
+        XCTAssertNil(DownloadEngine.parseContentRange("bytes abc-def/100"))
+        XCTAssertNil(DownloadEngine.parseContentRange("bytes 0-1023"))
+        XCTAssertNil(DownloadEngine.parseContentRange(""))
+    }
+
+    func testValidateResumeResponse() {
+        // Correct 206 for a fresh 0-byte part, full file 1024.
+        if case .valid(let total) = DownloadEngine.validateResumeResponse(contentRange: "bytes 0-1023/1024", contentLength: 1024, baseOffset: 0) {
+            XCTAssertEqual(total, 1024)
+        } else {
+            XCTFail("correct 206 must validate")
+        }
+        // Wrong start offset.
+        if case .invalid = DownloadEngine.validateResumeResponse(contentRange: "bytes 500-1023/1024", contentLength: 524, baseOffset: 0) {
+        } else { XCTFail("wrong start must fail") }
+        // Missing Content-Range.
+        if case .invalid = DownloadEngine.validateResumeResponse(contentRange: nil, contentLength: 1024, baseOffset: 0) {
+        } else { XCTFail("missing Content-Range must fail") }
+        // Content-Length disagrees with the range.
+        if case .invalid = DownloadEngine.validateResumeResponse(contentRange: "bytes 0-511/1024", contentLength: 1024, baseOffset: 0) {
+        } else { XCTFail("length mismatch must fail") }
+        // Total disagrees with the segment.
+        if case .invalid = DownloadEngine.validateResumeResponse(contentRange: "bytes 0-1023/2048", contentLength: 1024, baseOffset: 0) {
+        } else { XCTFail("total mismatch must fail") }
+        // Unknown total (*) is accepted when the segment is consistent.
+        if case .valid(let total) = DownloadEngine.validateResumeResponse(contentRange: "bytes 512-1023/*", contentLength: 512, baseOffset: 512) {
+            XCTAssertEqual(total, 1024)
+        } else {
+            XCTFail("unknown-total 206 must validate")
+        }
+    }
+
+    // MARK: - §2.1 Problem D: same file name, different tasks
+
+    func testSameFileNameCrossTaskCollision() {
+        let fileName = "collision-\(UUID().uuidString).bin"
+        let key1 = "t-col1-\(UUID().uuidString)"
+        let key2 = "t-col2-\(UUID().uuidString)"
+        let source1 = makeSourceFile(size: 64 * 1024)
+        let source2 = makeSourceFile(size: 128 * 1024)
+        let done1 = expectation(description: "first completes")
+        let done2 = expectation(description: "second completes")
+        var info1: DownloadTaskInfo?
+        var info2: DownloadTaskInfo?
+        engine.enqueue(request: request(key: key1, source: source1, fileName: fileName)) { info in
+            info1 = info
+            done1.fulfill()
+        }
+        engine.enqueue(request: request(key: key2, source: source2, fileName: fileName)) { info in
+            info2 = info
+            done2.fulfill()
+        }
+        wait(for: [done1, done2], timeout: 20)
+        XCTAssertEqual(info1?.state, .completed)
+        XCTAssertEqual(info2?.state, .completed)
+        let path1 = info1?.localRelativePath
+        let path2 = info2?.localRelativePath
+        XCTAssertNotNil(path1)
+        XCTAssertNotEqual(path1, path2)
+        // Each task's path holds its own bytes.
+        for info in [info1, info2] {
+            guard let info = info, let relative = info.localRelativePath,
+                  let url = LocalFileIndex.resolve(relative, subdir: DownloadEngine.downloadSubdir) else {
+                XCTFail("missing path for \(String(describing: info?.request.key))")
+                continue
+            }
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+            XCTAssertEqual((try? Data(contentsOf: url))?.count, Int(info.downloadedBytes))
+        }
+        // One of them kept the plain name.
+        XCTAssertTrue([path1, path2].contains("music_downloads/\(fileName)"))
+    }
+
+    // MARK: - §2.1 Finding E: restore validation
+
+    func testRestoreDropsCompletedTaskWithMissingFile() {
+        let key = "t-restore-drop-\(UUID().uuidString)"
+        let source = makeSourceFile(size: 64 * 1024)
+        let fileName = "restore-drop-\(UUID().uuidString).bin"
+        let done = expectation(description: "download completes")
+        engine.enqueue(request: request(key: key, source: source, fileName: fileName)) { _ in done.fulfill() }
+        wait(for: [done], timeout: 10)
+        XCTAssertEqual(engine.taskInfo(for: key)?.state, .completed)
+        // Delete the landed file out from under the index.
+        let landed = downloadsDir().appendingPathComponent(fileName)
+        try? FileManager.default.removeItem(at: landed)
+        // A fresh engine restores the persisted index — the dangling
+        // completed entry must be dropped, not reported .completed.
+        let restored = DownloadEngine()
+        XCTAssertNil(restored.taskInfo(for: key))
+        XCTAssertFalse(restored.allTasks().contains { $0.request.key == key })
+    }
+
+    func testRestoreClampsStaleDownloadedBytes() {
+        let key = "t-restore-clamp-\(UUID().uuidString)"
+        let source = makeSourceFile(size: 8 * 1024 * 1024)
+        let fileName = "restore-clamp-\(UUID().uuidString).bin"
+        engine.testChunkDelay = 0.05
+        let progressSeen = expectation(description: "first progress then pause")
+        var didPause = false
+        let req = request(key: key, source: source, fileName: fileName)
+        engine.enqueue(request: req, progress: { [weak self] downloaded, _ in
+            guard let self = self, !didPause, downloaded > 0 else { return }
+            didPause = true
+            self.engine.pause(key: key)
+            progressSeen.fulfill()
+        }, completion: nil)
+        wait(for: [progressSeen], timeout: 10)
+        let part = downloadsDir().appendingPathComponent(DownloadEngine.partFileName(for: req))
+        let partSize = (try? FileManager.default.attributesOfItem(atPath: part.path)[.size] as? NSNumber)?.int64Value ?? 0
+        XCTAssertGreaterThan(partSize, 0)
+        // Corrupt the persisted count (simulates a kill mid-download
+        // with a stale in-memory value) and restore in a fresh engine.
+        var infos: [DownloadTaskInfo] = LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: [])
+        guard let idx = infos.firstIndex(where: { $0.request.key == key }) else {
+            XCTFail("task not persisted")
+            return
+        }
+        infos[idx].downloadedBytes = partSize + 1_000_000
+        LocalStore.saveCollection(named: DownloadEngine.tasksCollection, value: infos)
+        let restored = DownloadEngine()
+        XCTAssertEqual(restored.taskInfo(for: key)?.state, .paused)
+        XCTAssertEqual(restored.taskInfo(for: key)?.downloadedBytes, partSize)
     }
 }
