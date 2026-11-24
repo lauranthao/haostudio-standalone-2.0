@@ -155,6 +155,11 @@ final class MusicLyricsAPI {
             // Strip leading section labels ("[Chorus]", "[副歌]"):
             // they are structure, not lyrics.
             stripped = stripLeadingSectionLabel(stripped)
+            // Strip leading metadata tags ("[ti:...]", "[ar:...]"):
+            // B6 stopped stripping every bracket group so bracketed
+            // lyric text survives, but a line that is only metadata
+            // must still be skipped, not shown as a lyric line.
+            stripped = stripLeadingMetadataTags(stripped)
             let text = stripped.trimmingCharacters(in: .whitespaces)
             guard !text.isEmpty else { continue }
             let lower = text.lowercased()
@@ -191,6 +196,27 @@ final class MusicLyricsAPI {
             let content = String(rest[rest.index(after: rest.startIndex)..<close])
                 .trimmingCharacters(in: .whitespaces).lowercased()
             guard labels.contains(content) else { break }
+            rest = String(rest[rest.index(after: close)...])
+        }
+        return rest
+    }
+
+    /// Drop leading "[key:value]" metadata tags (ti/ar/al/au/by/
+    /// offset/re/ve/length). Only known LRC metadata keys are
+    /// stripped, so bracketed lyric text ("[you]", "[笑]") and
+    /// anything with an unknown key is kept.
+    private static func stripLeadingMetadataTags(_ text: String) -> String {
+        let keys: Set<String> = [
+            "ti", "ar", "al", "au", "by", "offset", "re", "ve", "length",
+        ]
+        var rest = text
+        while rest.hasPrefix("["),
+              let close = rest.firstIndex(of: "]") {
+            let content = String(rest[rest.index(after: rest.startIndex)..<close])
+            guard let colon = content.firstIndex(of: ":") else { break }
+            let key = String(content[..<colon])
+                .trimmingCharacters(in: .whitespaces).lowercased()
+            guard keys.contains(key) else { break }
             rest = String(rest[rest.index(after: close)...])
         }
         return rest
