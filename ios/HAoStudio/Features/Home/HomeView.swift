@@ -417,26 +417,33 @@ private struct HomeRecentPlaysView: View {
                 )
                 .haoBottomChromePadding()
             } else {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        ForEach(Array(viewModel.allRecentPlays.enumerated()), id: \.element.id) { index, song in
-                            MusicSongRow(
-                                song: song,
-                                isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
-                                onTap: {
-                                    playerVM.play(song: song, in: viewModel.allRecentPlays, startAt: index)
-                                }
-                                // No onToggleFav: same as the home
-                                // songRow — the row flips its own
-                                // favourite state; a star tap no
-                                // longer pays for a full reload
-                                // (build 36, item 10).
-                            )
-                            .padding(.vertical, 6)
-                        }
+                // Lazy (build 36, item 10): a plain VStack built
+                // all 100 rows — each with its cover, menu host
+                // and subscriptions — on every appearance. A
+                // List only builds the rows on screen, like
+                // every other music list in the app. Same rows,
+                // same order, same tap behaviour.
+                List {
+                    ForEach(Array(viewModel.allRecentPlays.enumerated()), id: \.element.id) { index, song in
+                        MusicSongRow(
+                            song: song,
+                            isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
+                            onTap: {
+                                playerVM.play(song: song, in: viewModel.allRecentPlays, startAt: index)
+                            }
+                            // No onToggleFav: same as the home
+                            // songRow — the row flips its own
+                            // favourite state; a star tap no
+                            // longer pays for a full reload
+                            // (build 36, item 10).
+                        )
+                        .listRowBackground(theme.scaffoldBackground)
+                        .listRowSeparatorTint(theme.hairline)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 24, bottom: 6, trailing: 24))
                     }
-                    .padding(.horizontal, 24)
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
                 .haoBottomChromePadding()
             }
         }

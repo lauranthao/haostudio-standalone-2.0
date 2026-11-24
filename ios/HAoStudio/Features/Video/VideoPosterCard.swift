@@ -134,6 +134,9 @@ struct VideoPosterCard: View {
 /// `watchedKeys` defaults to the store's watched set, so every
 /// grid shows the same "already watched" checkmark the home rows
 /// show (callers with a live list pass their own set instead).
+/// The default is cheap: the set lives in memory in
+/// VideoLibraryStore (build 36, item 10) — constructing a grid
+/// no longer reads the history file.
 struct VideoPosterGrid: View {
     var items: [VideoItem]
     var watchedKeys: Set<String> = VideoLibraryStore.watchedKeys()

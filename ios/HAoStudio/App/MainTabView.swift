@@ -68,6 +68,17 @@ struct MainTabView: View {
 
     @State private var selectedTab: HaoTab = .home
     @State private var showingFullPlayer = false
+    /// Wallpaper image cache (build 36, item 10): the background
+    /// used to re-read the wallpaper file from disk on EVERY
+    /// body evaluation (tab switch, theme switch, chrome
+    /// minimise). One UIImage, keyed by the file URL it was
+    /// loaded from — reloaded only when the wallpaper changes
+    /// (switch / new pick), never per body. A failed load caches
+    /// nil under the same URL so a missing file is not retried
+    /// on every frame either. Deliberately a single image, not
+    /// a cache of many: only one wallpaper is ever on screen.
+    @State private var cachedWallpaper: UIImage?
+    @State private var cachedWallpaperURL: URL?
     /// Namespace for the cover morph: the mini cover grows into the
     /// full player's cover (matchedGeometryEffect, id
     /// HaoLayout.playerCoverMorphID). Owned here so the mini and the
@@ -179,6 +190,12 @@ struct MainTabView: View {
         // the previous tab's so the new tab calibrates from scratch
         // instead of minimizing at its own top.
         .onChange(of: selectedTab) { _ in bottomChrome.resetRest() }
+        // Wallpaper cache (build 36, item 10): load once on
+        // appear and whenever the switch or the picked file
+        // changes — never during body evaluation.
+        .onAppear { refreshWallpaperCache() }
+        .onChange(of: settingsStore.wallpaperEnabled) { _ in refreshWallpaperCache() }
+        .onChange(of: settingsStore.wallpaperCurrent) { _ in refreshWallpaperCache() }
     }
 
     /// Scaffold background, three-layer priority (S5-C):
@@ -186,7 +203,7 @@ struct MainTabView: View {
     /// that cannot be loaded falls through to the next layer.
     @ViewBuilder
     private func backgroundLayer(palette: HaoThemePalette) -> some View {
-        let wallpaper = wallpaperImage()
+        let wallpaper = cachedWallpaper
         switch MyBackgroundColor.kind(
             wallpaperEnabled: settingsStore.wallpaperEnabled,
             wallpaperAvailable: wallpaper != nil,
@@ -213,13 +230,20 @@ struct MainTabView: View {
         }
     }
 
-    /// The wallpaper image when enabled and loadable, nil otherwise.
-    private func wallpaperImage() -> UIImage? {
+    /// Load the wallpaper image into the cache when it is
+    /// enabled and its URL moved (or nothing is cached yet).
+    /// No-op otherwise — in particular, body re-evaluations
+    /// never reach the disk through here.
+    private func refreshWallpaperCache() {
         guard settingsStore.wallpaperEnabled,
               let wallpaperURL = settingsStore.wallpaperBackgroundURL else {
-            return nil
+            cachedWallpaper = nil
+            cachedWallpaperURL = nil
+            return
         }
-        return UIImage(contentsOfFile: wallpaperURL.path)
+        guard cachedWallpaperURL != wallpaperURL else { return }
+        cachedWallpaperURL = wallpaperURL
+        cachedWallpaper = UIImage(contentsOfFile: wallpaperURL.path)
     }
 
     @ViewBuilder
