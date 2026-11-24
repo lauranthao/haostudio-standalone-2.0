@@ -111,6 +111,14 @@ struct VodSettingsSheet: View {
     var detail: VideoDetail?
     var lineIndex: Int
     var episodeIndex: Int
+    /// True when the user configured a custom danmaku API address
+    /// (b36 item 11, leg 3). The "重新加载弹幕" row only appears
+    /// then: on the official address the client already retries
+    /// an empty 200 once, so a permanent reload row would be a
+    /// control most users never need.
+    var isCustomDanmakuAddress = false
+    /// Re-fetch danmaku for the current episode (reloadDanmaku).
+    var onReloadDanmaku: (() -> Void)? = nil
     var onSelectLine: (Int) -> Void
     var onSelectEpisode: (Int) -> Void
 
@@ -171,6 +179,10 @@ struct VodSettingsSheet: View {
                                 }
                                 Slider(value: $state.danmakuOpacity, in: 0.3...1.0, step: 0.1)
                                     .tint(theme.accent)
+                            }
+                            if isCustomDanmakuAddress {
+                                Button("重新加载弹幕") { onReloadDanmaku?() }
+                                    .foregroundStyle(theme.accent)
                             }
                         case .unavailable:
                             EmptyView()

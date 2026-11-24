@@ -458,6 +458,121 @@ final class VodDanmakuLayerStateTests: XCTestCase {
         }
         waitForExpectations(timeout: 2)
     }
+
+    /// b36 item 11, leg 3: reload re-fetches the same episode and
+    /// clears the old items while the new fetch runs.
+    func testReloadFetchesSameEpisodeAgain() {
+        let state = VodDanmakuLayerState()
+        let provider = DeferredDanmakuProvider()
+        let episode = PlayEpisode(name: "第01集", url: nil, index: 0)
+        state.load(for: episode, provider: provider)
+        provider.complete(0, with: [DanmakuItem(text: "old", timeSeconds: 1, colorHex: "", isTop: false)])
+        let checked = expectation(description: "reload lands")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            XCTAssertEqual(state.items.map { $0.text }, ["old"])
+            state.reload(for: episode, provider: provider)
+            XCTAssertEqual(provider.calls, 2)
+            XCTAssertTrue(state.items.isEmpty)
+            XCTAssertTrue(state.isLoading)
+            XCTAssertFalse(state.didLoad)
+            provider.complete(1, with: [DanmakuItem(text: "new", timeSeconds: 1, colorHex: "", isTop: false)])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                XCTAssertEqual(state.items.map { $0.text }, ["new"])
+                XCTAssertTrue(state.didLoad)
+                XCTAssertFalse(state.isLoading)
+                checked.fulfill()
+            }
+        }
+        waitForExpectations(timeout: 2)
+    }
+
+    /// b36 item 11, leg 3: the second reload cancels the first in
+    /// effect — a late completion from the older fetch must not
+    /// overwrite the newer result.
+    func testStaleReloadCompletionIsDiscarded() {
+        let state = VodDanmakuLayerState()
+        let provider = DeferredDanmakuProvider()
+        let episode = PlayEpisode(name: "第01集", url: nil, index: 0)
+        state.load(for: episode, provider: provider)
+        provider.complete(0, with: [DanmakuItem(text: "base", timeSeconds: 1, colorHex: "", isTop: false)])
+        let checked = expectation(description: "newest reload wins")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            state.reload(for: episode, provider: provider)
+            state.reload(for: episode, provider: provider)
+            XCTAssertEqual(provider.calls, 3)
+            provider.complete(1, with: [DanmakuItem(text: "stale", timeSeconds: 1, colorHex: "", isTop: false)])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                XCTAssertTrue(state.items.isEmpty)
+                XCTAssertTrue(state.isLoading)
+                provider.complete(2, with: [DanmakuItem(text: "fresh", timeSeconds: 2, colorHex: "", isTop: false)])
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    XCTAssertEqual(state.items.map { $0.text }, ["fresh"])
+                    checked.fulfill()
+                }
+            }
+        }
+        waitForExpectations(timeout: 2)
+    }
+
+    /// b36 item 11, leg 3: changing episode supersedes an
+    /// in-flight reload — the old completion must not pollute
+    /// the new episode.
+    func testEpisodeChangeDiscardsOldCompletion() {
+        let state = VodDanmakuLayerState()
+        let provider = DeferredDanmakuProvider()
+        state.reload(for: PlayEpisode(name: "第01集", url: nil, index: 0), provider: provider)
+        state.load(for: PlayEpisode(name: "第02集", url: nil, index: 1), provider: provider)
+        XCTAssertEqual(provider.calls, 2)
+        provider.complete(0, with: [DanmakuItem(text: "ep1-late", timeSeconds: 1, colorHex: "", isTop: false)])
+        let checked = expectation(description: "new episode lands")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            XCTAssertTrue(state.items.isEmpty)
+            XCTAssertTrue(state.isLoading)
+            provider.complete(1, with: [DanmakuItem(text: "ep2-ok", timeSeconds: 1, colorHex: "", isTop: false)])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                XCTAssertEqual(state.items.map { $0.text }, ["ep2-ok"])
+                checked.fulfill()
+            }
+        }
+        waitForExpectations(timeout: 2)
+    }
+
+    /// b36 item 11, leg 3: closing the player mid-fetch (clear)
+    /// invalidates the in-flight completion — it must not refill
+    /// the layer after the clear.
+    func testClearInvalidatesInFlightFetch() {
+        let state = VodDanmakuLayerState()
+        let provider = DeferredDanmakuProvider()
+        let episode = PlayEpisode(name: "第01集", url: nil, index: 0)
+        state.load(for: episode, provider: provider)
+        state.clear()
+        provider.complete(0, with: [DanmakuItem(text: "ghost", timeSeconds: 1, colorHex: "", isTop: false)])
+        let checked = expectation(description: "no refill after clear")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            XCTAssertTrue(state.items.isEmpty)
+            XCTAssertFalse(state.didLoad)
+            XCTAssertFalse(state.isLoading)
+            checked.fulfill()
+        }
+        waitForExpectations(timeout: 2)
+    }
+}
+
+/// Controllable stand-in for VodDanmakuProvider (b36 item 11,
+/// leg 3): captures each fetch's completion so tests can fire
+/// them in any order and drive the generation guard.
+final class DeferredDanmakuProvider: VodDanmakuProvider {
+    private(set) var calls = 0
+    private var pending: [([DanmakuItem]) -> Void] = []
+
+    func fetchDanmaku(for episode: PlayEpisode, completion: @escaping ([DanmakuItem]) -> Void) {
+        calls += 1
+        pending.append(completion)
+    }
+
+    func complete(_ index: Int, with items: [DanmakuItem]) {
+        pending[index](items)
+    }
 }
 
 // MARK: - Driver with fakes

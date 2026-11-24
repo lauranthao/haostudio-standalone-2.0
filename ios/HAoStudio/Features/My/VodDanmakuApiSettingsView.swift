@@ -47,7 +47,13 @@ struct VodDanmakuApiSettingsView: View {
             } header: {
                 Text("访问密钥")
             } footer: {
-                Text("自托管服务设了访问密钥才填；官方地址不用填。密钥放在地址后面发送，不会出现在弹幕请求头里。")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("自托管服务设了访问密钥才填；官方地址不用填。密钥放在地址后面发送，不会出现在弹幕请求头里。")
+                    if !apiTokenDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       apiUrlDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("地址留空时，密钥将用在官方地址上；官方地址使用默认密钥，自定义密钥可能导致无弹幕。")
+                    }
+                }
             }
             Section {
                 Button("保存") {

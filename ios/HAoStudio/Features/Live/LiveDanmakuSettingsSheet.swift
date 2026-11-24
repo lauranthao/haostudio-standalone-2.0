@@ -161,9 +161,10 @@ struct LiveDanmakuSettingsSheet: View {
     /// The model carried these fields (speed, stroke, strokeWidth,
     /// colorMode) but the sheet never showed them and the overlay
     /// never read them — fixed 8 s, fixed shadow, always white.
-    /// `occlusionAvoidance` is deliberately NOT here: it is an
-    /// MPV/VOD-only flag, and a toggle that does nothing in live
-    /// would be an orphan control (item 11 owns the VOD side).
+    /// `occlusionAvoidance` is deliberately NOT here: it is
+    /// MPV-only，VOD + 直播共用一开关（Flutter 原型）；Swift 2.0 未实现，无读者。
+    /// A toggle that does nothing in live would be an orphan
+    /// control (item 11 owns the VOD side).
     private var flyingSection: some View {
         Section {
             HStack {
