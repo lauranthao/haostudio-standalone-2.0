@@ -33,7 +33,11 @@
 // each with an 8 s timeout; a failure or timeout leaves the
 // previous badge value alone (unknown), never blocks reload, never
 // throws to the UI — only a successful "off air" answer clears a
-// badge.
+// badge. The check is throttled (build 36, item 10): a room set
+// checked less than 5 min ago is not checked again, and a room
+// with a check already in flight is never fired twice — so a tab
+// switch, a pop back, or a favourite tap does not re-fire up to
+// 10 room-info requests per reload.
 //
 // The stores are plain value-access layers (not ObservableObject):
 // this view model owns the published state and reload() reads them.
@@ -146,12 +150,58 @@ final class HomeViewModel: ObservableObject {
     /// Bump on every reload; late status answers from an older
     /// reload are dropped.
     private var liveStatusGeneration = 0
+    /// Live-status throttle (build 36, item 10): the room set
+    /// (platform|roomId ids) of the last check round, and when
+    /// it was fired. A reload whose hotLive set matches and
+    /// falls inside `liveStatusThrottleSeconds` skips the check
+    /// — the carried badges are the last confirmed answers, so
+    /// nothing flickers and no request is wasted.
+    static let liveStatusThrottleSeconds = 300.0
+    private var liveStatusLastCheckAt: Date?
+    private var liveStatusLastCheckedRoomIDs: Set<String> = []
+    /// Room ids with a check currently in flight. A reload
+    /// while a round is still out never fires a duplicate
+    /// request for the same room; the in-flight answer still
+    /// lands (it writes by room id, not by reload round).
+    private var liveStatusInFlightIDs: Set<String> = []
+    /// Appearance-reload coalescing (build 36, item 10):
+    /// HomeView's onAppear (tab switch back) and its
+    /// path-empty change (pop back from a detail) are
+    /// different triggers for the same "back at home" event,
+    /// and one return trip can fire both. A reload that ran
+    /// less than this long ago makes the second one a
+    /// duplicate — skip it. An explicit reload (pull-to-refresh)
+    /// always runs and resets the clock.
+    static let appearanceReloadCoalesceSeconds = 1.0
+    private var lastReloadAt: Date?
+    /// Clock, injectable so tests can move time past the
+    /// throttle / coalescing windows. Defaults to the wall
+    /// clock; the app never passes one.
+    private let now: () -> Date
 
     /// `liveStatusChecker` nil = never confirm live status (all
     /// rooms stay isLive false). Tests pass nil or a stub; the app
     /// uses the default room-info checker.
-    init(liveStatusChecker: HomeLiveStatusChecker? = HomeViewModel.defaultLiveStatusChecker) {
+    init(
+        liveStatusChecker: HomeLiveStatusChecker? = HomeViewModel.defaultLiveStatusChecker,
+        now: @escaping () -> Date = Date.init
+    ) {
         self.liveStatusChecker = liveStatusChecker
+        self.now = now
+    }
+
+    /// Reload for an appearance trigger (HomeView onAppear /
+    /// path-empty, and the "全部" page's onAppear). Coalesced:
+    /// if any reload ran inside the window, the data is already
+    /// fresh and this one is skipped — one return trip never
+    /// pays for two full reloads. Pull-to-refresh calls
+    /// reload() directly and always runs.
+    func reloadForAppearance() {
+        if let last = lastReloadAt,
+           now().timeIntervalSince(last) < Self.appearanceReloadCoalesceSeconds {
+            return
+        }
+        reload()
     }
 
     /// Synchronous local reads for all five sections. Live-status
@@ -186,6 +236,10 @@ final class HomeViewModel: ObservableObject {
         liveHistory: [LiveHistoryEntry],
         dailyPicks: [MusicSong]
     ) {
+        // Every reload — local or appearance — resets the
+        // coalescing clock, so a second appearance trigger
+        // right after it is recognised as the same event.
+        lastReloadAt = now()
         continueWatching = Self.continueWatchingEntries(from: videoHistory)
         recentPlays = Array(recent.prefix(Self.sectionLimit))
         allRecentPlays = recent
@@ -344,18 +398,38 @@ final class HomeViewModel: ObservableObject {
     // MARK: - Live status
 
     /// Confirm live status for the rooms in hotLive (at most 10),
-    /// through the injected checker. A late answer (older reload)
-    /// is dropped; `.unknown` (failed / timed out) changes nothing,
-    /// so a transient network failure never blinks a good badge off.
+    /// through the injected checker. Throttled: the same room set
+    /// inside 5 min is not checked again, and a room with a check
+    /// already in flight is never fired twice. A late answer
+    /// (older reload) is dropped; `.unknown` (failed / timed out)
+    /// changes nothing, so a transient network failure never
+    /// blinks a good badge off — only a successful `.offline`
+    /// clears one.
     private func refreshLiveStatus() {
         guard let checker = liveStatusChecker, !hotLive.isEmpty else { return }
+        let roomIDs = Set(hotLive.map { $0.id })
+        // Same room set, checked inside the window — reuse the
+        // last answers (badges were carried across the rebuild
+        // above). A changed set, or an expired window, re-checks
+        // — minus rooms already in flight.
+        if roomIDs == liveStatusLastCheckedRoomIDs,
+           let lastCheckAt = liveStatusLastCheckAt,
+           now().timeIntervalSince(lastCheckAt) < Self.liveStatusThrottleSeconds {
+            return
+        }
+        let pending = hotLive.filter { !liveStatusInFlightIDs.contains($0.id) }
+        guard !pending.isEmpty else { return }
+        liveStatusLastCheckAt = now()
+        liveStatusLastCheckedRoomIDs = roomIDs
         liveStatusGeneration += 1
         let generation = liveStatusGeneration
-        for item in hotLive {
+        for item in pending {
+            liveStatusInFlightIDs.insert(item.id)
             checker(item) { [weak self] status in
-                guard status != .unknown else { return }
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
+                    self.liveStatusInFlightIDs.remove(item.id)
+                    guard status != .unknown else { return }
                     guard self.liveStatusGeneration == generation else { return }
                     if let index = self.hotLive.firstIndex(where: { $0.id == item.id }) {
                         self.hotLive[index].isLive = (status == .live)

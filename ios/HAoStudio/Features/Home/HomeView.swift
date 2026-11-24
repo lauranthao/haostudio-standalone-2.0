@@ -97,7 +97,12 @@ struct HomeView: View {
                     LiveRoomView(room: room, playlist: playlist)
                 }
             }
-            .onAppear { viewModel.reload() }
+            // Appearance reload, coalesced in the view model:
+            // a tab switch back (onAppear) and a pop back
+            // (path-empty below) are different triggers for the
+            // same "back at home" event — one return trip pays
+            // for one reload, never two.
+            .onAppear { viewModel.reloadForAppearance() }
             // Return-to-home refresh: NavigationStack's own
             // onAppear does not re-fire when a pushed detail or
             // room pops (the stack itself never disappears), so
@@ -106,7 +111,7 @@ struct HomeView: View {
             // in its old place in 继续观看 until the tab was
             // switched. An empty path means back at the home root.
             .onChange(of: path) { _, newPath in
-                if newPath.isEmpty { viewModel.reload() }
+                if newPath.isEmpty { viewModel.reloadForAppearance() }
             }
         }
     }
@@ -288,15 +293,21 @@ struct HomeView: View {
     /// One tappable song row wired to the shared music player
     /// (same call as the music home recent section: the mini
     /// player appears and switching tabs does not stop playback).
+    /// No onToggleFav: the row flips its own favourite state
+    /// (MusicSongMenuHost keeps @State isFav, refreshed from the
+    /// haoMusicFavChanged notification the toggle posts), so a
+    /// favourite tap needs no view-model refresh at all — the
+    /// old reload() here paid for a full reload plus up to 10
+    /// live-status requests for one star tap, and changed
+    /// nothing else: daily is per-day cached and stable, recent
+    /// / continue-listening do not depend on favourites.
+    /// (Build 36, item 10.)
     private func songRow(song: MusicSong, tracks: [MusicSong], index: Int) -> some View {
         MusicSongRow(
             song: song,
             isPlaying: isPlaying(song),
             onTap: {
                 playerVM.play(song: song, in: tracks, startAt: index)
-            },
-            onToggleFav: {
-                viewModel.reload()
             }
         )
         .padding(.vertical, 6)
@@ -414,10 +425,12 @@ private struct HomeRecentPlaysView: View {
                                 isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
                                 onTap: {
                                     playerVM.play(song: song, in: viewModel.allRecentPlays, startAt: index)
-                                },
-                                onToggleFav: {
-                                    viewModel.reload()
                                 }
+                                // No onToggleFav: same as the home
+                                // songRow — the row flips its own
+                                // favourite state; a star tap no
+                                // longer pays for a full reload
+                                // (build 36, item 10).
                             )
                             .padding(.vertical, 6)
                         }
@@ -430,7 +443,17 @@ private struct HomeRecentPlaysView: View {
         .background(theme.scaffoldBackground)
         .navigationTitle("最近播放")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { viewModel.reload() }
+        // This page's only reload: pushing it does NOT re-fire
+        // home's onAppear (the NavigationStack root stays
+        // mounted), so without this the list would show the data
+        // from home's last reload — stale if a song was played
+        // from home just before tapping "全部". Coalesced, not
+        // unconditional: if home reloaded less than a second ago
+        // (e.g. a pop back straight into "全部"), the data is
+        // already fresh and this is skipped — no duplicate full
+        // reload for one trip. HomeHotLiveView needs no reload
+        // of its own (it reuses the same hotLive array).
+        .onAppear { viewModel.reloadForAppearance() }
     }
 }
 

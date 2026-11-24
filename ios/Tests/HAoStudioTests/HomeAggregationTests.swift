@@ -550,13 +550,22 @@ final class HomeAggregationTests: XCTestCase {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
         XCTAssertEqual(viewModel.hotLive.map { $0.isLive }, [true])
         answerLive = false
+        // Second reload with a CHANGED room set (a new follow):
+        // a same-set reload inside the 5-min throttle window
+        // does not re-check, so the unknown answer below would
+        // never be consulted without the new room. The new room
+        // forces a fresh round; its `.unknown` answer must leave
+        // room "1"'s confirmed badge alone (room "9" is newest
+        // first, so it sorts ahead).
         viewModel.reload(
             videoHistory: inputs.videoHistory, recent: inputs.recent,
             listenLog: inputs.listenLog, resumeMap: inputs.resumeMap,
-            follows: inputs.follows, liveHistory: inputs.liveHistory,
+            follows: inputs.follows + [follow(roomId: "9", followedAt: Date(timeIntervalSince1970: 3000))],
+            liveHistory: inputs.liveHistory,
             dailyPicks: inputs.dailyPicks)
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
-        XCTAssertEqual(viewModel.hotLive.map { $0.isLive }, [true])
+        XCTAssertEqual(viewModel.hotLive.map { $0.roomId }, ["9", "1"])
+        XCTAssertEqual(viewModel.hotLive.map { $0.isLive }, [false, true])
     }
 
     func testLiveBadgeClearsWhenRoomGoesOffline() {
@@ -574,10 +583,136 @@ final class HomeAggregationTests: XCTestCase {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
         XCTAssertEqual(viewModel.hotLive.map { $0.isLive }, [true])
         answerLive = false
+        // Changed room set (a new follow), as in the test above:
+        // a same-set reload inside the throttle window does not
+        // re-check, so the offline answer needs a fresh round.
+        // Room "9" is newest first, so it sorts ahead of "1".
+        viewModel.reload(
+            videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
+            follows: follows + [follow(roomId: "9", followedAt: Date(timeIntervalSince1970: 3000))],
+            liveHistory: [], dailyPicks: [])
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        XCTAssertEqual(viewModel.hotLive.map { $0.roomId }, ["9", "1"])
+        XCTAssertEqual(viewModel.hotLive.map { $0.isLive }, [false, false])
+    }
+
+    // MARK: - Live-status throttle / dedup (build 36, item 10)
+
+    func testLiveStatusNotRecheckedWithinThrottleWindow() {
+        // Same room set, second reload seconds later: the check
+        // round fires once, not once per reload — a tab switch
+        // or a pop back inside the window costs zero requests.
+        var calls = 0
+        let viewModel = HomeViewModel(liveStatusChecker: { _, completion in
+            calls += 1
+            completion(.live)
+        })
+        let follows = [follow(roomId: "1", followedAt: Date(timeIntervalSince1970: 2000))]
         viewModel.reload(
             videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
             follows: follows, liveHistory: [], dailyPicks: [])
+        viewModel.reload(
+            videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
+            follows: follows, liveHistory: [], dailyPicks: [])
+        XCTAssertEqual(calls, 1)
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
-        XCTAssertEqual(viewModel.hotLive.map { $0.isLive }, [false])
+        XCTAssertEqual(viewModel.hotLive.map { $0.isLive }, [true])
+    }
+
+    func testLiveStatusRecheckedWhenRoomSetChanges() {
+        // A new room in the set defeats the throttle: the fresh
+        // round checks the whole set again.
+        var calls = 0
+        let viewModel = HomeViewModel(liveStatusChecker: { _, completion in
+            calls += 1
+            completion(.live)
+        })
+        viewModel.reload(
+            videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
+            follows: [follow(roomId: "1", followedAt: Date(timeIntervalSince1970: 2000))],
+            liveHistory: [], dailyPicks: [])
+        // Flush the first round's main-queue turn, or room "1"
+        // still counts as in flight for the second reload.
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        XCTAssertEqual(calls, 1)
+        viewModel.reload(
+            videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
+            follows: [
+                follow(roomId: "1", followedAt: Date(timeIntervalSince1970: 2000)),
+                follow(roomId: "2", followedAt: Date(timeIntervalSince1970: 3000)),
+            ],
+            liveHistory: [], dailyPicks: [])
+        XCTAssertEqual(calls, 3)
+    }
+
+    func testLiveStatusRecheckedAfterThrottleWindowExpires() {
+        var calls = 0
+        var clock = Date(timeIntervalSince1970: 1000)
+        let viewModel = HomeViewModel(
+            liveStatusChecker: { _, completion in
+                calls += 1
+                completion(.live)
+            },
+            now: { clock })
+        let follows = [follow(roomId: "1", followedAt: Date(timeIntervalSince1970: 2000))]
+        viewModel.reload(
+            videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
+            follows: follows, liveHistory: [], dailyPicks: [])
+        XCTAssertEqual(calls, 1)
+        // Flush the first round's main-queue turn, or room "1"
+        // still counts as in flight after the window expires.
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        clock = Date(timeIntervalSince1970: 1000 + 301)
+        viewModel.reload(
+            videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
+            follows: follows, liveHistory: [], dailyPicks: [])
+        XCTAssertEqual(calls, 2)
+    }
+
+    func testLiveStatusInFlightRequestsAreDeduped() {
+        // The stub never answers, so room "1" is still in flight
+        // when the second reload arrives with a changed set
+        // (which defeats the throttle). Only the new room is
+        // fired — no duplicate request for the room already
+        // being checked.
+        var calls = 0
+        var held: [(HomeLiveItem, (HomeLiveStatus) -> Void)] = []
+        let viewModel = HomeViewModel(liveStatusChecker: { item, completion in
+            calls += 1
+            held.append((item, completion))
+        })
+        viewModel.reload(
+            videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
+            follows: [follow(roomId: "1", followedAt: Date(timeIntervalSince1970: 2000))],
+            liveHistory: [], dailyPicks: [])
+        XCTAssertEqual(calls, 1)
+        viewModel.reload(
+            videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
+            follows: [
+                follow(roomId: "1", followedAt: Date(timeIntervalSince1970: 2000)),
+                follow(roomId: "2", followedAt: Date(timeIntervalSince1970: 3000)),
+            ],
+            liveHistory: [], dailyPicks: [])
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(held.map { $0.0.roomId }, ["1", "2"])
+    }
+
+    func testAppearanceReloadCoalescedWithinWindow() {
+        // An appearance trigger right after any reload is the
+        // same "back at home" event: no second full reload, no
+        // second live-status round.
+        var calls = 0
+        let viewModel = HomeViewModel(liveStatusChecker: { _, completion in
+            calls += 1
+            completion(.live)
+        })
+        viewModel.reload(
+            videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
+            follows: [follow(roomId: "1", followedAt: Date(timeIntervalSince1970: 2000))],
+            liveHistory: [], dailyPicks: [])
+        XCTAssertEqual(calls, 1)
+        viewModel.reloadForAppearance()
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(viewModel.hotLive.map { $0.roomId }, ["1"])
     }
 }
