@@ -349,6 +349,18 @@ struct LXSourceRow: Identifiable, Equatable {
     /// records have no downloaded file yet — see
     /// LXSourceManagementView.
     let url: String
+    /// File name under `Documents/lx_scripts/` (empty for bundled
+    /// scripts and for legacy URL-only records that were never
+    /// downloaded — those show a re-download button).
+    let fileName: String
+
+    init(id: String, name: String, isCustom: Bool, url: String, fileName: String = "") {
+        self.id = id
+        self.name = name
+        self.isCustom = isCustom
+        self.url = url
+        self.fileName = fileName
+    }
 }
 
 enum LXSourceListOrdering {
@@ -371,7 +383,7 @@ enum LXSourceListOrdering {
         for record in customRecords {
             rows.append(LXSourceRow(
                 id: record.id, name: record.name,
-                isCustom: true, url: record.url))
+                isCustom: true, url: record.url, fileName: record.fileName))
         }
         let orderIndex: [String: Int] = Dictionary(
             uniqueKeysWithValues: savedOrder.enumerated().map { ($0.element, $0.offset) })
