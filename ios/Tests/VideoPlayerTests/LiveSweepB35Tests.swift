@@ -306,3 +306,29 @@ final class LiveSweepDanmakuCapTests: XCTestCase {
         XCTAssertEqual(LiveDanmakuListView.capped(shown, to: 200).count, 100, "under the cap, nothing is dropped")
     }
 }
+
+// MARK: - Build 36 item 8: search platform switch
+
+@MainActor
+final class LiveSweepSearchPlatformTests: XCTestCase {
+    // Switching platform while a search is showing re-runs the
+    // same query on the new platform instead of leaving the old
+    // platform's rooms under the new tab; with an empty field
+    // there is nothing to re-run, so the view drops back to
+    // history.
+    func testSelectPlatformRerunsQueryOrClearsToHistory() {
+        let viewModel = LiveSearchViewModel(gateway: DeferredLiveGateway())
+        viewModel.search(query: "b36-test")
+        XCTAssertTrue(viewModel.hasSearched)
+        viewModel.selectPlatform(.douyu, query: "b36-test")
+        XCTAssertEqual(viewModel.platform, .douyu)
+        XCTAssertTrue(viewModel.hasSearched, "re-running the query keeps the results view")
+        viewModel.selectPlatform(.huya, query: "")
+        XCTAssertEqual(viewModel.platform, .huya)
+        XCTAssertFalse(viewModel.hasSearched, "empty field drops back to the history view")
+        XCTAssertTrue(viewModel.results.isEmpty)
+        viewModel.selectPlatform(.huya, query: "")
+        XCTAssertEqual(viewModel.platform, .huya, "same-platform switch is a no-op")
+        LiveLibraryStore.removeSearchHistory(term: "b36-test")
+    }
+}

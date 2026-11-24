@@ -161,4 +161,18 @@ final class LiveLibraryStoreTests: XCTestCase {
         XCTAssertEqual(stored[0], "q24")
         XCTAssertEqual(stored[19], "q5")
     }
+
+    // MARK: - Search history single-term delete (build 36 item 8)
+
+    func testRemovingSearchHistoryDropsOneTerm() {
+        XCTAssertEqual(
+            LiveLibraryStore.removingSearchHistory(["a", "b", "c"], term: "b"),
+            ["a", "c"])
+    }
+
+    func testRemovingAbsentSearchTermKeepsList() {
+        XCTAssertEqual(
+            LiveLibraryStore.removingSearchHistory(["a", "b"], term: "z"),
+            ["a", "b"])
+    }
 }

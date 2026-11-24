@@ -158,6 +158,21 @@ func liveDanmakuRowPadding(_ spacing: String) -> CGFloat {
     }
 }
 
+/// UIColor from a 0xAARRGGBB danmaku colour (platform colour
+/// mode). A zero RGB means the platform sent no colour — white,
+/// never black-on-video. The transports already map a missing
+/// colour to white; this guard covers a raw zero.
+func liveDanmakuColor(argb: UInt32) -> Color {
+    let rgb = argb & 0x00FF_FFFF
+    guard rgb != 0 else { return .white }
+    let alpha = CGFloat((argb >> 24) & 0xFF) / 255
+    return Color(
+        red: CGFloat((argb >> 16) & 0xFF) / 255,
+        green: CGFloat((argb >> 8) & 0xFF) / 255,
+        blue: CGFloat(argb & 0xFF) / 255,
+        opacity: alpha > 0 ? alpha : 1)
+}
+
 // MARK: - Shared toggle button
 
 /// The one danmaku on/off button both players use (live portrait
@@ -182,6 +197,7 @@ struct DanmakuToggleButton: View {
                 .frame(width: 44, height: 44)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(isOn ? "关闭弹幕" : "开启弹幕")
     }
 }
 
@@ -380,14 +396,19 @@ struct LiveDanmakuListView: View {
 
 // MARK: - Landscape flying overlay
 
-/// One flying row: right-to-left over 8 s on a fixed lane
-/// (VOD layer pattern). The row owns its own offset state, keyed
-/// by a stable id, so parent re-renders never restart an
-/// in-flight animation.
+/// One flying row: right-to-left on a fixed lane (VOD layer
+/// pattern). The row owns its own offset state, keyed by a stable
+/// id, so parent re-renders never restart an in-flight animation.
+/// Duration, shadow and colour come from the settings (build 36
+/// item 8 — the overlay used to hardcode 8 s, a fixed shadow and
+/// always-white text while the model carried speed / stroke /
+/// colorMode). `duration` is fixed at creation: a row created
+/// before a speed change keeps its own removal time.
 private struct LiveFlyingRow: View {
     var message: DanmakuMessage
     var settings: LiveDanmakuSettings
     var containerWidth: CGFloat
+    var duration: Double
 
     @State private var offsetX: CGFloat?
 
@@ -400,25 +421,34 @@ private struct LiveFlyingRow: View {
             Text(message.text)
                 .font(.system(size: CGFloat(settings.fontSize)))
         }
-        .foregroundStyle(.white)
-        .shadow(color: .black.opacity(0.8), radius: 2, x: 0, y: 1)
+        .foregroundStyle(flyingColor)
+        .shadow(
+            color: settings.stroke ? .black.opacity(0.8) : .clear,
+            radius: settings.stroke ? CGFloat(settings.strokeWidth) : 0, x: 0, y: 1)
         .opacity(settings.opacity)
         .offset(x: offsetX ?? containerWidth)
         .onAppear {
-            withAnimation(.linear(duration: LiveDanmakuOverlayView.scrollDuration)) {
+            withAnimation(.linear(duration: duration)) {
                 offsetX = -(containerWidth + 300)
             }
         }
+    }
+
+    /// Platform colour mode uses the colour the transport
+    /// supplied; uniform mode (and a missing colour) is white —
+    /// the only colour readable over any video frame.
+    private var flyingColor: Color {
+        guard settings.colorMode == "platform" else { return .white }
+        return liveDanmakuColor(argb: message.colorArgb)
     }
 }
 
 /// Flying danmaku over the fullscreen video. Lanes live inside
 /// the settings area fraction (top of the video); each new
-/// message takes the next lane round-robin. Messages leave 8 s
-/// after they arrive.
+/// message takes the next lane round-robin. Messages leave one
+/// crossing time after they arrive (8 s at speed 1.0 — the
+/// `speed` setting divides it).
 struct LiveDanmakuOverlayView: View {
-    /// How long a line takes to cross the screen (VOD parity).
-    static let scrollDuration: Double = 8
     /// Flying lanes inside the area fraction (VOD parity).
     static let laneCount: Int = 4
     /// Backlog cap on a fresh mount: when the overlay (re)appears
@@ -449,10 +479,11 @@ struct LiveDanmakuOverlayView: View {
     @State private var lastSeenSequence = 0
     @State private var nextLane = 0
     /// Pending per-row removal work (b36 item 5): each flying
-    /// row schedules its own removal 8 s after arrival. The
-    /// work items are cancelled on disappear, so a back-out
-    /// leaves no work behind that mutates this view's state
-    /// after the room is gone.
+    /// row schedules its own removal one crossing time after
+    /// arrival (`settings.flyingDuration` — the same duration
+    /// its animation uses). The work items are cancelled on
+    /// disappear, so a back-out leaves no work behind that
+    /// mutates this view's state after the room is gone.
     @State private var removalWorkItems: [DispatchWorkItem] = []
 
     var body: some View {
@@ -463,7 +494,8 @@ struct LiveDanmakuOverlayView: View {
                     LiveFlyingRow(
                         message: item.message,
                         settings: settings,
-                        containerWidth: geometry.size.width
+                        containerWidth: geometry.size.width,
+                        duration: settings.flyingDuration
                     )
                     .position(
                         x: geometry.size.width / 2,
@@ -537,7 +569,7 @@ struct LiveDanmakuOverlayView: View {
             let itemId = item.id
             let removal = DispatchWorkItem { flying.removeAll { $0.id == itemId } }
             removalWorkItems.append(removal)
-            DispatchQueue.main.asyncAfter(deadline: .now() + LiveDanmakuOverlayView.scrollDuration, execute: removal)
+            DispatchQueue.main.asyncAfter(deadline: .now() + settings.flyingDuration, execute: removal)
         }
     }
 }

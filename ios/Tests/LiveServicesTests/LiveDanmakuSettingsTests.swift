@@ -127,6 +127,15 @@ final class LiveDanmakuSettingsTests: XCTestCase {
         XCTAssertEqual(small.flyingMaxVisibleCount, 20)
     }
 
+    /// Flying duration (build 36 item 8): the base 8 s divided
+    /// by the speed setting — the overlay animation and the
+    /// per-row removal timer share this value.
+    func testFlyingDurationDividesBaseBySpeed() {
+        XCTAssertEqual(LiveDanmakuSettings().flyingDuration, 8.0)
+        XCTAssertEqual(LiveDanmakuSettings(speed: 2.0).flyingDuration, 4.0)
+        XCTAssertEqual(LiveDanmakuSettings(speed: 0.5).flyingDuration, 16.0)
+    }
+
     func testBlockedEntriesDictionaryRoundTrip() {
         let settings = LiveDanmakuSettings(blockedEntries: [
             LiveDanmakuBlockEntry(id: "1", text: "spam", isUser: false),

@@ -235,8 +235,10 @@ struct LiveRoomView: View {
                     .background(Color.black.opacity(0.7), in: Capsule())
                     .padding(.bottom, 96)
                     .allowsHitTesting(false)
+                    .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: livePlayer.toast)
         .onChange(of: livePlayer.toast) { _, toast in
             toastWork?.cancel()
             guard toast != nil else { return }
@@ -489,6 +491,7 @@ struct LiveRoomView: View {
                     .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(livePlayer.isPlaying ? "暂停" : "播放")
             DanmakuToggleButton(isOn: danmakuEnabledForRoom, action: toggleDanmaku)
             Spacer()
             Button(action: { isFullscreen = true }) {
@@ -498,6 +501,7 @@ struct LiveRoomView: View {
                     .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("全屏")
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 4)
@@ -534,7 +538,7 @@ struct LiveRoomView: View {
                     roomSwitchButtons
                 }
             }
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 anchorAvatar
                 VStack(alignment: .leading, spacing: 2) {
                     Text(currentRoom.streamer.isEmpty ? currentRoom.platform.displayName : currentRoom.streamer)
@@ -589,6 +593,7 @@ struct LiveRoomView: View {
             }
             .buttonStyle(.plain)
             .disabled(!hasPreviousRoom)
+            .accessibilityLabel("上一个房间")
             Button(action: { switchToRoom(at: currentIndex + 1) }) {
                 Image(systemName: "chevron.down")
                     .font(.haoDenseTitle)
@@ -598,6 +603,7 @@ struct LiveRoomView: View {
             }
             .buttonStyle(.plain)
             .disabled(!hasNextRoom)
+            .accessibilityLabel("下一个房间")
         }
     }
 
@@ -694,6 +700,7 @@ struct LiveRoomView: View {
                     .frame(width: 40, height: 40)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("亮度与音量")
             Button(action: { showDanmakuSettings = true }) {
                 Image(systemName: "gearshape")
                     .font(.system(size: 18, weight: .semibold))  // icon size, not text
@@ -701,6 +708,7 @@ struct LiveRoomView: View {
                     .frame(width: 40, height: 40)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("弹幕设置")
         }
         // The room's stack lays the bar out at the physical screen
         // bottom (the push does not inset it above the shell
@@ -726,6 +734,22 @@ struct LiveRoomView: View {
                     if case .success(let image) = phase {
                         image.resizable().scaledToFill().opacity(0.35)
                     }
+                }
+            }
+            // Same honest placeholder as portrait (build 36 item
+            // 8): landscape used to show only a dimmed cover or
+            // black with no explanation when there was no picture.
+            if livePlayer.videoView == nil {
+                VStack(spacing: 8) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.white.opacity(0.6))
+                    Text("暂无画面")
+                        .font(.haoCalloutStrong)
+                        .foregroundStyle(.white.opacity(0.9))
+                    Text("房间未开播或暂时无法观看")
+                        .font(.haoFootnote)
+                        .foregroundStyle(.white.opacity(0.7))
                 }
             }
             if danmakuEnabledForRoom {
@@ -779,6 +803,7 @@ struct LiveRoomView: View {
                     .background(Color.black.opacity(0.45), in: Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("返回")
             VStack(alignment: .leading, spacing: 2) {
                 Text(currentRoom.title.isEmpty ? "直播间" : currentRoom.title)
                     .font(.haoCalloutStrong)
@@ -807,6 +832,7 @@ struct LiveRoomView: View {
                     .background(Color.black.opacity(0.45), in: Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("亮度与音量")
             Button(action: { showDanmakuSettings = true }) {
                 Image(systemName: "gearshape")
                     .font(.haoBodyStrong)
@@ -815,6 +841,7 @@ struct LiveRoomView: View {
                     .background(Color.black.opacity(0.45), in: Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("弹幕设置")
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
@@ -875,6 +902,7 @@ struct LiveRoomView: View {
                     .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(livePlayer.isPlaying ? "暂停" : "播放")
             DanmakuToggleButton(isOn: danmakuEnabledForRoom, action: toggleDanmaku)
             Button(action: toggleFollow) {
                 Image(systemName: isFollowing ? "heart.fill" : "heart")
@@ -909,6 +937,7 @@ struct LiveRoomView: View {
                     .frame(width: 40, height: 40)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("退出全屏")
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 12)

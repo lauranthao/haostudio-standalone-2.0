@@ -63,6 +63,30 @@ final class LiveSearchViewModel: ObservableObject {
     func clearSearchHistory() {
         LiveLibraryStore.clearSearchHistory()
     }
+
+    /// Delete one history keyword (long-press on a history chip —
+    /// the same shape as the video search's `removeHistoryItem`).
+    func removeHistoryItem(_ term: String) {
+        LiveLibraryStore.removeSearchHistory(term: term)
+    }
+
+    /// Switch platform (build 36 item 8): the old platform's
+    /// results must not stay visible under the new platform's
+    /// tab. When a search is showing, re-run the same query on
+    /// the new platform; when the field is empty there is nothing
+    /// to re-run, so drop back to the history view.
+    func selectPlatform(_ next: LivePlatform, query: String) {
+        guard next != platform else { return }
+        platform = next
+        guard hasSearched else { return }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            results = []
+            hasSearched = false
+        } else {
+            search(query: trimmed)
+        }
+    }
 }
 
 struct LiveSearchView: View {
@@ -134,6 +158,7 @@ struct LiveSearchView: View {
                         .foregroundStyle(theme.textMuted)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("清除搜索")
             }
         }
         .padding(.horizontal, 14)
@@ -147,12 +172,12 @@ struct LiveSearchView: View {
 
     private var platformRow: some View {
         LivePlatformTextTabs(selected: viewModel.platform) { platform in
-            viewModel.platform = platform
+            viewModel.selectPlatform(platform, query: query)
         }
     }
 
     private var searchHistorySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("搜索历史")
                     .font(.haoBodyStrong)
@@ -180,6 +205,10 @@ struct LiveSearchView: View {
                     onTap: { keyword in
                         query = keyword
                         viewModel.search(query: keyword)
+                    },
+                    onDelete: { term in
+                        viewModel.removeHistoryItem(term)
+                        historyVersion += 1
                     }
                 )
                 .padding(.horizontal, 24)
@@ -189,7 +218,7 @@ struct LiveSearchView: View {
     }
 
     private var resultsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             if viewModel.isSearching {
                 ProgressView()
                     .frame(maxWidth: .infinity)

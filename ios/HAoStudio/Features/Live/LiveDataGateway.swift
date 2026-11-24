@@ -147,8 +147,8 @@ enum LiveGridLayout {
     static let edgePadding: Double = 24
     /// Gap between the two columns (points).
     static let interItemSpacing: Double = 12
-    /// Gap between grid rows (points).
-    static let rowSpacing: Double = 14
+    /// Gap between grid rows (points). 16, on the 4pt grid.
+    static let rowSpacing: Double = 16
     /// Cover aspect ratio (width / height), 16:9 — the video
     /// frame ratio (Pure Live: the player is 16:9 and the covers
     /// are video frames, so the card cover matches it instead of

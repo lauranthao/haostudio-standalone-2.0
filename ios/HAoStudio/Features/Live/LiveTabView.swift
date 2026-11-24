@@ -266,11 +266,13 @@ struct LiveTabView: View {
                     Button(action: { path.append(.history) }) {
                         Image(systemName: "clock")
                     }
+                    .accessibilityLabel("观看历史")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: { path.append(.follows) }) {
                         Image(systemName: "heart")
                     }
+                    .accessibilityLabel("我的关注")
                 }
             }
             .navigationDestination(for: LiveDestination.self) { destination in
@@ -292,6 +294,13 @@ struct LiveTabView: View {
                 }
             }
             .onAppear { viewModel.loadIfNeeded() }
+            // Follow toggles from a card's long-press menu (or the
+            // room page, or the follows page's swipe delete) write
+            // the store directly — refresh the local rows at once
+            // instead of waiting for the next appear.
+            .onReceive(NotificationCenter.default.publisher(for: .haoLiveFollowChanged)) { _ in
+                viewModel.refreshLibrary()
+            }
         }
     }
 
@@ -394,7 +403,7 @@ struct LiveTabView: View {
     // MARK: - Follow row
 
     private var followSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             sectionHeader(title: "我的关注") { path.append(.follows) }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
@@ -413,7 +422,7 @@ struct LiveTabView: View {
     // MARK: - History row
 
     private var historySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             sectionHeader(title: "最近看过") { path.append(.history) }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
@@ -445,7 +454,7 @@ struct LiveTabView: View {
     // MARK: - Recommend grid
 
     private var recommendSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("推荐直播")
                     .font(.haoDetailTitle)
@@ -516,7 +525,9 @@ struct LiveTabView: View {
 }
 
 /// One followed room in the tab's horizontal follow row: cover
-/// + nick + LIVE badge when the stored room was live.
+/// + nick + title. No LIVE badge: stored entries carry no live
+/// status by design (the pages show the stored title/cover/nick,
+/// never a faked badge — same rule as the follows page).
 struct LiveFollowCard: View {
     var follow: LiveFollowedRoom
     var onTap: () -> Void
@@ -545,7 +556,7 @@ struct LiveFollowCard: View {
                     .frame(width: 140, alignment: .leading)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MusicPressScaleStyle())
     }
 
     @ViewBuilder
@@ -570,7 +581,7 @@ struct LiveFollowCard: View {
         Rectangle()
             .fill(theme.surfaceStrong)
             .overlay {
-                Image(systemName: "person.fill")
+                Image(systemName: "antenna.radiowaves.left.and.right")
                     .font(.system(size: 18))
                     .foregroundStyle(theme.textSecondary)
             }
@@ -605,7 +616,7 @@ struct LiveHistoryCard: View {
                     .frame(width: 140, alignment: .leading)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MusicPressScaleStyle())
     }
 
     @ViewBuilder
@@ -630,7 +641,7 @@ struct LiveHistoryCard: View {
         Rectangle()
             .fill(theme.surfaceStrong)
             .overlay {
-                Image(systemName: "clock")
+                Image(systemName: "antenna.radiowaves.left.and.right")
                     .font(.system(size: 18))
                     .foregroundStyle(theme.textSecondary)
             }

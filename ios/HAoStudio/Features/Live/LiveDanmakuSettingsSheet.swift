@@ -50,6 +50,7 @@ struct LiveDanmakuSettingsSheet: View {
                 fontSection
                 opacitySection
                 areaSection
+                flyingSection
                 listSection
                 filterSection
                 blockSection
@@ -154,6 +155,58 @@ struct LiveDanmakuSettingsSheet: View {
         }
     }
 
+    // MARK: - 4b. Flying (fullscreen only, build 36 item 8)
+
+    /// Speed / stroke / colour for the fullscreen flying danmaku.
+    /// The model carried these fields (speed, stroke, strokeWidth,
+    /// colorMode) but the sheet never showed them and the overlay
+    /// never read them — fixed 8 s, fixed shadow, always white.
+    /// `occlusionAvoidance` is deliberately NOT here: it is an
+    /// MPV/VOD-only flag, and a toggle that does nothing in live
+    /// would be an orphan control (item 11 owns the VOD side).
+    private var flyingSection: some View {
+        Section {
+            HStack {
+                Text("飞屏速度")
+                Spacer()
+                Text(String(format: "×%.1f", settings.speed))
+                    .foregroundStyle(theme.textSecondary)
+            }
+            Slider(
+                value: $settings.speed,
+                in: 0.5...2.0,
+                step: 0.1
+            )
+            .tint(theme.accent)
+            Toggle("弹幕描边", isOn: $settings.stroke)
+                .tint(theme.accent)
+            if settings.stroke {
+                HStack {
+                    Text("描边粗细")
+                    Spacer()
+                    Text(String(format: "%.1f", settings.strokeWidth))
+                        .foregroundStyle(theme.textSecondary)
+                }
+                Slider(
+                    value: $settings.strokeWidth,
+                    in: 0.5...2.0,
+                    step: 0.1
+                )
+                .tint(theme.accent)
+            }
+            Picker("弹幕颜色", selection: $settings.colorMode) {
+                Text("统一白色").tag("uniform")
+                Text("平台原色").tag("platform")
+            }
+            .pickerStyle(.segmented)
+            .tint(theme.accent)
+        } header: {
+            Text("全屏飞屏")
+        } footer: {
+            Text("仅全屏时生效；平台原色用平台发来的弹幕颜色，没给颜色的仍是白色。")
+        }
+    }
+
     // MARK: - 5–7. List style / spacing / usernames
 
     private var listSection: some View {
@@ -167,6 +220,21 @@ struct LiveDanmakuSettingsSheet: View {
                 Text("标准").tag("standard")
                 Text("宽松").tag("loose")
             }
+            HStack {
+                Text("最多显示条数")
+                Spacer()
+                Text("\(settings.maxCount) 条")
+                    .foregroundStyle(theme.textSecondary)
+            }
+            Slider(
+                value: Binding(
+                    get: { Double(settings.maxCount) },
+                    set: { settings.maxCount = Int($0) }
+                ),
+                in: 20...200,
+                step: 10
+            )
+            .tint(theme.accent)
             Toggle("显示用户名", isOn: $settings.showUsernames)
                 .tint(theme.accent)
         } header: {
@@ -265,6 +333,7 @@ struct LiveDanmakuSettingsSheet: View {
                                 .foregroundStyle(theme.textSecondary)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("删除这条屏蔽")
                     }
                 }
             }

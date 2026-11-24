@@ -169,6 +169,13 @@ enum LiveLibraryStore {
         return Array(list.prefix(maxSearchHistory))
     }
 
+    /// Drop one keyword from a search history list (pure — the
+    /// long-press delete on a history chip; the video side has the
+    /// same shape on VideoLibraryStore).
+    static func removingSearchHistory(_ stored: [String], term: String) -> [String] {
+        stored.filter { $0 != term }
+    }
+
     /// How many stored entries a new limit would delete (0 when
     /// the new limit is unlimited or >= the stored count).
     static func wouldDeleteCount(_ stored: [LiveHistoryEntry], newLimit: Int) -> Int {
@@ -213,11 +220,13 @@ enum LiveLibraryStore {
             platform: platform, roomId: roomId, title: title,
             nick: nick, cover: cover, followedAt: Date())
         saveFollows(mergedFollows(follows(), with: follow))
+        NotificationCenter.default.post(name: .haoLiveFollowChanged, object: nil)
     }
 
     static func removeFollow(platform: String, roomId: String) {
         let key = LiveResumeKey.key(platform: platform, roomId: roomId)
         saveFollows(follows().filter { $0.id != key })
+        NotificationCenter.default.post(name: .haoLiveFollowChanged, object: nil)
     }
 
     /// Toggle follow. Returns true when the room was followed.
@@ -239,6 +248,7 @@ enum LiveLibraryStore {
 
     static func clearFollows() {
         saveFollows([])
+        NotificationCenter.default.post(name: .haoLiveFollowChanged, object: nil)
     }
 
     // MARK: - History
@@ -326,4 +336,22 @@ enum LiveLibraryStore {
     static func clearSearchHistory() {
         LocalStore.saveCollection(named: searchHistoryCollection, value: [String]())
     }
+
+    /// Delete one search keyword (long-press on a history chip).
+    static func removeSearchHistory(term: String) {
+        LocalStore.saveCollection(
+            named: searchHistoryCollection,
+            value: removingSearchHistory(searchHistory(), term: term))
+    }
+}
+
+/// Follow-list change signal: posted whenever the follow list
+/// changes (follow / unfollow / clear-all), so the tab's follow
+/// row and the follows page refresh without waiting for a
+/// re-appear — the context-menu toggle on a card writes the store
+/// directly and no view owns that write. Posted from the store so
+/// every writer is covered (card menu, room page, swipe delete,
+/// clear-all); views observe and re-read.
+extension Notification.Name {
+    static let haoLiveFollowChanged = Notification.Name("haoLiveFollowChanged")
 }
