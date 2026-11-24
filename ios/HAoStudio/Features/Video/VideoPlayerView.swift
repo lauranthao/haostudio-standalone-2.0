@@ -827,6 +827,21 @@ struct VideoPlayerView: View {
     /// until release (the bar must not vanish mid-drag).
     @State private var isSeekDragging = false
     @State private var autoHideWork: DispatchWorkItem?
+    /// Single/double-tap disambiguation (build 36, item 9): every
+    /// tap-up feeds `tapDisambiguator`; the first tap waits
+    /// `doubleTapWindowSeconds` for a second tap (pending work
+    /// below), the second tap fires the double-tap at once. The
+    /// single tap therefore lags ≤0.28 s — the price of a
+    /// double-tap that never flashes the controls.
+    @State private var tapDisambiguator = VodTapDisambiguator()
+    @State private var pendingSingleTapWork: DispatchWorkItem?
+    /// Middle double-tap feedback: a brief centre pause/play icon
+    /// (white on the same black 0.45 scrim as the top-bar buttons
+    /// — no new style, no new colour). `pauseFlashShowsPause`
+    /// picks the icon for the NEW state after the toggle.
+    @State private var pauseFlashVisible = false
+    @State private var pauseFlashShowsPause = true
+    @State private var pauseFlashWork: DispatchWorkItem?
     /// Landscape state. Only the [ ] button changes it — turning
     /// the phone never does (live parity: LiveRoomView
     /// isFullscreen). Starts true: tap-play enters landscape.
@@ -843,17 +858,26 @@ struct VideoPlayerView: View {
             // Gesture layer, UNDER the chrome: a tap toggles the
             // controls, a long press is 2x (VOD only). Chrome buttons
             // sit above it and keep their own taps.
+            //
+            // Build 36, item 9 — single vs double tap: the tap-up
+            // goes through VodTapDisambiguator instead of a bare
+            // onTapGesture, because the old pair (onTapGesture +
+            // simultaneous double-tap) fired the single-tap toggle
+            // on EVERY tap of a double-tap — the controls flipped
+            // twice and flashed. Now the first tap waits 0.28 s
+            // for a second tap; a double-tap fires at once (middle
+            // third = play/pause, sides = ±seek by the live
+            // SettingsStore step) and the pending single is
+            // dropped, so the controls never move on a double-tap.
+            // Long-press 2x is untouched: a double-tap's two quick
+            // presses never reach the 0.5 s threshold.
             Color.clear
                 .contentShape(Rectangle())
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        if controlsVisible {
-                            hideControls()
-                        } else {
-                            showControlsTemporarily()
-                        }
+                .simultaneousGesture(
+                    SpatialTapGesture(count: 1).onEnded { value in
+                        handleVideoTap(at: value.location)
                     }
-                }
+                )
                 // Long-press 2x (VOD only). NOT wired through
                 // SwiftUI's `pressing` callback: `pressing` fires
                 // true on touch-down and false the moment
@@ -879,22 +903,6 @@ struct VideoPlayerView: View {
                             }
                         }
                 )
-                // S7 wiring: double-tap seek (left third back,
-                // right third forward, middle third no seek — the
-                // two single taps underneath toggle the controls
-                // twice, i.e. net zero, so a middle double-tap is
-                // a no-op like Flutter's). The step is read live
-                // from SettingsStore. Simultaneous so the existing
-                // tap / long-press behaviour is untouched.
-                .simultaneousGesture(
-                    SpatialTapGesture(count: 2).onEnded { value in
-                        videoPlayer.doubleTapSeek(
-                            atX: value.location.x,
-                            width: UIScreen.main.bounds.width,
-                            seconds: settingsStore.doubleTapSeconds
-                        )
-                    }
-                )
             if controlsVisible {
                 VStack(spacing: 0) {
                     topBar
@@ -909,6 +917,17 @@ struct VideoPlayerView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(theme.accentOnVideo, in: Capsule())
+            }
+            // Build 36, item 9: middle double-tap feedback — a
+            // brief centre pause/play icon for the new state.
+            // Same white-on-black-scrim treatment as the top-bar
+            // buttons; fades out after 0.7 s.
+            if pauseFlashVisible {
+                Image(systemName: pauseFlashShowsPause ? "pause.fill" : "play.fill")
+                    .font(.system(size: 44, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 96, height: 96)
+                    .background(Color.black.opacity(0.45), in: Circle())
             }
             if videoPlayer.seekFailed {
                 VStack {
@@ -1004,6 +1023,8 @@ struct VideoPlayerView: View {
             // leave the 2x badge (or 2x speed) behind: the view
             // model is app-level and outlives this view.
             videoPlayer.setDoubleSpeed(false)
+            pendingSingleTapWork?.cancel()
+            pauseFlashWork?.cancel()
             videoPlayer.disarmBrightness()
             VideoOrientation.unlockPortrait()
         }
@@ -1167,6 +1188,83 @@ struct VideoPlayerView: View {
     private func hideControls() {
         autoHideWork?.cancel()
         controlsVisible = false
+    }
+
+    // MARK: - Tap disambiguation (build 36, item 9)
+
+    /// One tap-up from the gesture layer. The disambiguator
+    /// decides: first tap → wait for a possible second tap (the
+    /// single-tap toggle fires only when the window expires);
+    /// second tap inside the window → the double-tap for its zone
+    /// at once, pending single dropped. `.singleTap` never arrives
+    /// here (the expiry work item handles it).
+    private func handleVideoTap(at location: CGPoint) {
+        let outcome = tapDisambiguator.tap(
+            at: Date().timeIntervalSinceReferenceDate,
+            x: location.x,
+            width: UIScreen.main.bounds.width
+        )
+        switch outcome {
+        case .wait:
+            pendingSingleTapWork?.cancel()
+            let work = DispatchWorkItem { [self] in
+                guard self.tapDisambiguator.expirePending(
+                    at: Date().timeIntervalSinceReferenceDate
+                ) == .singleTap else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    if self.controlsVisible {
+                        self.hideControls()
+                    } else {
+                        self.showControlsTemporarily()
+                    }
+                }
+            }
+            pendingSingleTapWork = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + VodGestureConfig.doubleTapWindowSeconds,
+                execute: work
+            )
+        case .singleTap:
+            break
+        case .doubleTap(let zone):
+            pendingSingleTapWork?.cancel()
+            handleDoubleTap(zone: zone, x: location.x)
+        }
+    }
+
+    /// A double-tap, by zone. Sides keep their ±seek (step read
+    /// live from SettingsStore, `doubleTapSeconds` untouched);
+    /// the middle reuses the bottom play button's toggle — no
+    /// second playback state machine — then keeps the controls up
+    /// (paused playback never auto-hides: `showControlsTemporarily`
+    /// is a no-op for the timer while paused, and the
+    /// `isPlaying` onChange cancels any pending hide) and flashes
+    /// the pause/play icon for the new state.
+    private func handleDoubleTap(zone: VodDoubleTapZone, x: CGFloat) {
+        switch zone {
+        case .seekBack, .seekForward:
+            videoPlayer.doubleTapSeek(
+                atX: x,
+                width: UIScreen.main.bounds.width,
+                seconds: settingsStore.doubleTapSeconds
+            )
+        case .togglePlayPause:
+            videoPlayer.togglePlayPause()
+            pauseFlashShowsPause = !videoPlayer.isPlaying
+            showPauseFlash()
+            showControlsTemporarily()
+        }
+    }
+
+    /// Show the centre pause/play flash for 0.7 s.
+    private func showPauseFlash() {
+        pauseFlashWork?.cancel()
+        pauseFlashVisible = true
+        let work = DispatchWorkItem { [self] in
+            self.pauseFlashVisible = false
+        }
+        pauseFlashWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7, execute: work)
     }
 
     private var bottomControls: some View {
