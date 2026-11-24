@@ -183,6 +183,19 @@ struct MyView: View {
             .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { _ in
                 counts = MyEntryCounts.reload()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .haoLiveFollowChanged)) { _ in
+                // Same staleness as the music counts above: a
+                // follow toggle from a card's long-press menu
+                // writes the store directly and never re-triggers
+                // onAppear, so the "我的关注" count stayed stale
+                // while this page was on screen. Only assign when
+                // the counts actually changed, so a duplicate
+                // notification does not refresh the list twice.
+                let reloaded = MyEntryCounts.reload()
+                if reloaded != counts {
+                    counts = reloaded
+                }
+            }
         }
     }
 

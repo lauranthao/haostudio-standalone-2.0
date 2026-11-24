@@ -177,6 +177,14 @@ enum BackupEngineCore {
         "hao_migration_done_v1",
         "hao_migration_state",
         "hao_migration_notice_dismissed",
+        // b36 follow-up: the VOD danmaku API token is a credential
+        // and never enters a backup (see userDefaultsKeyKinds).
+        // Old backups made by b36 item 11 already carry it — on
+        // import it is skipped here, before the unknown-key
+        // branch, so it is neither restored nor isolated into
+        // backup_unknown_keys.json: the import succeeds, the
+        // token simply stays whatever it is on this device.
+        "hao_vod_danmaku_api_token",
     ]
 
     /// Test-only fault injection, mirroring MigrationStore:
@@ -228,13 +236,19 @@ enum BackupEngineCore {
         out["hao_glass_intensity"] = .double
         out["hao_video_player_key"] = .string
         out["hao_video_last_engine"] = .string
-        // b36 item 11: VOD danmaku API address + token (plain
-        // UserDefaults strings, same as the S5 additions above).
-        // Whitelist-based export/import: without these lines a
-        // backup would silently drop them and a restore would
-        // isolate them as unknown keys.
+        // b36 item 11: VOD danmaku API address (plain UserDefaults
+        // string, same as the S5 additions above). The address is
+        // not a secret, so it stays in the whitelist and a restore
+        // brings it back without re-typing. The TOKEN does not:
+        // b36 follow-up removes it from the whitelist, like the
+        // Emby apiKey precedent — a credential must never sit in
+        // a backup zip in plain text. Old backups that already
+        // carry it are handled on import: the key is listed in
+        // ignoredImportKeys below, so it is skipped, never
+        // applied, and never isolated into backup_unknown_keys.json
+        // (isolating it would still leave the token on disk in
+        // plain text).
         out["hao_vod_danmaku_api_url"] = .string
-        out["hao_vod_danmaku_api_token"] = .string
         return out
     }
 

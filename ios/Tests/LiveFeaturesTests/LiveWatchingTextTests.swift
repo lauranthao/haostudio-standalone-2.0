@@ -21,8 +21,16 @@ final class LiveWatchingTextTests: XCTestCase {
     }
 
     func testTenThousandFormatsAsWan() {
-        XCTAssertEqual(liveWatchingText(10000), "1.0万")
+        // b36 follow-up: the ".0" tail is stripped — 10000 reads
+        // "1万", never "1.0万". 10500 stays "1.1万" (1.05 rounds
+        // up at one decimal), 100000 reads "10万".
+        XCTAssertEqual(liveWatchingText(10000), "1万")
+        XCTAssertEqual(liveWatchingText(10499), "1万")
+        XCTAssertEqual(liveWatchingText(10500), "1.1万")
         XCTAssertEqual(liveWatchingText(12345), "1.2万")
+        XCTAssertEqual(liveWatchingText(99999), "10万")
+        XCTAssertEqual(liveWatchingText(100000), "10万")
+        XCTAssertEqual(liveWatchingText(999999), "100万")
         XCTAssertEqual(liveWatchingText(1000000), "100万")
     }
 }

@@ -276,6 +276,43 @@ final class HomeViewModel: ObservableObject {
         refreshLiveStatus()
     }
 
+    // MARK: - Follow-list change (haoLiveFollowChanged)
+
+    /// Rebuild hot live after a follow toggle, from the stores'
+    /// current follows + history. The store is already updated
+    /// when the notification posts (saveFollows runs before
+    /// post), so the list can be rebuilt from local data alone:
+    /// a room that was only followed drops out, a room that is
+    /// also watched stays, a room followed elsewhere appears.
+    /// No network — refreshLiveStatus is deliberately NOT called,
+    /// so a toggle never pays for up to 10 room-info requests —
+    /// and lastReloadAt is untouched, so appearance coalescing
+    /// is unaffected. A rebuilt list identical to the current
+    /// one is not assigned, so a duplicate notification neither
+    /// flickers the section nor refreshes it twice. In-flight
+    /// status answers still land by room id on survivors; a
+    /// removed room simply has no index to write to.
+    func refreshHotLiveForFollowChange() {
+        refreshHotLiveForFollowChange(
+            follows: LiveLibraryStore.follows(),
+            liveHistory: LiveLibraryStore.history())
+    }
+
+    /// Same rebuild with the inputs supplied, so tests can drive
+    /// it with fixture data (same seam as reload's overload).
+    func refreshHotLiveForFollowChange(
+        follows: [LiveFollowedRoom],
+        liveHistory: [LiveHistoryEntry]
+    ) {
+        let previouslyLive = Set(hotLive.filter { $0.isLive }.map { $0.id })
+        var rebuilt = Self.hotLiveItems(follows: follows, history: liveHistory)
+        for index in rebuilt.indices where previouslyLive.contains(rebuilt[index].id) {
+            rebuilt[index].isLive = true
+        }
+        guard rebuilt != hotLive else { return }
+        hotLive = rebuilt
+    }
+
     // MARK: - Pure aggregation (unit-tested, no I/O)
 
     /// Continue watching: history() as-is, newest first, capped —

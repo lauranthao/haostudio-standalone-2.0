@@ -292,6 +292,80 @@ final class HomeAggregationTests: XCTestCase {
         XCTAssertEqual(HomeViewModel.hotLiveItems(follows: [], history: []).count, 0)
     }
 
+    // MARK: - Follow change refresh (b36 follow-up)
+
+    func testFollowChangeDropsUnfollowedCardImmediately() {
+        // Room "1" is only followed; room "2" is only watched.
+        // Unfollowing "1" must drop its card at once, without a
+        // reload — and "2" stays.
+        let viewModel = HomeViewModel(liveStatusChecker: nil)
+        viewModel.reload(
+            videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
+            follows: [follow(roomId: "1", followedAt: Date(timeIntervalSince1970: 2000))],
+            liveHistory: [liveEntry(roomId: "2", watchedAt: Date(timeIntervalSince1970: 1000))],
+            dailyPicks: [])
+        XCTAssertEqual(viewModel.hotLive.map { $0.roomId }, ["1", "2"])
+        viewModel.refreshHotLiveForFollowChange(follows: [], liveHistory: [liveEntry(roomId: "2", watchedAt: Date(timeIntervalSince1970: 1000))])
+        XCTAssertEqual(viewModel.hotLive.map { $0.roomId }, ["2"])
+    }
+
+    func testFollowChangeKeepsRoomThatIsAlsoWatched() {
+        // Unfollowing a room that is also in history keeps its
+        // card — it is still a watched room, only the follow is gone.
+        let viewModel = HomeViewModel(liveStatusChecker: nil)
+        viewModel.reload(
+            videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
+            follows: [follow(roomId: "1", followedAt: Date(timeIntervalSince1970: 2000))],
+            liveHistory: [liveEntry(roomId: "1", watchedAt: Date(timeIntervalSince1970: 1000))],
+            dailyPicks: [])
+        XCTAssertEqual(viewModel.hotLive.map { $0.roomId }, ["1"])
+        viewModel.refreshHotLiveForFollowChange(follows: [], liveHistory: [liveEntry(roomId: "1", watchedAt: Date(timeIntervalSince1970: 1000))])
+        XCTAssertEqual(viewModel.hotLive.map { $0.roomId }, ["1"])
+    }
+
+    func testFollowChangeAddsNewlyFollowedRoom() {
+        // Following from elsewhere (live tab, room page) must make
+        // the room appear on home without waiting for a reload.
+        let viewModel = HomeViewModel(liveStatusChecker: nil)
+        emptyReload(on: viewModel)
+        XCTAssertTrue(viewModel.hotLive.isEmpty)
+        viewModel.refreshHotLiveForFollowChange(
+            follows: [follow(roomId: "9", followedAt: Date(timeIntervalSince1970: 2000))],
+            liveHistory: [])
+        XCTAssertEqual(viewModel.hotLive.map { $0.roomId }, ["9"])
+    }
+
+    func testFollowChangeCarriesLiveBadgeAndSkipsNetwork() {
+        // A surviving room keeps its confirmed LIVE badge, and the
+        // refresh fires no status check at all (checker call count
+        // stays 0) — a toggle must not pay for room-info requests.
+        var calls = 0
+        let viewModel = HomeViewModel(liveStatusChecker: { _, completion in
+            calls += 1
+            completion(.live)
+        })
+        viewModel.reload(
+            videoHistory: [], recent: [], listenLog: [], resumeMap: [:],
+            follows: [follow(roomId: "1", followedAt: Date(timeIntervalSince1970: 2000))],
+            liveHistory: [liveEntry(roomId: "2", watchedAt: Date(timeIntervalSince1970: 1000))],
+            dailyPicks: [])
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+        XCTAssertEqual(viewModel.hotLive.map { $0.isLive }, [true, true])
+        let callsAfterReload = calls
+        viewModel.refreshHotLiveForFollowChange(
+            follows: [follow(roomId: "1", followedAt: Date(timeIntervalSince1970: 2000))],
+            liveHistory: [liveEntry(roomId: "2", watchedAt: Date(timeIntervalSince1970: 1000))])
+        XCTAssertEqual(calls, callsAfterReload, "follow refresh must not re-check live status")
+        XCTAssertEqual(viewModel.hotLive.map { $0.isLive }, [true, true])
+        // A duplicate notification with unchanged data changes
+        // nothing — no flicker, no second refresh.
+        viewModel.refreshHotLiveForFollowChange(
+            follows: [follow(roomId: "1", followedAt: Date(timeIntervalSince1970: 2000))],
+            liveHistory: [liveEntry(roomId: "2", watchedAt: Date(timeIntervalSince1970: 1000))])
+        XCTAssertEqual(calls, callsAfterReload)
+        XCTAssertEqual(viewModel.hotLive.map { $0.roomId }, ["1", "2"])
+    }
+
     // MARK: - Daily picks (reused logic)
 
     func testDailyPicksReuseExistingLogic() {
