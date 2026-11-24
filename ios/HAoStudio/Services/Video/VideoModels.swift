@@ -34,7 +34,8 @@ struct VideoSource: Codable, Equatable, Identifiable {
 
 /// One title in a list / search result. `id` is the CMS vod_id as
 /// a string (ids drift on reseed; the stable identity for resume
-/// is title + year, see VideoResumeKey).
+/// is title + year, see VideoResumeKey). For an Emby item `id` is
+/// the Emby item id instead, and `sourceId` is nil.
 struct VideoItem: Codable, Equatable, Identifiable, Hashable {
     let id: String
     let title: String
@@ -46,6 +47,78 @@ struct VideoItem: Codable, Equatable, Identifiable, Hashable {
     let remarks: String?
     /// CMS source this item came from (nil for Emby / Douban rows).
     let sourceId: Int?
+
+    /// Which detail loader serves this item. CMS items always
+    /// carry their source id (CmsClient.parseVideoItem); Emby
+    /// items carry the Emby item id in `id` and no CMS source
+    /// (EmbyClient.toVideoItem). A nil source id is therefore
+    /// Emby — never a CMS item. The detail page resolves its
+    /// loader from the item itself, so a history / favourite /
+    /// search entry keeps its Emby identity instead of falling
+    /// through to the CMS loader (which answers nil for it:
+    /// fetchDetail guards on sourceId, so the page opened on an
+    /// empty "暂无可播剧集" state — build 36 item 16).
+    var detailSource: VideoDetailSource {
+        sourceId == nil ? .emby : .cms
+    }
+}
+
+/// Where a detail comes from: CMS detail (lines + Douban meta)
+/// or Emby detail (streams as lines). Lives here (not the detail
+/// view) so the routing decision is testable from AppCore.
+enum VideoDetailSource: Equatable {
+    case cms
+    case emby
+}
+
+/// Pure detail-page routing decisions shared by the detail view
+/// model and the unit tests (no I/O, no store reads).
+enum VideoDetailRouting {
+
+    /// Which line / episode a resume bookmark opens. Emby lines
+    /// are seasons, so the resume episode may live in a later
+    /// season, not the first line — searching only the first line
+    /// used to reopen season 1 episode 1 instead of resuming.
+    /// CMS lines are sources holding the same episodes, so the
+    /// first line holding the episode at its recorded index wins
+    /// there too. `lineName` is the recorded line (history entry):
+    /// when it names a line, that line wins first — same-name
+    /// episodes across seasons ("第 N 集" with no episode title)
+    /// are otherwise indistinguishable. Nil when no line holds
+    /// the resume episode.
+    static func resumeSelection(
+        lines: [PlayLine],
+        resume: ResumeInfo,
+        lineName: String? = nil
+    ) -> (lineIndex: Int, episodeIndex: Int)? {
+        // The recorded line first (exact season / source).
+        if let lineName = lineName, !lineName.isEmpty,
+           let lineIndex = lines.firstIndex(where: { $0.name == lineName }) {
+            let line = lines[lineIndex]
+            if line.episodes.indices.contains(resume.episodeIndex),
+               line.episodes[resume.episodeIndex].name == resume.episodeName {
+                return (lineIndex, resume.episodeIndex)
+            }
+            if let episodeIndex = line.episodes.firstIndex(where: { $0.name == resume.episodeName }) {
+                return (lineIndex, episodeIndex)
+            }
+        }
+        // Prefer the line where the resume episode sits at its
+        // recorded index: same-name episodes across seasons (or
+        // sources) are disambiguated by position.
+        for (lineIndex, line) in lines.enumerated() {
+            if line.episodes.indices.contains(resume.episodeIndex),
+               line.episodes[resume.episodeIndex].name == resume.episodeName {
+                return (lineIndex, resume.episodeIndex)
+            }
+        }
+        for (lineIndex, line) in lines.enumerated() {
+            if let episodeIndex = line.episodes.firstIndex(where: { $0.name == resume.episodeName }) {
+                return (lineIndex, episodeIndex)
+            }
+        }
+        return nil
+    }
 }
 
 /// One playable episode inside a line.
