@@ -54,9 +54,13 @@ struct MusicCoverView: View {
 }
 
 /// One song row: cover (or track number), title + artist,
-/// platform badge, duration. Tap = play. The row itself never
-/// invents actions: the context menu offers only actions that
-/// exist (favourite / add to playlist).
+/// platform badge, duration. Tap = play. The "…" button at the
+/// right edge opens the shared 7-action menu (see
+/// MusicSongMenuHost); long-press opens the identical menu as a
+/// context menu. The row itself never invents actions: the menu
+/// offers only actions that exist for this song (favourite /
+/// add to playlist / play next / download / share / view artist
+/// / view album), hiding the ones that don't apply.
 ///
 /// Apple Music shape: 56pt cover, 10pt radius, title 16 semibold,
 /// artist 14 secondary, duration right. Album / chart / playlist
@@ -71,66 +75,273 @@ struct MusicSongRow: View {
     /// title / artist / duration layout.
     var trackNumber: Int? = nil
     var onTap: () -> Void
-    var onToggleFav: (() -> Void)?
-    var onAddToPlaylist: (() -> Void)?
+    /// Post-toggle hook only: the row toggles the favourite itself
+    /// (MusicSongMenuHost). Lists that reload after a toggle (home
+    /// daily / recent) pass their reload here.
+    var onToggleFav: (() -> Void)? = nil
+    /// Queue-only extra menu item ("不喜欢"): nil everywhere else.
+    var onDislike: (() -> Void)? = nil
 
     @Environment(\.haoTheme) private var theme
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 12) {
-                if let trackNumber = trackNumber {
-                    Text("\(trackNumber)")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(theme.textSecondary)
-                        .frame(width: 28, alignment: .center)
-                } else {
-                    MusicCoverView(urlString: song.cover, size: 56, cornerRadius: 10)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(song.title.isEmpty ? "未知歌曲" : song.title)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(isPlaying ? theme.accent : theme.textPrimary)
-                        .lineLimit(1)
-                    HStack(spacing: 6) {
-                        if showPlatformBadge, let badge = song.badgePlatform {
-                            Text(badge.badgeName)
-                                .font(.system(size: 11, weight: .medium))
+        // The "…" button is a SIBLING of the play button, never
+        // nested inside it (nested buttons double-fire — build 35
+        // search-history / MiniPlayerBar fix).
+        MusicSongMenuHost(song: song, onFavToggled: onToggleFav, onDislike: onDislike) { menu in
+            HStack(spacing: 8) {
+                Button(action: onTap) {
+                    HStack(spacing: 12) {
+                        if let trackNumber = trackNumber {
+                            Text("\(trackNumber)")
+                                .font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(theme.textSecondary)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                        .strokeBorder(theme.hairline, lineWidth: 0.5)
-                                }
+                                .frame(width: 28, alignment: .center)
+                        } else {
+                            MusicCoverView(urlString: song.cover, size: 56, cornerRadius: 10)
                         }
-                        Text(song.artist.isEmpty ? "未知艺人" : song.artist)
-                            .font(.system(size: 14))
-                            .foregroundStyle(theme.textSecondary)
-                            .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(song.title.isEmpty ? "未知歌曲" : song.title)
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(isPlaying ? theme.accent : theme.textPrimary)
+                                .lineLimit(1)
+                            HStack(spacing: 6) {
+                                if showPlatformBadge, let badge = song.badgePlatform {
+                                    Text(badge.badgeName)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(theme.textSecondary)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                                .strokeBorder(theme.hairline, lineWidth: 0.5)
+                                        }
+                                }
+                                Text(song.artist.isEmpty ? "未知艺人" : song.artist)
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(theme.textSecondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        Spacer()
+                        if song.dur > 0 {
+                            Text(musicDurationText(seconds: song.dur))
+                                .font(.system(size: 13))
+                                .foregroundStyle(theme.textMuted)
+                        }
+                        if isPlaying {
+                            MusicPlayingEQView()
+                        }
                     }
+                    .contentShape(Rectangle())
                 }
-                Spacer()
-                if song.dur > 0 {
-                    Text(musicDurationText(seconds: song.dur))
-                        .font(.system(size: 13))
-                        .foregroundStyle(theme.textMuted)
-                }
-                if isPlaying {
-                    MusicPlayingEQView()
-                }
+                .buttonStyle(.plain)
+                MusicSongMenuButton(handle: menu)
             }
-            .contentShape(Rectangle())
+            .contextMenu { menu.menuContent() }
         }
-        .buttonStyle(.plain)
-        .contextMenu {
-            if let onToggleFav = onToggleFav {
-                Button("收藏 / 取消收藏", action: onToggleFav)
+    }
+}
+
+// MARK: - Shared song actions menu (build 36, item 12)
+
+/// Pure, testable availability for the shared song menu: an item
+/// is hidden when it cannot do anything real for this song — never
+/// a dead entry. Download stays visible for an already-downloaded
+/// song (the engine toasts "已下载"); only a local file hides it
+/// (there is nothing to download).
+enum MusicSongMenuAvailability {
+    /// False for an imported local file (already on the device).
+    static func canDownload(song: MusicSong) -> Bool { !song.isLocal }
+    /// False when there is no artist name to look up.
+    static func canViewArtist(song: MusicSong) -> Bool {
+        !song.artist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    /// False when there is no album name to look up.
+    static func canViewAlbum(song: MusicSong) -> Bool {
+        !song.album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    /// Real share text from the song itself. MusicSong carries no
+    /// shareable URL and none is invented.
+    static func shareText(song: MusicSong) -> String {
+        let platform = song.badgePlatform?.badgeName ?? ""
+        if platform.isEmpty { return "《\(song.title)》 - \(song.artist)" }
+        return "《\(song.title)》 - \(song.artist)（\(platform)）"
+    }
+}
+
+/// The 7 shared song actions, built from one handle so a "…"
+/// Menu and a long-press context menu offer the identical items.
+/// Play-next / download run on the shared player view model;
+/// view-artist / view-album open their sheets via the host.
+struct MusicSongMenuContent: View {
+    var song: MusicSong
+    var isFav: Bool
+    var showDownload: Bool = true
+    var onToggleFav: () -> Void
+    var onAddToPlaylist: () -> Void
+    var onPlayNext: () -> Void
+    var onDownload: () -> Void
+    var onShowArtist: () -> Void
+    var onShowAlbum: () -> Void
+    var onDislike: (() -> Void)? = nil
+
+    var body: some View {
+        Group {
+            Button(action: onToggleFav) {
+                Label(isFav ? "取消收藏" : "收藏", systemImage: isFav ? "heart.fill" : "heart")
             }
-            if let onAddToPlaylist = onAddToPlaylist {
-                Button("添加到歌单", action: onAddToPlaylist)
+            Button(action: onAddToPlaylist) {
+                Label("加入歌单", systemImage: "text.badge.plus")
+            }
+            Button(action: onPlayNext) {
+                Label("下一首播放", systemImage: "text.insert")
+            }
+            if showDownload && MusicSongMenuAvailability.canDownload(song: song) {
+                Button(action: onDownload) {
+                    Label("下载", systemImage: "arrow.down.circle")
+                }
+            }
+            ShareLink(item: MusicSongMenuAvailability.shareText(song: song)) {
+                Label("分享", systemImage: "square.and.arrow.up")
+            }
+            if MusicSongMenuAvailability.canViewArtist(song: song) {
+                Button(action: onShowArtist) {
+                    Label("查看歌手", systemImage: "person")
+                }
+            }
+            if MusicSongMenuAvailability.canViewAlbum(song: song) {
+                Button(action: onShowAlbum) {
+                    Label("查看专辑", systemImage: "square.stack")
+                }
+            }
+            if let onDislike = onDislike {
+                Button(role: .destructive, action: onDislike) {
+                    Label("不喜欢（私人漫游不再推）", systemImage: "hand.thumbsdown")
+                }
             }
         }
+    }
+}
+
+/// One song's menu wiring: the song, the player, and the host's
+/// state bindings. The host builds one handle per body evaluation,
+/// so the "…" Menu and the long-press context menu read the same
+/// favourite flag and open the same sheets.
+struct MusicSongMenuHandle {
+    var song: MusicSong
+    var playerVM: MusicPlayerViewModel
+    var isFav: Binding<Bool>
+    var showAddToPlaylist: Binding<Bool>
+    var showAlbum: Binding<Bool>
+    var showArtist: Binding<Bool>
+    var showDownload: Bool = true
+    var onFavToggled: (() -> Void)? = nil
+    var onDislike: (() -> Void)? = nil
+
+    func menuContent() -> MusicSongMenuContent {
+        MusicSongMenuContent(
+            song: song,
+            isFav: isFav.wrappedValue,
+            showDownload: showDownload,
+            onToggleFav: {
+                isFav.wrappedValue = MusicLibraryStore.toggleFav(song)
+                onFavToggled?()
+            },
+            onAddToPlaylist: { showAddToPlaylist.wrappedValue = true },
+            onPlayNext: { playerVM.playNext(song: song) },
+            onDownload: { playerVM.download(song: song) },
+            onShowArtist: { showArtist.wrappedValue = true },
+            onShowAlbum: { showAlbum.wrappedValue = true },
+            onDislike: onDislike
+        )
+    }
+}
+
+/// The visible "…" button: 28×28 hit target, ellipsis icon,
+/// theme secondary text — Apple Music's row affordance. The
+/// favourite label inside the menu is live (the host syncs it),
+/// so this button needs no state of its own.
+struct MusicSongMenuButton: View {
+    var handle: MusicSongMenuHandle
+
+    @Environment(\.haoTheme) private var theme
+
+    var body: some View {
+        Menu { handle.menuContent() } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(theme.textSecondary)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("更多操作")
+    }
+}
+
+/// Owns one song's action-menu state (favourite flag, the three
+/// sheets) and vends a handle to its content, so a row ("…"
+/// Menu + long-press) and a shelf card (long-press only) offer
+/// the identical menu without duplicating state. The favourite
+/// flag is read from the store on appear / when the song changes,
+/// and refreshed on `haoMusicFavChanged` — so a toggle from any
+/// other row, card, or the full player updates this menu's label
+/// live. Artist / album sheets get their own NavigationStack
+/// (same as the full player) so they present from every list,
+/// including the queue sheet, with no plumbing into the caller's
+/// navigation stack. The detail view models resolve an empty id
+/// by name search, so no id is faked.
+struct MusicSongMenuHost<Content: View>: View {
+    var song: MusicSong
+    var showDownload: Bool = true
+    var onFavToggled: (() -> Void)? = nil
+    var onDislike: (() -> Void)? = nil
+    @ViewBuilder var content: (MusicSongMenuHandle) -> Content
+
+    @EnvironmentObject private var playerVM: MusicPlayerViewModel
+    @State private var isFav = false
+    @State private var showAddToPlaylist = false
+    @State private var showAlbum = false
+    @State private var showArtist = false
+
+    var body: some View {
+        content(handle)
+            .sheet(isPresented: $showAddToPlaylist) {
+                MusicAddToPlaylistSheet(song: song) { showAddToPlaylist = false }
+            }
+            .sheet(isPresented: $showAlbum) {
+                NavigationStack {
+                    MusicAlbumDetailView(album: AlbumSummary(
+                        id: "", name: song.album, artist: song.artist,
+                        platform: song.platform))
+                }
+            }
+            .sheet(isPresented: $showArtist) {
+                NavigationStack {
+                    MusicArtistDetailView(artist: ArtistSummary(
+                        id: "", name: MusicAPIJSON.firstArtist(song.artist),
+                        platform: song.platform))
+                }
+            }
+            .onAppear { isFav = MusicLibraryStore.isFav(song) }
+            .onChange(of: song.identityKey) { _, _ in isFav = MusicLibraryStore.isFav(song) }
+            .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { _ in
+                isFav = MusicLibraryStore.isFav(song)
+            }
+    }
+
+    private var handle: MusicSongMenuHandle {
+        MusicSongMenuHandle(
+            song: song,
+            playerVM: playerVM,
+            isFav: $isFav,
+            showAddToPlaylist: $showAddToPlaylist,
+            showAlbum: $showAlbum,
+            showArtist: $showArtist,
+            showDownload: showDownload,
+            onFavToggled: onFavToggled,
+            onDislike: onDislike
+        )
     }
 }
 

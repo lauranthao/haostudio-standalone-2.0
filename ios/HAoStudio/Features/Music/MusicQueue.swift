@@ -221,6 +221,27 @@ struct MusicQueue {
         }
     }
 
+    /// Insert `song` at `position`, moving it there when it is
+    /// already queued so it never appears twice (play-next
+    /// dedupe). The current track never moves: inserting the
+    /// playing song is a no-op, and inserting at or before the
+    /// current index shifts the index so the same song stays
+    /// current. Inserting into an empty queue leaves the index
+    /// at 0, on the new song.
+    mutating func insert(_ song: MusicSong, at position: Int) {
+        let wasEmpty = tracks.isEmpty
+        var target = position
+        if let existing = tracks.firstIndex(where: { $0.identityKey == song.identityKey }) {
+            if existing == index { return }
+            tracks.remove(at: existing)
+            if existing < index { index -= 1 }
+            if existing < target { target -= 1 }
+        }
+        target = min(max(0, target), tracks.count)
+        tracks.insert(song, at: target)
+        if !wasEmpty && target <= index { index += 1 }
+    }
+
     mutating func clear() {
         tracks.removeAll()
         index = 0

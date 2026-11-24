@@ -260,10 +260,8 @@ struct HomeView: View {
                 playerVM.play(song: song, in: tracks, startAt: index)
             },
             onToggleFav: {
-                _ = MusicLibraryStore.toggleFav(song)
                 viewModel.reload()
-            },
-            onAddToPlaylist: nil
+            }
         )
         .padding(.vertical, 6)
     }
@@ -324,21 +322,27 @@ struct HomeSongCard: View {
     @Environment(\.haoTheme) private var theme
 
     var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 6) {
-                MusicCoverView(urlString: song.cover, size: 120, cornerRadius: 12)
-                Text(song.title.isEmpty ? "未知歌曲" : song.title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(theme.textPrimary)
-                    .lineLimit(1)
-                Text(song.artist.isEmpty ? "未知艺人" : song.artist)
-                    .font(.system(size: 12))
-                    .foregroundStyle(theme.textSecondary)
-                    .lineLimit(1)
+        // Long-press only (build 36, item 12): a "…" button does
+        // not fit the 120pt card layout without redesign. The
+        // menu is the same shared one as the rows.
+        MusicSongMenuHost(song: song) { menu in
+            Button(action: onTap) {
+                VStack(alignment: .leading, spacing: 6) {
+                    MusicCoverView(urlString: song.cover, size: 120, cornerRadius: 12)
+                    Text(song.title.isEmpty ? "未知歌曲" : song.title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(theme.textPrimary)
+                        .lineLimit(1)
+                    Text(song.artist.isEmpty ? "未知艺人" : song.artist)
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.textSecondary)
+                        .lineLimit(1)
+                }
+                .frame(width: 120, alignment: .leading)
             }
-            .frame(width: 120, alignment: .leading)
+            .buttonStyle(.plain)
+            .contextMenu { menu.menuContent() }
         }
-        .buttonStyle(.plain)
     }
 }
 
@@ -371,10 +375,8 @@ private struct HomeRecentPlaysView: View {
                                     playerVM.play(song: song, in: viewModel.recentPlays, startAt: index)
                                 },
                                 onToggleFav: {
-                                    _ = MusicLibraryStore.toggleFav(song)
                                     viewModel.reload()
-                                },
-                                onAddToPlaylist: nil
+                                }
                             )
                             .padding(.vertical, 6)
                         }

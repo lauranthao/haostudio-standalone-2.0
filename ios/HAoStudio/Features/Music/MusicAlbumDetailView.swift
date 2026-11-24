@@ -117,11 +117,7 @@ struct MusicAlbumDetailView: View {
                                 trackNumber: index + 1,
                                 onTap: {
                                     playerVM.play(song: song, in: viewModel.songs, startAt: index)
-                                },
-                                onToggleFav: {
-                                    _ = MusicLibraryStore.toggleFav(song)
-                                },
-                                onAddToPlaylist: nil
+                                }
                             )
                             .listRowBackground(theme.scaffoldBackground)
                             .listRowSeparatorTint(theme.hairline)

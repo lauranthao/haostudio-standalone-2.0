@@ -14,7 +14,6 @@ struct MusicSearchView: View {
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
     @StateObject private var searchVM = MusicSearchViewModel()
     @State private var query = ""
-    @State private var showAddToPlaylistFor: MusicSong?
 
     @Environment(\.haoTheme) private var theme
     @FocusState private var searchFocused: Bool
@@ -33,11 +32,6 @@ struct MusicSearchView: View {
         .background(theme.scaffoldBackground)
         .navigationTitle("搜歌")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $showAddToPlaylistFor) { song in
-            MusicAddToPlaylistSheet(song: song) {
-                showAddToPlaylistFor = nil
-            }
-        }
     }
 
     private var searchField: some View {
@@ -142,12 +136,6 @@ struct MusicSearchView: View {
                     isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
                     onTap: {
                         playerVM.play(song: song, in: searchVM.results, startAt: index)
-                    },
-                    onToggleFav: {
-                        _ = MusicLibraryStore.toggleFav(song)
-                    },
-                    onAddToPlaylist: {
-                        showAddToPlaylistFor = song
                     }
                 )
                 .listRowBackground(theme.scaffoldBackground)
