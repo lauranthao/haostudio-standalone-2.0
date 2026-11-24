@@ -237,14 +237,16 @@ struct UpdatePromptSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            headerSection
-            notesSection
-            blockedSection
-            buttonsSection
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                headerSection
+                notesSection
+                blockedSection
+                buttonsSection
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.scaffoldBackground)
     }
 

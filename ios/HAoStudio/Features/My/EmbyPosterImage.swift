@@ -71,7 +71,7 @@ struct EmbyPosterImage: View {
             .fill(theme.surfaceStrong)
             .overlay {
                 Image(systemName: "film")
-                    .font(.system(size: 28, weight: .regular))
+                    .font(.title)
                     .foregroundStyle(theme.textSecondary)
             }
     }

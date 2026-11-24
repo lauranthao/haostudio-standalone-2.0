@@ -86,11 +86,13 @@ struct LXSourceManagementView: View {
                     importFromURL()
                 }
                 .font(.haoBody)
+                .foregroundStyle(theme.accent)
                 .disabled(isImporting)
                 Button("从文件选择 .js 导入") {
                     showingFileImporter = true
                 }
                 .font(.haoBody)
+                .foregroundStyle(theme.accent)
                 .disabled(isImporting)
                 if isImporting {
                     ProgressView("正在导入…")
@@ -106,6 +108,7 @@ struct LXSourceManagementView: View {
                     showingRestoreAlert = true
                 }
                 .font(.haoBody)
+                .foregroundStyle(theme.accent)
             }
         }
         .listStyle(.insetGrouped)
@@ -174,7 +177,7 @@ struct LXSourceManagementView: View {
                 if let status = statusText(for: row) {
                     Text(status.text)
                         .font(.haoFootnote)
-                        .foregroundStyle(status.isFailure ? theme.liveRed : theme.textMuted)
+                        .foregroundStyle(status.isFailure ? theme.textPrimary : theme.textMuted)
                 }
             }
             Spacer()
@@ -210,6 +213,8 @@ struct LXSourceManagementView: View {
                     .font(.haoRowSubtitle)
             }
             .buttonStyle(.plain)
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
             .disabled(isLastEnabled)
         }
     }
@@ -383,6 +388,7 @@ struct CmsSourceManagementView: View {
                     showingRestoreAlert = true
                 }
                 .font(.haoBody)
+                .foregroundStyle(theme.accent)
             }
         }
         .listStyle(.insetGrouped)
