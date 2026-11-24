@@ -85,12 +85,12 @@ struct LXSourceManagementView: View {
                 Button("添加") {
                     importFromURL()
                 }
-                .font(.system(size: 15))
+                .font(.system(size: 17))
                 .disabled(isImporting)
                 Button("从文件选择 .js 导入") {
                     showingFileImporter = true
                 }
-                .font(.system(size: 15))
+                .font(.system(size: 17))
                 .disabled(isImporting)
                 if isImporting {
                     ProgressView("正在导入…")
@@ -98,14 +98,14 @@ struct LXSourceManagementView: View {
                         .foregroundStyle(theme.textMuted)
                 }
                 Text("粘贴 .js 脚本直链，或从文件 App 选择 .js 文件；导入时会先校验，校验通过才加入列表参与搜歌和播放，失败会提示原因。")
-                    .font(.system(size: 12))
+                    .font(.system(size: 13))
                     .foregroundStyle(theme.textMuted)
             }
             Section {
                 Button("恢复默认") {
                     showingRestoreAlert = true
                 }
-                .font(.system(size: 15))
+                .font(.system(size: 17))
             }
         }
         .listStyle(.insetGrouped)
@@ -164,16 +164,16 @@ struct LXSourceManagementView: View {
         return HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.name)
-                    .font(.system(size: 15))
+                    .font(.system(size: 17))
                     .foregroundStyle(theme.textPrimary)
                 if row.isCustom {
                     Text("自定义")
-                        .font(.system(size: 12))
+                        .font(.system(size: 13))
                         .foregroundStyle(theme.textMuted)
                 }
                 if let status = statusText(for: row) {
                     Text(status.text)
-                        .font(.system(size: 12))
+                        .font(.system(size: 13))
                         .foregroundStyle(status.isFailure ? theme.liveRed : theme.textMuted)
                 }
             }
@@ -382,7 +382,7 @@ struct CmsSourceManagementView: View {
                 Button("恢复默认") {
                     showingRestoreAlert = true
                 }
-                .font(.system(size: 15))
+                .font(.system(size: 17))
             }
         }
         .listStyle(.insetGrouped)
@@ -412,10 +412,10 @@ struct CmsSourceManagementView: View {
         return HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(source.name)
-                    .font(.system(size: 15))
+                    .font(.system(size: 17))
                     .foregroundStyle(theme.textPrimary)
                 Text(source.apiUrl)
-                    .font(.system(size: 12))
+                    .font(.system(size: 13))
                     .foregroundStyle(theme.textMuted)
                     .lineLimit(1)
             }
@@ -512,7 +512,7 @@ struct LiveSourceManagementView: View {
         let isLastEnabled = isEnabled && enabledIDs.count == 1
         return HStack {
             Text(platform.displayName)
-                .font(.system(size: 15))
+                .font(.system(size: 17))
                 .foregroundStyle(theme.textPrimary)
             Spacer()
             Toggle(

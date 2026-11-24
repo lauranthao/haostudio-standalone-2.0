@@ -189,7 +189,7 @@ struct LiveDanmakuSettingsSheet: View {
                     step: 1
                 )
                 Text("越高越严格（只挡更像的）")
-                    .font(.system(size: 12))
+                    .font(.system(size: 13))
                     .foregroundStyle(theme.textMuted)
             }
             Toggle("屏蔽纯表情弹幕", isOn: $settings.blockEmoteOnly)

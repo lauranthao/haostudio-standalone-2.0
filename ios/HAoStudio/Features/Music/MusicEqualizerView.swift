@@ -29,7 +29,7 @@ struct MusicEqualizerView: View {
                     autoEqCard
                     normalizationCard
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 20)
                 .padding(.vertical, 16)
             }
             .background(theme.scaffoldBackground)
@@ -70,7 +70,7 @@ struct MusicEqualizerView: View {
             }
         }
         .padding(16)
-        .background(theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     // MARK: - Bands
@@ -106,7 +106,7 @@ struct MusicEqualizerView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     // MARK: - Preamp
@@ -134,7 +134,7 @@ struct MusicEqualizerView: View {
             .disabled(!eqVM.enabled)
         }
         .padding(16)
-        .background(theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     // MARK: - Presets
@@ -216,7 +216,7 @@ struct MusicEqualizerView: View {
             }
         }
         .padding(16)
-        .background(theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     // MARK: - AutoEq
@@ -247,7 +247,7 @@ struct MusicEqualizerView: View {
             }
         }
         .padding(16)
-        .background(theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     // MARK: - Normalization
@@ -276,7 +276,7 @@ struct MusicEqualizerView: View {
             }
         }
         .padding(16)
-        .background(theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 }
 

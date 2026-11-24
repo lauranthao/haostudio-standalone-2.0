@@ -213,7 +213,7 @@ struct MyView: View {
                 .foregroundStyle(theme.textPrimary)
             Spacer()
             Text("\(count)")
-                .font(.system(size: 14))
+                .font(.system(size: 17))
                 .foregroundStyle(theme.textSecondary)
         }
     }
@@ -235,17 +235,17 @@ struct MyView: View {
         if showMigrationNotice {
             Section("旧版数据") {
                 Text("未找到旧版数据，可从备份文件导入。")
-                    .font(.system(size: 14))
+                    .font(.system(size: 15))
                     .foregroundStyle(theme.textSecondary)
                 Button("从备份文件导入") {
                     BackupUpdateFlow.shared.beginImport()
                 }
-                .font(.system(size: 14))
+                .font(.system(size: 17))
                 Button("不再提示") {
                     MigrationStore.dismissMigrationNotice()
                     showMigrationNotice = false
                 }
-                .font(.system(size: 14))
+                .font(.system(size: 17))
             }
         }
     }

@@ -45,11 +45,11 @@ struct SettingsSectionHeader: View {
         }) {
             HStack {
                 Text(section.title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(theme.textPrimary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(theme.textSecondary)
                 Spacer()
                 Image(systemName: settings.sectionExpanded(section.rawValue) ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(theme.textMuted)
             }
         }
@@ -169,8 +169,9 @@ struct SettingsGroupsView: View {
 
     private func footnote(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 12))
-            .foregroundStyle(theme.textMuted)
+            .font(.system(size: 13))
+            .foregroundStyle(theme.textSecondary)
+            .listRowSeparator(.hidden)
     }
 
     /// String-option Picker binding: an unknown stored value
@@ -212,15 +213,14 @@ struct SettingsGroupsView: View {
         }
     }
 
-    /// Theme picker, inline — same as MyPlaceholderView.
+    /// Theme picker, navigation style — label left, current
+    /// value right, chevron (system settings row grammar).
     private var themeRow: some View {
         Picker("主题", selection: $themeStore.themeID) {
             ForEach(HaoThemeID.allCases) { id in
                 Text(id.displayName).tag(id)
             }
         }
-        .pickerStyle(.inline)
-        .labelsHidden()
     }
 
     private var appearanceRow: some View {
@@ -257,7 +257,7 @@ struct SettingsGroupsView: View {
                 Button("恢复默认") {
                     settings.accentOverride = nil
                 }
-                .font(.system(size: 14))
+                .font(.system(size: 17))
             }
         }
     }
@@ -274,7 +274,7 @@ struct SettingsGroupsView: View {
     private var tabAccentRow: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("底栏选中颜色")
-                .font(.system(size: 15))
+                .font(.system(size: 17))
                 .foregroundStyle(theme.textPrimary)
             HStack(spacing: 12) {
                 ForEach(tabAccentChoices) { choice in
@@ -357,11 +357,11 @@ struct SettingsGroupsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("液态玻璃强度")
-                    .font(.system(size: 15))
+                    .font(.system(size: 17))
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 Text("\(Int(settings.glassIntensity * 100))%")
-                    .font(.system(size: 14))
+                    .font(.system(size: 17))
                     .foregroundStyle(theme.textSecondary)
             }
             // Coordinator fix (S5 merge): glassIntensity is a
@@ -454,19 +454,22 @@ struct SettingsGroupsView: View {
                         NativeMusicPlayer.shared.setNormalizationEnabled(newValue)
                     }
                 footnote("需开启均衡器才能测量响度")
-                VStack(alignment: .leading, spacing: 8) {
-                    Stepper(
-                        "归一化强度",
-                        value: $settings.normalizationStrength,
-                        in: 0...2,
-                        step: 1
-                    )
-                    .onChange(of: settings.normalizationStrength) { _, newValue in
-                        // b35-sweep-settings: 同上，强度也只在 init
-                        // 读一次，不推就一直是旧强度。
-                        NativeMusicPlayer.shared.setNormalizationStrength(newValue)
+                Stepper(
+                    value: $settings.normalizationStrength,
+                    in: 0...2,
+                    step: 1
+                ) {
+                    HStack {
+                        Text("归一化强度")
+                        Spacer()
+                        Text(NormalizationStrengthLabel.label(for: Double(settings.normalizationStrength)))
+                            .foregroundStyle(theme.textSecondary)
                     }
-                    footnote("当前：\(NormalizationStrengthLabel.label(for: Double(settings.normalizationStrength)))")
+                }
+                .onChange(of: settings.normalizationStrength) { _, newValue in
+                    // b35-sweep-settings: 同上，强度也只在 init
+                    // 读一次，不推就一直是旧强度。
+                    NativeMusicPlayer.shared.setNormalizationStrength(newValue)
                 }
             }
         }
@@ -551,130 +554,115 @@ struct SettingsGroupsView: View {
     private var lastUsedEngineRow: some View {
         HStack {
             Text("上次实际")
-                .font(.system(size: 15))
+                .font(.system(size: 17))
                 .foregroundStyle(theme.textPrimary)
             Spacer()
             Text(engineReporter.lastUsed?.displayName ?? "—")
-                .font(.system(size: 15))
+                .font(.system(size: 17))
                 .foregroundStyle(theme.textSecondary)
         }
     }
 
     private var doubleTapRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Stepper(
-                "双击快进秒数",
-                value: $settings.doubleTapSeconds,
-                in: 5...30,
-                step: 5
-            )
-            footnote("当前：\(settings.doubleTapSeconds) 秒")
+        Stepper(
+            value: $settings.doubleTapSeconds,
+            in: 5...30,
+            step: 5
+        ) {
+            HStack {
+                Text("双击快进秒数")
+                Spacer()
+                Text("\(settings.doubleTapSeconds) 秒")
+                    .foregroundStyle(theme.textSecondary)
+            }
         }
     }
 
     private var videoFitRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Picker("视频画面比例", selection: $settings.videoFit) {
-                ForEach(VideoFit.allCases, id: \.self) { fit in
-                    Text(fit.label).tag(fit)
-                }
+        Picker("视频画面比例", selection: $settings.videoFit) {
+            ForEach(VideoFit.allCases, id: \.self) { fit in
+                Text(fit.label).tag(fit)
             }
-            footnote("当前：\(settings.videoFit.label)")
         }
     }
 
     private var skipIntroRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Picker(
-                "跳过片头片尾",
-                selection: optionBinding(
-                    get: { settings.skipIntroMode },
-                    set: { newValue in settings.skipIntroMode = newValue },
-                    valid: SettingsOptionLists.isValidSkipIntroMode,
-                    default: SettingsOptionLists.skipIntroDefault
-                )
-            ) {
-                ForEach(SettingsOptionLists.skipIntroOptions, id: \.value) { option in
-                    Text(option.label).tag(option.value)
-                }
+        Picker(
+            "跳过片头片尾",
+            selection: optionBinding(
+                get: { settings.skipIntroMode },
+                set: { newValue in settings.skipIntroMode = newValue },
+                valid: SettingsOptionLists.isValidSkipIntroMode,
+                default: SettingsOptionLists.skipIntroDefault
+            )
+        ) {
+            ForEach(SettingsOptionLists.skipIntroOptions, id: \.value) { option in
+                Text(option.label).tag(option.value)
             }
-            footnote("当前：\(SettingsOptionLists.label(for: settings.skipIntroMode, in: SettingsOptionLists.skipIntroOptions, default: SettingsOptionLists.skipIntroDefault))")
         }
     }
 
     private var subtitleFontSizeRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Picker(
-                "字幕字号",
-                selection: optionBinding(
-                    get: { settings.subtitleFontSize },
-                    set: { newValue in settings.subtitleFontSize = newValue },
-                    valid: SettingsOptionLists.isValidSubtitleFontSize,
-                    default: SettingsOptionLists.subtitleFontSizeDefault
-                )
-            ) {
-                ForEach(SettingsOptionLists.subtitleFontSizeOptions, id: \.value) { option in
-                    Text(option.label).tag(option.value)
-                }
+        Picker(
+            "字幕字号",
+            selection: optionBinding(
+                get: { settings.subtitleFontSize },
+                set: { newValue in settings.subtitleFontSize = newValue },
+                valid: SettingsOptionLists.isValidSubtitleFontSize,
+                default: SettingsOptionLists.subtitleFontSizeDefault
+            )
+        ) {
+            ForEach(SettingsOptionLists.subtitleFontSizeOptions, id: \.value) { option in
+                Text(option.label).tag(option.value)
             }
-            footnote("当前：\(SettingsOptionLists.label(for: settings.subtitleFontSize, in: SettingsOptionLists.subtitleFontSizeOptions, default: SettingsOptionLists.subtitleFontSizeDefault))")
         }
     }
 
     private var subtitleColorRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Picker(
-                "字幕颜色",
-                selection: optionBinding(
-                    get: { settings.subtitleColor },
-                    set: { newValue in settings.subtitleColor = newValue },
-                    valid: SettingsOptionLists.isValidSubtitleColor,
-                    default: SettingsOptionLists.subtitleColorDefault
-                )
-            ) {
-                ForEach(SettingsOptionLists.subtitleColorOptions, id: \.value) { option in
-                    Text(option.label).tag(option.value)
-                }
+        Picker(
+            "字幕颜色",
+            selection: optionBinding(
+                get: { settings.subtitleColor },
+                set: { newValue in settings.subtitleColor = newValue },
+                valid: SettingsOptionLists.isValidSubtitleColor,
+                default: SettingsOptionLists.subtitleColorDefault
+            )
+        ) {
+            ForEach(SettingsOptionLists.subtitleColorOptions, id: \.value) { option in
+                Text(option.label).tag(option.value)
             }
-            footnote("当前：\(SettingsOptionLists.label(for: settings.subtitleColor, in: SettingsOptionLists.subtitleColorOptions, default: SettingsOptionLists.subtitleColorDefault))")
         }
     }
 
     private var subtitlePositionRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Picker(
-                "字幕位置",
-                selection: optionBinding(
-                    get: { settings.subtitlePosition },
-                    set: { newValue in settings.subtitlePosition = newValue },
-                    valid: SettingsOptionLists.isValidSubtitlePosition,
-                    default: SettingsOptionLists.subtitlePositionDefault
-                )
-            ) {
-                ForEach(SettingsOptionLists.subtitlePositionOptions, id: \.value) { option in
-                    Text(option.label).tag(option.value)
-                }
+        Picker(
+            "字幕位置",
+            selection: optionBinding(
+                get: { settings.subtitlePosition },
+                set: { newValue in settings.subtitlePosition = newValue },
+                valid: SettingsOptionLists.isValidSubtitlePosition,
+                default: SettingsOptionLists.subtitlePositionDefault
+            )
+        ) {
+            ForEach(SettingsOptionLists.subtitlePositionOptions, id: \.value) { option in
+                Text(option.label).tag(option.value)
             }
-            footnote("当前：\(SettingsOptionLists.label(for: settings.subtitlePosition, in: SettingsOptionLists.subtitlePositionOptions, default: SettingsOptionLists.subtitlePositionDefault))")
         }
     }
 
     private var lowMemoryRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Picker(
-                "低内存模式",
-                selection: optionBinding(
-                    get: { settings.lowMemoryMode },
-                    set: { newValue in settings.lowMemoryMode = newValue },
-                    valid: SettingsOptionLists.isValidLowMemoryMode,
-                    default: SettingsOptionLists.lowMemoryDefault
-                )
-            ) {
-                ForEach(SettingsOptionLists.lowMemoryOptions, id: \.value) { option in
-                    Text(option.label).tag(option.value)
-                }
+        Picker(
+            "低内存模式",
+            selection: optionBinding(
+                get: { settings.lowMemoryMode },
+                set: { newValue in settings.lowMemoryMode = newValue },
+                valid: SettingsOptionLists.isValidLowMemoryMode,
+                default: SettingsOptionLists.lowMemoryDefault
+            )
+        ) {
+            ForEach(SettingsOptionLists.lowMemoryOptions, id: \.value) { option in
+                Text(option.label).tag(option.value)
             }
-            footnote("当前：\(SettingsOptionLists.label(for: settings.lowMemoryMode, in: SettingsOptionLists.lowMemoryOptions, default: SettingsOptionLists.lowMemoryDefault))")
         }
     }
 
@@ -705,7 +693,7 @@ struct SettingsGroupsView: View {
                         Text("Emby 连接")
                         Spacer()
                         Text(embySubtitle)
-                            .font(.system(size: 14))
+                            .font(.system(size: 17))
                             .foregroundStyle(theme.textSecondary)
                     }
                 }
@@ -733,19 +721,19 @@ struct SettingsGroupsView: View {
             if isExpanded(.data) {
                 HStack {
                     Text("缓存管理")
-                        .font(.system(size: 15))
+                        .font(.system(size: 17))
                         .foregroundStyle(theme.textPrimary)
                     Spacer()
                     Text(ByteCountFormatter.string(
                         fromByteCount: Int64(cacheSizeBytes),
                         countStyle: .file
                     ))
-                    .font(.system(size: 14))
+                    .font(.system(size: 17))
                     .foregroundStyle(theme.textSecondary)
                     Button("清理") {
                         showingClearCacheAlert = true
                     }
-                    .font(.system(size: 14))
+                    .font(.system(size: 17))
                 }
                 .alert("清理缓存", isPresented: $showingClearCacheAlert) {
                     Button("取消", role: .cancel) {
@@ -777,7 +765,7 @@ struct SettingsGroupsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("导出备份")
-                    .font(.system(size: 15))
+                    .font(.system(size: 17))
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 if backupFlow.isExporting {
@@ -786,14 +774,14 @@ struct SettingsGroupsView: View {
                     Button("导出") {
                         backupFlow.beginExport()
                     }
-                    .font(.system(size: 14))
+                    .font(.system(size: 17))
                 }
             }
             if let exportedURL = backupFlow.exportedURL {
                 ShareLink(item: exportedURL) {
                     HStack {
                         Text("分享备份文件")
-                            .font(.system(size: 15))
+                            .font(.system(size: 17))
                             .foregroundStyle(theme.textPrimary)
                         Spacer()
                         Text(exportedURL.lastPathComponent)
@@ -813,7 +801,7 @@ struct SettingsGroupsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("导入备份")
-                    .font(.system(size: 15))
+                    .font(.system(size: 17))
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 if backupFlow.isImporting {
@@ -822,7 +810,7 @@ struct SettingsGroupsView: View {
                     Button("选择文件") {
                         backupFlow.beginImport()
                     }
-                    .font(.system(size: 14))
+                    .font(.system(size: 17))
                 }
             }
             footnote("从 .zip 备份文件导入；导入失败会自动回滚，现有数据不受影响。")
@@ -844,11 +832,11 @@ struct SettingsGroupsView: View {
             if isExpanded(.about) {
                 HStack {
                     Text("版本")
-                        .font(.system(size: 15))
+                        .font(.system(size: 17))
                         .foregroundStyle(theme.textPrimary)
                     Spacer()
                     Text(bundleVersion)
-                        .font(.system(size: 15))
+                        .font(.system(size: 17))
                         .foregroundStyle(theme.textSecondary)
                 }
                 checkUpdateRow
@@ -868,10 +856,10 @@ struct SettingsGroupsView: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text("检查更新")
-                    .font(.system(size: 15))
+                    .font(.system(size: 17))
                     .foregroundStyle(theme.textPrimary)
                 Text(UpdateCheckLogic.lastCheckLabel(date: backupFlow.lastCheckDate, now: Date()))
-                    .font(.system(size: 12))
+                    .font(.system(size: 13))
                     .foregroundStyle(theme.textMuted)
             }
             Spacer()
@@ -881,7 +869,7 @@ struct SettingsGroupsView: View {
                 Button("检查") {
                     backupFlow.checkForUpdate()
                 }
-                .font(.system(size: 14))
+                .font(.system(size: 17))
             }
         }
     }
@@ -894,13 +882,13 @@ struct SettingsGroupsView: View {
         if let skipped = backupFlow.skippedVersionLabel {
             HStack {
                 Text("已跳过 \(skipped)，点按取消跳过")
-                    .font(.system(size: 15))
+                    .font(.system(size: 17))
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 Button("取消跳过") {
                     backupFlow.clearSkippedVersion()
                 }
-                .font(.system(size: 14))
+                .font(.system(size: 17))
             }
         }
     }
@@ -978,7 +966,7 @@ struct WallpaperManagementView: View {
         }) {
             HStack {
                 Text(displayName(for: name))
-                    .font(.system(size: 15))
+                    .font(.system(size: 17))
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 if settings.wallpaperCurrent == name {
@@ -1087,7 +1075,7 @@ struct VideoCategoryEditView: View {
     private func categoryRow(_ name: String) -> some View {
         HStack {
             Text(name)
-                .font(.system(size: 15))
+                .font(.system(size: 17))
                 .foregroundStyle(theme.textPrimary)
             Spacer()
             Toggle(
