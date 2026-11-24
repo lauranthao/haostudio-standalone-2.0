@@ -14,6 +14,7 @@
 		000000000000000000000009 /* GlassTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000A /* GlassTabBar.swift */; };
 		00000000000000000000000B /* MiniPlayerBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000C /* MiniPlayerBar.swift */; };
 		00000000000000000000000D /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000E /* MainTabView.swift */; };
+		0000000000000000000001E4 /* ImmersiveChromeState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001E5 /* ImmersiveChromeState.swift */; };
 		0000000000000000000001D1 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001D2 /* HomeView.swift */; };
 		000000000000000000000011 /* PlaybackCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000012 /* PlaybackCoordinator.swift */; };
 		000000000000000000000013 /* LocalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000014 /* LocalStore.swift */; };
@@ -236,6 +237,7 @@
 		00000000000000000000000A /* GlassTabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassTabBar.swift; sourceTree = "<group>"; };
 		00000000000000000000000C /* MiniPlayerBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniPlayerBar.swift; sourceTree = "<group>"; };
 		00000000000000000000000E /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
+		0000000000000000000001E5 /* ImmersiveChromeState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImmersiveChromeState.swift; sourceTree = "<group>"; };
 		0000000000000000000001D2 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		000000000000000000000012 /* PlaybackCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackCoordinator.swift; sourceTree = "<group>"; };
 		000000000000000000000014 /* LocalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalStore.swift; sourceTree = "<group>"; };
@@ -495,6 +497,7 @@
 				00000000000000000000000A /* GlassTabBar.swift */,
 				00000000000000000000000C /* MiniPlayerBar.swift */,
 				00000000000000000000000E /* MainTabView.swift */,
+				0000000000000000000001E5 /* ImmersiveChromeState.swift */,
 			); path = App; sourceTree = "<group>"; };
 		00000000000000000000005F /* Playback */ = {isa = PBXGroup; children = (
 				0000000000000000000000EA /* AVPlayerBackend.swift */,
@@ -884,6 +887,7 @@
 				000000000000000000000081 /* LXUserKeyStore.swift in Sources */,
 				000000000000000000000013 /* LocalStore.swift in Sources */,
 				00000000000000000000000D /* MainTabView.swift in Sources */,
+				0000000000000000000001E4 /* ImmersiveChromeState.swift in Sources */,
 				00000000000000000000006A /* MigrationStore.swift in Sources */,
 				00000000000000000000000B /* MiniPlayerBar.swift in Sources */,
 				000000000000000000000101 /* MpvPlayerBackend.swift in Sources */,

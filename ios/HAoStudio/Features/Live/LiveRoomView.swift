@@ -60,6 +60,7 @@ struct LiveRoomView: View {
 
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var livePlayer: LivePlayerViewModel
+    @EnvironmentObject private var immersiveChrome: ImmersiveChromeState
     @Environment(\.dismiss) private var dismiss
     @Environment(\.haoTheme) private var theme
 
@@ -110,6 +111,10 @@ struct LiveRoomView: View {
             }
         }
         .onAppear {
+            // Immersive: hide the shell bottom chrome (mini player
+            // + glass tab bar) while the room is up, so the room's
+            // own bottom bar is never covered by it.
+            immersiveChrome.enterImmersive()
             VideoOrientation.unlockPortrait()
             openCurrentRoom()
             isFollowing = LiveLibraryStore.isFollowed(
@@ -121,6 +126,8 @@ struct LiveRoomView: View {
             livePlayer.setVolume(Double(AVAudioSession.sharedInstance().outputVolume))
         }
         .onDisappear {
+            // The room is gone: the shell bottom chrome comes back.
+            immersiveChrome.exitImmersive()
             autoHideWork?.cancel()
             VideoOrientation.unlockPortrait()
             livePlayer.stopDanmaku()
@@ -513,8 +520,15 @@ struct LiveRoomView: View {
             }
             .buttonStyle(.plain)
         }
+        // The room's stack lays the bar out at the physical screen
+        // bottom (the push does not inset it above the shell
+        // chrome — that is the reported bug), so once the chrome
+        // is hidden the bar would sit on the home indicator:
+        // pad by the bottom safe area, and let the surface fill
+        // down to it like a native toolbar.
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
+        .safeAreaPadding(.bottom)
         .background(theme.surface)
     }
 

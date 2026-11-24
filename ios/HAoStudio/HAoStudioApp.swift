@@ -30,6 +30,12 @@ struct HAoStudioApp: App {
     /// its init takes the live driver, mirroring the VOD view
     /// model shape.
     @StateObject private var livePlayer: LivePlayerViewModel
+    /// One shared immersive-chrome flag for the whole app
+    /// (MainTabView hides the bottom chrome while a live room is
+    /// up; the room page sets it on appear / clears it on
+    /// disappear). Created here, next to the other shared state —
+    /// never one instance per page.
+    @StateObject private var immersiveChrome = ImmersiveChromeState()
     /// S5-A: one shared settings store for the whole app (Settings
     /// page, theme overrides, engine preference). Built with the
     /// themeStore above — the ThemeStore is created first and
@@ -130,6 +136,7 @@ struct HAoStudioApp: App {
             .environmentObject(musicPlayer)
             .environmentObject(videoPlayer)
             .environmentObject(livePlayer)
+            .environmentObject(immersiveChrome)
             .onChange(of: scenePhase) { newPhase in
                 switch newPhase {
                 case .background:
