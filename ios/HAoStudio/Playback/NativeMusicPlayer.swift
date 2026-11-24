@@ -1606,7 +1606,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                     return
                 }
                 self.actualQuality = tier
-                self.crossfade(to: item, url: url, tried: [url])
+                self.crossfade(to: item, url: url, tried: [url], attempts: attempts)
             }
         }
         if resolveURL == nil {
@@ -1621,7 +1621,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     /// playback can survive a rapid series of track changes. When
     /// the outgoing track already ended, the incoming starts at full
     /// volume instead of swallowing its intro with a ramp.
-    private func crossfade(to item: PlaybackItem, url: URL, tried: [URL]) {
+    private func crossfade(to item: PlaybackItem, url: URL, tried: [URL], attempts: Int) {
         let gen = nextGeneration()
         stopCrossfadeTimer()
         standbyEndedDuringCrossfade = false
@@ -1658,18 +1658,18 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                                     // A13: the fallback resolve found
                                     // nothing — failure-driven skip.
                                     self.failedTrackIds.insert(item.id)
-                                    self.advanceAutoFrom(index: self.queueIndex, attempts: 0)
+                                    self.advanceAutoFrom(index: self.queueIndex, attempts: attempts + 1)
                                     return
                                 }
                                 self.actualQuality = tier
-                                self.crossfade(to: item, url: nextURL, tried: tried + [nextURL])
+                                self.crossfade(to: item, url: nextURL, tried: tried + [nextURL], attempts: attempts)
                             }
                         }
                     } else {
                         // A13: the fallback could not save this
                         // track either — failure-driven skip.
                         self.failedTrackIds.insert(item.id)
-                        self.advanceAutoFrom(index: self.queueIndex, attempts: 0)
+                        self.advanceAutoFrom(index: self.queueIndex, attempts: attempts + 1)
                     }
                     return
                 }
