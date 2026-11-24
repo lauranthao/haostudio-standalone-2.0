@@ -1,27 +1,50 @@
-// HAo Studio 2.0 — full music player (S2-C leg).
+// HAo Studio 2.0 — full music player (S2-C leg; Apple Music redo,
+// build 36 item 2).
 //
-// chen's screenshot standard (MEMORY.md, music player design
-// reference), ported from Flutter music_player_sheet.dart:
-// - immersive face: blurred cover + dark gradient background; white
-//   text in opacity levels (1.0 / 0.85 / 0.72 / 0.55). This page is
-//   a forced dark immersive face — the background is cover-tinted,
-//   independent of the theme light/dark mode.
-// - large square cover, centred, rounded corners; below it,
-//   left-aligned bold white title + lighter artist, star + … on the
-//   right; quality badge below the cover (the ACTUAL tier — a
-//   drop-down never shows as Master).
-// - thin progress bar, elapsed left, remaining right; drag changes
-//   only local state, seek fires once on release.
-// - three big white triangles prev/play/next, NO background circles.
+// chen's standard is Apple Music Now Playing (iOS 27): the order
+// from top to bottom is cover -> title/artist + star + … ->
+// progress (elapsed left, remaining right) -> transport -> volume
+// slider (speaker at each end) -> bottom row of 3 pure icons
+// (lyrics / AirPlay / queue). No text labels on the bottom controls.
+// - immersive face: blurred cover + cover-tinted gradient
+//   background (Apple Music's album-art-derived gradient — the
+//   dominant cover colour through a darker variant, not a black
+//   wash); white text in opacity levels (1.0 / 0.85 / 0.72 / 0.55).
+//   The dim is light (0.22 + a bottom-weighted gradient) so the
+//   cover tint actually shows — chen's screenshot is a deep blue
+//   cover-tinted gradient — while the bottom-weighted gradient
+//   keeps the transport / bottom rows legible on a light cover.
+// - large square cover, centred, rounded corners (min(16,
+//   size * 0.05)); below it, left-aligned bold title + lighter
+//   artist, star + … on the right; quality badge below the cover
+//   (the ACTUAL tier — a drop-down never shows as Master).
+// - thin progress bar (4pt, 10pt white knob), elapsed left,
+//   remaining right; drag changes only local state, seek fires
+//   once on release.
+// - three big white triangles prev/play/next, NO background
+//   circles; press-scale 0.92.
+// - volume slider (build 36: the old "NO volume slider on iOS"
+//   line is reversed — chen's screenshot and Apple Music both
+//   have the player's own volume slider; it drives the
+//   app-internal AVPlayer volume, never the system volume).
 // - bottom row: 3 pure icons only (lyrics / AirPlay / queue).
-// - NO volume slider on iOS (chen: iOS 上不要音量滑杆).
-// - lyrics live BEHIND the cover: tap cover -> lyrics in the cover
-//   area; tap a lyric line -> seek to that line; tap lyric blank ->
-//   cover back. No word-level karaoke: no source returns word timing.
+// - lyrics live BEHIND the cover: tap cover -> lyrics in the
+//   cover area; tap a lyric line -> seek to that line; tap lyric
+//   blank -> cover back. Current line 22 bold. No word-level
+//   karaoke: no source returns word timing.
+// - title / artist are tappable (Apple Music: tap the artist
+//   below the title to go to the artist, tap the title for the
+//   album) — the same sheets the … menu already opened.
 // - whole player fits on one phone screen, no scrolling: the
 //   cover / lyrics slot is sized by width AND by the height left
 //   after the fixed chrome (see coverSize), so short phones
 //   shrink the cover instead of clipping the bottom rows.
+// - LANDSCAPE (build 36: build 35 left the landscape player
+//   overflowing — the portrait chrome + a 340 cover cannot fit
+//   in ~390pt of height): landscape is a two-column layout,
+//   cover + badge on the left, all the controls in a right
+//   column (top bar, title, progress, transport, volume, mode,
+//   bottom row). Same components, same sizes where they fit.
 // - CLOSE (chen 2026-11-24: opened player could not be closed):
 //   fullScreenCover has no system swipe-down dismiss, and the old
 //   close control was a bare 32pt white chevron with no scrim —
@@ -39,9 +62,11 @@
 //   heights left as a dead gap — while the code reads as a
 //   screen-width Spacer layout. Code reading alone cannot name
 //   the widening child (not identifiable from Linux), so the
-//   stack is now pinned to UIScreen.main.bounds.width: no child
-//   can widen it, whatever the culprit is. The pin equals the
-//   window width in the normal case (portrait-only player).
+//   stack is pinned to the screen width minus the safe-area
+//   side insets: no child can widen it, whatever the culprit is.
+//   The pin equals the window width in the normal case
+//   (portrait has no side insets); in landscape it keeps the
+//   content out of the notch / Dynamic Island side zones.
 //   MusicPlayerLayout holds the pure geometry so the regression
 //   guard is arithmetic (MusicPlayerLayoutTests), not a re-read.
 //
@@ -85,49 +110,28 @@ struct MusicPlayerView: View {
     @State private var followPausedUntil = Date.distantPast
 
     var body: some View {
-        ZStack {
-            playerBackground
-            VStack(spacing: 0) {
-                topBar
-                    .frame(maxWidth: .infinity)
-                coverOrLyrics
-                    .padding(.top, 8)
-                qualityBadge
-                    .padding(.top, 12)
-                titleRow
-                    .padding(.top, 10)
-                    .frame(maxWidth: .infinity)
-                progressSection
-                    .padding(.top, 14)
-                    .frame(maxWidth: .infinity)
-                transportRow
-                    .padding(.top, 6)
-                    .frame(maxWidth: .infinity)
-                modeRow
-                    .padding(.top, 10)
-                    .frame(maxWidth: .infinity)
-                Spacer()
-                bottomRow
-                    .padding(.bottom, 8)
-                    .frame(maxWidth: .infinity)
-            }
-            .padding(.horizontal, 24)
-            // Width pin (build 35): a fixed frame, not maxWidth —
-            // no child can widen the stack past the screen, which
-            // is what build 34 rendered on chen's phone.
-            .frame(width: UIScreen.main.bounds.width)
-            if let toast = playerVM.toast {
-                VStack {
-                    Spacer()
-                    Text(toast)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(Color.black.opacity(0.7), in: Capsule())
-                        .padding(.bottom, 90)
+        GeometryReader { geo in
+            ZStack {
+                playerBackground
+                if geo.size.width > geo.size.height {
+                    landscapeBody(geo: geo)
+                } else {
+                    portraitBody(geo: geo)
+                }
+                if let toast = playerVM.toast {
+                    VStack {
+                        Spacer()
+                        Text(toast)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(Color.black.opacity(0.7), in: Capsule())
+                            .padding(.bottom, 90)
+                    }
                 }
             }
+            .frame(width: geo.size.width, height: geo.size.height)
         }
         .sheet(isPresented: $showQueue) { MusicQueueView() }
         .sheet(isPresented: $showMore) { moreSheet }
@@ -176,27 +180,115 @@ struct MusicPlayerView: View {
     /// dismiss, so the player supplies its own. Only a clearly
     /// downward swipe closes (horizontal drags belong to the
     /// Slider); in lyrics mode the swipe must start on the top bar
-    /// because the lyrics list owns vertical drags elsewhere.
+    /// because the lyrics list owns vertical drags elsewhere. The
+    /// top-bar zone is 140pt in portrait and the 60pt top strip
+    /// in landscape (the screen is short there).
     private func handleDismissDrag(_ value: DragGesture.Value) {
         let translation = value.translation
         guard translation.height > 100, abs(translation.width) < 80 else { return }
-        if playerVM.showLyrics && value.startLocation.y > 140 { return }
+        let isLandscape = UIScreen.main.bounds.width > UIScreen.main.bounds.height
+        if playerVM.showLyrics && value.startLocation.y > (isLandscape ? 60 : 140) { return }
         close()
     }
 
-    /// Cover / lyrics slot size (pure math in MusicPlayerLayout,
-    /// tested by MusicPlayerLayoutTests): bounded by width AND by
-    /// the height left after the fixed chrome (~330pt: top bar 40
-    /// + gaps 60 + badge 23 + title 45 + progress 52 + transport
-    /// 52 + mode 28 + bottom row 30) + safe areas + slack, so the
-    /// whole player fits on one screen with no scrolling on any
-    /// phone height. Tall phones (iPhone Air, 874pt) still get the
-    /// 340 cap — the design there is unchanged; short phones
-    /// shrink the cover instead of clipping the bottom rows.
-    private var coverSize: CGFloat {
-        let bounds = UIScreen.main.bounds
-        return MusicPlayerLayout.coverSize(
-            screenWidth: bounds.width, screenHeight: bounds.height)
+    /// Content width: the GeometryReader width minus the safe-area
+    /// side insets (0 in portrait, the notch zones in landscape).
+    /// This is the width pin (build 35) — a fixed frame, not
+    /// maxWidth, so no child can widen the stack past the screen.
+    private func contentWidth(geo: GeometryProxy) -> CGFloat {
+        geo.size.width - geo.safeAreaInsets.leading - geo.safeAreaInsets.trailing
+    }
+
+    private func safeWidth(geo: GeometryProxy) -> CGFloat {
+        contentWidth(geo: geo)
+    }
+
+    private func safeHeight(geo: GeometryProxy) -> CGFloat {
+        geo.size.height - geo.safeAreaInsets.top - geo.safeAreaInsets.bottom
+    }
+
+    // MARK: - Portrait body (Apple Music Now Playing, top to bottom)
+
+    private func portraitBody(geo: GeometryProxy) -> some View {
+        VStack(spacing: 0) {
+            topBar
+                .frame(maxWidth: .infinity)
+            coverOrLyrics(size: MusicPlayerLayout.coverSize(
+                screenWidth: geo.size.width, screenHeight: geo.size.height))
+                .padding(.top, 8)
+            qualityBadge
+                .padding(.top, 12)
+            titleRow
+                .padding(.top, 10)
+                .frame(maxWidth: .infinity)
+            progressSection
+                .padding(.top, 14)
+                .frame(maxWidth: .infinity)
+            transportRow
+                .padding(.top, 6)
+                .frame(maxWidth: .infinity)
+            volumeRow
+                .padding(.top, 8)
+                .frame(maxWidth: .infinity)
+            modeRow
+                .padding(.top, 10)
+                .frame(maxWidth: .infinity)
+            Spacer()
+            bottomRow
+                .padding(.bottom, 8)
+                .frame(maxWidth: .infinity)
+        }
+        .padding(.horizontal, 24)
+        .frame(width: contentWidth(geo: geo))
+    }
+
+    // MARK: - Landscape body (two columns: cover left, controls right)
+
+    /// Landscape cannot stack the portrait column — cover 340 +
+    /// chrome 366 needs ~800pt of height and the screen only has
+    /// ~390. Apple Music's landscape Now Playing puts the artwork
+    /// on the left and the controls on the right; this does the
+    /// same with the same components (cover/lyrics slot, badge,
+    /// title, progress, transport, volume, mode, bottom row), so
+    /// nothing is lost or re-implemented for the orientation.
+    private func landscapeBody(geo: GeometryProxy) -> some View {
+        let cover = MusicPlayerLayout.landscapeCoverSize(
+            safeWidth: safeWidth(geo: geo), safeHeight: safeHeight(geo: geo))
+        return HStack(alignment: .top, spacing: 24) {
+            VStack(spacing: 0) {
+                coverOrLyrics(size: cover)
+                qualityBadge
+                    .padding(.top, 12)
+            }
+            .frame(width: cover)
+            VStack(spacing: 0) {
+                topBar
+                    .frame(maxWidth: .infinity)
+                titleRow
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity)
+                progressSection
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity)
+                transportRow
+                    .padding(.top, 4)
+                    .frame(maxWidth: .infinity)
+                volumeRow
+                    .padding(.top, 6)
+                    .frame(maxWidth: .infinity)
+                modeRow
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity)
+                Spacer()
+                bottomRow
+                    .padding(.bottom, 4)
+                    .frame(maxWidth: .infinity)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 12)
+        .frame(width: contentWidth(geo: geo))
     }
 
     // MARK: - Background
@@ -217,16 +309,17 @@ struct MusicPlayerView: View {
             } else {
                 Color.black
             }
-            // Uniform dim + top-to-bottom gradient: the blurred
-            // cover can be LIGHT (the reported song's cover reads
-            // ~137 grey at the top of the screenshot), and white
-            // 0.72-opacity text over it falls below 2:1 contrast —
-            // illegible. The dim guarantees every white text role
-            // stays legible on any cover while the tint still shows
-            // through; on a dark cover it is invisible.
-            Color.black.opacity(0.42)
+            // Apple Music's Now Playing background is the cover's
+            // own colours (dominant colour through a darker
+            // variant), not a black wash: the dim is light and the
+            // gradient is bottom-weighted, so the tint shows
+            // through (chen's screenshot: deep blue) while the
+            // lower rows — where the white controls sit — stay
+            // dark enough to read on any cover, light or dark.
+            // The old 0.42 uniform dim muted every cover to grey.
+            Color.black.opacity(0.22)
             LinearGradient(
-                colors: [Color.black.opacity(0.30), Color.black.opacity(0.45)],
+                colors: [Color.black.opacity(0.05), Color.black.opacity(0.40)],
                 startPoint: .top, endPoint: .bottom
             )
         }
@@ -277,20 +370,19 @@ struct MusicPlayerView: View {
 
     // MARK: - Cover / lyrics
 
-    private var coverOrLyrics: some View {
+    private func coverOrLyrics(size: CGFloat) -> some View {
         Group {
             if playerVM.showLyrics {
-                lyricsArea
+                lyricsArea(height: size)
             } else {
-                coverArea
+                coverArea(size: size)
             }
         }
         .frame(maxWidth: .infinity)
     }
 
-    private var coverArea: some View {
-        let size = coverSize
-        return Button(action: { playerVM.toggleLyrics() }) {
+    private func coverArea(size: CGFloat) -> some View {
+        Button(action: { playerVM.toggleLyrics() }) {
             morphCover(size: size)
             .shadow(color: .black.opacity(0.35), radius: 24, y: 12)
         }
@@ -323,9 +415,8 @@ struct MusicPlayerView: View {
         }
     }
 
-    private var lyricsArea: some View {
-        let height = coverSize
-        return ScrollViewReader { proxy in
+    private func lyricsArea(height: CGFloat) -> some View {
+        ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {
                     // Blank space above the lines: tap -> cover back.
@@ -446,14 +537,28 @@ struct MusicPlayerView: View {
     private var titleRow: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(playerVM.currentSong?.title ?? "未在播放")
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                Text(playerVM.currentSong?.artist ?? "")
-                    .font(.system(size: 16))
-                    .foregroundStyle(.white.opacity(0.72))
-                    .lineLimit(1)
+                // Apple Music: the title opens the album, the
+                // artist opens the artist — the same sheets the …
+                // menu already opened, so no new destination is
+                // invented. Empty title / artist is not tappable.
+                Button(action: { showAlbum = true }) {
+                    Text(playerVM.currentSong?.title ?? "未在播放")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .disabled((playerVM.currentSong?.album ?? "").isEmpty)
+                .accessibilityLabel("专辑：\(playerVM.currentSong?.album ?? "")")
+                Button(action: { showArtist = true }) {
+                    Text(playerVM.currentSong?.artist ?? "")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .disabled((playerVM.currentSong?.artist ?? "").isEmpty)
+                .accessibilityLabel("歌手：\(playerVM.currentSong?.artist ?? "")")
             }
             Spacer()
             Button(action: { playerVM.toggleFavourite() }) {
@@ -581,12 +686,72 @@ struct MusicPlayerView: View {
         .padding(.horizontal, 16)
     }
 
+    // MARK: - Volume (Apple Music: speaker — slider — speaker)
+
+    /// Volume slider, same thin-bar language as the progress bar
+    /// (4pt track, white fill, 10pt knob) with a speaker icon at
+    /// each end. Live on every drag tick (setVolume applies at
+    /// once in the player) — Apple Music's slider tracks the
+    /// finger, it does not commit on release. It drives the
+    /// app-internal AVPlayer volume only (see userVolume in
+    /// NativeMusicPlayer): the system volume, the hardware
+    /// buttons and Control Center are untouched.
+    private var volumeRow: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "speaker.fill")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(.white.opacity(0.85))
+            volumeSlider
+            Image(systemName: "speaker.wave.3.fill")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(.white.opacity(0.85))
+        }
+    }
+
+    private var volumeSlider: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            let ratio = min(max(playerVM.volume, 0), 1)
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(.white.opacity(0.3))
+                    .frame(height: 4)
+                Capsule()
+                    .fill(.white)
+                    .frame(width: max(0, width * ratio), height: 4)
+                Circle()
+                    .fill(.white)
+                    .frame(width: 10, height: 10)
+                    .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+                    .offset(x: min(max(width * ratio - 5, 0), max(0, width - 10)))
+            }
+            .frame(height: 28)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let r = min(max(value.location.x / width, 0), 1)
+                        playerVM.setVolume(r)
+                    }
+            )
+            .accessibilityLabel("音量")
+            .accessibilityValue("\(Int(ratio * 100))%")
+        }
+        .frame(height: 28)
+    }
+
     // MARK: - Mode / speed / sleep / EQ
 
     private var modeRow: some View {
         // Spacing 16 (fix 2026-11-24, build 35): 24 overflowed the
         // 320pt iPhone SE (row ≈ 333 > 272 usable). Labels 12pt —
         // secondary chrome, still legible; icons stay 14.
+        // Apple Music has no such row — shuffle / repeat live in
+        // its queue sheet and speed / sleep / EQ do not exist
+        // there at all — but this row is the only home for the
+        // play mode, speed, sleep timer and equalizer, so the
+        // redo keeps it (removing it would delete behaviour) and
+        // keeps it visually secondary under the volume slider.
         HStack(spacing: 16) {
             Button(action: { playerVM.cycleMode() }) {
                 HStack(spacing: 5) {
@@ -768,20 +933,23 @@ struct MusicAirPlayButton: View {
 }
 
 /// Pure layout math for the full music player (fix 2026-11-24,
-/// build 35). The view pins its stack to the screen width and
-/// sizes the cover from these values, so the geometry is testable
-/// without SwiftUI (MusicPlayerLayoutTests): build 34 rendered the
-/// player ~2x wider than the screen on chen's phone, and the
-/// regression guard is arithmetic — every row's width against the
-/// screen width on every shipping iPhone width — not a code read.
+/// build 35; Apple Music redo + landscape, build 36 item 2). The
+/// view pins its stack to the screen width minus the safe-area side
+/// insets and sizes the cover from these values, so the geometry is
+/// testable without SwiftUI (MusicPlayerLayoutTests): build 34
+/// rendered the player ~2x wider than the screen on chen's phone,
+/// and the regression guard is arithmetic — every row's width
+/// against the screen width on every shipping iPhone width — not a
+/// code read.
 enum MusicPlayerLayout {
     /// Horizontal side padding of the player stack (24pt each side).
     static let sidePadding: CGFloat = 24
-    /// Fixed chrome below the cover slot (~330pt: top bar 40 + gaps
+    /// Fixed chrome below the cover slot (~366pt: top bar 40 + gaps
     /// 60 + badge 23 + title 45 + progress 52 + transport 52 +
-    /// mode 28 + bottom row 30) + safe areas + slack — the height
-    /// budget the cover shrinks against on short phones.
-    static let fixedChromeHeight: CGFloat = 330
+    /// volume 36 + mode 28 + bottom row 30) + safe areas + slack —
+    /// the height budget the cover shrinks against on short phones.
+    /// Build 36 adds the volume row (36) to build 35's 330.
+    static let fixedChromeHeight: CGFloat = 366
 
     static func contentWidth(screenWidth: CGFloat) -> CGFloat {
         screenWidth - sidePadding * 2
@@ -792,7 +960,7 @@ enum MusicPlayerLayout {
     /// screen with no scrolling on any phone height. Tall phones
     /// still get the 340 cap.
     static func coverSize(screenWidth: CGFloat, screenHeight: CGFloat) -> CGFloat {
-        min(screenWidth - sidePadding * 2, 340, max(180, screenHeight - 460))
+        min(screenWidth - sidePadding * 2, 340, max(180, screenHeight - 470))
     }
 
     /// The whole player fits on one screen iff cover + chrome +
@@ -841,5 +1009,37 @@ enum MusicPlayerLayout {
         modeRowItemWidths.reduce(0, +)
             + modeRowSpacing * CGFloat(modeRowItemWidths.count - 1)
             <= contentWidth(screenWidth: screenWidth)
+    }
+
+    // MARK: - Landscape (two columns; build 36)
+
+    /// Right column height in landscape (top bar 40 + title 45 +
+    /// progress 24 + transport 52 + volume 28 + mode 28 + bottom
+    /// 30 + the tighter 6–8pt landscape gaps ≈ 287). The left
+    /// column is cover + badge (35). Both must fit the safe height.
+    static let landscapeRightColumnHeight: CGFloat = 287
+    /// Badge height + its top gap in the left column.
+    static let landscapeBadgeHeight: CGFloat = 35
+
+    /// Landscape cover / lyrics slot: bounded by 42% of the safe
+    /// width (so the right column keeps room for the mode row),
+    /// by the safe height minus badge (35) + vertical padding
+    /// (24) + slack (37), and by the same 340 cap as portrait.
+    /// The 96pt height term is what keeps the mode row inside
+    /// the right column on the narrowest landscape phone (SE 1st
+    /// gen, 568pt: cover 224, right column 272 vs the mode row's
+    /// 267 upper bound).
+    static func landscapeCoverSize(safeWidth: CGFloat, safeHeight: CGFloat) -> CGFloat {
+        min(safeWidth * 0.42, safeHeight - 96, 340)
+    }
+
+    /// The landscape player fits on one screen iff the left column
+    /// (cover + badge) and the right column (all controls) both fit
+    /// the safe height. Safe sizes are the screen minus the
+    /// safe-area insets (notch sides + home indicator).
+    static func landscapeFitsOneScreen(safeWidth: CGFloat, safeHeight: CGFloat) -> Bool {
+        landscapeCoverSize(safeWidth: safeWidth, safeHeight: safeHeight)
+            + landscapeBadgeHeight + 12 <= safeHeight
+            && landscapeRightColumnHeight + 24 <= safeHeight
     }
 }
