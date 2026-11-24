@@ -3,7 +3,8 @@
 // Daily picks, plaza, charts, listen report.
 //
 // - Daily: cached per day (hao_daily.json); a missing day is built
-//   from local data (most-played + top artists, seeded by day).
+//   from local data (listen log + favourites + recent +
+//   playlists, ranked — no shuffle, no seed).
 // - Listen report: pure local aggregation of the listen log
 //   (Flutter ListenReport.compute).
 // - Plaza (S7-A): real platform data via

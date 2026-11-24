@@ -19,8 +19,9 @@
 //   unconfirmed room never shows a LIVE badge.
 // - Daily: the same daily-picks computation as
 //   MusicDiscoveryViewModel.reloadDaily (cached per day in
-//   hao_daily, otherwise MusicRadio.dailyPicks from the listen
-//   log), max 10.
+//   hao_daily, otherwise MusicRadio.dailyPicks ranked from
+//   the listen log + favourites + recent + playlists — no
+//   shuffle, no seeded random), max 10.
 // - Recent plays: MusicLibraryStore.getRecent(), first 10.
 //
 // Live status: the per-room check reuses the existing site
@@ -257,34 +258,28 @@ final class HomeViewModel: ObservableObject {
         return out
     }
 
-    /// Daily picks, same computation as
-    /// MusicDiscoveryViewModel.reloadDaily: half most-played + half
-    /// discovery via top artists (MusicRadio.dailyPicks), seeded
-    /// by day so the same day always yields the same list.
-    /// Reuses the MusicRadio pure functions — no second algorithm.
+    /// Daily picks — the same computation as
+    /// MusicDiscoveryViewModel.reloadDaily: ranked from the
+    /// listen log + favourites + recent + playlist tracks
+    /// (MusicRadio.dailyPicks), no shuffle, no seeded random.
+    /// The same data always yields the same list; the per-day
+    /// cache in loadDailyPicks keeps one day stable even as
+    /// the user keeps listening.
     static func computeDailyPicks(
         listenLog: [ListenEvent],
         favourites: [MusicSong],
         recent: [MusicSong],
-        dayKey: String
+        dayKey: String,
+        playlistTracks: [MusicSong] = [],
+        dislikedIds: Set<String> = []
     ) -> [MusicSong] {
-        let top = MusicRadio.mostPlayedSongs(from: listenLog, limit: 10)
-        let artists = MusicRadio.topArtists(from: listenLog, limit: 5)
-        var byArtist: [String: [MusicSong]] = [:]
-        for event in listenLog {
-            let artist = event.artist.isEmpty ? "—" : event.artist
-            let song = MusicSong(
-                songId: event.songId, title: event.title, artist: event.artist,
-                cover: event.cover, platform: event.platform, dur: event.totalDur)
-            byArtist[artist, default: []].append(song)
-        }
         return MusicRadio.dailyPicks(
-            listenTop: top,
-            byArtist: byArtist,
-            topArtists: artists,
+            listenLog: listenLog,
             favourites: favourites,
             recent: recent,
-            seed: dayKey)
+            playlistTracks: playlistTracks,
+            dislikedIds: dislikedIds,
+            dayKey: dayKey)
     }
 
     /// Daily picks with the per-day cache (hao_daily), exactly
@@ -302,7 +297,9 @@ final class HomeViewModel: ObservableObject {
             listenLog: listenLog,
             favourites: MusicLibraryStore.favSongs(),
             recent: MusicLibraryStore.getRecent(),
-            dayKey: dayKey)
+            dayKey: dayKey,
+            playlistTracks: MusicLibraryStore.getLists().flatMap { $0.tracks },
+            dislikedIds: MusicLibraryStore.fmDislikedIds())
         if !picks.isEmpty {
             MusicLibraryStore.saveDailyTracks(picks, for: dayKey)
         }

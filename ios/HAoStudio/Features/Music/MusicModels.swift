@@ -469,7 +469,8 @@ func musicDayKey(of date: Date) -> String {
 
 /// FNV-1a + mulberry32, ported exactly from Flutter `SeededRandom`
 /// (app.js dailySeeded). The same day string always yields the same
-/// sequence — never use an unseeded random for daily picks.
+/// sequence — used by FM / heartbeat only; daily picks use no
+/// random at all (ranked from the user's data, MusicRadio).
 struct MusicSeededRandom {
     private var state: UInt32
 
