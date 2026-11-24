@@ -74,7 +74,7 @@ struct VideoSearchView: View {
     var body: some View {
         VStack(spacing: 0) {
             searchField
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 16)
                 .padding(.top, 8)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -89,7 +89,7 @@ struct VideoSearchView: View {
                                 title: "没有找到相关影片",
                                 note: "换个关键词试试，或检查影视源是否可用。"
                             )
-                            .padding(.horizontal, 24)
+                            .padding(.horizontal, 16)
                         } else {
                             if !viewModel.results.isEmpty {
                                 resultSection(title: "影视源", items: viewModel.results)
@@ -150,7 +150,7 @@ struct VideoSearchView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("搜索历史")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 if !viewModel.history.isEmpty {
@@ -164,7 +164,7 @@ struct VideoSearchView: View {
                 Text("还没有搜索记录。")
                     .font(.system(size: 14))
                     .foregroundStyle(theme.textMuted)
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, 16)
             } else {
                 FlowChips(
                     items: viewModel.history,
@@ -173,21 +173,29 @@ struct VideoSearchView: View {
                         viewModel.search(term)
                     }
                 )
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 16)
             }
         }
     }
 
     private func resultSection(title: String, items: [VideoItem]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(theme.textPrimary)
-                .padding(.horizontal, 24)
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+                Spacer()
+                // VidHub-style count ("共 3 部"): the number comes
+                // from the results themselves, never invented.
+                Text("共 \(items.count) 部")
+                    .font(.system(size: 13))
+                    .foregroundStyle(theme.textMuted)
+            }
+            .padding(.horizontal, 16)
             VideoPosterGrid(items: items) { item in
                 onSelect(item)
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 16)
         }
     }
 }
@@ -332,12 +340,12 @@ struct VideoCategoryView: View {
                     title: "这个分类下没有内容",
                     note: "影视源没有返回该分类的数据。"
                 )
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 16)
             } else {
                 VideoPosterGrid(items: viewModel.items) { item in
                     onSelect(item)
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 16)
                 .padding(.top, 12)
                 if viewModel.hasMore {
                     ProgressView()

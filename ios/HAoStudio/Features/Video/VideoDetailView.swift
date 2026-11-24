@@ -219,7 +219,7 @@ struct VideoDetailContentView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 coverHeader
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 16) {
                     titleBlock
                     playButton
                     actionRow
@@ -251,7 +251,7 @@ struct VideoDetailContentView: View {
                     }
                     Spacer(minLength: 24)
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 20)
                 .padding(.top, 16)
             }
         }
@@ -285,7 +285,7 @@ struct VideoDetailContentView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 240)
+            .frame(height: 264)
             .clipped()
             .opacity(coverRevealed ? 1 : 0)
             .blur(radius: isCoverBlurred ? 18 : 0)
@@ -297,7 +297,7 @@ struct VideoDetailContentView: View {
                 ],
                 startPoint: .top, endPoint: .bottom
             )
-            .frame(height: 240)
+            .frame(height: 264)
             // S7 wiring: spoiler blur — an unwatched title's cover
             // is blurred until tapped (watched titles are never
             // blurred; the cover is the only thumbnail that
@@ -336,32 +336,37 @@ struct VideoDetailContentView: View {
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(viewModel.item.title)
-                .font(.system(size: 22, weight: .bold))
+                .font(.system(size: 24, weight: .bold))
                 .foregroundStyle(theme.textPrimary)
             HStack(spacing: 8) {
                 if let year = viewModel.item.year, !year.isEmpty {
                     Text(year)
-                        .font(.system(size: 13))
+                        .font(.system(size: 14))
                         .foregroundStyle(theme.textSecondary)
                 }
                 if let type = viewModel.item.typeName, !type.isEmpty {
                     Text(type)
-                        .font(.system(size: 13))
+                        .font(.system(size: 14))
                         .foregroundStyle(theme.textSecondary)
                 }
                 if let remarks = viewModel.item.remarks, !remarks.isEmpty {
                     Text(remarks)
-                        .font(.system(size: 13))
+                        .font(.system(size: 14))
                         .foregroundStyle(theme.textSecondary)
                 }
             }
             if let rating = viewModel.detail?.meta?.rating {
-                // VidHub-style rating: star + number, accent.
+                // VidHub-style rating row: star + number, accent,
+                // with the source named honestly — Douban is the
+                // sole metadata source, so no other rating is shown.
                 HStack(spacing: 4) {
                     Image(systemName: "star.fill")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text("评分 \(String(format: "%.1f", rating))")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(String(format: "%.1f", rating))
+                        .font(.system(size: 16, weight: .bold))
+                    Text("豆瓣评分")
+                        .font(.system(size: 13))
+                        .foregroundStyle(theme.textMuted)
                 }
                 .foregroundStyle(theme.accent)
             }
@@ -385,8 +390,8 @@ struct VideoDetailContentView: View {
                 Spacer()
             }
             .foregroundStyle(theme.onAccent)
-            .padding(.vertical, 14)
-            .background(theme.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.vertical, 16)
+            .background(theme.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(!viewModel.canPlay)
@@ -426,7 +431,7 @@ struct VideoDetailContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             if !meta.cast.isEmpty {
                 Text(meta.cast.joined(separator: " / "))
-                    .font(.system(size: 14))
+                    .font(.system(size: 15))
                     .foregroundStyle(theme.textSecondary)
                     .lineLimit(2)
             }
@@ -447,8 +452,9 @@ struct VideoDetailContentView: View {
                     .buttonStyle(.plain)
                 } else {
                     Text(synopsis)
-                        .font(.system(size: 14))
+                        .font(.system(size: 15))
                         .foregroundStyle(theme.textPrimary)
+                        .lineSpacing(4)
                         .lineLimit(6)
                 }
             }
@@ -460,7 +466,7 @@ struct VideoDetailContentView: View {
     private var linePicker: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("线路")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(theme.textPrimary)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -494,11 +500,11 @@ struct VideoDetailContentView: View {
     private var episodeGrid: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("选集")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(theme.textPrimary)
             LazyVGrid(
-                columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4),
-                spacing: 8
+                columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
+                spacing: 10
             ) {
                 ForEach(Array((viewModel.selectedLine?.episodes ?? []).enumerated()), id: \.element.id) { index, episode in
                     Button(action: { onPlay(viewModel.selectedLineIndex, index) }) {
@@ -509,13 +515,13 @@ struct VideoDetailContentView: View {
                                     ? theme.onAccent : theme.textPrimary)
                             .lineLimit(1)
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
+                            .padding(.vertical, 12)
                             .background(
                                 index == viewModel.selectedEpisodeIndex
                                     ? theme.accent : theme.surface,
-                                in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .overlay {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
                                     .strokeBorder(theme.hairline, lineWidth: 0.5)
                             }
                     }

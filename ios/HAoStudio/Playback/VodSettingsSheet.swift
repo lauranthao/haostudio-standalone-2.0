@@ -207,8 +207,8 @@ struct VodSettingsSheet: View {
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundColor(theme.textSecondary)
                             LazyVGrid(
-                                columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4),
-                                spacing: 8
+                                columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
+                                spacing: 10
                             ) {
                                 ForEach(Array(episodes(of: detail).enumerated()), id: \.element.id) { index, episode in
                                     Button(action: {
@@ -222,11 +222,11 @@ struct VodSettingsSheet: View {
                                                     ? theme.onAccent : theme.textPrimary)
                                             .lineLimit(1)
                                             .frame(maxWidth: .infinity)
-                                            .padding(.vertical, 10)
+                                            .padding(.vertical, 12)
                                             .background(
                                                 index == episodeIndex
                                                     ? theme.accent : theme.surface,
-                                                in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                                in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                                     }
                                     .buttonStyle(.plain)
                                 }

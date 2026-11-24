@@ -25,7 +25,7 @@ struct VideoFavsView: View {
                     VideoPosterGrid(items: items) { item in
                         selectedItem = item
                     }
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, 16)
                     .padding(.top, 12)
                     Spacer(minLength: 16)
                 }
