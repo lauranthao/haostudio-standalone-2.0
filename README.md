@@ -67,7 +67,7 @@ HAo Studio 独立版（2.0）是一个完全自包含的 iOS 应用：音乐、�
 
 ## 下载
 
-当前版本 **2.1.0 build 37**（2026-11-24），IPA 14,499,630 字节，md5 `d0283e2df0892661df58a9fb2e71bbb5`。
+当前版本 **2.1.0 build 37**（2026-11-24），IPA 14,484,046 字节，md5 `1519970c3df7a0ab2b226b8f11eb6975`。
 
 - **下载 IPA**：https://chen-hao-shop-production.up.railway.app/HAoStudio-standalone-v2.1.0.ipa
 - **系统要求**：iOS 17.0 以上，iPhone / iPad
