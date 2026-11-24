@@ -193,6 +193,12 @@ extension Notification.Name {
     /// favourites view reload on this, so the star never goes
     /// stale while the song is playing.
     static let haoMusicFavChanged = Notification.Name("haoMusicFavChanged")
+    /// The Emby server config changed (saved or cleared in
+    /// Settings). Posters are keyed by clean image URL, so a new
+    /// server's posters must not reuse the old server's cached
+    /// images; the video driver also ends any open reporter
+    /// session, which was built from the old config.
+    static let haoEmbyConfigChanged = Notification.Name("haoEmbyConfigChanged")
 }
 
 enum MusicNotificationKeys {

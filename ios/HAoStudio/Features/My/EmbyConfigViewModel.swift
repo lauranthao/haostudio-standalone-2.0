@@ -218,6 +218,12 @@ final class EmbyConfigViewModel: ObservableObject {
         if ok {
             resolvedConfig = config
             password = ""
+            // A new server means new posters and a new reporter
+            // session: drop the old server's cached images and
+            // tell the video driver to end its open session (the
+            // client it holds was built from the old config).
+            EmbyImageLoader.shared.clearCache()
+            NotificationCenter.default.post(name: .haoEmbyConfigChanged, object: nil)
             if config.isConfigured {
                 status = .configured(serverName: config.serverName, version: config.serverVersion)
             } else {
@@ -230,6 +236,8 @@ final class EmbyConfigViewModel: ObservableObject {
     /// Forget the server entirely: config file + Keychain token.
     func clear() {
         EmbyConfigStore.clear()
+        EmbyImageLoader.shared.clearCache()
+        NotificationCenter.default.post(name: .haoEmbyConfigChanged, object: nil)
         resolvedConfig = nil
         baseUrl = ""
         username = ""

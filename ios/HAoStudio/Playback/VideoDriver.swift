@@ -210,6 +210,10 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     /// recording reporter.
     var embyReporter = EmbyPlaybackReporter()
 
+    /// Token for the Emby-config-change observer (init). Removed
+    /// in deinit.
+    private var embyConfigChangedObserver: NSObjectProtocol?
+
     /// Settings storage for the "与其他音频同时播放" switch
     /// (test seam: tests point this at an isolated suite;
     /// production is `.standard`). The switch reads through the
@@ -349,6 +353,17 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             self.lastDroppedFrames = dropped
             self.updateDiagnostics()
         }
+        // An Emby server change (saved / cleared in Settings)
+        // ends any open reporter session: the reporter holds a
+        // client built from the old config and would keep
+        // reporting progress to the old server. noteStopped is a
+        // no-op with no session, so this is safe when idle.
+        embyConfigChangedObserver = NotificationCenter.default.addObserver(
+            forName: .haoEmbyConfigChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            self.embyReporter.noteStopped(positionSeconds: self.position)
+        }
     }
 
     deinit {
@@ -356,6 +371,9 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         openTimeoutWork?.cancel()
         fpsSampler.stop()
         backend?.shutdown()
+        if let observer = embyConfigChangedObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 
     // MARK: - Helpers
