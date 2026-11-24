@@ -885,7 +885,16 @@ struct SettingsGroupsView: View {
     // MARK: - 关于
 
     private var aboutSection: some View {
-        Section(header: SettingsSectionHeader(section: .about)) {
+        Section(
+            header: SettingsSectionHeader(section: .about),
+            // Page-ending footer (the last section): a deliberate
+            // bottom edge instead of dead space, and the honest
+            // statement of what this app is — local-only, no
+            // login, nothing uploaded.
+            footer: Text("HAo Studio 仅使用本地数据，不上传服务器，也不需要登录。")
+                .font(.haoFootnote)
+                .foregroundStyle(theme.textMuted)
+        ) {
             if isExpanded(.about) {
                 HStack {
                     Text("版本")
