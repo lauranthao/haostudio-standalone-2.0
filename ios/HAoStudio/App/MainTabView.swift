@@ -91,7 +91,7 @@ struct MainTabView: View {
             // player re-opens it here). S4: a live item re-opens
             // the room page, rebuilt from the playing item.
             if coordinator.currentItem?.kind == .music {
-                MusicPlayerView()
+                MusicPlayerView(isPresented: $showingFullPlayer)
             } else if coordinator.currentItem?.kind == .vod {
                 VideoPlayerView()
             } else if coordinator.currentItem?.kind == .live,
