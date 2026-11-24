@@ -462,7 +462,18 @@ final class MusicPlayerViewModel: ObservableObject {
     /// through and re-requests the song instead of resuming
     /// nothing (A2: the old shortcut called player.play(), which
     /// no-ops with no currentTrack, leaving a dead tap).
-    func play(song: MusicSong, in tracks: [MusicSong]? = nil, startAt: Int? = nil) {
+    ///
+    /// `resumeFrom`: the home "继续听" tap passes the stored
+    /// checkpoint here (H1, build 36 follow-up); every other
+    /// caller leaves it nil and plays from 0. A positive value
+    /// arms the one-shot resume seek before startPlayback — it
+    /// lands once the player reports a duration, through the
+    /// same applyPendingResumeSeek as the launch-time resume.
+    /// A same-track tap takes the shortcut above and does not
+    /// re-seek: a paused track resumes where it stopped, which
+    /// is the checkpoint itself (pause writes it), and a playing
+    /// track is already past it.
+    func play(song: MusicSong, in tracks: [MusicSong]? = nil, startAt: Int? = nil, resumeFrom: Double? = nil) {
         if queue.isCurrentTrack(song),
            let track = player.currentTrack,
            track.id == song.identityKey || track.id == song.songId {
@@ -476,6 +487,18 @@ final class MusicPlayerViewModel: ObservableObject {
             queue = MusicQueue(tracks: [song], index: 0)
         }
         expectedItemId = song.identityKey
+        // H1: arm the resume seek (if any) BEFORE startPlayback.
+        // A plain play clears an armed seek for a DIFFERENT song:
+        // the user chose a song from the start, so a stale armed
+        // seek (e.g. the launch resume) must not jump it forward
+        // when its duration later arrives. The same song keeps its
+        // armed seek — re-tapping the auto-resuming song before it
+        // loads must not silently drop the launch resume.
+        if let seconds = MusicResumeLogic.resumeSecondsToArm(requested: resumeFrom) {
+            pendingResume = (key: song.identityKey, seconds: seconds)
+        } else if pendingResume?.key != song.identityKey {
+            pendingResume = nil
+        }
         startPlayback()
         hapticTick()
     }
@@ -576,10 +599,11 @@ final class MusicPlayerViewModel: ObservableObject {
         lastResumeSavedSeconds = seconds
     }
 
-    /// One-shot launch-time resume seek, applied once the
-    /// restored track has loaded (duration > 0). Drops the
-    /// checkpoint when the song changed, the load failed, or
-    /// the stored position is past the end.
+    /// One-shot resume seek, applied once the track has loaded
+    /// (duration > 0). Shared by the launch-time resume (armed in
+    /// init) and the home "继续听" tap (armed in play(resumeFrom:),
+    /// H1). Drops the checkpoint when the song changed, the load
+    /// failed, or the stored position is past the end.
     private func applyPendingResumeSeek() {
         guard let pending = pendingResume else { return }
         guard let song = currentSong, song.identityKey == pending.key else {

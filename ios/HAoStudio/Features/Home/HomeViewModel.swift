@@ -132,6 +132,13 @@ private final class HomeLiveStatusGate {
 final class HomeViewModel: ObservableObject {
     @Published private(set) var continueWatching: [VideoHistoryEntry] = []
     @Published private(set) var continueListening: [MusicSong] = []
+    /// The stored resume point (seconds) behind the "继续听" card:
+    /// resumeMap[resumeSong.identityKey]. Nil when the card is the
+    /// recent-play fallback (no valid resume point) — the card
+    /// shows no "上次听到" label then, and the tap plays from 0.
+    /// The value is the same one the tap passes to the player as
+    /// resumeFrom, so the label and the seek can never disagree.
+    @Published private(set) var continueListeningResumeSeconds: Int?
     @Published private(set) var hotLive: [HomeLiveItem] = []
     @Published private(set) var daily: [MusicSong] = []
     @Published private(set) var recentPlays: [MusicSong] = []
@@ -245,8 +252,13 @@ final class HomeViewModel: ObservableObject {
         allRecentPlays = recent
         if let song = Self.resumeSong(recent: recent, listenLog: listenLog, resumeMap: resumeMap) {
             continueListening = [song]
+            // resumeSong only returns a song with a valid map
+            // entry (isValidMusicResume needs seconds > 10), so
+            // this is always non-nil here.
+            continueListeningResumeSeconds = resumeMap[song.identityKey]
         } else {
             continueListening = Array(recent.prefix(1))
+            continueListeningResumeSeconds = nil
         }
         // Carry a confirmed-live badge across the rebuild: the
         // merged list is rebuilt fresh on every reload, and
