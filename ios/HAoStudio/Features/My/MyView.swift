@@ -409,5 +409,11 @@ private struct MyRecentPlaysView: View {
         .onAppear {
             recent = MusicLibraryStore.getRecent()
         }
+        // Same real-time rule as home (H1): a song played from the
+        // mini player or another tab while this list is open must
+        // move to the top at once; a cleared list must empty at once.
+        .onReceive(NotificationCenter.default.publisher(for: .haoMusicRecentChanged)) { _ in
+            recent = MusicLibraryStore.getRecent()
+        }
     }
 }
