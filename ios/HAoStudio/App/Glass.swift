@@ -39,6 +39,21 @@ enum HaoLayout {
     /// + 2 x 4pt vertical padding = 50pt rendered; cover 36,
     /// control 32, title 12 semibold, subtitle 10).
     static let miniPlayerHeight: CGFloat = 50
+    /// Corner radius of the floating chrome (mini player + tab bar):
+    /// a rounded rectangle, NOT a capsule. chen's Apple Music
+    /// reference (2026-11-24 build 34): the mini and the bar share
+    /// one shape, one width, stacked with an 8pt gap. 12pt, on the
+    /// 4pt grid. One constant: the system tab bar's own rendered
+    /// radius is system-determined, so if the two still read as
+    /// different shapes on device, this is the single place to
+    /// adjust — never a second hand-written number in the mini.
+    static let floatingChromeCornerRadius: CGFloat = 12
+    /// Horizontal content padding inside the mini player strip,
+    /// symmetric both sides (was 10 leading / 6 trailing — the
+    /// strip read lopsided). Same 12pt step as the tab bar's side
+    /// margins, so the cover's left edge and the buttons' right
+    /// edge sit on the same rhythm as the bar.
+    static let miniPlayerContentPadding: CGFloat = 12
     /// Gap between the mini player strip and the tab bar.
     static let floatingStackSpacing: CGFloat = 8
     /// Total height of the glass tab bar as laid out in the floating
@@ -87,10 +102,59 @@ struct HaoGlassCapsule: ViewModifier {
     }
 }
 
+/// A rounded rectangle with the same glass treatment as the capsule,
+/// at the shared floating-chrome corner radius (HaoLayout
+/// .floatingChromeCornerRadius). The mini player uses this: chen's
+/// Apple Music reference has the mini and the tab bar as the same
+/// rounded rectangle, not a capsule. Same stroke + shadow values as
+/// the capsule (and HaoGlassCircle) — keep them in sync.
+/// A separate struct, not a generic shape: the shape APIs take a
+/// concrete shape, and a generic would only be verifiable on the
+/// macOS build gate.
+struct HaoGlassRoundedRectangle: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(
+            cornerRadius: HaoLayout.floatingChromeCornerRadius,
+            style: .continuous
+        )
+    }
+
+    func body(content: Content) -> some View {
+        Group {
+            if #available(iOS 26.0, *) {
+                content.glassEffect(.regular, in: shape)
+            } else {
+                // iOS 17–25: no .glassEffect — regular material is the
+                // Apple-native frosted-glass fallback.
+                content.background(.ultraThinMaterial, in: shape)
+            }
+        }
+        .overlay {
+            shape.strokeBorder(
+                .white.opacity(colorScheme == .dark ? 0.08 : 0.22),
+                lineWidth: 0.5
+            )
+        }
+        .clipShape(shape)
+        .shadow(
+            color: .black.opacity(colorScheme == .dark ? 0.28 : 0.10),
+            radius: 12, y: 4
+        )
+    }
+}
+
 extension View {
     /// Apply the shared floating-capsule glass treatment.
     func haoGlassCapsule() -> some View {
         modifier(HaoGlassCapsule())
+    }
+
+    /// Apply the shared floating rounded-rectangle glass treatment
+    /// (mini player shape).
+    func haoGlassRoundedRect() -> some View {
+        modifier(HaoGlassRoundedRectangle())
     }
 
     /// Bottom clearance for scroll content under the floating stack.
@@ -114,15 +178,24 @@ extension View {
 }
 
 /// The modifier behind haoBottomChromePadding(). Reads the shared
-/// PlaybackCoordinator from the environment (injected at the app
-/// root), so the clearance follows the mini player's visibility.
+/// PlaybackCoordinator and MusicPlayerViewModel from the environment
+/// (both injected at the app root), so the clearance follows the
+/// mini player's visibility exactly: the mini shows while the
+/// coordinator has a current item OR a music song is still loaded
+/// (MusicPlayerViewModel.miniFallbackSong — a failed / stopped track
+/// the full player keeps showing). Using only `currentItem` here
+/// would leave 66pt of clearance under a visible 124pt stack.
 private struct HaoBottomChromePadding: ViewModifier {
     @EnvironmentObject private var coordinator: PlaybackCoordinator
+    @EnvironmentObject private var musicPlayer: MusicPlayerViewModel
 
     func body(content: Content) -> some View {
         content.safeAreaPadding(
             .bottom,
-            HaoLayout.floatingStackClearance(miniPlayerVisible: coordinator.currentItem != nil)
+            HaoLayout.floatingStackClearance(
+                miniPlayerVisible: coordinator.currentItem != nil
+                    || musicPlayer.miniFallbackSong != nil
+            )
         )
     }
 }

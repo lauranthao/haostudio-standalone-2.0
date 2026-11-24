@@ -60,6 +60,7 @@ enum HaoTab: String, CaseIterable, Identifiable {
 struct MainTabView: View {
     @EnvironmentObject private var themeStore: ThemeStore
     @EnvironmentObject private var coordinator: PlaybackCoordinator
+    @EnvironmentObject private var musicPlayer: MusicPlayerViewModel
     @EnvironmentObject private var immersiveChrome: ImmersiveChromeState
     @EnvironmentObject private var settingsStore: SettingsStore
     @Environment(\.colorScheme) private var colorScheme
@@ -102,11 +103,16 @@ struct MainTabView: View {
         }
         .fullScreenCover(isPresented: $showingFullPlayer) {
             // S2-C: a music item opens the real full player.
+            // The mini can show a loaded music song while the
+            // coordinator has no current item (failed / stopped
+            // track): opening from the mini must land on that
+            // song's player, not the "cannot play" placeholder.
             // S3-C: a VOD item re-opens the video player (tap-play
             // on the detail page presents it directly; the mini
             // player re-opens it here). S4: a live item re-opens
             // the room page, rebuilt from the playing item.
-            if coordinator.currentItem?.kind == .music {
+            if coordinator.currentItem?.kind == .music
+                || (coordinator.currentItem == nil && musicPlayer.miniFallbackSong != nil) {
                 MusicPlayerView(isPresented: $showingFullPlayer)
             } else if coordinator.currentItem?.kind == .vod {
                 VideoPlayerView()
