@@ -52,12 +52,24 @@ import FoundationNetworking
 struct EmbyResponse {
     let statusCode: Int
     let json: Any?
+    /// True when the transport failed with URLError.timedOut
+    /// (not a refused/DNS failure): the client maps it to
+    /// .timedOut instead of .unreachable. Defaults false so
+    /// canned test responses keep working unchanged.
+    let timedOut: Bool
+
+    init(statusCode: Int, json: Any?, timedOut: Bool = false) {
+        self.statusCode = statusCode
+        self.json = json
+        self.timedOut = timedOut
+    }
 }
 
 /// Fetch one Emby JSON document. Never throws for an HTTP status —
 /// the status rides in EmbyResponse for the client to map.
-/// Transport failures (refused / DNS / timeout) become
-/// EmbyError.unreachable; the URL is never included in the message.
+/// Transport failures (refused / DNS) become EmbyError.unreachable;
+/// a timeout becomes EmbyError.timedOut (see EmbyResponse.timedOut).
+/// The URL is never included in the message.
 typealias EmbyFetcher = (URL, [String: String], TimeInterval, @escaping (EmbyResponse) -> Void) -> Void
 
 /// Mutating Emby request (POST/DELETE): method + full URL + auth
@@ -77,6 +89,10 @@ enum EmbyTransport {
             request.setValue(value, forHTTPHeaderField: key)
         }
         let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let urlError = error as? URLError, urlError.code == .timedOut {
+                completion(EmbyResponse(statusCode: 0, json: nil, timedOut: true))
+                return
+            }
             if error != nil {
                 completion(EmbyResponse(statusCode: 0, json: nil))
                 return
@@ -106,6 +122,10 @@ enum EmbyTransport {
             request.httpBody = try? JSONSerialization.data(withJSONObject: jsonBody, options: [])
         }
         let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let urlError = error as? URLError, urlError.code == .timedOut {
+                completion(EmbyResponse(statusCode: 0, json: nil, timedOut: true))
+                return
+            }
             if error != nil {
                 completion(EmbyResponse(statusCode: 0, json: nil))
                 return
@@ -454,6 +474,9 @@ final class EmbyClient {
     /// wording depends on the auth mode (password login vs key).
     private func mapDocument(_ response: EmbyResponse, wantMap: Bool) -> Result<Any, EmbyError> {
         let status = response.statusCode
+        if response.timedOut {
+            return .failure(.timedOut())
+        }
         if status == 0 {
             return .failure(.unreachable())
         }
@@ -548,7 +571,12 @@ final class EmbyClient {
             getJSON(url: url, allowPrefixRetry: false) { result in
                 switch result {
                 case .failure(let error):
-                    if error.kind == .unauthorized {
+                    // Transport failures stop the walk: when the
+                    // server never answered, the /emby-vs-root
+                    // prefix is not the question — trying the
+                    // other prefix just burns another timeout.
+                    // Only a real HTTP answer (404 / other) walks.
+                    if error.kind == .unauthorized || error.kind == .unreachable || error.kind == .timedOut {
                         self.baseOverride = nil
                         completion(EmbyProbeResult(ok: false, errorKind: error.kind, errorMessage: error.message))
                         return
@@ -628,8 +656,14 @@ final class EmbyClient {
                     return
                 }
                 if response.statusCode == 0 {
-                    lastError = .unreachable()
-                    step()
+                    // Transport failure: the server never answered,
+                    // so the prefix is not the question. Fail at
+                    // once instead of burning a second timeout on
+                    // the other prefix (and keep the timeout
+                    // distinction for the message).
+                    self.baseOverride = nil
+                    let error = response.timedOut ? EmbyError.timedOut() : .unreachable()
+                    completion(EmbyAuthResult(ok: false, errorKind: error.kind, errorMessage: error.message))
                     return
                 }
                 if response.statusCode < 200 || response.statusCode >= 300 {
@@ -683,6 +717,13 @@ final class EmbyClient {
                 return
             }
             fetcher(url, [:], 5) { response in
+                // Transport failure (status 0): the host never
+                // answered, so the other prefix cannot help —
+                // stop instead of burning a second 5 s timeout.
+                if response.statusCode == 0 {
+                    completion(false)
+                    return
+                }
                 if response.statusCode != 200 {
                     step()
                     return
@@ -723,7 +764,10 @@ final class EmbyClient {
                 case .success:
                     completion(nil)
                 case .failure(let error):
-                    if error.kind == .unauthorized {
+                    // Same rule as probeBase: a transport failure
+                    // stops the prefix walk; only a real HTTP
+                    // answer (wrong prefix looks like 404) walks.
+                    if error.kind == .unauthorized || error.kind == .unreachable || error.kind == .timedOut {
                         completion(error)
                         return
                     }

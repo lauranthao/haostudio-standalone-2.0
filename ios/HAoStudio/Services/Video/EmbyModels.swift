@@ -313,8 +313,11 @@ struct EmbyProbeResult {
 /// at the throw site so probe / list / detail can never drift
 /// apart — and so the CMS wording is never reused for Emby.
 enum EmbyErrorKind: Equatable {
-    /// Connection refused / DNS / timeout: address wrong or server down.
+    /// Connection refused / DNS: address wrong or server down.
     case unreachable
+    /// The server did not answer within the timeout: reachable
+    /// maybe, but too slow — different guidance from unreachable.
+    case timedOut
     /// HTTP 401: the key is wrong.
     case unauthorized
     /// HTTP 404: the addressed item/library is gone.
@@ -331,6 +334,10 @@ struct EmbyError: Error, Equatable {
 
     static func unreachable() -> EmbyError {
         EmbyError(kind: .unreachable, message: "连不上 Emby 服务器，检查地址和网络")
+    }
+
+    static func timedOut() -> EmbyError {
+        EmbyError(kind: .timedOut, message: "Emby 服务器响应超时，检查网络或稍后再试")
     }
 
     static func unauthorized() -> EmbyError {
