@@ -108,8 +108,26 @@ struct VideoTabView: View {
     @StateObject private var viewModel = VideoTabViewModel()
     @State private var path: [VideoDestination] = []
     @State private var mode: String = VideoLibraryStore.tabMode()
+    /// Hero carousel index + auto-advance timer (VidHub /
+    /// Streamyfin home, TV-App-SwiftUI pattern: TabView(.page)
+    /// + Timer + custom capsule dots — the system dots don't
+    /// match the banner).
+    @State private var heroIndex = 0
+    @State private var heroTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     @Environment(\.haoTheme) private var theme
+
+    /// Hero pages: the daily row first (VidHub's featured
+    /// banner), else the first row; max 5.
+    private var heroItems: [VideoItem] {
+        let source = viewModel.rows.first(where: { $0.id == "daily" }) ?? viewModel.rows.first
+        return Array((source?.items ?? []).prefix(5))
+    }
+
+    /// Hero height from the real screen width (16:10) — one
+    /// place, so the banner is proportional on every iPhone,
+    /// never a fixed number.
+    private var heroHeight: CGFloat { UIScreen.main.bounds.width * 0.625 }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -136,8 +154,13 @@ struct VideoTabView: View {
                 }
             }
             .background(theme.scaffoldBackground)
-            .navigationTitle("影视")
-            .navigationBarTitleDisplayMode(.large)
+            // b39: no system nav bar on this root — VidHub's home
+            // has a custom header, not a large title, and the
+            // system large title proved unreliable on chen's phone
+            // (Home's "首页" did not render, build 38). The hero
+            // below is the top of the page; pushed pages (detail,
+            // browse, search) keep their own bars and back buttons.
+            .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: VideoDestination.self) { destination in
                 switch destination {
                 case .search:
@@ -197,6 +220,9 @@ struct VideoTabView: View {
                     // link): drives minimize / restore as this tab scrolls.
                     HaoChromeScrollAnchor()
                         .id(HaoTabScrollTop.id(for: .movies))
+                    if !heroItems.isEmpty {
+                        heroCarousel
+                    }
                     searchEntry
                         .padding(.horizontal, 16)
                         .padding(.top, 12)
@@ -236,6 +262,104 @@ struct VideoTabView: View {
             .haoReselectScrollToTop(tab: .movies, proxy: proxy)
             .refreshable { viewModel.loadFresh() }
         }
+    }
+
+    // MARK: - Hero carousel (VidHub / Streamyfin home)
+
+    /// Featured hero carousel (VidHub shot0 / Streamyfin home
+    /// screen): full-bleed poster art with a bottom gradient,
+    /// title + meta overlaid, custom capsule page dots,
+    /// auto-advancing every 5 s. Sized from the real screen
+    /// width (heroHeight, 16:10) — the banner is edge-to-edge,
+    /// never a fixed height. Tapping a page opens its detail.
+    /// The poster is 2:3 art cropped to 16:10 (scaledToFill) —
+    /// the CMS gives no landscape backdrop, so the middle band
+    /// of the poster is the banner, under a dark gradient.
+    private var heroCarousel: some View {
+        TabView(selection: $heroIndex) {
+            ForEach(Array(heroItems.enumerated()), id: \.element.id) { index, item in
+                Button(action: { path.append(.detail(item)) }) {
+                    ZStack(alignment: .bottomLeading) {
+                        heroArt(item: item)
+                        LinearGradient(
+                            colors: [Color.black.opacity(0), Color.black.opacity(0.75)],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.title)
+                                .font(.system(size: 22, weight: .bold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                            HStack(spacing: 6) {
+                                if let year = item.year, !year.isEmpty {
+                                    Text(year)
+                                }
+                                if let type = item.typeName, !type.isEmpty {
+                                    Text(type)
+                                }
+                                if let remarks = item.remarks, !remarks.isEmpty {
+                                    Text(remarks)
+                                }
+                            }
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .lineLimit(1)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 28)
+                    }
+                }
+                .buttonStyle(.plain)
+                .tag(index)
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .frame(height: heroHeight)
+        .overlay(alignment: .bottom) {
+            // Custom capsule dots (TV-App-SwiftUI): the selected
+            // dot is a wide white capsule, the rest are small
+            // white-0.5 dots.
+            HStack(spacing: 6) {
+                ForEach(heroItems.indices, id: \.self) { index in
+                    Capsule()
+                        .fill(index == heroIndex ? Color.white : Color.white.opacity(0.5))
+                        .frame(width: index == heroIndex ? 16 : 6, height: 6)
+                }
+            }
+            .padding(.bottom, 10)
+        }
+        .onReceive(heroTimer) { _ in
+            guard heroItems.count > 1 else { return }
+            withAnimation(.easeInOut(duration: 0.4)) {
+                heroIndex = (heroIndex + 1) % heroItems.count
+            }
+        }
+        .onChange(of: heroItems.count) { _, _ in
+            if heroIndex >= heroItems.count { heroIndex = 0 }
+        }
+    }
+
+    private func heroArt(item: VideoItem) -> some View {
+        Group {
+            if item.detailSource == .emby {
+                EmbyPosterImage(urlString: item.coverURL?.absoluteString ?? "", cornerRadius: 0)
+            } else if let url = item.coverURL {
+                HaoCachedImage(
+                    urlString: url.absoluteString,
+                    targetWidth: UIScreen.main.bounds.width,
+                    targetHeight: heroHeight
+                ) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Rectangle().fill(theme.surfaceStrong)
+                }
+            } else {
+                Rectangle().fill(theme.surfaceStrong)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: heroHeight)
+        .clipped()
     }
 
     private var searchEntry: some View {
