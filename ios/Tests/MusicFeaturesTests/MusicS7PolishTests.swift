@@ -105,4 +105,13 @@ final class MusicS7PolishTests: XCTestCase {
         XCTAssertEqual(plazaPlayCountText(12_345), "1.2万次播放")
         XCTAssertEqual(plazaPlayCountText(123_456_789), "1.2亿次播放")
     }
+
+    func testPlazaPlayCountTextStripsZeroTenth() {
+        // b36 follow-up, same ".0"-tail rule as liveWatchingText.
+        XCTAssertEqual(plazaPlayCountText(10_000), "1万次播放")
+        XCTAssertEqual(plazaPlayCountText(10_500), "1.1万次播放")
+        XCTAssertEqual(plazaPlayCountText(100_000), "10万次播放")
+        XCTAssertEqual(plazaPlayCountText(100_000_000), "1亿次播放")
+        XCTAssertEqual(plazaPlayCountText(1_000_000_000), "10亿次播放")
+    }
 }

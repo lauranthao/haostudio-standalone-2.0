@@ -95,7 +95,14 @@ func liveWatchingText(_ watching: Int) -> String {
         if value >= 100 {
             return "\(Int(value))万"
         }
-        return String(format: "%.1f万", value)
+        // "1.0万" reads wrong at exactly 10k — strip the ".0"
+        // tail (10000 -> "1万", 100000 -> "10万"); a non-zero
+        // tenth keeps its digit (10500 -> "1.1万").
+        let formatted = String(format: "%.1f万", value)
+        if formatted.hasSuffix(".0万") {
+            return String(formatted.dropLast(3)) + "万"
+        }
+        return formatted
     }
     return "\(watching)"
 }

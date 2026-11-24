@@ -467,6 +467,75 @@ final class BackupEngineTests: XCTestCase {
         XCTAssertEqual(configDict["baseUrl"] as? String, "https://example.invalid")
     }
 
+    // MARK: - VOD danmaku token never in a backup (b36 follow-up)
+
+    func testDanmakuTokenNeverInExportButUrlIs() {
+        // Same canary shape as the Emby test: the address is not
+        // a secret and stays exportable, the token must not appear
+        // anywhere in the zip bytes or the envelope data.
+        let canary = "CANARY-DANMAKU-TOKEN-12345"
+        defaults.set("https://danmaku.example.invalid/api", forKey: "hao_vod_danmaku_api_url")
+        defaults.set(canary, forKey: "hao_vod_danmaku_api_token")
+        guard let exported = BackupEngineCore.exportBackup(
+            to: FileManager.default.temporaryDirectory
+                .appendingPathComponent("hao-backup-danmaku-\(UUID().uuidString).zip"),
+            documentsURL: docs, defaults: defaults,
+            currentVersion: currentVersion
+        ) else {
+            return XCTFail("export failed")
+        }
+        guard let zipData = try? Data(contentsOf: exported.zipURL),
+              let canaryData = canary.data(using: .utf8)
+        else {
+            return XCTFail("cannot read exported zip")
+        }
+        XCTAssertNil(zipData.range(of: canaryData), "danmaku token leaked into export bytes")
+        guard let entries = ZipArchive.listEntries(at: exported.zipURL),
+              let envelopeEntry = entries.first(where: { $0.name == BackupEngineCore.envelopeFileName }),
+              let envelopeData = ZipArchive.readEntryData(envelopeEntry, from: exported.zipURL),
+              let parsed = try? JSONSerialization.jsonObject(with: envelopeData, options: []),
+              let root = parsed as? [String: Any],
+              let data = root["data"] as? [String: Any]
+        else {
+            return XCTFail("exported envelope missing")
+        }
+        XCTAssertEqual(data["hao_vod_danmaku_api_url"] as? String, "https://danmaku.example.invalid/api")
+        XCTAssertNil(data["hao_vod_danmaku_api_token"])
+    }
+
+    func testOldBackupTokenIsSkippedNotRestored() {
+        // An old backup (b36 item 11) already carries the token:
+        // import must succeed, restore the address, and leave the
+        // token exactly as it is on this device — never applied,
+        // never isolated into backup_unknown_keys.json (that file
+        // would still leave the token on disk in plain text).
+        defaults.set("https://danmaku.example.invalid/api", forKey: "hao_vod_danmaku_api_url")
+        defaults.set("DEVICE-TOKEN-STAYS", forKey: "hao_vod_danmaku_api_token")
+        guard let zipURL = exportZip(using: engine) else { return }
+        guard let rewritten = rewriteBackupJSON(in: zipURL, mutate: { root in
+            var data = root["data"] as? [String: Any] ?? [:]
+            data["hao_vod_danmaku_api_token"] = "CANARY-OLD-BACKUP-TOKEN"
+            data["hao_vod_danmaku_api_url"] = "https://old-backup.example.invalid/api"
+            root["data"] = data
+        }) else {
+            return XCTFail("rewriting the backup failed")
+        }
+        // Wipe the device values: the address must come back from
+        // the backup, the token must stay absent.
+        defaults.removeObject(forKey: "hao_vod_danmaku_api_url")
+        defaults.removeObject(forKey: "hao_vod_danmaku_api_token")
+        let detail = BackupEngineCore.importBackup(
+            from: rewritten, documentsURL: docs, defaults: defaults,
+            currentVersion: currentVersion
+        )
+        XCTAssertEqual(detail.outcome, .imported)
+        XCTAssertTrue(detail.skippedKeyNames.contains("hao_vod_danmaku_api_token"))
+        XCTAssertEqual(defaults.string(forKey: "hao_vod_danmaku_api_url"), "https://old-backup.example.invalid/api")
+        XCTAssertNil(defaults.object(forKey: "hao_vod_danmaku_api_token"))
+        XCTAssertFalse(detail.unknownKeyNames.contains("hao_vod_danmaku_api_token"))
+        XCTAssertNil(readFile("backup_unknown_keys.json", from: docs), "token must not be isolated to disk")
+    }
+
     // MARK: - Bad-typed key: skipped, rest still lands
 
     func testBadKeySkippedNotFatal() {

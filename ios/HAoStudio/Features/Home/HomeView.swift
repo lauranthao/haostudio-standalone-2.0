@@ -103,6 +103,16 @@ struct HomeView: View {
             // same "back at home" event — one return trip pays
             // for one reload, never two.
             .onAppear { viewModel.reloadForAppearance() }
+            // Follow toggle from a card's long-press menu (shared
+            // LiveRoomCard) writes the store directly — the home
+            // section used to keep the unfollowed card until the
+            // next reload. Rebuild hot live from local data at
+            // once; the "全部" page shares this view model, so it
+            // updates too. No network is spent (see
+            // refreshHotLiveForFollowChange).
+            .onReceive(NotificationCenter.default.publisher(for: .haoLiveFollowChanged)) { _ in
+                viewModel.refreshHotLiveForFollowChange()
+            }
             // Return-to-home refresh: NavigationStack's own
             // onAppear does not re-fire when a pushed detail or
             // room pops (the stack itself never disappears), so
