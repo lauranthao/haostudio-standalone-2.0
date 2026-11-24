@@ -1009,6 +1009,98 @@ final class VodGestureStepTests: XCTestCase {
     }
 }
 
+// MARK: - Build 36, item 9: middle double-tap play/pause +
+// single/double-tap disambiguation.
+
+final class VodDoubleTapPauseTests: XCTestCase {
+    func testDoubleTapZones() {
+        XCTAssertEqual(VodGestureMath.doubleTapZone(x: 10, width: 300), .seekBack)
+        XCTAssertEqual(VodGestureMath.doubleTapZone(x: 290, width: 300), .seekForward)
+        XCTAssertEqual(VodGestureMath.doubleTapZone(x: 150, width: 300), .togglePlayPause)
+        // Zero width has no thirds — reads as the middle.
+        XCTAssertEqual(VodGestureMath.doubleTapZone(x: 10, width: 0), .togglePlayPause)
+        // The zone and the seek delta agree everywhere.
+        XCTAssertEqual(VodGestureMath.seekDelta(x: 150, width: 300), 0)
+    }
+
+    func testDisambiguatorSingleTapFiresOnlyAfterWindow() {
+        var disambiguator = VodTapDisambiguator()
+        // First tap waits — nothing fires yet.
+        XCTAssertEqual(disambiguator.tap(at: 100.0, x: 150, width: 300), .wait)
+        // Expiring early (inside the window) fires nothing.
+        XCTAssertEqual(disambiguator.expirePending(at: 100.1), .wait)
+        // Expiring after the window fires the single tap, once.
+        XCTAssertEqual(disambiguator.expirePending(at: 100.28), .singleTap)
+        XCTAssertEqual(disambiguator.expirePending(at: 100.5), .wait)
+    }
+
+    func testDisambiguatorDoubleTapConsumesPendingSingle() {
+        var disambiguator = VodTapDisambiguator()
+        XCTAssertEqual(disambiguator.tap(at: 100.0, x: 150, width: 300), .wait)
+        // Second tap inside the window: middle double-tap, at once.
+        XCTAssertEqual(
+            disambiguator.tap(at: 100.15, x: 150, width: 300),
+            .doubleTap(.togglePlayPause))
+        // The pending single is gone: a later expiry fires nothing.
+        XCTAssertEqual(disambiguator.expirePending(at: 100.5), .wait)
+    }
+
+    func testDisambiguatorSideDoubleTapKeepsSeek() {
+        var disambiguator = VodTapDisambiguator()
+        XCTAssertEqual(disambiguator.tap(at: 100.0, x: 10, width: 300), .wait)
+        XCTAssertEqual(
+            disambiguator.tap(at: 100.2, x: 10, width: 300),
+            .doubleTap(.seekBack))
+        XCTAssertEqual(disambiguator.tap(at: 200.0, x: 290, width: 300), .wait)
+        XCTAssertEqual(
+            disambiguator.tap(at: 200.2, x: 290, width: 300),
+            .doubleTap(.seekForward))
+    }
+
+    func testDisambiguatorLateSecondTapIsANewSingle() {
+        var disambiguator = VodTapDisambiguator()
+        XCTAssertEqual(disambiguator.tap(at: 100.0, x: 150, width: 300), .wait)
+        // Second tap after the window: the first tap already
+        // expired as a single, so this one starts a new pending tap.
+        XCTAssertEqual(disambiguator.tap(at: 100.5, x: 150, width: 300), .wait)
+        XCTAssertEqual(disambiguator.expirePending(at: 100.78), .singleTap)
+    }
+
+    func testDoubleTapWindowShorterThanLongPressThreshold() {
+        // The invariant that keeps a quick double-tap from ever
+        // engaging 2x: the whole double-tap window (0.28 s) fits
+        // inside one long-press hold (0.5 s).
+        XCTAssertLessThan(
+            VodGestureConfig.doubleTapWindowSeconds,
+            VodGestureConfig.longPressMinimumDuration)
+    }
+
+    func testGestureStateMiddleDoubleTapTogglesOnVodOnly() {
+        let state = VodGestureState()
+        state.isVod = true
+        var toggles = 0
+        var seeks: [Double] = []
+        state.onDoubleTapTogglePlayPause = { toggles += 1 }
+        state.onDoubleTapSeek = { seeks.append($0) }
+        state.doubleTapped(atX: 150, width: 300)
+        XCTAssertEqual(toggles, 1)
+        XCTAssertTrue(seeks.isEmpty)
+        // Sides still seek, with the persisted step.
+        state.doubleTapped(atX: 10, width: 300, seconds: 30)
+        XCTAssertEqual(seeks, [-30])
+        XCTAssertEqual(toggles, 1)
+        // Live: middle double-tap fires nothing — a live stream
+        // cannot pause, and the live view model never wires the
+        // callback either (this gate is the second lock).
+        state.isVod = false
+        state.doubleTapped(atX: 150, width: 300)
+        XCTAssertEqual(toggles, 1)
+        XCTAssertEqual(seeks, [-30])
+        // Live long-press stays dead too (existing gate).
+        XCTAssertNil(VodGestureMath.longPressSpeed(isPressing: true, isVod: false))
+    }
+}
+
 // MARK: - Player controls round (2026-11-24, chen build-33 report
 // items 3/4/5/9): seek-bar math, danmaku availability, danmaku
 // layer loading flags, live overlay backlog cap, 2x speed restore.
