@@ -220,12 +220,12 @@ final class DouyinSignerTests: XCTestCase {
     }
 
     func testSignedUrlABogusMatchesQueryBeforeIt() {
-        let signer = signer(
+        let subject = signer(
             fingerprint: "1440|810|1466|895|0|30|0|0|1440|900|1440|860|1440|810|24|24|Win32",
             clock: [1790502760100, 1790502760103],
             seeds: [7, 9999, 4321]
         )
-        guard let url = signer.signedUrl(baseUrl: "https://live.douyin.com/webcast/room/web/enter/", orderedParams: [
+        guard let url = subject.signedUrl(baseUrl: "https://live.douyin.com/webcast/room/web/enter/", orderedParams: [
             ("app_name", "douyin_web"), ("web_rid", "547977714661"), ("msToken", "fixed+token="),
         ]) else {
             XCTFail("signedUrl returned nil for a valid base URL")
