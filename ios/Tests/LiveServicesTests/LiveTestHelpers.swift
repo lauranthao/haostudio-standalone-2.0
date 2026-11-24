@@ -79,6 +79,18 @@ func routingFetcher(_ routes: [(String, Data?, Int?)]) -> LiveDataFetcher {
 /// unmatched URLs (Huya's WUP calls need the room page to fall
 /// back to the web-template anti-code, like the repo's resolve
 /// tests do with a blanket stub fetcher).
+///
+/// Answers on the MAIN queue, not a global queue (b38, Bitrise
+/// #14): a global-queue answer can land between two back-to-back
+/// main-thread calls, so the first load finishes before the
+/// second registers and the second correctly fetches fresh
+/// (dedup is not a cache) — the Huya failed-load dedup test
+/// counted 2. Main-async cannot interleave: XCTest runs the test
+/// method on the main thread, and main-queue blocks only run once
+/// the method returns into `waitForExpectations`' run loop, so
+/// both callers have registered by then. Every user of this
+/// helper waits via `waitForExpectations`, so nothing depends on
+/// the answer arriving on a background queue.
 final class CountingRoutingFetcher {
     private let routes: [(String, Data?, Int?)]
     private let fallback: (Data?, Int?)
@@ -111,7 +123,7 @@ final class CountingRoutingFetcher {
                 break
             }
             let captured = answer
-            DispatchQueue.global().async {
+            DispatchQueue.main.async {
                 completion(captured.0, captured.1, nil)
             }
         }
