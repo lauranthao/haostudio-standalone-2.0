@@ -198,9 +198,20 @@ func videoEngineCanPlay(_ engine: VideoEngine, format: VideoStreamFormat) -> Boo
 /// demuxer or decoder AVFoundation does not have:
 /// - container outside {mp4, mov, m4v} (mkv/avi/webm/ts/...),
 /// - AV1 video (no AVFoundation decoder on most devices),
-/// - Dolby Vision, EXCEPT profile 8 in an Apple container when the
-///   downgrade switch is on (its base layer is HDR10 (8.1) / HLG
-///   (8.4) compatible, so AVPlayer plays it natively),
+/// - Dolby Vision profile 7 (dual-layer; the ffmpeg kernels
+///   render its HDR10 base layer) and profile 8 when the
+///   downgrade switch is off (its base layer plays on the ffmpeg
+///   kernels instead). Profile 5 is ALWAYS admitted in an Apple
+///   container: it has no HDR base layer at all, so a player that
+///   ignores the DV layer renders its IPTPQc2 values as ordinary
+///   HDR10 and the picture comes out green/pink (mpv #10700) —
+///   only AVPlayer applies the DV mapping on iOS. An unknown
+///   profile is admitted too: P5/P8 play natively, P7 plays its
+///   base layer, and if AVPlayer refuses the open the ladder
+///   falls back to MPV — AVPlayer-first can only fail over, never
+///   strand. (Build 36, item 13: P5 used to be excluded here, so
+///   every Dolby movie landed on MPV's software render path and
+///   showed green.)
 /// - TrueHD / DTS audio (AVFoundation cannot decode them).
 /// HEVC in MP4/MOV stays allowed on AVPlayer (hardware-decoded
 /// since iOS 11), as does HDR10/HLG in MP4 — the gate is about the
@@ -218,7 +229,16 @@ func videoEngineCanPlayFacts(
     }
     if facts.videoCodec == "av1" { return false }
     if facts.dolbyVision {
-        if !dvDowngradeToHdr || facts.dvProfile != 8 { return false }
+        // Profile 5 or unknown: admitted (see above). Profile 8:
+        // admitted only with the downgrade switch on. Profile 7
+        // and anything else: excluded.
+        if let profile = facts.dvProfile {
+            if profile == 8 {
+                if !dvDowngradeToHdr { return false }
+            } else if profile != 5 {
+                return false
+            }
+        }
     }
     let ffmpegOnlyAudio: Set<String> = ["truehd", "dts", "dtshd", "dts-hd", "dca"]
     if let audio = facts.audioCodec, ffmpegOnlyAudio.contains(audio) {

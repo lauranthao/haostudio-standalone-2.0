@@ -214,6 +214,21 @@ final class MpvPlayerBackend: NSObject, VideoPlayerBackend, LiveAudioOnlyCapable
         // VOD NEVER drops frames. Live (S4) uses decoder+vo so a
         // lagging decoder stays live; VOD keeps every frame.
         setOption(handle, "framedrop", "no")
+        // Dolby Vision base layer (build 36, item 13): a DV stream
+        // that reaches this engine is one AVPlayer cannot take
+        // (dual-layer profile 7, or DV in an MKV container) — only
+        // its HDR10/HLG base layer is decoded. Pin the tone
+        // mapping for that base layer (mpv's default for SDR
+        // output is bt.2390; pinning it makes the HDR path
+        // deterministic instead of default-dependent). Profile 5
+        // has no base layer and never reaches a correct picture
+        // here — the capability gate routes it to AVPlayer, never
+        // an option. HDR10/HLG without DV need no option: mpv
+        // tone-maps them by default and their facts carry no HDR
+        // marker to key off.
+        if let facts = VideoStreamFacts.parse(url: url), facts.dolbyVision {
+            setOption(handle, "tone-mapping", "bt.2390")
+        }
         if lowEnd {
             setOption(handle, "vd-lavc-threads", "2")
         }

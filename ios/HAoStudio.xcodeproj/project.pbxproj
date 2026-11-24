@@ -126,6 +126,7 @@
 		0000000000000000000000F3 /* DownloadEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F2 /* DownloadEngine.swift */; };
 		0000000000000000000000F5 /* EmbyCategoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F4 /* EmbyCategoryView.swift */; };
 		0000000000000000000000F7 /* EmbyClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F6 /* EmbyClient.swift */; };
+		0000000000000000000001E7 /* EmbyPlaybackReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001E6 /* EmbyPlaybackReporter.swift */; };
 		0000000000000000000000F9 /* EmbyDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F8 /* EmbyDetailView.swift */; };
 		0000000000000000000000FB /* EmbyModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000FA /* EmbyModels.swift */; };
 		0000000000000000000000FD /* EmbyTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000FC /* EmbyTabView.swift */; };
@@ -334,6 +335,7 @@
 		0000000000000000000000F2 /* DownloadEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadEngine.swift; sourceTree = "<group>"; };
 		0000000000000000000000F4 /* EmbyCategoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbyCategoryView.swift; sourceTree = "<group>"; };
 		0000000000000000000000F6 /* EmbyClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbyClient.swift; sourceTree = "<group>"; };
+		0000000000000000000001E6 /* EmbyPlaybackReporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbyPlaybackReporter.swift; sourceTree = "<group>"; };
 		0000000000000000000000F8 /* EmbyDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbyDetailView.swift; sourceTree = "<group>"; };
 		0000000000000000000000FA /* EmbyModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbyModels.swift; sourceTree = "<group>"; };
 		0000000000000000000000FC /* EmbyTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbyTabView.swift; sourceTree = "<group>"; };
@@ -580,6 +582,7 @@
 				0000000000000000000000EC /* CmsClient.swift */,
 				0000000000000000000000F0 /* DoubanService.swift */,
 				0000000000000000000000F6 /* EmbyClient.swift */,
+				0000000000000000000001E6 /* EmbyPlaybackReporter.swift */,
 				0000000000000000000000FA /* EmbyModels.swift */,
 				00000000000000000000010C /* VideoCapability.swift */,
 				0000000000000000000000E7 /* VideoModels.swift */,
@@ -854,6 +857,7 @@
 				0000000000000000000000F3 /* DownloadEngine.swift in Sources */,
 				0000000000000000000000F5 /* EmbyCategoryView.swift in Sources */,
 				0000000000000000000000F7 /* EmbyClient.swift in Sources */,
+				0000000000000000000001E7 /* EmbyPlaybackReporter.swift in Sources */,
 				0000000000000000000000F9 /* EmbyDetailView.swift in Sources */,
 				0000000000000000000000FB /* EmbyModels.swift in Sources */,
 				0000000000000000000000FD /* EmbyTabView.swift in Sources */,

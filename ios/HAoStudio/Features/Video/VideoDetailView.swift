@@ -118,6 +118,16 @@ final class VideoDetailViewModel: ObservableObject {
 
     func toggleFavourite() {
         isFavourite = VideoLibraryStore.toggleFavourite(item: item)
+        // Emby (build 36, item 13): mirror the tap to the server.
+        // An explicit user action — never gated by the 数据上报
+        // switch. Local state stays the source of truth for the
+        // UI; a failed server call leaves it unchanged, and no
+        // favourite state is ever faked. Non-Emby titles, an
+        // empty id, and unconfigured servers no-op.
+        if source == .emby, !item.id.isEmpty,
+           let config = EmbyConfigStore.load(), config.isConfigured {
+            EmbyClient(config: config).setFavorite(itemId: item.id, favorite: isFavourite) { _ in }
+        }
     }
 
     /// Queue the selected episode for download. The result is a

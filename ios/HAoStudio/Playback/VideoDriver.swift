@@ -173,6 +173,13 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     /// `reopenAtCurrentPosition` (AVPlayer-backed P8 streams).
     var dvP8Downgrade: Bool = true
 
+    /// Emby playback reporting (build 36, item 13): start /
+    /// progress / stop + played to the configured Emby server.
+    /// A no-op for non-Emby URLs and when no server is
+    /// configured. Injectable so tests can substitute a
+    /// recording reporter.
+    var embyReporter = EmbyPlaybackReporter()
+
     /// Settings storage for the "与其他音频同时播放" switch
     /// (test seam: tests point this at an isolated suite;
     /// production is `.standard`). The switch reads through the
@@ -329,6 +336,16 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     private func currentURLFacts() -> VideoStreamFacts? {
         guard let url = currentURL else { return nil }
         return VideoStreamFacts.parse(url: url)
+    }
+
+    /// The Emby item id for the stream now playing, or nil when
+    /// the URL is not an Emby direct stream (CMS lines,
+    /// strm-direct remotes). The id comes from the stream URL
+    /// itself, so no source flag has to travel through the
+    /// player — and a non-Emby URL can never report by accident.
+    private func currentEmbyItemId() -> String? {
+        guard let url = currentURL else { return nil }
+        return EmbyClient.episodeIdFromStreamUrl(url.absoluteString)
     }
 
     /// The video surface for the player page to embed. Nil until
@@ -688,6 +705,10 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         finish: @escaping (Result<Void, MusicPlayerError>) -> Void
     ) {
         guard gen == generation else { return }
+        // The resume position this open seeks to — captured now,
+        // because the seek block below consumes startPosition.
+        // Reported to Emby as the playback-start position.
+        let reportedStartPosition = startPosition
         playRequested = true
         stallFailed = false
         stallWarning = false
@@ -744,6 +765,13 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         recomputePlayingState()
         finish(.success(()))
         onEpisodeStarted?(item)
+        // Emby (build 36, item 13): report playback start to the
+        // server. Only an Emby stream URL yields an id — CMS
+        // lines no-op here. An engine swap re-opening the same
+        // item dedupes inside the reporter.
+        if let embyId = currentEmbyItemId() {
+            embyReporter.noteStarted(itemId: embyId, positionSeconds: reportedStartPosition)
+        }
         // S5-A: the open verified playback on this engine — record
         // it once, here, as the last-used engine. (The AVPlayer
         // reopen path also lands here, so a soft-decode fallback
@@ -752,6 +780,13 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     }
 
     private func stopBackendForNewRequest() {
+        // Emby (build 36, item 13): a new request ends the
+        // previous episode's server session (final progress +
+        // stopped). No session active (first play) = no-op. An
+        // engine swap for the SAME episode never passes through
+        // here (reopenOnAVPlayer shuts down directly), so its
+        // session correctly survives.
+        embyReporter.noteStopped(positionSeconds: position)
         activeLadder = nil
         openTimeoutWork?.cancel()
         openTimeoutWork = nil
@@ -786,6 +821,12 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             self.playRequested = false
             self.backend?.pause()
             self.recomputePlayingState()
+            // Emby (build 36, item 13): a pause reports progress
+            // with IsPaused immediately (state change, not the
+            // 15 s throttle) so the server's breakpoint is fresh
+            // even when the user pauses and walks away.
+            self.embyReporter.noteProgress(
+                positionSeconds: self.position, durationSeconds: self.duration, isPaused: true)
         }
     }
 
@@ -891,6 +932,10 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         ensureMain {
             self.nextGeneration()
             self.saveBreakpoint()
+            // Emby (build 36, item 13): end the server session
+            // (final progress + stopped) before the position is
+            // cleared below.
+            self.embyReporter.noteStopped(positionSeconds: self.position)
             self.activeLadder = nil
             self.openTimeoutWork?.cancel()
             self.openTimeoutWork = nil
@@ -928,6 +973,9 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         ensureMain {
             self.nextGeneration()
             self.saveBreakpoint()
+            // Emby (build 36, item 13): same session end as
+            // stop() — the player page calls this on exit.
+            self.embyReporter.noteStopped(positionSeconds: self.position)
             self.activeLadder = nil
             self.openTimeoutWork?.cancel()
             self.openTimeoutWork = nil
@@ -1048,6 +1096,13 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
 
     private func handleEpisodeEnded() {
         guard let item = currentEpisode else { return }
+        // Emby (build 36, item 13): natural end — final
+        // progress + played + session end, BEFORE the
+        // auto-advance below (which starts a new session for
+        // the next episode). The played marking here is
+        // belt-and-braces: the progress tick already marks
+        // played at the end margin, and the reporter dedupes.
+        embyReporter.noteEnded(positionSeconds: position)
         // Advance within the same line when there is a next episode.
         // The stored `hao_video_auto_next` preference gates this
         // path too: the settings toggle used to stop only the view
@@ -1079,6 +1134,10 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         position = pos
         if dur.isFinite, dur > 0 { duration = dur }
         recomputePlayingState()
+        // Emby (build 36, item 13): periodic progress, throttled
+        // to one report per 15 s inside the reporter, plus the
+        // played marking at the end margin.
+        embyReporter.noteProgress(positionSeconds: pos, durationSeconds: duration, isPaused: !isPlaying)
         switch watchdog.tick(position: pos, duration: duration, isPlaying: isPlaying) {
         case .none:
             break

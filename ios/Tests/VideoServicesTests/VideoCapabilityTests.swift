@@ -145,10 +145,26 @@ final class VideoCapabilityTests: XCTestCase {
         let p8 = VideoStreamFacts(container: "mp4", videoCodec: "hevc", audioCodec: "aac", dolbyVision: true, dvProfile: 8, width: nil, height: nil, bitRate: nil, size: nil)
         XCTAssertTrue(videoEngineCanPlayFacts(.avplayer, facts: p8, dvDowngradeToHdr: true))
         XCTAssertFalse(videoEngineCanPlayFacts(.avplayer, facts: p8, dvDowngradeToHdr: false))
+        // Build 36, item 13: profile 5 has no HDR base layer, so
+        // it is ALWAYS admitted to AVPlayer in an Apple container
+        // — the ffmpeg kernels render it green. The P8 switch
+        // never governed it.
         let p5 = VideoStreamFacts(container: "mp4", videoCodec: "hevc", audioCodec: "aac", dolbyVision: true, dvProfile: 5, width: nil, height: nil, bitRate: nil, size: nil)
-        XCTAssertFalse(videoEngineCanPlayFacts(.avplayer, facts: p5, dvDowngradeToHdr: true))
+        XCTAssertTrue(videoEngineCanPlayFacts(.avplayer, facts: p5, dvDowngradeToHdr: true))
+        XCTAssertTrue(videoEngineCanPlayFacts(.avplayer, facts: p5, dvDowngradeToHdr: false))
         let p7 = VideoStreamFacts(container: "mp4", videoCodec: "hevc", audioCodec: "aac", dolbyVision: true, dvProfile: 7, width: nil, height: nil, bitRate: nil, size: nil)
         XCTAssertFalse(videoEngineCanPlayFacts(.avplayer, facts: p7, dvDowngradeToHdr: true))
+    }
+
+    func testFactsGateDolbyVisionUnknownProfileAdmittedInAppleContainer() {
+        // Server reported DV but no profile: best bet is AVPlayer
+        // (P5/P8 native, P7 base layer); the ladder falls back
+        // to MPV if AVPlayer refuses the open.
+        let unknown = VideoStreamFacts(container: "mp4", videoCodec: "hevc", audioCodec: "aac", dolbyVision: true, dvProfile: nil, width: nil, height: nil, bitRate: nil, size: nil)
+        XCTAssertTrue(videoEngineCanPlayFacts(.avplayer, facts: unknown))
+        // Same DV in MKV stays off AVPlayer (no MKV demuxer).
+        let mkv = VideoStreamFacts(container: "mkv", videoCodec: "hevc", audioCodec: "aac", dolbyVision: true, dvProfile: nil, width: nil, height: nil, bitRate: nil, size: nil)
+        XCTAssertFalse(videoEngineCanPlayFacts(.avplayer, facts: mkv))
     }
 
     // MARK: - Capability split (who goes first)
@@ -193,10 +209,44 @@ final class VideoCapabilityTests: XCTestCase {
         XCTAssertEqual(videoCandidatesFor(url: url).first, .avplayer)
     }
 
-    func testCandidatesForDvP5Mp4ExcludeAVPlayer() {
+    func testCandidatesForDvP5Mp4StartWithAVPlayer() {
+        // Build 36, item 13: P5 in MP4 goes to AVPlayer first —
+        // MPV renders it green (no base layer, no RPU handling
+        // on the software render path). The old expectation
+        // (AVPlayer excluded, MPV first) was the bug.
         let url = URL(string: "https://emby.invalid/Videos/1/stream?hao_container=mp4&hao_vcodec=hevc&hao_dv=1&hao_dvprofile=5")!
+        XCTAssertEqual(videoCandidatesFor(url: url).first, .avplayer)
+        XCTAssertTrue(videoCandidatesFor(url: url).contains(.avplayer))
+    }
+
+    func testCandidatesForDvP5MkvStayOnFfmpegKernels() {
+        // P5 in MKV cannot reach AVPlayer (no MKV demuxer):
+        // MPV first, honest limit — its base-layer-less picture
+        // stays wrong-coloured on every bundled kernel.
+        let url = URL(string: "https://emby.invalid/Videos/1/stream?hao_container=mkv&hao_vcodec=hevc&hao_dv=1&hao_dvprofile=5")!
         XCTAssertFalse(videoCandidatesFor(url: url).contains(.avplayer))
         XCTAssertEqual(videoCandidatesFor(url: url).first, .mpv)
+    }
+
+    func testCandidatesForDvP7Mp4ExcludeAVPlayer() {
+        // Dual-layer P7 stays on the ffmpeg kernels, which render
+        // its HDR10 base layer (AVPlayer would do the same).
+        let url = URL(string: "https://emby.invalid/Videos/1/stream?hao_container=mp4&hao_vcodec=hevc&hao_dv=1&hao_dvprofile=7")!
+        XCTAssertFalse(videoCandidatesFor(url: url).contains(.avplayer))
+        XCTAssertEqual(videoCandidatesFor(url: url).first, .mpv)
+    }
+
+    func testCandidatesForDvP8Mp4SwitchOffExcludeAVPlayer() {
+        let url = URL(string: "https://emby.invalid/Videos/1/stream?hao_container=mp4&hao_vcodec=hevc&hao_dv=1&hao_dvprofile=8")!
+        XCTAssertFalse(videoCandidatesFor(url: url, dvDowngradeToHdr: false).contains(.avplayer))
+        XCTAssertEqual(videoCandidatesFor(url: url, dvDowngradeToHdr: false).first, .mpv)
+    }
+
+    func testCandidatesForHdr10Mp4StartWithAVPlayer() {
+        // HDR10 (HEVC, no DV flag) in MP4: AVPlayer first, native
+        // HDR. HLG rides the same facts (HEVC in MP4) — same route.
+        let url = URL(string: "https://emby.invalid/Videos/1/stream?hao_container=mp4&hao_vcodec=hevc&hao_width=3840&hao_height=2160")!
+        XCTAssertEqual(videoCandidatesFor(url: url).first, .avplayer)
     }
 
     func testExplicitPreferenceWinsAmongCapable() {
