@@ -363,7 +363,19 @@ extension HuyaLiveSite {
         guard let match = regex.firstMatch(in: text, options: [], range: range) else {
             return nil
         }
-        let matchStart = text.index(text.startIndex, offsetBy: match.range.location, limitedBy: text.endIndex) ?? text.endIndex
+        // NSRegularExpression ranges are UTF-16 offsets; String.Index
+        // arithmetic counts Character (grapheme clusters). Converting
+        // via offsetBy: drifts whenever the text before the match
+        // contains multi-unit characters — Huya room pages carry 65
+        // CRLF in the header (2 UTF-16 units = 1 Character each), so
+        // the old code landed 65 characters inside the JSON and
+        // returned a nested object (no `state`, no `data`), failing
+        // EVERY room. Use the Range conversion, as
+        // DouyinSite.parseRenderData already does.
+        guard let matchRange = Range(match.range, in: text) else {
+            return nil
+        }
+        let matchStart = matchRange.lowerBound
         guard let braceAt = text[matchStart...].firstIndex(of: "{") else {
             return nil
         }
@@ -498,9 +510,15 @@ enum HuyaTransportPolicy {
         return !hasNativeFlvCredential(url)
     }
 
-    /// Native WUP FLV credential marker: FLV + ctype=huya_pc_exe +
-    /// t=100. Web-template-signed URLs carry ctype=huya_webh5 and
-    /// never match.
+    /// Native WUP FLV credential marker: FLV + t=100 + a native SDK
+    /// client ctype. The WUP token's ctype is the requesting SDK, not
+    /// a fixed string: real tokens observed in the VM probe carry
+    /// huya_pc_exe, huya_ios, tv_huya_nftv or huya_adr (the SDK UA is
+    /// randomised per token — see randomSdkUserAgent's adr / ios /
+    /// huya_nftv / pc_exe platforms). Web-template-signed URLs carry
+    /// ctype=huya_webh5 and never match. Unknown future ctypes fall
+    /// back to the short lease (safe side: refresh early, never play
+    /// past expiry).
     static func hasNativeFlvCredential(_ url: String) -> Bool {
         guard let uri = URL(string: url),
               let host = uri.host?.lowercased(),
@@ -509,8 +527,11 @@ enum HuyaTransportPolicy {
             return false
         }
         let query = uri.query ?? ""
-        return LiveQuery.value(query, key: "ctype") == "huya_pc_exe"
-            && LiveQuery.value(query, key: "t") == "100"
+        guard LiveQuery.value(query, key: "t") == "100",
+              let ctype = LiveQuery.value(query, key: "ctype") else {
+            return false
+        }
+        return ["huya_pc_exe", "huya_ios", "tv_huya_nftv", "huya_adr"].contains(ctype)
     }
 
     private static func mediaUri(_ url: String) -> URL? {
