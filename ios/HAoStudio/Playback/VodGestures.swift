@@ -94,6 +94,61 @@ enum VodGestureMath {
         guard isPressing, isVod else { return nil }
         return VodGestureConfig.longPressSpeed
     }
+
+    // MARK: - Full-screen horizontal drag seek (build 36, item 9,
+    // leg 3). VOD ONLY — live is a real-time stream and has no
+    // position to drag to; the live room never calls these.
+
+    /// One full-width sweep covers this many seconds of the
+    /// episode — NOT the whole duration. Full-width = full-duration
+    /// is far too twitchy on a long film (a 2 h film on an ~800 pt
+    /// landscape screen would be ~9 s per point, so a 10 pt
+    /// finger wobble jumps 90 s). The sweep is 1/8 of the
+    /// duration, clamped to [60, 300] s: a 2 h film sweeps 5 min
+    /// per full width (~0.4 s/pt), a 30 min episode 225 s, a
+    /// 3 min short 60 s. Coarse jumps stay on the progress bar /
+    /// double-tap; the drag is for fine scrubbing, Bilibili-style.
+    static let dragSeekMinSweepSeconds: Double = 60
+    static let dragSeekMaxSweepSeconds: Double = 300
+    /// A drag only becomes a seek past this much movement, so an
+    /// ordinary tap / hold never starts one.
+    static let dragSeekActivationDistance: CGFloat = 10
+
+    /// Sweep seconds for a `duration`: duration / 8, clamped to
+    /// [60, 300]. Zero / negative duration is the minimum (the
+    /// view guards duration > 0 before dragging, so this is only
+    /// a never-NaN fallback).
+    static func dragSeekSweepSeconds(duration: Double) -> Double {
+        guard duration > 0 else { return dragSeekMinSweepSeconds }
+        return min(
+            dragSeekMaxSweepSeconds,
+            max(dragSeekMinSweepSeconds, duration / 8))
+    }
+
+    /// Target seconds for a horizontal drag of `translationX`
+    /// points in a view `width` wide, measured from the playhead
+    /// `anchor` where the drag started (the playhead keeps
+    /// advancing underneath while playing, so the target must not
+    /// drift with it). Right = forward, left = back, clamped to
+    /// [0, duration]. Zero width / duration holds the anchor
+    /// (clamped), never NaN.
+    static func dragSeekTarget(
+        anchor: Double, translationX: CGFloat, width: CGFloat, duration: Double
+    ) -> Double {
+        let clampedAnchor = min(max(0, anchor), max(0, duration))
+        guard width > 0, duration > 0 else { return clampedAnchor }
+        let sweep = dragSeekSweepSeconds(duration: duration)
+        let target = clampedAnchor + Double(translationX / width) * sweep
+        return min(max(0, target), duration)
+    }
+
+    /// Whether a drag is horizontal-dominant: a mostly-vertical
+    /// drag is not a seek (there is no vertical gesture on the
+    /// VOD picture today, but a vertical swipe must never become
+    /// a seek just because it drifted sideways).
+    static func isHorizontalDrag(translation: CGSize) -> Bool {
+        abs(translation.width) > abs(translation.height)
+    }
 }
 
 /// Single/double-tap disambiguation, pure and time-injected so
