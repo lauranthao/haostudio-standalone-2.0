@@ -172,13 +172,15 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     /// it (no resolver -> no URL -> no fake playback).
     var playURLResolver: VideoPlayURLResolver?
 
-    static let openTimeout: TimeInterval = 10
-    /// Overall open cap factor (build 36, item 14, G-J): the
-    /// whole open (ladder + re-resolution) may take at most 2.5x
-    /// the per-attempt budget — 25 s in production. A healthy
-    /// first engine still opens in ~1 s; the cap only binds when
-    /// engines hang.
-    static let openTotalTimeoutFactor: Double = 2.5
+    /// Per-attempt budget / whole-open cap factor, shared with
+    /// LiveDriver through OpenTimeoutPolicy (build 36, item 8,
+    /// smell 1): one home for the numbers, so a cap change never
+    /// needs a lockstep edit in two drivers. The statics stay so
+    /// existing call sites keep their names; the values live in
+    /// the policy. A healthy first engine still opens in ~1 s;
+    /// the cap only binds when engines hang.
+    static let openTimeout: TimeInterval = OpenTimeoutPolicy.perAttemptTimeout
+    static let openTotalTimeoutFactor: Double = OpenTimeoutPolicy.totalTimeoutFactor
     static let seekTolerance: TimeInterval = 2.0
 
     /// Test seam: open timeout seconds. Production is 10; tests set
@@ -732,21 +734,19 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                     attemptCompletion(false)
                     return
                 }
-                // (G-J) Per-attempt timeout: a hanging attempt
-                // fails like a stream error after its own budget,
-                // and the ladder moves to the next engine. The
-                // `settled` guard makes the completion fire
-                // exactly once — a late backend answer after the
-                // timeout is dropped (and its backend shut down)
-                // instead of double-reporting or sounding behind
-                // the engine the ladder moved on to.
-                var settled = false
-                var attemptBackend: VideoPlayerBackend?
-                let attemptTimeout = DispatchWorkItem { [weak self] in
+                // (G-J) Per-attempt timeout, shared with LiveDriver
+                // via OpenAttemptTimeoutGuard (build 36, item 8,
+                // smell 1): a hanging attempt fails like a stream
+                // error after its own budget, and the ladder moves
+                // to the next engine. The guard's `settled` state
+                // makes the completion fire exactly once — a late
+                // backend answer after the timeout is dropped (and
+                // its backend shut down) instead of
+                // double-reporting or sounding behind the engine
+                // the ladder moved on to.
+                let attemptGuard = OpenAttemptTimeoutGuard(timeout: self.openTimeoutInterval) { [weak self] in
                     guard let self = self else { return }
                     self.ensureMain {
-                        guard !settled else { return }
-                        settled = true
                         self.openAttemptTimedOut = true
                         if let current = self.backend, current.engine == engine {
                             current.shutdown()
@@ -755,11 +755,10 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                         attemptCompletion(false)
                     }
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + self.openTimeoutInterval, execute: attemptTimeout)
                 self.openOnEngine(engine, url: attemptURL, gen: gen) { [weak self] ok in
                     guard let self = self else { return }
                     self.ensureMain {
-                        guard !settled else {
+                        guard attemptGuard.complete(ok: ok, attemptCompletion: attemptCompletion) else {
                             // Late answer after the per-attempt
                             // timeout: shut this attempt's backend
                             // down so it cannot sound behind the
@@ -768,17 +767,14 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                             // still current — shutdown is
                             // idempotent — this covers the case
                             // where the ladder already moved on).
-                            if let attemptBackend = attemptBackend, self.backend !== attemptBackend {
+                            if let attemptBackend = attemptGuard.backend, self.backend !== attemptBackend {
                                 attemptBackend.shutdown()
                             }
                             return
                         }
-                        settled = true
-                        attemptTimeout.cancel()
-                        attemptCompletion(ok)
                     }
                 }
-                attemptBackend = self.backend
+                attemptGuard.noteBackend(self.backend)
             }, onAttempt: { [weak self] engine, _ in
                 self?.currentEngine = engine
             })

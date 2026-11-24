@@ -107,15 +107,15 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         return session.recovery?.qualities ?? []
     }
 
-    static let openTimeout: TimeInterval = 10
-
-    /// Overall open cap factor (build 36, item 14, G-J — the same
-    /// edit as VideoDriver): the whole open is capped at 2.5x
-    /// the per-attempt budget (25 s in production), while each
-    /// ladder attempt gets its own `openTimeoutInterval`. Live
-    /// routing, quality selection and recovery are otherwise
-    /// untouched by this item.
-    static let openTotalTimeoutFactor: Double = 2.5
+    /// Per-attempt budget / whole-open cap factor, shared with
+    /// VideoDriver through OpenTimeoutPolicy (build 36, item 8,
+    /// smell 1): one home for the numbers, so a cap change never
+    /// needs a lockstep edit in two drivers. The statics stay so
+    /// existing call sites keep their names; the values live in
+    /// the policy. Live routing, quality selection and recovery
+    /// are otherwise untouched by this item.
+    static let openTimeout: TimeInterval = OpenTimeoutPolicy.perAttemptTimeout
+    static let openTotalTimeoutFactor: Double = OpenTimeoutPolicy.totalTimeoutFactor
 
     /// Test seam: open timeout seconds. Production is 10; tests set
     /// a short value so the timeout path runs without waiting.
@@ -615,18 +615,16 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                     attemptCompletion(false)
                     return
                 }
-                // (G-J) Per-attempt timeout, same shape as
-                // VideoDriver: a hanging attempt fails like a
-                // stream error after its own budget, and the
-                // ladder moves to the next engine. The `settled`
-                // guard makes the completion fire exactly once.
-                var settled = false
-                var attemptBackend: VideoPlayerBackend?
-                let attemptTimeout = DispatchWorkItem { [weak self] in
+                // (G-J) Per-attempt timeout, shared with
+                // VideoDriver via OpenAttemptTimeoutGuard (build
+                // 36, item 8, smell 1): a hanging attempt fails
+                // like a stream error after its own budget, and
+                // the ladder moves to the next engine. The guard's
+                // `settled` state makes the completion fire
+                // exactly once.
+                let attemptGuard = OpenAttemptTimeoutGuard(timeout: self.openTimeoutInterval) { [weak self] in
                     guard let self = self else { return }
                     self.ensureMain {
-                        guard !settled else { return }
-                        settled = true
                         self.openAttemptTimedOut = true
                         if let current = self.backend, current.engine == engine {
                             current.shutdown()
@@ -635,22 +633,18 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                         attemptCompletion(false)
                     }
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + self.openTimeoutInterval, execute: attemptTimeout)
                 self.openOnEngine(engine, url: attemptURL, gen: gen) { [weak self] ok in
                     guard let self = self else { return }
                     self.ensureMain {
-                        guard !settled else {
-                            if let attemptBackend = attemptBackend, self.backend !== attemptBackend {
+                        guard attemptGuard.complete(ok: ok, attemptCompletion: attemptCompletion) else {
+                            if let attemptBackend = attemptGuard.backend, self.backend !== attemptBackend {
                                 attemptBackend.shutdown()
                             }
                             return
                         }
-                        settled = true
-                        attemptTimeout.cancel()
-                        attemptCompletion(ok)
                     }
                 }
-                attemptBackend = self.backend
+                attemptGuard.noteBackend(self.backend)
             }, onAttempt: { [weak self] engine, _ in
                 self?.currentEngine = engine
             })

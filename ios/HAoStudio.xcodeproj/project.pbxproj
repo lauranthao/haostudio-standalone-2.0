@@ -13,6 +13,7 @@
 		000000000000000000000007 /* Glass.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000008 /* Glass.swift */; };
 		0000000000000000000001F7 /* HaoSidebarDragMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001F6 /* HaoSidebarDragMath.swift */; };
 		0000000000000000000001F9 /* HaoDragSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001F8 /* HaoDragSidebar.swift */; };
+		0000000000000000000001FB /* OpenTimeoutLadder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001FA /* OpenTimeoutLadder.swift */; };
 		000000000000000000000009 /* GlassTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000A /* GlassTabBar.swift */; };
 		00000000000000000000000B /* MiniPlayerBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000C /* MiniPlayerBar.swift */; };
 		00000000000000000000000D /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000000E /* MainTabView.swift */; };
@@ -245,6 +246,7 @@
 		000000000000000000000008 /* Glass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Glass.swift; sourceTree = "<group>"; };
 		0000000000000000000001F6 /* HaoSidebarDragMath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HaoSidebarDragMath.swift; sourceTree = "<group>"; };
 		0000000000000000000001F8 /* HaoDragSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HaoDragSidebar.swift; sourceTree = "<group>"; };
+		0000000000000000000001FA /* OpenTimeoutLadder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenTimeoutLadder.swift; sourceTree = "<group>"; };
 		00000000000000000000000A /* GlassTabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassTabBar.swift; sourceTree = "<group>"; };
 		00000000000000000000000C /* MiniPlayerBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniPlayerBar.swift; sourceTree = "<group>"; };
 		00000000000000000000000E /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
@@ -528,6 +530,7 @@
 				000000000000000000000132 /* LiveRoomSession.swift */,
 				000000000000000000000100 /* MpvPlayerBackend.swift */,
 				000000000000000000000076 /* NativeMusicPlayer.swift */,
+				0000000000000000000001FA /* OpenTimeoutLadder.swift */,
 				000000000000000000000012 /* PlaybackCoordinator.swift */,
 				00000000000000000000010A /* PlayerKernel.swift */,
 				000000000000000000000112 /* VideoDriver.swift */,
@@ -963,6 +966,7 @@
 				0000000000000000000000C9 /* MusicSleepTimer.swift in Sources */,
 				000000000000000000000089 /* MusicTrack.swift in Sources */,
 				000000000000000000000075 /* NativeMusicPlayer.swift in Sources */,
+				0000000000000000000001FB /* OpenTimeoutLadder.swift in Sources */,
 				000000000000000000000011 /* PlaybackCoordinator.swift in Sources */,
 				00000000000000000000010B /* PlayerKernel.swift in Sources */,
 				000000000000000000000200 /* PreviewAudioClassifier.swift in Sources */,
