@@ -50,11 +50,12 @@ final class SettingsGroupsLogicTests: XCTestCase {
     func testSectionIDsInOrder() {
         XCTAssertEqual(
             SettingsSection.allCases.map { $0.rawValue },
-            ["appearance", "music", "live", "video", "sources", "data", "about"]
+            ["my", "appearance", "music", "live", "video", "sources", "data", "about"]
         )
     }
 
     func testSectionTitlesCopyFlutter() {
+        XCTAssertEqual(SettingsSection.my.title, "我的")
         XCTAssertEqual(SettingsSection.appearance.title, "外观")
         XCTAssertEqual(SettingsSection.music.title, "音乐播放")
         XCTAssertEqual(SettingsSection.live.title, "直播")

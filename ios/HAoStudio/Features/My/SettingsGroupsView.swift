@@ -27,7 +27,37 @@ import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
 
-/// The 7 settings groups as List Sections. Embed in the My tab
+/// Shared collapsible-section header: tap the title to fold /
+/// unfold the section, chevron tracks the state. Used by the 7
+/// settings groups in `SettingsGroupsView` and by the 我的 entry
+/// section in `MyView`, so every section folds the same way.
+/// Reads the fold state from `SettingsStore` directly; default
+/// expanded (no stored key reads back as true).
+struct SettingsSectionHeader: View {
+    @EnvironmentObject private var settings: SettingsStore
+    @Environment(\.haoTheme) private var theme
+
+    let section: SettingsSection
+
+    var body: some View {
+        Button(action: {
+            settings.setSectionExpanded(!settings.sectionExpanded(section.rawValue), for: section.rawValue)
+        }) {
+            HStack {
+                Text(section.title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+                Spacer()
+                Image(systemName: settings.sectionExpanded(section.rawValue) ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(theme.textMuted)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// The 8 sections (我的 + the 7 settings groups) as List Sections. Embed in the My tab
 /// List; do not wrap in another List / NavigationStack.
 struct SettingsGroupsView: View {
     @EnvironmentObject private var settings: SettingsStore
@@ -131,23 +161,6 @@ struct SettingsGroupsView: View {
         settings.sectionExpanded(section.rawValue)
     }
 
-    private func sectionHeader(_ section: SettingsSection) -> some View {
-        Button(action: {
-            settings.setSectionExpanded(!isExpanded(section), for: section.rawValue)
-        }) {
-            HStack {
-                Text(section.title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(theme.textPrimary)
-                Spacer()
-                Image(systemName: isExpanded(section) ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(theme.textMuted)
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
     private func footnote(_ text: String) -> some View {
         Text(text)
             .font(.system(size: 12))
@@ -179,7 +192,7 @@ struct SettingsGroupsView: View {
     // MARK: - 外观
 
     private var appearanceSection: some View {
-        Section(header: sectionHeader(.appearance)) {
+        Section(header: SettingsSectionHeader(section: .appearance)) {
             if isExpanded(.appearance) {
                 themeRow
                 appearanceRow
@@ -390,7 +403,7 @@ struct SettingsGroupsView: View {
     // MARK: - 音乐播放
 
     private var musicSection: some View {
-        Section(header: sectionHeader(.music)) {
+        Section(header: SettingsSectionHeader(section: .music)) {
             if isExpanded(.music) {
                 Toggle("与其他音频同时播放", isOn: $settings.mixWithOthers)
                     .onChange(of: settings.mixWithOthers) { _, newValue in
@@ -428,7 +441,7 @@ struct SettingsGroupsView: View {
     // MARK: - 直播
 
     private var liveSection: some View {
-        Section(header: sectionHeader(.live)) {
+        Section(header: SettingsSectionHeader(section: .live)) {
             if isExpanded(.live) {
                 NavigationLink("弹幕设置") {
                     LiveDanmakuSettingsSheet(settings: $danmakuSettings)
@@ -445,7 +458,7 @@ struct SettingsGroupsView: View {
     // MARK: - 影视播放
 
     private var videoSection: some View {
-        Section(header: sectionHeader(.video)) {
+        Section(header: SettingsSectionHeader(section: .video)) {
             if isExpanded(.video) {
                 engineRow
                 lastUsedEngineRow
@@ -626,7 +639,7 @@ struct SettingsGroupsView: View {
     // MARK: - 源管理
 
     private var sourcesSection: some View {
-        Section(header: sectionHeader(.sources)) {
+        Section(header: SettingsSectionHeader(section: .sources)) {
             if isExpanded(.sources) {
                 NavigationLink("音源管理") {
                     LXSourceManagementView()
@@ -674,7 +687,7 @@ struct SettingsGroupsView: View {
     // MARK: - 数据
 
     private var dataSection: some View {
-        Section(header: sectionHeader(.data)) {
+        Section(header: SettingsSectionHeader(section: .data)) {
             if isExpanded(.data) {
                 HStack {
                     Text("缓存管理")
@@ -785,7 +798,7 @@ struct SettingsGroupsView: View {
     // MARK: - 关于
 
     private var aboutSection: some View {
-        Section(header: sectionHeader(.about)) {
+        Section(header: SettingsSectionHeader(section: .about)) {
             if isExpanded(.about) {
                 HStack {
                     Text("版本")

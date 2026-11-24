@@ -137,6 +137,16 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertFalse(defaults.bool(forKey: "settingsSectionExpanded_engine"))
     }
 
+    func testSectionExpandedPersistsForMySection() {
+        // The 我的 entry section folds on the same store keys as the
+        // 7 settings groups; default expanded, persists per section.
+        XCTAssertTrue(settings.sectionExpanded(SettingsSection.my.rawValue))
+        settings.setSectionExpanded(false, for: SettingsSection.my.rawValue)
+        XCTAssertFalse(settings.sectionExpanded(SettingsSection.my.rawValue))
+        XCTAssertFalse(defaults.bool(forKey: "settingsSectionExpanded_my"))
+        XCTAssertTrue(settings.sectionExpanded(SettingsSection.appearance.rawValue))
+    }
+
     // MARK: - Clamps and fallbacks
 
     func testNormalizationStrengthClampsToZeroTwo() {

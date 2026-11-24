@@ -20,10 +20,11 @@ import Foundation
 
 // MARK: - Section ids
 
-/// The 7 settings groups. Raw values are the section ids the
+/// The 8 sections (我的 + the 7 settings groups). Raw values are the section ids the
 /// SettingsStore fold state is keyed by; titles copy the Flutter
 /// settings page group titles verbatim.
 enum SettingsSection: String, CaseIterable, Identifiable {
+    case my
     case appearance
     case music
     case live
@@ -36,6 +37,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .my: return "我的"
         case .appearance: return "外观"
         case .music: return "音乐播放"
         case .live: return "直播"
