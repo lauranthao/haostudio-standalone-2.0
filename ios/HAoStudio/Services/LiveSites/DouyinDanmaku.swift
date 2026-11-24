@@ -35,6 +35,9 @@
 // Swift 5.0: completion handlers only, no async/await, no `any`.
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // MARK: - Minimal protobuf
 

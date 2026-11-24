@@ -33,6 +33,9 @@
 // Swift 5.0: completion handlers only, no async/await, no `any`.
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // MARK: - Request params
 
@@ -1383,9 +1386,14 @@ extension DouyinLiveSite {
         for rawItem in list {
             guard let envelope = LiveJSON.asMap(rawItem) else { continue }
             let embedded = DouyinLiveSite.decodeEmbeddedMap(envelope["data"])
+            // The embedded JSON string may itself wrap the room one
+            // level deeper ({"room": {...}} — the "new envelope"
+            // shape). The wrapper is not room-like, so without this
+            // unwrap the item is skipped and the list comes back empty.
+            let embeddedRoom = LiveJSON.asMap(embedded?["room"])
             let nestedRoom = LiveJSON.asMap(envelope["room"])
             var room: [String: Any]? = nil
-            for candidate in [embedded, nestedRoom, envelope] as [[String: Any]?] {
+            for candidate in [embeddedRoom, embedded, nestedRoom, envelope] as [[String: Any]?] {
                 if let candidate = candidate, DouyinLiveSite.looksLikeRoom(candidate) {
                     room = candidate
                     break
