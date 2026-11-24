@@ -63,6 +63,20 @@ struct HomeView: View {
             .background(theme.scaffoldBackground)
             .navigationTitle("首页")
             .navigationBarTitleDisplayMode(.large)
+            // Opaque nav-bar background (fix 2026-11-24, build
+            // 35): the bar is translucent by default, so a cover
+            // scrolling underneath it shows through as a blurred
+            // grey block with no readable content — the grey smear
+            // at the top of the build-34 screenshot is the
+            // "继续听" cover seen through the bar (HomeView has no
+            // banner / hero / header image to delete). A solid
+            // scaffold-coloured bar removes the artifact at every
+            // scroll position. Theme-owned, so all 4 themes x
+            // light/dark keep working; toolbarBackground is
+            // iOS 16+, deploy target is 17, no gating needed.
+            // The bottom glass tab bar is untouched.
+            .toolbarBackground(theme.scaffoldBackground, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .navigationDestination(for: HomeDestination.self) { destination in
                 switch destination {
                 case .detail(let item):
