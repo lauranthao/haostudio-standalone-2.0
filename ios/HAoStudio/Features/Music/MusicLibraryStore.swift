@@ -366,19 +366,41 @@ enum MusicLibraryStore {
     }
 
     static func saveLists(_ lists: [UserPlaylist]) {
+        // b49fix17 P2-6: the write runs under
+        // MigrationStore.collectionWriteQueue, the same queue
+        // the backup import's lists merge takes. Callers that
+        // read-modify-write (createList, deleteList, updateList,
+        // renameList, addTracksToList, removeTrackFromList) take
+        // the queue once for the whole operation and call
+        // saveListsLocked — taking it here as well would
+        // deadlock (DispatchQueue.sync re-entry).
+        MigrationStore.collectionWriteQueue.sync {
+            saveListsLocked(lists)
+        }
+    }
+
+    /// The saveLists body, assuming collectionWriteQueue is
+    /// held. Split out so the atomic playlist operations can
+    /// read, mutate and save under the same queue without
+    /// re-entering it (same shape as writeDailyTracksLocked).
+    private static func saveListsLocked(_ lists: [UserPlaylist]) {
         writeArray(named: listsCollection, lists.map { $0.toJSON() })
     }
 
     static func createList(named name: String) -> UserPlaylist {
-        var lists = getLists()
-        let list = UserPlaylist(id: UUID().uuidString, name: name, tracks: [])
-        lists.append(list)
-        saveLists(lists)
-        return list
+        MigrationStore.collectionWriteQueue.sync {
+            var lists = getLists()
+            let list = UserPlaylist(id: UUID().uuidString, name: name, tracks: [])
+            lists.append(list)
+            saveListsLocked(lists)
+            return list
+        }
     }
 
     static func deleteList(id: String) {
-        saveLists(getLists().filter { $0.id != id })
+        MigrationStore.collectionWriteQueue.sync {
+            saveListsLocked(getLists().filter { $0.id != id })
+        }
         // b49fix2 P2-28: the snapshot is the deleted list's ghost —
         // without this, 切歌 still plays it from the snapshot and
         // the detail page stays stuck on "歌单不存在".
@@ -389,10 +411,60 @@ enum MusicLibraryStore {
     }
 
     static func updateList(_ updated: UserPlaylist) {
-        var lists = getLists()
-        if let index = lists.firstIndex(where: { $0.id == updated.id }) {
-            lists[index] = updated
-            saveLists(lists)
+        MigrationStore.collectionWriteQueue.sync {
+            var lists = getLists()
+            if let index = lists.firstIndex(where: { $0.id == updated.id }) {
+                lists[index] = updated
+                saveListsLocked(lists)
+            }
+        }
+    }
+
+    /// Renames a playlist atomically (b49fix17 P2-6): the
+    /// view-model rename used to read-modify-write outside the
+    /// store, so a rename that read before an import merge and
+    /// saved after it overwrote the imported lists with stale
+    /// bytes. Returns false when the list does not exist.
+    @discardableResult
+    static func renameList(id: String, name: String) -> Bool {
+        MigrationStore.collectionWriteQueue.sync { () -> Bool in
+            var lists = getLists()
+            guard let index = lists.firstIndex(where: { $0.id == id }) else { return false }
+            lists[index].name = name
+            saveListsLocked(lists)
+            return true
+        }
+    }
+
+    /// Adds songs to a playlist atomically (b49fix17 P2-6):
+    /// same stale-write hole as renameList — the view-model
+    /// add used to read the lists, mutate in memory, then save.
+    /// Returns (added, dropped, dupes) like
+    /// UserPlaylist.addTracks, or (0, 0, 0) when the list does
+    /// not exist.
+    static func addTracksToList(_ songs: [MusicSong], listId: String) -> (added: Int, dropped: Int, dupes: Int) {
+        MigrationStore.collectionWriteQueue.sync { () -> (added: Int, dropped: Int, dupes: Int) in
+            var lists = getLists()
+            guard let index = lists.firstIndex(where: { $0.id == listId }) else {
+                return (0, 0, 0)
+            }
+            let result = lists[index].addTracks(songs)
+            saveListsLocked(lists)
+            return result
+        }
+    }
+
+    /// Removes one song from a playlist atomically (b49fix17
+    /// P2-6): same stale-write hole as renameList. Returns
+    /// false when the list does not exist.
+    @discardableResult
+    static func removeTrackFromList(song: MusicSong, listId: String) -> Bool {
+        MigrationStore.collectionWriteQueue.sync { () -> Bool in
+            var lists = getLists()
+            guard let index = lists.firstIndex(where: { $0.id == listId }) else { return false }
+            lists[index].tracks.removeAll(where: { $0.identityKey == song.identityKey })
+            saveListsLocked(lists)
+            return true
         }
     }
 
@@ -419,16 +491,22 @@ enum MusicLibraryStore {
 
     @discardableResult
     static func toggleFavPlaylist(id: String) -> Bool {
-        var ids = favPlaylistIds()
-        let added: Bool
-        if ids.contains(id) {
-            ids.remove(id)
-            added = false
-        } else {
-            ids.insert(id)
-            added = true
+        // b49fix17 P2-6: read-modify-write under
+        // MigrationStore.collectionWriteQueue (same queue as the
+        // import's merge); the notification posts after the
+        // queue block returns.
+        let added: Bool = MigrationStore.collectionWriteQueue.sync {
+            var ids = favPlaylistIds()
+            if ids.contains(id) {
+                ids.remove(id)
+                writeStringArray(named: favPlaylistsCollection, Array(ids))
+                return false
+            } else {
+                ids.insert(id)
+                writeStringArray(named: favPlaylistsCollection, Array(ids))
+                return true
+            }
         }
-        writeStringArray(named: favPlaylistsCollection, Array(ids))
         NotificationCenter.default.post(name: .haoMusicPlaylistChanged, object: nil)
         return added
     }
@@ -454,15 +532,20 @@ enum MusicLibraryStore {
 
     @discardableResult
     static func toggleFavAlbum(_ album: AlbumSummary) -> Bool {
-        var albums = favAlbums()
-        if let index = albums.firstIndex(where: { $0.id == album.id && $0.name == album.name }) {
-            albums.remove(at: index)
+        // b49fix17 P2-6: read-modify-write under
+        // MigrationStore.collectionWriteQueue (same queue as the
+        // import's merge).
+        MigrationStore.collectionWriteQueue.sync { () -> Bool in
+            var albums = favAlbums()
+            if let index = albums.firstIndex(where: { $0.id == album.id && $0.name == album.name }) {
+                albums.remove(at: index)
+                writeArray(named: favAlbumsCollection, albums.map { albumDict($0) })
+                return false
+            }
+            albums.append(album)
             writeArray(named: favAlbumsCollection, albums.map { albumDict($0) })
-            return false
+            return true
         }
-        albums.append(album)
-        writeArray(named: favAlbumsCollection, albums.map { albumDict($0) })
-        return true
     }
 
     private static func albumDict(_ album: AlbumSummary) -> [String: Any] {
@@ -494,15 +577,20 @@ enum MusicLibraryStore {
 
     @discardableResult
     static func toggleFavArtist(_ artist: ArtistSummary) -> Bool {
-        var artists = favArtists()
-        if let index = artists.firstIndex(where: { $0.id == artist.id && $0.name == artist.name }) {
-            artists.remove(at: index)
+        // b49fix17 P2-6: read-modify-write under
+        // MigrationStore.collectionWriteQueue (same queue as the
+        // import's merge).
+        MigrationStore.collectionWriteQueue.sync { () -> Bool in
+            var artists = favArtists()
+            if let index = artists.firstIndex(where: { $0.id == artist.id && $0.name == artist.name }) {
+                artists.remove(at: index)
+                writeArray(named: favArtistsCollection, artists.map { artistDict($0) })
+                return false
+            }
+            artists.append(artist)
             writeArray(named: favArtistsCollection, artists.map { artistDict($0) })
-            return false
+            return true
         }
-        artists.append(artist)
-        writeArray(named: favArtistsCollection, artists.map { artistDict($0) })
-        return true
     }
 
     private static func artistDict(_ artist: ArtistSummary) -> [String: Any] {
@@ -560,17 +648,25 @@ enum MusicLibraryStore {
     /// the front (newest first). Returns true when the song was added.
     @discardableResult
     static func toggleFav(_ song: MusicSong) -> Bool {
-        var entries = favEntries()
-        let key = song.identityKey
-        let added: Bool
-        if let index = entries.firstIndex(where: { $0.key == key }) {
-            entries.remove(at: index)
-            added = false
-        } else {
-            entries.insert(MusicFavEntry(key: key, song: song), at: 0)
-            added = true
+        // b49fix17 P2-6: the read-modify-write runs under
+        // MigrationStore.collectionWriteQueue, the same queue
+        // the backup import's fav merge takes. The notification
+        // posts after the queue block returns (an observer
+        // calling back into the store must never run while the
+        // queue is held).
+        let added: Bool = MigrationStore.collectionWriteQueue.sync {
+            var entries = favEntries()
+            let key = song.identityKey
+            if let index = entries.firstIndex(where: { $0.key == key }) {
+                entries.remove(at: index)
+                writeArray(named: favCollection, entries.map { $0.toJSON() })
+                return false
+            } else {
+                entries.insert(MusicFavEntry(key: key, song: song), at: 0)
+                writeArray(named: favCollection, entries.map { $0.toJSON() })
+                return true
+            }
         }
-        writeArray(named: favCollection, entries.map { $0.toJSON() })
         // b49fix3 P2-22: the add/remove rides in the
         // notification object — MainTabView's backup nudge fires
         // on add only; the other listeners (star refresh, list
@@ -598,14 +694,23 @@ enum MusicLibraryStore {
     /// File part of addRecent, without the notification: the
     /// background wrapper posts on the main thread after the write
     /// lands, so observers that reload always read the new list.
+    /// b49fix17 P1-2: the whole read-modify-write runs under
+    /// MigrationStore.recentWriteQueue, the same queue the backup
+    /// import's recent merge takes — a switch landing between
+    /// the import's re-read and write is serialised after it
+    /// instead of being overwritten by it.
     private static func writeRecent(_ song: MusicSong) {
-        var list = getRecent().filter { $0.identityKey != song.identityKey }
-        list.insert(song, at: 0)
-        writeArray(named: recentCollection, Array(list.prefix(maxRecent)).map { $0.toJSON() })
+        MigrationStore.recentWriteQueue.sync {
+            var list = getRecent().filter { $0.identityKey != song.identityKey }
+            list.insert(song, at: 0)
+            writeArray(named: recentCollection, Array(list.prefix(maxRecent)).map { $0.toJSON() })
+        }
     }
 
     static func clearRecent() {
-        writeArray(named: recentCollection, [])
+        MigrationStore.recentWriteQueue.sync {
+            writeArray(named: recentCollection, [])
+        }
         NotificationCenter.default.post(name: .haoMusicRecentChanged, object: nil)
     }
 
@@ -643,17 +748,26 @@ enum MusicLibraryStore {
     static func saveSearchQuery(_ query: String) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        var history = getSearchHistory().filter { $0 != trimmed }
-        history.insert(trimmed, at: 0)
-        writeStringArray(named: searchHistoryCollection, Array(history.prefix(maxSearchHistory)))
+        // b49fix17 P2-6: read-modify-write under
+        // MigrationStore.collectionWriteQueue (same queue as the
+        // import's merge).
+        MigrationStore.collectionWriteQueue.sync {
+            var history = getSearchHistory().filter { $0 != trimmed }
+            history.insert(trimmed, at: 0)
+            writeStringArray(named: searchHistoryCollection, Array(history.prefix(maxSearchHistory)))
+        }
     }
 
     static func clearSearchHistory() {
-        writeStringArray(named: searchHistoryCollection, [])
+        MigrationStore.collectionWriteQueue.sync {
+            writeStringArray(named: searchHistoryCollection, [])
+        }
     }
 
     static func removeSearchQuery(_ query: String) {
-        writeStringArray(named: searchHistoryCollection, getSearchHistory().filter { $0 != query })
+        MigrationStore.collectionWriteQueue.sync {
+            writeStringArray(named: searchHistoryCollection, getSearchHistory().filter { $0 != query })
+        }
     }
 
     // MARK: - Cover cache
@@ -668,12 +782,17 @@ enum MusicLibraryStore {
     }
 
     static func saveCover(key: String, url: String) {
-        var cache = coverCache()
-        cache[key] = url
-        while cache.count > maxCoverCache {
-            if let first = cache.keys.first { cache.removeValue(forKey: first) }
+        // b49fix17 P2-6: read-modify-write under
+        // MigrationStore.collectionWriteQueue (same queue as the
+        // import's merge).
+        MigrationStore.collectionWriteQueue.sync {
+            var cache = coverCache()
+            cache[key] = url
+            while cache.count > maxCoverCache {
+                if let first = cache.keys.first { cache.removeValue(forKey: first) }
+            }
+            writeObject(named: coverCacheCollection, cache)
         }
-        writeObject(named: coverCacheCollection, cache)
     }
 
     // MARK: - Lyrics cache
@@ -706,6 +825,21 @@ enum MusicLibraryStore {
         UserDefaults.standard.set(order, forKey: lyricsCacheOrderKey)
     }
 
+    /// Drops one lyrics-cache entry (expired short-lived marker
+    /// or invalid entry) — the read path's write, under the same
+    /// queue as putLyrics and the import's merge (b49fix17 P2-6):
+    /// the entry is re-read inside the queue, so a drop landing
+    /// after an import merge removes only its own key instead of
+    /// writing back a stale pre-merge dict.
+    private static func dropLyricsEntry(_ identityKey: String) {
+        MigrationStore.collectionWriteQueue.sync {
+            var dict = readObject(named: lyricsCacheCollection)
+            guard dict.removeValue(forKey: identityKey) != nil else { return }
+            writeObject(named: lyricsCacheCollection, dict)
+            saveLyricsCacheOrder(lyricsCacheOrder().filter { $0 != identityKey })
+        }
+    }
+
     static func cachedLyrics(for identityKey: String) -> [StoredLyricLine]? {
         cachedLyricsInfo(for: identityKey)?.lines
     }
@@ -720,11 +854,19 @@ enum MusicLibraryStore {
             // First read after the bump (or a fresh install with
             // no version stamped): drop the stale collection once
             // so truncated version-1 entries are never served.
-            writeObject(named: lyricsCacheCollection, [:])
-            UserDefaults.standard.set(lyricsCacheVersion, forKey: lyricsCacheVersionKey)
+            // b49fix17 P2-6: under collectionWriteQueue, like the
+            // import's merge — a wipe landing after the merge
+            // must not interleave with it.
+            MigrationStore.collectionWriteQueue.sync {
+                writeObject(named: lyricsCacheCollection, [:])
+                UserDefaults.standard.set(lyricsCacheVersion, forKey: lyricsCacheVersionKey)
+            }
             return nil
         }
-        var dict = readObject(named: lyricsCacheCollection)
+        // b49fix17 P2-6: `let` now — the entry drops below go
+        // through dropLyricsEntry (re-read inside the queue),
+        // so this local dict is never mutated here.
+        let dict = readObject(named: lyricsCacheCollection)
         guard let raw = dict[identityKey] else { return nil }
         // v2 entry with per-entry metadata: {"v", "dur", "count",
         // "lines"}. "dur" is the song duration when the caller
@@ -748,9 +890,7 @@ enum MusicLibraryStore {
             if shortLived {
                 let expiresAt = MusicDict.double(entry, "expiresAt")
                 if expiresAt > 0, Date().timeIntervalSince1970 >= expiresAt {
-                    dict.removeValue(forKey: identityKey)
-                    writeObject(named: lyricsCacheCollection, dict)
-                    saveLyricsCacheOrder(lyricsCacheOrder().filter { $0 != identityKey })
+                    dropLyricsEntry(identityKey)
                     return nil
                 }
             }
@@ -758,9 +898,7 @@ enum MusicLibraryStore {
                 || count != lineDicts.count
                 || (!shortLived && duration > 0 && !lines.isEmpty && lastTime < duration * 0.8)
             if invalid {
-                dict.removeValue(forKey: identityKey)
-                writeObject(named: lyricsCacheCollection, dict)
-                saveLyricsCacheOrder(lyricsCacheOrder().filter { $0 != identityKey })
+                dropLyricsEntry(identityKey)
                 return nil
             }
             return (lines, shortLived)
@@ -785,6 +923,19 @@ enum MusicLibraryStore {
     /// a 1 h marker instead of not caching it at all — a song whose
     /// lyrics legitimately end early must not re-fetch on every play.
     static func putLyrics(_ lines: [StoredLyricLine], for identityKey: String, duration: TimeInterval = 0, shortLived: Bool = false) {
+        // b49fix17 P2-6: the whole read-modify-write runs under
+        // MigrationStore.collectionWriteQueue, the same queue
+        // the backup import's lyrics merge takes — a fetch
+        // landing between the import's re-read and write is
+        // serialised after it instead of being overwritten by it.
+        MigrationStore.collectionWriteQueue.sync {
+            putLyricsLocked(lines, for: identityKey, duration: duration, shortLived: shortLived)
+        }
+    }
+
+    /// The putLyrics body, assuming collectionWriteQueue is held
+    /// (same shape as saveListsLocked).
+    private static func putLyricsLocked(_ lines: [StoredLyricLine], for identityKey: String, duration: TimeInterval = 0, shortLived: Bool = false) {
         var cache = readObject(named: lyricsCacheCollection)
         let lastTime = lines.map(\.t).max() ?? 0
         var entry: [String: Any] = [
@@ -821,7 +972,15 @@ enum MusicLibraryStore {
     }
 
     static func saveQueue(_ queue: MusicQueueData) {
-        writeObject(named: queueCollection, queue.toJSON())
+        // b49fix17 P1-3: the queue file write runs under
+        // MigrationStore.musicQueueWriteQueue, the same queue
+        // the backup import's queue merge takes — a switch
+        // landing between the import's re-read and write is
+        // serialised after it instead of silently replacing
+        // the queue being listened to.
+        MigrationStore.musicQueueWriteQueue.sync {
+            writeObject(named: queueCollection, queue.toJSON())
+        }
     }
 
     // MARK: - Downloads
@@ -831,11 +990,27 @@ enum MusicLibraryStore {
     }
 
     static func saveDownloads(_ downloads: [DownloadedSong]) {
+        // b49fix17 P2-6: the write runs under
+        // MigrationStore.collectionWriteQueue, the same queue
+        // the backup import's downloads merge takes.
+        // removeDownload reads-modifies-writes through
+        // saveDownloadsLocked so the whole operation holds the
+        // queue once (no re-entry deadlock).
+        MigrationStore.collectionWriteQueue.sync {
+            saveDownloadsLocked(downloads)
+        }
+    }
+
+    /// The saveDownloads body, assuming collectionWriteQueue
+    /// is held (same shape as saveListsLocked).
+    private static func saveDownloadsLocked(_ downloads: [DownloadedSong]) {
         writeArray(named: downloadsCollection, downloads.map { $0.toJSON() })
     }
 
     static func removeDownload(key: String) {
-        saveDownloads(getDownloads().filter { $0.key != key })
+        MigrationStore.collectionWriteQueue.sync {
+            saveDownloadsLocked(getDownloads().filter { $0.key != key })
+        }
         // A3: 我的's 我的下载 count reloads on this — same
         // staleness as the playlist count above.
         NotificationCenter.default.post(name: .haoMusicDownloadChanged, object: nil)
@@ -948,20 +1123,13 @@ enum MusicLibraryStore {
         dict[dayKey] = tracks.map { $0.toJSON() }
         // b49sweep: prune day keys older than ~7 days on save —
         // nothing ever pruned them, so the file grew one key per
-        // day forever. Only keys that parse as YYYY-MM-DD dates
-        // are pruned; an unparseable key is kept, never deleted
-        // on a guess. (Load-side validity — only today's key
+        // day forever. The rule lives in
+        // MigrationStore.prunedDailyEntries (b49fix17 P2-4) —
+        // one rule for the live writes and both import merges,
+        // so a concurrent prune can no longer fail the import's
+        // verify. (Load-side validity — only today's key
         // counts — lives in HomeViewModel.)
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        let cutoff = Calendar.current.startOfDay(
-            for: Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date.distantPast)
-        for key in dict.keys where key != dayKey {
-            if let date = formatter.date(from: key), date < cutoff {
-                dict.removeValue(forKey: key)
-            }
-        }
+        dict = MigrationStore.prunedDailyEntries(dict, keeping: dayKey)
         writeObject(named: dailyCollection, dict)
     }
 
@@ -1028,38 +1196,24 @@ enum MusicLibraryStore {
         return raw.map(MusicSong.init(json:))
     }
 
-    /// Serial queue for pool writes (b49fix8 P2-4):
-    /// saveDailyPool is a read-modify-write of the whole dict,
-    /// called from Home's background reload and from
-    /// Discovery's main-thread load. Two writers racing across
-    /// midnight (different day keys, both reading an empty
-    /// dict) could lose a day key — the loser overwrites the
-    /// winner's key. The queue makes the read-modify-write
-    /// atomic; same-day races stay last-write-wins, which is
-    /// fine (both are valid rankings for the same day). A lost
-    /// key would only cost one recompute (the pool is a pure
-    /// derived cache, no user data), but the queue is cheap
-    /// and removes the window entirely. Readers see either
-    /// the old or the new file (atomic write), never a torn one.
-    private static let dailyPoolQueue = DispatchQueue(label: "com.haostudio.dailyPool")
-
     /// Save the day's pinned ranking pool. Same 7-day prune
     /// as saveDailyTracks (keys are YYYY-MM-DD dates; an
     /// unparseable key is kept, never deleted on a guess).
+    /// b49fix17 P2-3/P2-6: the pool write runs under
+    /// MigrationStore.dailyWriteQueue now, not its own
+    /// dailyPoolQueue (b49fix8 P2-4) — the import's pool merge
+    /// and the pool save must share ONE queue, or a pin
+    /// landing between the merge's re-read and write is still
+    /// lost. dailyPoolQueue is deleted; the midnight-race
+    /// serialisation it provided now comes from dailyWriteQueue
+    /// (same guarantee: the read-modify-write is atomic, a lost
+    /// key would only cost one recompute anyway — the pool is a
+    /// pure derived cache, no user data).
     static func saveDailyPool(_ tracks: [MusicSong], for dayKey: String) {
-        dailyPoolQueue.sync {
+        MigrationStore.dailyWriteQueue.sync {
             var dict = readObject(named: dailyPoolCollection)
             dict[dayKey] = tracks.map { $0.toJSON() }
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "yyyy-MM-dd"
-            let cutoff = Calendar.current.startOfDay(
-                for: Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date.distantPast)
-            for key in dict.keys where key != dayKey {
-                if let date = formatter.date(from: key), date < cutoff {
-                    dict.removeValue(forKey: key)
-                }
-            }
+            dict = MigrationStore.prunedDailyEntries(dict, keeping: dayKey)
             writeObject(named: dailyPoolCollection, dict)
         }
     }
@@ -1079,11 +1233,16 @@ enum MusicLibraryStore {
     /// along with it. Legacy bare-id entries keep working: fmQueue
     /// checks both forms.
     static func addFMDisliked(key: String) {
-        var ids = fmDislikedIds()
-        ids.insert(key)
-        let url = LocalStore.collectionURL(named: "fmDislikedIds")
-        guard let data = MusicDict.data(forTopLevel: Array(ids)) else { return }
-        try? data.write(to: url, options: [.atomic])
+        // b49fix17 P2-6: read-modify-write under
+        // MigrationStore.collectionWriteQueue (same queue as the
+        // import's merge).
+        MigrationStore.collectionWriteQueue.sync {
+            var ids = fmDislikedIds()
+            ids.insert(key)
+            let url = LocalStore.collectionURL(named: "fmDislikedIds")
+            guard let data = MusicDict.data(forTopLevel: Array(ids)) else { return }
+            try? data.write(to: url, options: [.atomic])
+        }
     }
 
     // MARK: - Resume map
@@ -1103,17 +1262,35 @@ enum MusicLibraryStore {
     }
 
     static func saveResume(_ identityKey: String, seconds: Int) {
-        var map = resumeMap()
-        map[identityKey] = seconds
-        writeObject(named: resumeCollection, map)
+        // b49fix17 P2-2: the whole read-modify-write runs under
+        // MigrationStore.resumeWriteQueue, the same queue the
+        // backup import's resume merge takes — a checkpoint that
+        // read the old map before an import write can no longer
+        // write back after it and restore imported resume values
+        // to pre-import values. (The key-only verify tolerates a
+        // checkpoint advancing the playing song's value; the
+        // queue closes the stale-write hole itself.)
+        MigrationStore.resumeWriteQueue.sync {
+            var map = resumeMap()
+            map[identityKey] = seconds
+            writeObject(named: resumeCollection, map)
+        }
     }
 
     /// Drop the resume point for a track (natural completion):
     /// the next play starts from 0. No-op when there is no
     /// checkpoint, so it never rewrites the file needlessly.
+    /// b49fix17 P2-2: runs under resumeWriteQueue like
+    /// saveResume, and records the deletion — a key deleted
+    /// between the import's write and its verify is excused
+    /// there (deleting a key is a legitimate concurrent event,
+    /// same class as a checkpoint advancing).
     static func clearResume(_ identityKey: String) {
-        var map = resumeMap()
-        guard map.removeValue(forKey: identityKey) != nil else { return }
-        writeObject(named: resumeCollection, map)
+        MigrationStore.resumeWriteQueue.sync {
+            var map = resumeMap()
+            guard map.removeValue(forKey: identityKey) != nil else { return }
+            MigrationStore.noteResumeKeyDeleted(identityKey)
+            writeObject(named: resumeCollection, map)
+        }
     }
 }

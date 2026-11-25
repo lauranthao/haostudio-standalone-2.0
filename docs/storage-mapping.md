@@ -109,7 +109,7 @@
 | `hao_lyrics` | JSON 字符串，上限 100 | `Documents/hao_lyrics.json` | 歌词缓存 |
 | `musicQueue` | JSON 字符串 | `Documents/musicQueue.json` | 播放队列 `{songs, index}` |
 | `musicDownloads` | JSON 字符串 | `Documents/musicDownloads.json` | 已下载歌曲；文件在 `music_downloads/` |
-| `musicResume` | JSON 字符串 | `Documents/musicResume.json` | 断点续播 `{identityKey: 秒}`，只在杀后台时写 |
+| `musicResume` | JSON 字符串 | `Documents/musicResume.json` | 断点续播 `{identityKey: 秒}`，只在杀后台时写。b49fix17 P1-4：此为 dict 形狀——舊的遷移 fixture 曾誤以 list `[{"id":"x"}]` 抽樣它（見 `simulate_upgrade.py`／`CrossGenerationMigrationTests.swift` 的修正），2.0 的 `resumeMap()` 也只認 dict；Route B 匯入時按 dict overlay 合併。 |
 | `fmDislikedIds` | JSON 字符串 | `Documents/fmDislikedIds.json` | 私人 FM 不喜欢的歌曲 id |
 | `hao_feature_cover_plaza` | JSON 字符串 | `Documents/hao_feature_cover_plaza.json` | 音乐首页广场卡片首封 |
 | `hao_feature_cover_charts` | JSON 字符串 | `Documents/hao_feature_cover_charts.json` | 音乐首页榜单卡片首封 |

@@ -48,10 +48,15 @@ final class CrossGenerationMigrationTests: XCTestCase {
     /// Keys whose JSON value is a list, not a dict. Same set as
     /// simulate_upgrade.py; a list key given a dict value would
     /// still migrate, but the fixture mirrors real Flutter shapes.
+    /// b49fix17 P1-4: musicResume is NOT here — it is a dict
+    /// {identityKey: seconds} (docs/storage-mapping.md:112;
+    /// 2.0's resumeMap() only reads a dict). The old set listed
+    /// it only because the generator sampled [{"id":"x"}] for
+    /// every .json key, not a real Flutter shape.
     private static let jsonListKeys: Set<String> = [
         "hao_lists", "hao_fav", "hao_recent", "hao_listen",
         "hao_music_search_hist", "hao_cover_cache", "hao_lyrics",
-        "musicQueue", "musicDownloads", "musicResume", "fmDislikedIds",
+        "musicQueue", "musicDownloads", "fmDislikedIds",
         "hao_feature_cover_plaza", "hao_feature_cover_charts",
         "hao_music_bookmarks", "hao_music_loudness_cache",
         "hao_music_sources", "hao_local_music", "hao_music_queue_memory",
