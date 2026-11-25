@@ -154,16 +154,24 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     /// the SAME room id again.
     private var openAttemptToken = 0
     /// Wall-clock budget for one attemptOpen chain (b49 sweep
-    /// #12): every open() in the chain already gets its own whole-
-    /// open cap (25 s), so a multi-line dead room used to spin
-    /// ~50–200 s before the failure card. One chain — entry
-    /// resolve, line walk, fresh re-parses — gets a single shared
-    /// 25 s budget from its first attempt; when it is spent the
-    /// chain fails fast with .timeout. Armed lazily by attemptOpen
-    /// and reset by beginAttemptChain() at each new chain entry
-    /// (new room, line/quality switch, stall recovery).
+    /// #12, reshaped b49fix2 P1-3): every open() in the chain
+    /// already gets its own whole-open cap (25 s), so the chain
+    /// budget must exceed ONE open's cap — one whole-open cap
+    /// per line the walk may visit. A budget equal to a single
+    /// cap let a first line whose ladder hangs spend the whole
+    /// budget, and the chain failed with .timeout without ever
+    /// trying line 2. Armed lazily by attemptOpen and reset by
+    /// beginAttemptChain() at each new chain entry (new room,
+    /// line/quality switch, stall recovery).
     private var attemptChainDeadline: Date?
     private var attemptChainArmed = false
+    /// Background task spanning one attemptOpen chain (b49fix2
+    /// P1-32): without it iOS may suspend a backgrounded app
+    /// mid-resolve/open and the main-queue open timeout then
+    /// fires the instant the app returns, killing a healthy
+    /// open. Same shape as NativeMusicPlayer's switch task:
+    /// begun when the chain arms, ended when it clears or fails.
+    private var chainBackgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var pendingItem: PlaybackItem?
     private var playRequested: Bool = false
     // #6: the backend paused itself (interruption / stall /
@@ -175,6 +183,16 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     private var backendPaused: Bool = false
     private var stallFailed: Bool = false
     private var fellBackForSoftwareDecode = false
+    /// Audio-session interruption observer token (b49fix2 P1-6 /
+    /// P1-33): the token — not the driver — owns the observation,
+    /// so it must be stored, never discarded (the music view
+    /// model dropped its tokens and its observers died on
+    /// arrival). Removed in deinit.
+    private var interruptionObserver: NSObjectProtocol?
+    /// Whether the room was playing when an interruption began
+    /// (b49fix2 P1-33): only a room that was playing resumes
+    /// when the interruption ends with .shouldResume.
+    private var wasPlayingBeforeInterruption: Bool = false
 
     private var openTimeoutWork: DispatchWorkItem?
     private var positionTimer: Timer?
@@ -218,11 +236,21 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             self.lastDroppedFrames = dropped
             self.updateDiagnostics()
         }
+        // (b49fix2 P1-6 / P1-33) Phone call / Siri / alarm: the
+        // music player was the only domain observing
+        // interruptionNotification — live stayed paused (or, on
+        // MPV/IJK, kept sounding through the call) and never
+        // resumed. Stored token, removed in deinit.
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] note in self?.handleInterruption(note) }
     }
 
     deinit {
         positionTimer?.invalidate()
         openTimeoutWork?.cancel()
+        endChainBackgroundTask()
+        if let o = interruptionObserver { NotificationCenter.default.removeObserver(o) }
         fpsSampler.stop()
         backend?.shutdown()
     }
@@ -356,6 +384,11 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         currentLineIndex = index
         let url = recovery.urls[index]
         ensureMain {
+            // (b49fix2 P1-8) Show "加载中…" while the switch
+            // opens: open() tears the backend down at once, and
+            // without this the placeholder flashes "暂无画面 /
+            // 房间未开播" on every line switch.
+            self.isLoading = true
             self.beginAttemptChain()
             self.attemptOpen(item: item, url: url, tried: [url], freshRounds: 2)
         }
@@ -387,9 +420,21 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                     }
                     self.currentQuality = quality
                     if let platform = self.session.room?.platform {
-                        LivePreferredQuality.savePreferredQualityId(quality.id, for: platform, defaults: self.defaults)
+                        // (b49fix2 P2-55) Persist the ACKED tier,
+                        // not the requested one: the session's
+                        // committed tier is what actually plays
+                        // (the sheet already derives its highlight
+                        // from it), and persisting the request
+                        // would re-ask for a tier the server just
+                        // refused on every next room entry.
+                        let ackedId = self.session.currentQuality?.id ?? quality.id
+                        LivePreferredQuality.savePreferredQualityId(ackedId, for: platform, defaults: self.defaults)
                     }
                     if let url = self.session.recovery?.currentUrl {
+                        // (b49fix2 P1-8) Same loading flag as
+                        // switchLine: the switch tears the backend
+                        // down at once.
+                        self.isLoading = true
                         self.beginAttemptChain()
                         self.attemptOpen(item: item, url: url, tried: [url], freshRounds: 2)
                     }
@@ -606,14 +651,19 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     /// same URL twice (`excluding` is passed through). `freshRounds`
     /// bounds the fresh-URL recursion inside `open` (at most 2
     /// fresh re-parses per open). The whole chain shares one
-    /// 25 s wall-clock budget (b49 sweep #12): when it is spent
-    /// the chain fails fast instead of walking every line at
-    /// 25 s each.
+    /// wall-clock budget of one whole-open cap per line (b49fix2
+    /// P1-3): when it is spent the chain fails fast instead of
+    /// walking every line at 25 s each.
     private func attemptOpen(item: PlaybackItem, url: URL, tried: [URL], freshRounds: Int) {
         if !attemptChainArmed {
             attemptChainArmed = true
+            // (b49fix2 P1-3) One whole-open cap per line the
+            // walk may visit (see the property comment): a
+            // budget equal to a single cap let a hanging first
+            // line spend it all before line 2 was tried.
+            let lines = max(2, session.recovery?.urls.count ?? 0)
             attemptChainDeadline = Date().addingTimeInterval(
-                openTimeoutInterval * LiveDriver.openTotalTimeoutFactor)
+                openTimeoutInterval * LiveDriver.openTotalTimeoutFactor * Double(lines))
         }
         openAttemptToken += 1
         let token = openAttemptToken
@@ -634,13 +684,22 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                 self.clearAttemptChain()
                 return
             case .failure(let error):
-                // Unsupported format (b49 sweep #28): no line walk
-                // and no fresh re-parse — re-parsing a format
-                // problem cannot fix it, and every line shares the
-                // same format. Fail straight to the card.
+                // Unsupported format (b49 sweep #28): no fresh
+                // re-parse — re-parsing a format problem cannot
+                // fix it. But lines carry PER-LINE formats (Huya
+                // FLV vs HLS), so line 1 can be unplayable while
+                // line 2 plays: only fast-fail when NO untried
+                // line has a capable engine (b49fix2 P2-57);
+                // otherwise fall through to the walk below.
                 if error == .unsupportedFormat {
-                    self.failAttemptChain(item: item, error: error)
-                    return
+                    let remaining = (self.session.recovery?.urls ?? []).filter { !tried.contains($0) }
+                    let anyPlayable = remaining.contains { url in
+                        !videoCandidatesFor(url: url, declaredFormat: self.declaredFormat(for: url)).isEmpty
+                    }
+                    if !anyPlayable {
+                        self.failAttemptChain(item: item, error: error)
+                        return
+                    }
                 }
                 // Shared chain budget spent (b49 sweep #12): fail
                 // fast to the card instead of opening the next line
@@ -699,25 +758,53 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
 
     /// Start a fresh attemptOpen chain (new room, line/quality
     /// switch, stall recovery): the next attemptOpen arms a new
-    /// shared 25 s budget instead of inheriting the old chain's
+    /// shared budget instead of inheriting the old chain's
     /// (possibly spent) deadline.
     private func beginAttemptChain() {
         attemptChainArmed = false
         attemptChainDeadline = nil
+        // (b49fix2 P1-32) The task spans the whole chain — resolve
+        // + open + recovery — so a backgrounded chain keeps
+        // running instead of freezing its main-queue timers.
+        beginChainBackgroundTask()
     }
 
-    /// A chain ended in success: drop its budget.
+    /// Begin the background task that keeps a backgrounded chain's
+    /// resolve + open alive (b49fix2 P1-32). Ends any previous
+    /// task first (one chain at a time). No-op when tasks are
+    /// unavailable (beginBackgroundTask returns .invalid) — the
+    /// chain budget below still converts a stall into a reported
+    /// failure. Called on main (every chain entry runs in
+    /// ensureMain).
+    private func beginChainBackgroundTask() {
+        endChainBackgroundTask()
+        chainBackgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
+            self?.endChainBackgroundTask()
+        }
+    }
+
+    private func endChainBackgroundTask() {
+        guard chainBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(chainBackgroundTask)
+        chainBackgroundTask = .invalid
+    }
+
+    /// A chain ended in success: drop its budget and its
+    /// background task.
     private func clearAttemptChain() {
         attemptChainArmed = false
         attemptChainDeadline = nil
+        endChainBackgroundTask()
     }
 
-    /// A chain ended in failure: drop its budget and report the
-    /// failure the way the old inline sites did (loading off,
-    /// failure card on, retry item kept).
+    /// A chain ended in failure: drop its budget and its
+    /// background task, and report the failure the way the old
+    /// inline sites did (loading off, failure card on, retry
+    /// item kept).
     private func failAttemptChain(item: PlaybackItem, error: MusicPlayerError) {
         attemptChainArmed = false
         attemptChainDeadline = nil
+        endChainBackgroundTask()
         isLoading = false
         pendingItem = nil
         openFailure = error
@@ -796,7 +883,15 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             }
             self.openTimeoutWork = timeoutWork
             DispatchQueue.main.asyncAfter(deadline: .now() + self.openTimeoutInterval * LiveDriver.openTotalTimeoutFactor, execute: timeoutWork)
-            let engines = PlayerKernel.candidatesFor(url: url, declaredFormat: self.declaredFormat(for: url))
+            // (b49fix2 P1-26) Live calls videoCandidatesFor with
+            // preferred: nil directly: PlayerKernel.candidatesFor
+            // injects the STORED video preference, and the picker
+            // lives in the 影视播放 section — a VOD pick must not
+            // reorder live engine selection (an HLS live room
+            // would lose AVPlayer hardware decode to an MPV pick).
+            // Live has no own preference; the capability split
+            // decides.
+            let engines = videoCandidatesFor(url: url, declaredFormat: self.declaredFormat(for: url), preferred: nil)
             // (b49 sweep #28) No capable engine for this format:
             // the same failure VOD reports as unsupportedFormat —
             // fail at once with that reason instead of running the
@@ -1119,6 +1214,15 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         stallWarning = false
         isLoading = false
         backend.play()
+        // (b49fix2 P1-31) Re-apply audio-only to the fresh
+        // backend: a stall recovery / line switch / reopen while
+        // backgrounded installs a new backend with video back
+        // on, silently breaking the audio-only contract. Mirror
+        // of VideoDriver.finishStartPlayback (which also lands
+        // here via reopenOnAVPlayer).
+        if isAudioOnly, let capable = backend as? LiveAudioOnlyCapable {
+            capable.setAudioOnly(true)
+        }
         do {
             // The audio session is global: an open used to reset
             // the category with no options, wiping the music
@@ -1211,6 +1315,35 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             self.session.notePlaybackPaused()
             self.recomputePlayingState()
             self.updateNowPlayingInfo()
+        }
+    }
+
+    // MARK: - Interruption (b49fix2 P1-6 / P1-33)
+
+    /// Phone call / Siri / alarm: pause on .began (remembering
+    /// whether the room was playing — MPV/IJK do not auto-pause,
+    /// so the driver pauses explicitly through backend.pause(),
+    /// which works on every engine), resume on .ended when the
+    /// system says it should. Same shape as
+    /// NativeMusicPlayer.handleInterruption.
+    private func handleInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeRaw = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeRaw) else { return }
+        switch type {
+        case .began:
+            guard isPlaying else { return }
+            wasPlayingBeforeInterruption = true
+            pause()
+        case .ended:
+            guard wasPlayingBeforeInterruption else { return }
+            wasPlayingBeforeInterruption = false
+            if let optionsRaw = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
+                let options = AVAudioSession.InterruptionOptions(rawValue: optionsRaw)
+                if options.contains(.shouldResume) { resume() }
+            }
+        @unknown default:
+            break
         }
     }
 
@@ -1313,6 +1446,7 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             self.activeLadder = nil
             self.openTimeoutWork?.cancel()
             self.openTimeoutWork = nil
+            self.endChainBackgroundTask()
             self.positionTimer?.invalidate()
             self.positionTimer = nil
             self.fpsSampler.stop()
@@ -1367,6 +1501,7 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             self.activeLadder = nil
             self.openTimeoutWork?.cancel()
             self.openTimeoutWork = nil
+            self.endChainBackgroundTask()
             self.positionTimer?.invalidate()
             self.positionTimer = nil
             self.fpsSampler.stop()
@@ -1435,7 +1570,13 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             return false
         }
         setAudioOnly(false)
-        if backend != nil {
+        // (b49fix2 P1-34) Resume only when the session is
+        // actually playing: a room the user paused from the lock
+        // screen / Control Center while backgrounded must stay
+        // paused on return, not restart by itself. (The video
+        // track is still restored above — the flag, not the
+        // pause, owns that.)
+        if backend != nil, session.state == .playing {
             resume()
         }
         return true
@@ -1523,6 +1664,12 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                 attemptOpen(item: item, url: url, tried: [url], freshRounds: 2)
             } else {
                 stop()
+                // (b49fix2 P1-6) The stall walk is spent: the
+                // room failed, and the page must show why with a
+                // retry (D10) — set after stop(), which clears
+                // the failure state, like .exhausted does.
+                self.openFailure = .timeout
+                self.lastFailedItem = item
                 onRoomFailed?(item, .timeout)
             }
         case .fetchFresh:
@@ -1548,11 +1695,19 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                         return
                     }
                     self.stop()
+                    // (b49fix2 P1-6) Same failure-card rule as
+                    // .exhausted: set after stop().
+                    self.openFailure = .timeout
+                    self.lastFailedItem = item
                     self.onRoomFailed?(item, .timeout)
                 }
             })
             if session.recovery == nil {
                 stop()
+                // (b49fix2 P1-6) Same failure-card rule as
+                // .exhausted: set after stop().
+                self.openFailure = .timeout
+                self.lastFailedItem = item
                 onRoomFailed?(item, .timeout)
             }
         case .nextLine(let url):
