@@ -47,6 +47,13 @@ final class VodDanmakuLayerState: ObservableObject {
     /// A fetch finished for the current episode (items or empty).
     /// False before the first load and while a reload is running.
     @Published private(set) var didLoad = false
+    /// The last fetch failed at the transport level (the danmaku
+    /// server could not be reached) — as opposed to "this title
+    /// has no danmaku", which is `didLoad && items.isEmpty`.
+    /// The settings sheet shows a visible failure + retry from
+    /// this (sweep-4 P2-9); a silent empty layer used to read
+    /// exactly like "no danmaku for this episode".
+    @Published private(set) var loadFailed = false
 
     /// How long a scrolling line takes to cross the screen.
     static let scrollDuration: Double = 8
@@ -97,12 +104,14 @@ final class VodDanmakuLayerState: ObservableObject {
         }
         isLoading = true
         didLoad = false
-        provider.fetchDanmaku(for: episode) { [weak self] fetched in
+        loadFailed = false
+        provider.fetchDanmaku(for: episode) { [weak self] fetched, failed in
             guard let self = self else { return }
             DispatchQueue.main.async {
                 guard generation == self.loadGeneration,
                       self.loadedEpisodeId == episode.id else { return }
                 self.items = fetched.sorted { $0.timeSeconds < $1.timeSeconds }
+                self.loadFailed = failed
                 self.isLoading = false
                 self.didLoad = true
             }
@@ -118,6 +127,7 @@ final class VodDanmakuLayerState: ObservableObject {
         items = []
         isLoading = false
         didLoad = false
+        loadFailed = false
     }
 
     /// Items visible at `position` (seconds), each with a stable
@@ -154,17 +164,24 @@ final class VodDanmakuLayerState: ObservableObject {
 /// - available: items arrived — the switch is real.
 /// - unavailable: the fetch finished with nothing — the switch
 ///   stays hidden.
+/// - failed: the danmaku server could not be reached — the page
+///   shows the failure with a retry instead of silently hiding
+///   the section (sweep-4 P2-9).
 enum VodDanmakuAvailability {
     case loading
     case available
     case unavailable
+    case failed
 
     /// Pure derivation from the layer state, so tests can drive it
     /// without a view. Items win over loading: while a new episode
     /// reloads, the old items are already cleared by `load`, so a
-    /// non-empty list always means switchable danmaku.
-    static func resolve(isLoading: Bool, didLoad: Bool, itemCount: Int) -> VodDanmakuAvailability {
+    /// non-empty list always means switchable danmaku. A failed
+    /// fetch wins over the empty state, so the failure is visible
+    /// instead of reading as "no danmaku".
+    static func resolve(isLoading: Bool, didLoad: Bool, itemCount: Int, loadFailed: Bool = false) -> VodDanmakuAvailability {
         if itemCount > 0 { return .available }
+        if loadFailed { return .failed }
         if isLoading || !didLoad { return .loading }
         return .unavailable
     }

@@ -135,7 +135,7 @@ struct VodSettingsSheet: View {
     private var danmakuAvailability: VodDanmakuAvailability {
         VodDanmakuAvailability.resolve(
             isLoading: danmaku.isLoading, didLoad: danmaku.didLoad,
-            itemCount: danmaku.items.count)
+            itemCount: danmaku.items.count, loadFailed: danmaku.loadFailed)
     }
 
     var body: some View {
@@ -189,6 +189,19 @@ struct VodSettingsSheet: View {
                                     .tint(theme.accent)
                             }
                             if isCustomDanmakuAddress {
+                                Button("重新加载弹幕") { onReloadDanmaku?() }
+                                    .foregroundStyle(theme.accentText)
+                            }
+                        case .failed:
+                            // The danmaku server could not be
+                            // reached — a visible state with a
+                            // retry, not a silently hidden section
+                            // (sweep-4 P2-9). Distinct from
+                            // "this title has no danmaku", which
+                            // hides the section entirely.
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("弹幕加载失败")
+                                    .foregroundColor(theme.textSecondary)
                                 Button("重新加载弹幕") { onReloadDanmaku?() }
                                     .foregroundStyle(theme.accentText)
                             }
