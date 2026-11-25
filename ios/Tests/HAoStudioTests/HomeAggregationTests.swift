@@ -826,4 +826,17 @@ final class HomeAggregationTests: XCTestCase {
         XCTAssertEqual(calls, 1)
         XCTAssertEqual(viewModel.hotLive.map { $0.roomId }, ["1"])
     }
+
+    func testShouldPublishDaily() {
+        // b49fix10 P2-3: a reload that starts before midnight
+        // and publishes after it must NOT publish its daily list
+        // — the result was computed under yesterday's key, so
+        // publishing it would stamp yesterday's list as today's
+        // and set dailyDayKey back a day. Same key publishes;
+        // a rolled-over day skips the daily part of the round.
+        XCTAssertTrue(HomeViewModel.shouldPublishDaily(
+            startDayKey: "2026-11-26", publishDayKey: "2026-11-26"))
+        XCTAssertFalse(HomeViewModel.shouldPublishDaily(
+            startDayKey: "2026-11-25", publishDayKey: "2026-11-26"))
+    }
 }

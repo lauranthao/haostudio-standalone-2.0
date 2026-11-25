@@ -169,12 +169,17 @@ final class HomeViewModel: ObservableObject {
     /// song in place exactly like the discovery daily page.
     /// Empty = no replacement left (the button hides).
     @Published private(set) var dailySpares: [MusicSong] = []
-    /// The day key the current daily list was loaded under
-    /// (b49fix4 P2-31): replaceDailySong saves under THIS key,
-    /// not a fresh Date() — an app open across midnight would
-    /// otherwise write yesterday's list under today's key.
-    /// Set by the publish overload of reload(); empty until the
-    /// first reload (the fallback then is today's key, as before).
+    /// The day key the current daily list was loaded under.
+    /// replaceDailySong used to save under THIS key (b49fix4
+    /// P2-31) — but the key goes stale across midnight: a
+    /// replace after midnight saved under yesterday's key and
+    /// the next load dropped it (validatedDailyTracks only
+    /// accepts today's key), so the replacement was lost
+    /// (b49fix10 P2-3). The save now takes a fresh key at save
+    /// time and updates this to match, so it always names the
+    /// key the list on disk actually lives under. Set by the
+    /// publish overload of reload(); empty until the first
+    /// reload (the fallback then is today's key, as before).
     private var dailyDayKey = ""
     /// The full recent list (up to MusicLibraryStore.maxRecent).
     /// Feeds the 继续听 resume queue (the resume song first,
@@ -326,6 +331,22 @@ final class HomeViewModel: ObservableObject {
     /// `forceLiveRecheck` (pull-to-refresh) bypasses the 120 s
     /// live-status throttle once — a refresh the throttle used
     /// to swallow silently now really re-checks.
+    /// Whether this reload may publish its daily list
+    /// (b49fix10 P2-3): the day can roll over between the
+    /// background read and the main-thread publish (a reload
+    /// that starts at 23:59:59 publishes after 00:00:00), and
+    /// the daily result was computed under the start key — so
+    /// publishing it would stamp yesterday's list as today's
+    /// and set dailyDayKey back a day. The decision is pure so
+    /// XCTest can pin it: same key publishes, a rolled-over
+    /// day skips the daily part of the round (the non-daily
+    /// sections still publish, so the first-frame loading state
+    /// still ends) and the next reload recomputes under
+    /// today's key.
+    nonisolated static func shouldPublishDaily(startDayKey: String, publishDayKey: String) -> Bool {
+        startDayKey == publishDayKey
+    }
+
     func reload(forceLiveRecheck: Bool = false) {
         // Every reload — local or appearance — resets the
         // coalescing clock here, synchronously, so a second
@@ -355,6 +376,31 @@ final class HomeViewModel: ObservableObject {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self,
                       generation == self.backgroundReloadGeneration else { return }
+                // b49fix10 P2-3: the day rolled over mid-reload
+                // (see shouldPublishDaily) — the daily result
+                // below was computed under yesterday's key, so
+                // skip the daily part of THIS round: publish the
+                // non-daily sections with the daily list exactly
+                // as it is (dayKey "" leaves dailyDayKey
+                // untouched) and write nothing to disk. The next
+                // reload recomputes under today's key. On a first
+                // load this leaves the daily section empty for one
+                // round — honest, and the loading state still
+                // ends — instead of stamping yesterday's list as
+                // today's.
+                if !Self.shouldPublishDaily(startDayKey: dayKey, publishDayKey: musicDayKey(of: Date())) {
+                    self.reload(
+                        videoHistory: videoHistory,
+                        recent: recent,
+                        listenLog: listenLog,
+                        resumeMap: resumeMap,
+                        follows: follows,
+                        liveHistory: liveHistory,
+                        dailyPicks: allDailyPicks,
+                        dailySpares: dailySpares,
+                        dayKey: "")
+                    return
+                }
                 // b49fix5 P2-4: the save happens here, on the main
                 // thread under the generation guard — never in the
                 // background block (the old code saved there
@@ -408,11 +454,13 @@ final class HomeViewModel: ObservableObject {
                 // and cannot revive through this path.
                 // b49fix8 P2-1: the CAS only compares the DISK
                 // list — a dislike recorded after the background
-                // load read fmDislikedIds (FM 不喜欢, a
-                // spares-empty replaceDailySong, or a midnight
-                // dayKey slip writing under yesterday's key) is
-                // NOT in the comparison, so a CAS success would
-                // still publish the disliked song for one round.
+                // load read fmDislikedIds (FM 不喜欢 or a
+                // spares-empty replaceDailySong) is NOT in the
+                // comparison, so a CAS success would still publish
+                // the disliked song for one round. (The third case
+                // the old comment listed — a midnight dayKey slip
+                // writing under yesterday's key — is closed by
+                // b49fix10 P2-3: replace takes a fresh key now.)
                 // Re-filter at publish time with the ids as of
                 // now, on EVERY path (CAS success, CAS refuse,
                 // and no save at all) — the filter is idempotent,
@@ -485,9 +533,12 @@ final class HomeViewModel: ObservableObject {
     /// reload() with the inputs supplied (same composition, no
     /// disk reads) so tests can drive it with fixture data.
     /// `dayKey` is the day the daily list was loaded under —
-    /// the background reload passes the same key it ranked with,
-    /// so replaceDailySong saves under it (P2-31); tests that
-    /// omit it leave dailyDayKey untouched (fallback: today).
+    /// the background reload passes the same key it ranked
+    /// with; tests that omit it leave dailyDayKey untouched
+    /// (fallback: today). replaceDailySong no longer relies on
+    /// this key — it takes a fresh key at save time (b49fix10
+    /// P2-3), so a midnight crossing cannot strand a replace
+    /// under yesterday's key.
     func reload(
         videoHistory: [VideoHistoryEntry],
         recent: [MusicSong],
@@ -1047,17 +1098,24 @@ final class HomeViewModel: ObservableObject {
     /// never disagree. b49fix4 P2-31: the dislike is recorded
     /// BEFORE the spares-empty guard (the old order silently
     /// dropped the dislike when the spares ran out at that
-    /// instant), and the save uses the reload's dayKey
-    /// (dailyDayKey) and the full 40 (picks + spares) — saving
-    /// only the 20 picks shrank the cache back to 20 and lost
-    /// the spares.
+    /// instant), and the save writes the full 40 (picks +
+    /// spares) — saving only the 20 picks shrank the cache back
+    /// to 20 and lost the spares. b49fix10 P2-3: the save takes
+    /// a FRESH day key at save time, not the cached dailyDayKey
+    /// — the cached key goes stale across midnight, and saving
+    /// under yesterday's key lost the replacement (the next
+    /// load only accepts today's key). The list on screen
+    /// (yesterday's ranking with the user's replacement) becomes
+    /// today's cached list; a force refresh recomputes it from
+    /// today's pool.
     func replaceDailySong(_ song: MusicSong) {
         guard let index = allDailyPicks.firstIndex(where: { $0.identityKey == song.identityKey }) else { return }
         MusicLibraryStore.addFMDisliked(key: song.identityKey)
         guard !dailySpares.isEmpty else { return }
         allDailyPicks[index] = dailySpares.removeFirst()
         daily = Array(allDailyPicks.prefix(Self.sectionLimit))
-        let key = dailyDayKey.isEmpty ? musicDayKey(of: Date()) : dailyDayKey
+        let key = musicDayKey(of: Date())
+        dailyDayKey = key
         MusicLibraryStore.saveDailyTracks(allDailyPicks + dailySpares, for: key)
     }
 

@@ -189,12 +189,20 @@ final class MusicDiscoveryViewModel: ObservableObject {
     /// when the spares ran out at that instant), and the save
     /// writes the full 40 (picks + spares) — saving only the
     /// picks shrank the cache back to 20 and lost the spares.
+    /// b49fix10 P2-3: same midnight staleness as Home's
+    /// replaceDailySong — the save takes a FRESH day key at
+    /// save time, not the cached dailyDayKey (only refreshed
+    /// by init / reloadDaily), or a replace after midnight
+    /// saved under yesterday's key and the next load dropped
+    /// it. The cached key is updated to match.
     func replaceDailySong(_ song: MusicSong) {
         guard let index = dailyTracks.firstIndex(where: { $0.identityKey == song.identityKey }) else { return }
         MusicLibraryStore.addFMDisliked(key: song.identityKey)
         guard !dailySpares.isEmpty else { return }
         dailyTracks[index] = dailySpares.removeFirst()
-        MusicLibraryStore.saveDailyTracks(dailyTracks + dailySpares, for: dailyDayKey)
+        let key = musicDayKey(of: Date())
+        dailyDayKey = key
+        MusicLibraryStore.saveDailyTracks(dailyTracks + dailySpares, for: key)
     }
 
     // MARK: - Explore (b45-b, Coda §3.9)
