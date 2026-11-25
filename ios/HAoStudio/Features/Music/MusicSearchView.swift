@@ -39,9 +39,9 @@ struct MusicSearchView: View {
                 // margin (pushed page) — the brief's 20→24 is NOT
                 // applied to this line alone: the page's inner
                 // sections are all built on 20, and changing only
-                // the outer padding would misalign them (same call
-                // as the Live lane's search page, which kept 24).
-                // The search-page margin question goes to sweep 6.
+                // the outer padding would misalign them. Sweep 6
+                // ruled the same way (search pages 20, EmbyTabView
+                // excepted at 24 as a tab root).
                 .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.top, 8)
             suggestionChips
@@ -98,7 +98,15 @@ struct MusicSearchView: View {
         .padding(.leading, 16)
         .padding(.trailing, query.isEmpty ? 16 : 4)
         .frame(minHeight: HaoLayout.searchFieldHeight)
+        // b49fix4 P2-4: the input keeps surfaceStrong (a real
+        // editable field reads stronger than a tappable entry,
+        // which is surface) — the hairline is the shared entry
+        // grammar, so it gets one like every other entry.
         .background(theme.surfaceStrong, in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous)
+                .strokeBorder(theme.hairline, lineWidth: 0.5)
+        }
     }
 
     // MARK: - Suggestion / hot-word chips (Coda §5.3)
@@ -546,7 +554,9 @@ struct MusicSearchView: View {
                 Button("加载更多失败，点击重试") {
                     searchVM.retrySongsPage()
                 }
-                .font(.haoFootnote)
+                // b49fix4 P2-6: inline text retries are 13 medium
+                // site-wide (was 13 regular here).
+                .font(.haoFootnoteMedium)
                 .foregroundStyle(theme.accentText)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .listRowBackground(theme.scaffoldBackground)
@@ -581,7 +591,11 @@ struct MusicSearchView: View {
                 MusicEmptyState(icon: "wifi.exclamationmark", title: "加载失败", note: "检查网络后重试。", onRetry: { searchVM.retryCategory(.artists) })
                     .frame(minHeight: 300)
             } else if searchVM.artists.isEmpty {
-                MusicEmptyState(icon: "magnifyingglass", title: "没有找到相关结果", note: "换个关键词试试。")
+                // b49fix4 P1-3 (backstop): this branch used to be a
+                // dead end — a tab switched to while its kind was
+                // still in flight under 综合 landed here with no
+                // retry. The retry re-issues the kind's first page.
+                MusicEmptyState(icon: "magnifyingglass", title: "没有找到相关结果", note: "换个关键词试试。", onRetry: { searchVM.retryCategory(.artists) })
                     .frame(minHeight: 300)
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 16)], spacing: 24) {
@@ -611,7 +625,10 @@ struct MusicSearchView: View {
                 MusicEmptyState(icon: "wifi.exclamationmark", title: "加载失败", note: "检查网络后重试。", onRetry: { searchVM.retryCategory(.albums) })
                     .frame(minHeight: 300)
             } else if searchVM.albums.isEmpty {
-                MusicEmptyState(icon: "magnifyingglass", title: "没有找到相关结果", note: "换个关键词试试。")
+                // b49fix4 P1-3 (backstop): same dead end as the
+                // artists grid — the retry re-issues the kind's
+                // first page.
+                MusicEmptyState(icon: "magnifyingglass", title: "没有找到相关结果", note: "换个关键词试试。", onRetry: { searchVM.retryCategory(.albums) })
                     .frame(minHeight: 300)
             } else {
                 // b49fix2 B14: the adaptive minimum must be the card
@@ -645,7 +662,10 @@ struct MusicSearchView: View {
                 MusicEmptyState(icon: "wifi.exclamationmark", title: "加载失败", note: "检查网络后重试。", onRetry: { searchVM.retryCategory(.playlists) })
                     .frame(minHeight: 300)
             } else if searchVM.playlists.isEmpty {
-                MusicEmptyState(icon: "magnifyingglass", title: "没有找到相关结果", note: "换个关键词试试。")
+                // b49fix4 P1-3 (backstop): same dead end as the
+                // artists grid — the retry re-issues the kind's
+                // first page.
+                MusicEmptyState(icon: "magnifyingglass", title: "没有找到相关结果", note: "换个关键词试试。", onRetry: { searchVM.retryCategory(.playlists) })
                     .frame(minHeight: 300)
             } else {
                 // b49fix2 B14: same as albumsGrid — the minimum must
@@ -685,7 +705,9 @@ struct MusicSearchView: View {
             Button("加载失败，点击重试") {
                 searchVM.retryCategory(kind)
             }
-            .font(.haoFootnote)
+            // b49fix4 P2-6: inline text retries are 13 medium
+            // site-wide (was 13 regular here).
+            .font(.haoFootnoteMedium)
             .foregroundStyle(theme.accentText)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.vertical, 16)
@@ -697,8 +719,10 @@ struct MusicSearchView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if !searchVM.history.isEmpty {
                     HStack {
+                        // b49fix4 P2-5: 20 semibold, like the
+                        // video / live history titles (was 17).
                         Text("搜索历史")
-                            .font(.haoBodyStrong)
+                            .font(.haoSectionTitle)
                             .foregroundStyle(theme.textPrimary)
                         Spacer()
                         Button("清除") { showClearHistoryConfirm = true }
@@ -753,7 +777,9 @@ struct MusicSearchView: View {
                         icon: "magnifyingglass", title: "搜你想听的歌",
                         note: "默认搜索全部平台，网易云和 QQ 的结果排在前面。"
                     )
-                    .padding(.top, 40)
+                    // b49fix4 P2-19: empty-state top offset 0
+                    // site-wide (was 40 here) — the container
+                    // spacing decides, not the state itself.
                 }
             }
         }

@@ -151,7 +151,10 @@ struct MusicHomeView: View {
 
     /// The search box lives in the page (Coda §5.4): a tappable
     /// field look that opens the search page. No dead entry — it
-    /// always navigates.
+    /// always navigates. b49fix4 P1-1/P2-4: the placeholder is
+    /// textSecondary (textMuted on this fill failed AA in dark
+    /// mode + light wallpaper) and the fill is theme.surface +
+    /// hairline — the same entry grammar as recommendEntry below.
     private var searchEntry: some View {
         Button(action: { path.append(.search) }) {
             HStack(spacing: 8) {
@@ -159,12 +162,16 @@ struct MusicHomeView: View {
                     .foregroundStyle(theme.textSecondary)
                 Text("搜索歌曲、歌手、专辑、歌单")
                     .font(.haoSubhead)
-                    .foregroundStyle(theme.textMuted)
+                    .foregroundStyle(theme.textSecondary)
                 Spacer()
             }
             .padding(.horizontal, 16)
             .frame(height: HaoLayout.searchFieldHeight)
-            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
+            .background(theme.surface, in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous)
+                    .strokeBorder(theme.hairline, lineWidth: 0.5)
+            }
         }
         .buttonStyle(.plain)
         .accessibilityLabel("搜索")

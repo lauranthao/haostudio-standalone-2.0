@@ -662,7 +662,7 @@ struct MusicPlayerView: View {
                 .frame(maxWidth: .infinity)
                 .chromeFade(hidden: chromeHidden)
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, HaoLayout.playerHorizontalMargin)
         // b47-player: the root is full-screen now (see body), so
         // the content is kept inside the safe area here — the
         // layout is pixel-identical to the old safe-sized root,
@@ -697,14 +697,14 @@ struct MusicPlayerView: View {
             Button("重试") {
                 playerVM.retryCurrentSong()
             }
+            // b49fix4 P2-6: the standard retry capsule (15 semibold,
+            // 24/12, filled accent) — the old outline button
+            // (14/6, strokeBorder) was a fourth retry system.
             .font(.haoSubheadStrong)
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .overlay {
-                RoundedRectangle(cornerRadius: HaoLayout.cornerSmall, style: .continuous)
-                    .strokeBorder(.white.opacity(0.35), lineWidth: 0.5)
-            }
+            .foregroundStyle(theme.onAccent)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
+            .background(theme.accent, in: Capsule())
             .buttonStyle(.plain)
             .accessibilityLabel("重试播放")
         }
@@ -756,13 +756,15 @@ struct MusicPlayerView: View {
             }
             .frame(maxWidth: .infinity)
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, HaoLayout.playerHorizontalMargin)
         // b47-player: the root is full-screen now (see body), so
-        // the 12pt vertical padding is measured from the SAFE
-        // edges, not the screen edges — the landscape column sits
-        // exactly where it sat under the old safe-sized root.
-        .padding(.top, 12 + geo.safeAreaInsets.top)
-        .padding(.bottom, 12 + geo.safeAreaInsets.bottom)
+        // the vertical padding is measured from the SAFE edges,
+        // not the screen edges — the landscape column sits exactly
+        // where it sat under the old safe-sized root. b49fix4
+        // P1-9: 12 → landscapeVerticalPadding (8) — the honest
+        // 303 right-column budget needs the slack back.
+        .padding(.top, MusicPlayerLayout.landscapeVerticalPadding + geo.safeAreaInsets.top)
+        .padding(.bottom, MusicPlayerLayout.landscapeVerticalPadding + geo.safeAreaInsets.bottom)
         .frame(width: contentWidth(geo: geo))
     }
 
@@ -917,7 +919,12 @@ struct MusicPlayerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.top, 2)
-        .frame(height: 40)
+        // b49fix4 P1-9: the frame fits its content — with the sleep
+        // pill showing the stack is 46pt tall (grabber 17 + gap 4
+        // + pill 23 + top 2), so a fixed 40 spilled 6pt into the
+        // gap below. 48 when the pill shows, 40 otherwise; the
+        // landscape budget (MusicPlayerLayout) counts the 48.
+        .frame(height: playerVM.sleepActive ? 48 : 40)
     }
 
     // MARK: - Cover / lyrics
@@ -926,6 +933,16 @@ struct MusicPlayerView: View {
         Group {
             if playerVM.showLyrics {
                 lyricsArea(height: size)
+                    // b49fix4 P1-9: pin the lyrics list to the slot
+                    // height. Unframed, the ScrollView takes the
+                    // whole stack proposal and the landscape column
+                    // fills the screen exactly (zero slack — any
+                    // future row growth clips it). Framed to the
+                    // cover height, lyrics mode has the same
+                    // geometry — and the same slack — as cover
+                    // mode. Portrait never reaches this branch
+                    // (lyricsModeColumn owns lyrics there).
+                    .frame(height: size)
             } else {
                 coverArea(size: size)
             }
@@ -1497,9 +1514,11 @@ struct MusicPlayerView: View {
     /// the times, no wasted row for the badge. The old own-row
     /// badge (b46-player) left a full row between the bar and the
     /// times and pushed the chrome budget up 30pt. In landscape
-    /// the right column has no room for a badge in the row (5pt
-    /// of slack on the shortest landscape phone), so the badge
-    /// stays overlaid on the bar there.
+    /// the right column has no room for a badge in the row (1pt
+    /// of slack on the shortest landscape phone with the sleep
+    /// pill showing, 9pt otherwise — b49fix4 P1-9 measured the
+    /// real 295/303 budget), so the badge stays overlaid on the
+    /// bar there.
     private func progressSection(isLandscape: Bool) -> some View {
         VStack(spacing: 6) {
             thinProgressBar(badgeOverlay: isLandscape)
@@ -1845,14 +1864,17 @@ struct MusicPlayerView: View {
                             Text("播放模式")
                             Spacer()
                             Text(playerVM.playMode.label)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(theme.textSecondary)
                         }
                     }
                     Menu {
                         ForEach([0.6, 0.8, 1.0, 1.25, 1.5, 2.0], id: \.self) { speed in
                             Button(action: { playerVM.setSpeed(speed) }) {
                                 HStack {
-                                    Text(String(format: "%.2fx", speed).replacingOccurrences(of: ".00", with: ".0"))
+                                    // b49fix4 P2-14: one format (%.1fx) —
+                                    // the old %.2fx + ".00"→".0" patch
+                                    // was a handmade duplicate of it.
+                                    Text(String(format: "%.1fx", speed))
                                     if speed == playerVM.playbackSpeed {
                                         Image(systemName: "checkmark")
                                     }
@@ -1864,7 +1886,7 @@ struct MusicPlayerView: View {
                             Text("倍速")
                             Spacer()
                             Text(String(format: "%.1fx", playerVM.playbackSpeed))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(theme.textSecondary)
                         }
                     }
                     Button {
@@ -1875,7 +1897,7 @@ struct MusicPlayerView: View {
                             Text("睡眠定时")
                             Spacer()
                             Text(playerVM.sleepActive ? playerVM.sleepRemainingText : "未设置")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(theme.textSecondary)
                         }
                     }
                 }
@@ -1921,7 +1943,7 @@ struct MusicPlayerView: View {
                             Text("歌词来源")
                             Spacer()
                             Text(lyricSourceLabel)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(theme.textSecondary)
                         }
                     }
                     Button("重新加载歌词") {
@@ -1931,7 +1953,7 @@ struct MusicPlayerView: View {
                         Text("歌词偏移")
                         Spacer()
                         Text(MusicLyrics.offsetLabel(playerVM.lyricOffsetMs))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(theme.textSecondary)
                     }
                     Slider(
                         value: Binding(
@@ -1942,19 +1964,46 @@ struct MusicPlayerView: View {
                     )
                     // b45-a (Coda §2.8): ±0.2 s quick steps + reset.
                     // The Slider stays; these are the quick path.
+                    // b49fix4 P2-15: capsules, not .bordered — the
+                    // same small-capsule grammar as the search
+                    // suggestion chips (12/7, hairline stroke).
                     HStack(spacing: 12) {
                         Button("−0.2s") {
                             playerVM.adjustLyricOffset(byMs: -200)
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.plain)
+                        .font(.haoFootnoteStrong)
+                        .foregroundStyle(theme.textPrimary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .overlay {
+                            Capsule()
+                                .strokeBorder(theme.hairline, lineWidth: 0.5)
+                        }
                         Button("+0.2s") {
                             playerVM.adjustLyricOffset(byMs: 200)
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.plain)
+                        .font(.haoFootnoteStrong)
+                        .foregroundStyle(theme.textPrimary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .overlay {
+                            Capsule()
+                                .strokeBorder(theme.hairline, lineWidth: 0.5)
+                        }
                         Button("还原") {
                             playerVM.resetLyricOffset()
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.plain)
+                        .font(.haoFootnoteStrong)
+                        .foregroundStyle(theme.textPrimary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .overlay {
+                            Capsule()
+                                .strokeBorder(theme.hairline, lineWidth: 0.5)
+                        }
                         Spacer()
                     }
                     // E5: translation switch, same section as the
@@ -1976,6 +2025,9 @@ struct MusicPlayerView: View {
                 }
             }
         }
+        // b49fix4 P1-12: the sheet's switches had no tint, so ON
+        // was system green — the theme accent owns every toggle.
+        .tint(theme.accent)
     }
 }
 
@@ -2108,7 +2160,11 @@ struct MusicOutputDeviceButton: View {
                         .font(.haoFootnote)
                         .foregroundStyle(.secondary)
                 }
-                .padding()
+                // b49fix4 P2-22: sheet standard (horizontal 24,
+                // top 16) — the old bare .padding() was 16 all
+                // round, one rung under the sheet token.
+                .padding(.horizontal, HaoLayout.sheetHorizontalPadding)
+                .padding(.vertical, HaoLayout.sheetTopPadding)
                 .navigationTitle("选择输出设备")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -2160,7 +2216,9 @@ private extension View {
 /// code read.
 enum MusicPlayerLayout {
     /// Horizontal side padding of the player stack (24pt each side).
-    static let sidePadding: CGFloat = 24
+    /// b49fix4 P2-16: one value, not two — this references the
+    /// token instead of restating 24 (HaoLayout.playerHorizontalMargin).
+    static let sidePadding: CGFloat = HaoLayout.playerHorizontalMargin
     /// Fixed chrome below the cover slot. b47-player: the quality
     /// badge moved out of its own row into the time row (bar → time
     /// row with the badge centred in it), so the honest budget
@@ -2223,11 +2281,23 @@ enum MusicPlayerLayout {
 
     // MARK: - Landscape (two columns; build 36)
 
-    /// Right column height in landscape (b45-a: top bar 40 + title
-    /// 46 + progress 49 + transport 82 + toolbar 50 + the tighter
-    /// 6–8pt landscape gaps ≈ 291). The left column is the cover
-    /// alone now (the badge moved onto the progress bar).
-    static let landscapeRightColumnHeight: CGFloat = 291
+    /// Right column height in landscape — the MEASURED row sum,
+    /// not a round number (b49fix4 P1-9: the old 291 claimed title
+    /// 46, but the title row is two 20pt lines + 2 spacing = 50,
+    /// so the real base is 295; with the sleep pill showing the
+    /// top bar is 48, so the worst case is 303). Base: top bar 40
+    /// + gap 8 + title 50 + gap 8 + progress 49 + gap 4 +
+    /// transport 82 + toolbar 50 + bottom 4 = 295. Worst case
+    /// (sleep pill showing): 295 + 8 = 303. The fits check uses
+    /// the worst case, so the shortest landscape phone (SE 1st
+    /// gen, 320pt) keeps 1pt of slack even with the pill showing.
+    static let landscapeRightColumnHeight: CGFloat = 303
+    /// Vertical body padding in landscape (top + bottom, each).
+    /// b49fix4 P1-9: 12 → 8 — the old 12 left the shortest phone
+    /// at 1pt of slack on the WRONG budget (291); with the honest
+    /// 303 budget the 12 would overflow it, so the padding gives
+    /// the slack back (303 + 16 = 319 ≤ 320).
+    static let landscapeVerticalPadding: CGFloat = 8
     /// Badge height + its top gap in the left column (build 36).
     /// Kept for the fits check: the badge no longer lives in the
     /// left column, so the term now stands for the left column's
@@ -2249,11 +2319,14 @@ enum MusicPlayerLayout {
     /// The landscape player fits on one screen iff the left column
     /// (cover + badge) and the right column (all controls) both fit
     /// the safe height. Safe sizes are the screen minus the
-    /// safe-area insets (notch sides + home indicator).
+    /// safe-area insets (notch sides + home indicator). The cover
+    /// check's +12 is the left column's slack term, not the body
+    /// padding (the body padding is landscapeVerticalPadding,
+    /// counted ×2 in the right-column check).
     static func landscapeFitsOneScreen(safeWidth: CGFloat, safeHeight: CGFloat) -> Bool {
         landscapeCoverSize(safeWidth: safeWidth, safeHeight: safeHeight)
             + landscapeBadgeHeight + 12 <= safeHeight
-            && landscapeRightColumnHeight + 24 <= safeHeight
+            && landscapeRightColumnHeight + 2 * landscapeVerticalPadding <= safeHeight
     }
 }
 

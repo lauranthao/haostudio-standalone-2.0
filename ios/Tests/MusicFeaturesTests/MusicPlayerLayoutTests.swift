@@ -89,6 +89,20 @@ final class MusicPlayerLayoutTests: XCTestCase {
         XCTAssertEqual(MusicPlayerLayout.landscapeCoverSize(safeWidth: 667, safeHeight: 375), 279)
     }
 
+    func testLandscapeRightColumnBudgetIsMeasured() {
+        // b49fix4 P1-9: the right-column budget is the measured
+        // worst case, not the old 291 — topBar 40 + gap 8 +
+        // titleRow 50 (two 20pt lines + 2 spacing) + gap 8 +
+        // progressSection 49 + gap 4 + transportRow 82 +
+        // toolbarRow 50 + bottom 4 = 295, plus 8 for the sleep
+        // pill (its 46pt content spills 6pt out of the 40pt
+        // topBar when active) = 303. The vertical padding is 8,
+        // so the SE 1st gen (568x320, no insets) fits at
+        // 303 + 16 = 319, 1pt of slack.
+        XCTAssertEqual(MusicPlayerLayout.landscapeRightColumnHeight, 303)
+        XCTAssertEqual(MusicPlayerLayout.landscapeVerticalPadding, 8)
+    }
+
     func testLandscapePlayerFitsOneScreen() {
         // Build 35 left the landscape player overflowing (the
         // portrait column cannot fit ~390pt of height). Both

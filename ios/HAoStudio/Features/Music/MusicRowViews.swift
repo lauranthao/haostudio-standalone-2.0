@@ -301,68 +301,10 @@ struct MusicUnplayableTag: View {
     }
 }
 
-/// Coda CoverCard: 178×178, r8 (cornerSmall) + 0.5pt primary 0.08
-/// stroke, cover→text 8, title→subtitle 4, title cardTitle max 2
-/// lines, subtitle secondary max 1 line. Play-count badge overlays
-/// the cover's top-trailing corner (8pt margin).
-struct MusicCoverCard: View {
-    var coverURL: String
-    var title: String
-    var subtitle: String
-    var playCount: Int? = nil
-    var isVIP: Bool = false
-    var size: CGFloat = 178
-    var onTap: (() -> Void)? = nil
-
-    @Environment(\.haoTheme) private var theme
-
-    var body: some View {
-        // b48: same rule as MusicCoverCardBody — no disabled Button
-        // (it renders dimmed, i.e. a grey veil over the cover).
-        // The Button exists only when there is an action.
-        Group {
-            if let onTap = onTap {
-                Button(action: onTap) { cardContent }
-                    .buttonStyle(.plain)
-            } else {
-                cardContent
-            }
-        }
-    }
-
-    private var cardContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            MusicCoverView(urlString: coverURL, size: size, cornerRadius: HaoLayout.cornerSmall)
-                .overlay {
-                    RoundedRectangle(cornerRadius: HaoLayout.cornerSmall, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
-                }
-                .overlay(alignment: .topTrailing) {
-                    if let playCount = playCount, playCount > 0 {
-                        MusicPlayCountBadge(count: playCount)
-                            .padding(8)
-                    }
-                }
-                .overlay(alignment: .topLeading) {
-                    if isVIP {
-                        MusicVIPBadge()
-                            .padding(8)
-                    }
-                }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title.isEmpty ? "未知" : title)
-                    .font(.haoBodyStrong)
-                    .foregroundStyle(theme.textPrimary)
-                    .lineLimit(2)
-                Text(subtitle)
-                    .font(.haoFootnote)
-                    .foregroundStyle(theme.textSecondary)
-                    .lineLimit(1)
-            }
-        }
-        .frame(width: size, alignment: .leading)
-    }
-}
+// b49fix4 P2-17: MusicCoverCard (r8, Coda CoverCard) was deleted
+// here — it had zero callers repo-wide (verified by grep);
+// MusicCoverCardBody below is the only cover-card renderer
+// in the app.
 
 /// Coda CoverCardBody (home / grid variant): r22 (cornerXXLarge)
 /// cover, title body strong max 2 lines, subtitle footnote 13

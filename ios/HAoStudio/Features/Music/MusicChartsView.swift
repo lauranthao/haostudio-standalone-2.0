@@ -210,7 +210,12 @@ struct MusicChartsView: View {
                 if !chart.desc.isEmpty {
                     Text(chart.desc)
                         .font(.haoCaption)
-                        .foregroundStyle(theme.textMuted)
+                        // b49fix4 P1-1: textSecondary, not muted —
+                        // the card is a translucent fill and muted
+                        // 12pt on it failed AA in dark mode + light
+                        // wallpaper (same class as the search-entry
+                        // placeholder). The name above already is.
+                        .foregroundStyle(theme.textSecondary)
                         .lineLimit(1)
                 }
                 if let tracks = viewModel.topTracks[chart.id] {
@@ -224,7 +229,9 @@ struct MusicChartsView: View {
                     Button("加载失败，点击重试") {
                         viewModel.retryTopTracks(chart: chart)
                     }
-                    .font(.haoCaption)
+                    // b49fix4 P2-6: inline text retries are 13
+                    // medium site-wide (was 12 regular here).
+                    .font(.haoFootnoteMedium)
                     .foregroundStyle(theme.accentText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 4)
