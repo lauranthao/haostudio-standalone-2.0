@@ -49,6 +49,14 @@ struct EmbyConfigView: View {
                 }
             }
             Section {
+                Toggle("上报播放进度", isOn: $viewModel.reportProgress)
+                    .tint(theme.accent)
+            } header: {
+                Text("播放进度")
+            } footer: {
+                Text("看片时每 15 秒向你的 Emby 服务器上报一次播放进度，用于继续观看。关闭后服务器不再记录你的播放进度。")
+            }
+            Section {
                 DisclosureGroup("高级选项") {
                     SecureField("API key", text: $viewModel.apiKey)
                         .textInputAutocapitalization(.never)

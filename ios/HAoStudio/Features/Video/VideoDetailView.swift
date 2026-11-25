@@ -25,6 +25,13 @@ import SwiftUI
 final class VideoDetailViewModel: ObservableObject {
     @Published private(set) var detail: VideoDetail?
     @Published private(set) var isLoading = true
+    /// Whether the last detail fetch failed (b49fix4 P2-40):
+    /// the gateway completes with nil only on failure — a
+    /// successful fetch with no lines yields a non-nil detail
+    /// with empty lines. The pinned retry shows only on a real
+    /// failure; a successful empty load is an honest empty state
+    /// with no retry that could never succeed.
+    @Published private(set) var loadFailed = false
     @Published private(set) var isFavourite = false
     @Published private(set) var resume: ResumeInfo?
     /// Whether this title has any watch history (S7 wiring: the
@@ -152,6 +159,7 @@ final class VideoDetailViewModel: ObservableObject {
     /// cannot leave a stale successful detail on screen.
     func load() {
         isLoading = true
+        loadFailed = false
         detail = nil
         downloadCheckKey = nil
         downloadAvailable = nil
@@ -163,6 +171,7 @@ final class VideoDetailViewModel: ObservableObject {
             guard let self = self else { return }
             self.isLoading = false
             self.detail = loaded
+            self.loadFailed = loaded == nil
             let entry = VideoLibraryStore.historyEntry(title: self.item.title, year: self.item.year)
             self.isWatched = entry != nil
             // sweep-4 P1-23: apply the resume selection only on
@@ -449,12 +458,14 @@ struct VideoDetailContentView: View {
                     } else if !viewModel.isLoading {
                         MusicEmptyState(
                             icon: "film",
-                            title: viewModel.source == .emby ? "暂无可播内容" : "暂无可播剧集",
+                            title: viewModel.loadFailed ? "详情加载失败" : (viewModel.source == .emby ? "暂无可播内容" : "暂无可播剧集"),
                             note: viewModel.source == .emby
                                 ? "Emby 没有返回这部影片的播放地址，检查服务器连接后重试。"
-                                : viewModel.altSources.isEmpty && !viewModel.altSourcesLoading
-                                    ? "该片源没有返回播放线路，其他片源也没有这部影片。"
-                                    : "该片源没有返回播放线路，换个片源试试。"
+                                : viewModel.loadFailed
+                                    ? "详情加载失败，请检查网络后重试。"
+                                    : viewModel.altSources.isEmpty && !viewModel.altSourcesLoading
+                                        ? "该片源没有返回播放线路，其他片源也没有这部影片。"
+                                        : "该片源没有返回播放线路，换个片源试试。"
                         )
                         // A failed detail fetch used to leave this
                         // state with no way back except leaving the
@@ -515,6 +526,7 @@ struct VideoDetailContentView: View {
                 }
                 .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.top, 16)
+                .modifier(DetailBottomChromePadding(showRetry: showRetryButton))
             }
         }
         .safeAreaInset(edge: .bottom) {
@@ -523,8 +535,8 @@ struct VideoDetailContentView: View {
             // scroll to be found. Hidden while loading and once
             // lines arrive. sweep-5 P1-26: the clearance rides
             // INSIDE this inset (bottomChromeClearance below) —
-            // the inset and the scroll view's haoBottomChromePadding
-            // used to both own the bottom space.
+            // while the button shows, the scroll content carries
+            // no clearance of its own, so the two never stack.
             if showRetryButton {
                 retryButton
                     .padding(.horizontal, HaoLayout.pushedPageMargin)
@@ -532,7 +544,6 @@ struct VideoDetailContentView: View {
                     .padding(.bottom, bottomChromeClearance)
             }
         }
-        .modifier(DetailBottomChromePadding(showRetry: showRetryButton))
         .background(theme.scaffoldBackground)
         .navigationTitle(viewModel.item.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -541,10 +552,13 @@ struct VideoDetailContentView: View {
         }
     }
     /// Whether the pinned retry button is showing (sweep-5
-    /// P1-26): the failed-load state only — hidden while loading
-    /// and once lines arrive.
+    /// P1-26, b49fix4 P2-40): the failed-load state only —
+    /// hidden while loading, once lines arrive, and when the
+    /// load succeeded but the source genuinely has nothing
+    /// (a successful empty load must not offer a retry that
+    /// can never succeed).
     private var showRetryButton: Bool {
-        viewModel.lines.isEmpty && !viewModel.isLoading
+        viewModel.loadFailed && !viewModel.isLoading
     }
 
     /// Bottom-chrome clearance for this page, from the same rule
@@ -959,23 +973,27 @@ extension PlayEpisode {
     }
 }
 
-/// Bottom-chrome clearance for the detail page (sweep-5 P1-26):
-/// the pinned retry button's safeAreaInset AND
-/// haoBottomChromePadding BOTH owned the bottom space — the
-/// content's bottom clearance was the chrome clearance PLUS the
-/// button height. Now exactly one mechanism owns it per state:
-/// while the retry button shows, the inset carries the clearance
-/// as bottom padding under the button (see the safeAreaInset
-/// above); while the button is hidden the inset is empty and the
-/// scroll view keeps haoBottomChromePadding. Device check pending
-/// — chen's phone is the judge (未验).
+/// Bottom-chrome clearance for the detail page (sweep-5 P1-26,
+/// b49fix4 P2-41): exactly one mechanism owns it per state.
+/// While the retry button shows, the safeAreaInset carries the
+/// clearance as bottom padding under the button; while the button
+/// is hidden the inset is empty and the clearance lives INSIDE
+/// the scroll content (haoBottomChromeContentPadding). The
+/// non-retry state used to use haoBottomChromePadding
+/// (safeAreaPadding on the ScrollView), but that never reached
+/// the content inside a NavigationStack — the tab roots hit the
+/// same failure on device (build 39: last row half hidden under
+/// the mini) and moved to in-content padding in b40. The detail
+/// page is a pushed page under the same NavigationStack, so it
+/// follows the same rule. Last-row scroll-out still needs chen's
+/// phone to confirm (未验).
 private struct DetailBottomChromePadding: ViewModifier {
     var showRetry: Bool
     func body(content: Content) -> some View {
         if showRetry {
             content
         } else {
-            content.haoBottomChromePadding()
+            content.haoBottomChromeContentPadding()
         }
     }
 }
