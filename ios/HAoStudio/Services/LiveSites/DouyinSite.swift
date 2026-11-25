@@ -580,6 +580,20 @@ final class DouyinLiveSite: LiveSiteResolver {
     /// In-flight room-detail loads, keyed by trimmed room id
     /// (build 36 item 10 leg 4 — see `loadRoomDetail`).
     private var roomDetailInFlight: [String: [(Result<LiveRoom, Error>) -> Void]] = [:]
+    /// One recommend-feed snapshot per session (b49fix2 P2-22):
+    /// the feed endpoint has no paging of its own, so every page
+    /// used to re-fetch the whole feed with identical params and
+    /// slice client-side — the order could shift between pages
+    /// (duplicates/gaps). Pages slice the same snapshot while it
+    /// is fresh (5 min TTL); a later fetch re-reads the feed.
+    /// `recommendFeedInFlight` joins concurrent first-page
+    /// callers onto the one fetch in flight.
+    private var recommendFeedCache: [LiveRoom]?
+    private var recommendFeedFetchedAt: Date?
+    private var recommendFeedInFlight: [([LiveRoom]) -> Void] = []
+    /// The feed snapshot is fresh for one paging session; a
+    /// deliberate refresh after this re-reads the feed.
+    private static let recommendFeedTTLSeconds: TimeInterval = 300
 
     /// Guards the anonymous-cookie cache + in-flight dedup above:
     /// headers are built from URLSession background callbacks and
@@ -1135,10 +1149,28 @@ extension DouyinLiveSite {
 
     /// Recommended rooms (Dart `getRecommendRooms`): the
     /// anonymous webcast feed, sliced client-side. A feed failure
-    /// returns an empty list rather than fake rooms.
+    /// returns an empty list rather than fake rooms. The whole
+    /// feed is fetched once per session and every page slices the
+    /// same snapshot (b49fix2 P2-22) — re-fetching per page let
+    /// the order shift between pages (duplicates/gaps).
     func recommendRooms(page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
         let size = max(1, pageSize)
         let currentPage = max(1, page)
+        if let cached = locked({ recommendFeedCache }),
+           let fetchedAt = locked({ recommendFeedFetchedAt }),
+           Date().timeIntervalSince(fetchedAt) < DouyinLiveSite.recommendFeedTTLSeconds {
+            completion(DouyinLiveSite.slice(cached, page: currentPage, pageSize: size))
+            return
+        }
+        let alreadyInFlight = locked {
+            recommendFeedInFlight.append { rooms in
+                completion(DouyinLiveSite.slice(rooms, page: currentPage, pageSize: size))
+            }
+            return recommendFeedInFlight.count > 1
+        }
+        if alreadyInFlight {
+            return
+        }
         requestHeaders { [weak self] headers in
             guard let self = self else { return }
             guard let url = LiveListURL.url(base: DouyinLiveSite.feedURL, params: [
@@ -1147,16 +1179,28 @@ extension DouyinLiveSite {
                 ("enter_source", "web_homepage_hot_web_live_card"),
                 ("source_key", "web_homepage_hot_web_live_card")
             ]) else {
-                completion([])
+                self.finishRecommendFeedFetch([])
                 return
             }
             LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
-                guard let rooms = DouyinLiveSite.parseRecommendRooms(json) else {
-                    completion([])
-                    return
-                }
-                completion(DouyinLiveSite.slice(rooms, page: currentPage, pageSize: size))
+                self.finishRecommendFeedFetch(DouyinLiveSite.parseRecommendRooms(json) ?? [])
             }
+        }
+    }
+
+    /// Records the fetched feed snapshot and answers every caller
+    /// that joined the fetch in flight (b49fix2 P2-22). The lock
+    /// is only held for the state touch, never across a completion.
+    private func finishRecommendFeedFetch(_ rooms: [LiveRoom]) {
+        let completions = locked {
+            recommendFeedCache = rooms
+            recommendFeedFetchedAt = Date()
+            let completions = recommendFeedInFlight
+            recommendFeedInFlight = []
+            return completions
+        }
+        for item in completions {
+            item(rooms)
         }
     }
 
@@ -1186,8 +1230,22 @@ extension DouyinLiveSite {
         }
     }
 
+    /// Static fallback (b49fix2 P2-23): the old two-entry list
+    /// (游戏 1,1 / 英雄联盟 2,1) left the tab nearly empty
+    /// whenever the homepage scrape failed. These ids were read
+    /// off the live homepage's `categoryData` blob on 2026-11-25
+    /// (top-level partitions + the 游戏 sub-partitions, in the
+    /// same flattened order `areasFromCategoryData` produces);
+    /// the old ids are superseded — the homepage has since
+    /// renumbered 游戏 to 103,4 and 英雄联盟 to 1010014,1.
     static let fallbackCategories: [(id: String, name: String)] = [
-        ("1,1", "游戏"), ("2,1", "英雄联盟")
+        ("101,4", "聊天"), ("102,4", "音乐"), ("103,4", "游戏"),
+        ("1011032,1", "三角洲行动"), ("1010045,1", "王者荣耀"),
+        ("1010032,1", "和平精英"), ("1010014,1", "英雄联盟"),
+        ("1010017,1", "无畏契约"), ("1010146,1", "QQ飞车端游"),
+        ("1010026,1", "绝地求生"), ("1010042,1", "火影忍者手游"),
+        ("104,4", "二次元"), ("105,4", "舞蹈"), ("106,4", "文化"),
+        ("107,4", "生活"), ("108,4", "运动")
     ]
 
     /// Rooms of one partition (Dart `getCategoryRooms`):
