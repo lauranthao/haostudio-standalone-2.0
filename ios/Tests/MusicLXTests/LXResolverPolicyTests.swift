@@ -162,6 +162,45 @@ final class LXResolverPolicyTests: XCTestCase {
         XCTAssertEqual(cooldown.averageMs("qq"), 300)
     }
 
+    // MARK: - b49fix23 D25-4: clamp the imported stamp to now
+
+    func testClockAheadImportedStampIsClampedToNow() {
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        let (cooldown, _) = makeCooldown(now: t0)
+        cooldown.record("qq", outcome: .success, milliseconds: 300)
+        // The backup's record is stamped 10 minutes in the
+        // future (its device clock was ahead). Clamped to now,
+        // it ties with the live recording, and the tie goes to
+        // memory — the import must not suppress live speeds
+        // until this clock catches up.
+        plantDiskSpeeds(["qq": ResolverSpeedRecord(avg: 100, updatedAtMs: Int(t0.addingTimeInterval(600).timeIntervalSince1970 * 1000))])
+        cooldown.saveNow()
+        XCTAssertEqual(cooldown.averageMs("qq"), 300)
+        // ...and the disk file keeps the live value too.
+        let reloaded = ResolverCooldown(documentsDirectory: docs)
+        XCTAssertEqual(reloaded.averageMs("qq"), 300)
+    }
+
+    // MARK: - b49fix23 D25-5: avg is field-level, not wholesale
+
+    func testNewerImportedRecordWithNilAvgKeepsMemoryAvg() {
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        let (cooldown, _) = makeCooldown(now: t0)
+        cooldown.record("qq", outcome: .success, milliseconds: 300)
+        cooldown.record("qq", outcome: .error, milliseconds: 0)
+        // The backup's record is newer and cleared the failure
+        // streak (fails nil) but never measured a speed (avg
+        // nil) — the live measured avg survives; fails is still
+        // cleared wholesale.
+        plantDiskSpeeds(["qq": ResolverSpeedRecord(avg: nil, fails: nil, updatedAtMs: Int(t0.addingTimeInterval(60).timeIntervalSince1970 * 1000))])
+        cooldown.saveNow()
+        XCTAssertEqual(cooldown.averageMs("qq"), 300)
+        XCTAssertNil(cooldown.fails["qq"])
+        // ...and the disk file keeps the live avg too.
+        let reloaded = ResolverCooldown(documentsDirectory: docs)
+        XCTAssertEqual(reloaded.averageMs("qq"), 300)
+    }
+
     func testRecordStampsUpdatedAt() {
         let t0 = Date(timeIntervalSince1970: 1_790_000_000)
         let (cooldown, _) = makeCooldown(now: t0)
@@ -228,6 +267,30 @@ final class LXResolverPolicyTests: XCTestCase {
         XCTAssertFalse(memory.isFailed(sourceKey: "lx:netease", songId: "111"))
         XCTAssertFalse(memory.isFailed(sourceKey: "lx:qq", songId: "111"))
         XCTAssertTrue(memory.isFailed(sourceKey: "lx:netease", songId: "222"))
+    }
+
+    /// b49fix23 D25-3: a manual clear bumps a synchronous
+    /// per-song generation, so a resolve enqueued BEFORE the
+    /// clear knows the failure memory it is about to read is
+    /// stale. The generation is per song — a clear for another
+    /// song does not move this song's generation.
+    func testFailureMemoryClearGeneration() {
+        let memory = ResolveFailureMemory()
+        memory.record(sourceKey: "lx:netease", songId: "111")
+        XCTAssertEqual(memory.clearGeneration(songId: "111"), 0)
+        // A resolve enqueued now captures generation 0.
+        let captured = memory.clearGeneration(songId: "111")
+        // A manual clear requested while it waits bumps it.
+        memory.bumpClearGeneration(songId: "111")
+        XCTAssertEqual(memory.clearGeneration(songId: "111"), 1)
+        XCTAssertNotEqual(memory.clearGeneration(songId: "111"), captured)
+        // Another song's clear does not move this song.
+        memory.bumpClearGeneration(songId: "222")
+        XCTAssertEqual(memory.clearGeneration(songId: "111"), 1)
+        XCTAssertEqual(memory.clearGeneration(songId: "222"), 1)
+        // The dict clear itself still works as before.
+        memory.clear(songId: "111")
+        XCTAssertFalse(memory.isFailed(sourceKey: "lx:netease", songId: "111"))
     }
 }
 

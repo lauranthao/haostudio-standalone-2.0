@@ -718,11 +718,13 @@ final class DownloadEngine: NSObject {
     /// downloads list uses this for its delete action.
     /// b49fix22 D24-5: returns whether the deletion landed on
     /// disk — false means the catalog save failed even after
-    /// one retry, and the caller can surface it instead of the
-    /// failure being swallowed. The mirror stays pruned on
-    /// failure, so the next persist re-aligns the catalog
-    /// instead of resurrecting the key (the catalog can only
-    /// resurrect it when no persist runs before a restart).
+    /// one retry. persistLocked also posts .haoStoreSaveFailed
+    /// on that path (b49fix23 D25-2, option b), so the failure
+    /// is surfaced even though no product caller exists to read
+    /// this Bool. The mirror stays pruned on failure, so the
+    /// next persist re-aligns the catalog instead of resurrecting
+    /// the key (the catalog can only resurrect it when no persist
+    /// runs before a restart).
     @discardableResult
     func delete(key: String) -> Bool {
         syncQueue.sync {
@@ -1324,6 +1326,31 @@ final class DownloadEngine: NSObject {
     /// catalog is a cache of live state, not its source of
     /// truth.
     @discardableResult
+    /// b49fix23 D25-2 (option b): the catalog save failure is
+    /// surfaced here, not through delete()'s Bool. delete(key:)
+    /// has no product caller — the tasks page deliberately never
+    /// calls it (clearing a finished task must not delete the
+    /// file), and deleteDownload deletes the file before any
+    /// engine call could report — so a caller-surfaced Bool
+    /// cannot be the observable path. Instead persistLocked
+    /// posts the same .haoStoreSaveFailed LocalStore's mirror
+    /// already posts (b49fix2 P1-13), once per launch, and the
+    /// shell's storage notice surfaces it; the next persist
+    /// rewrites the catalog wholesale, so a transient failure
+    /// also self-heals. The Bool return stays for callers and
+    /// tests.
+    private static let catalogSaveFailureLock = NSLock()
+    private static var catalogSaveFailureReported = false
+
+    private static func reportCatalogSaveFailureOnce() {
+        catalogSaveFailureLock.lock()
+        let first = !catalogSaveFailureReported
+        catalogSaveFailureReported = true
+        catalogSaveFailureLock.unlock()
+        guard first else { return }
+        NotificationCenter.default.post(name: .haoStoreSaveFailed, object: DownloadCatalogStore.fileName)
+    }
+
     private func persistLocked(pruning prunedKey: String? = nil) -> Bool {
         let infos = order.compactMap { records[$0]?.info }
         // b49fix21 D23-4: reconcile the disk mirror into the
@@ -1380,6 +1407,15 @@ final class DownloadEngine: NSObject {
             }
             LocalStore.saveCollection(named: DownloadEngine.tasksCollection, value: merged)
             return DownloadCatalogStore.save(DownloadCatalogFile(revision: revision, tasks: merged))
+        }
+        if !catalogSaved {
+            // b49fix23 D25-2 (option b): a failed catalog write
+            // used to be silent here (the mirror's own failure
+            // already posts .haoStoreSaveFailed from
+            // LocalStore.saveCollection, but the catalog write
+            // did not). Post once per launch; the shell surfaces
+            // it, and the next persist re-aligns the catalog.
+            Self.reportCatalogSaveFailureOnce()
         }
         // b49fix2 P2-59: every state mutation re-derives activity
         // (start/stop of the app-root background task).

@@ -261,12 +261,25 @@ final class LXSourceResolver: SourceResolver {
     /// the work queue could concurrently run record() on the
     /// same plain Swift dictionaries — a write/write race the
     /// fix21 backfill made real (before it, saveLocked only
-    /// read them). Enqueuing here is safe and order-preserving:
+    /// read them). Enqueuing here is safe and order-preserving
+    /// for a clear / resolve pair the tap itself enqueues:
     /// resolve() itself enqueues on the same queue, and a
     /// manual play always resolves after clearing, so the
-    /// clear runs first. Never sync here — a work-queue caller
-    /// would deadlock on itself.
+    /// clear runs first. It does NOT cover a resolve that was
+    /// already queued before this clear — that one still sits
+    /// ahead in the FIFO (see the generation bump below, b49fix23
+    /// D25-3). Never sync here — a work-queue caller would
+    /// deadlock on itself.
     func clearFailureMemory(forSongId songId: String) {
+        // b49fix23 D25-3: bump the clear generation
+        // SYNCHRONOUSLY, before enqueueing the dict clear — a
+        // resolve already queued ahead of this clear captured
+        // the old generation at enqueue time, and its sort
+        // ignores the stale failure memory when the generation
+        // has moved. The bump touches only the lock-guarded
+        // counter, never the failedAt dict, so the D24-3
+        // serialisation is unchanged.
+        failureMemory.bumpClearGeneration(songId: songId)
         workQueue.async { [weak self] in
             guard let self = self else { return }
             // b49sweep P1-5: a manual "re-ask every source" was only
@@ -322,9 +335,18 @@ final class LXSourceResolver: SourceResolver {
         /// source that fails mid-resolve is still tried at the
         /// lower tiers of the same resolve.
         let startedAt: Date
+        /// b49fix23 D25-3: the failure-memory clear generation
+        /// captured when this resolve was ENQUEUED (see
+        /// resolve()). When a manual clear was requested while
+        /// this resolve waited in the queue, the generation has
+        /// moved by sort time, and the sort ignores the stale
+        /// failure memory instead of skipping sources the user
+        /// just asked to re-ask.
+        let clearGenerationAtEnqueue: UInt64
 
         init(tiers: [AudioQuality], requestedQuality: AudioQuality, totalDeadline: Date, background: Bool,
-             trialOnly: Bool = false, excluding: Set<String> = []) {
+             trialOnly: Bool = false, excluding: Set<String> = [],
+             clearGenerationAtEnqueue: UInt64 = 0) {
             self.tiers = tiers
             self.requestedQuality = requestedQuality
             self.totalDeadline = totalDeadline
@@ -332,6 +354,7 @@ final class LXSourceResolver: SourceResolver {
             self.trialOnly = trialOnly
             self.excluding = excluding
             self.startedAt = Date()
+            self.clearGenerationAtEnqueue = clearGenerationAtEnqueue
         }
     }
 
@@ -346,6 +369,14 @@ final class LXSourceResolver: SourceResolver {
         excluding: [URL] = [],
         completion: @escaping (PlayUrlResult?) -> Void
     ) {
+        // b49fix23 D25-3: capture the clear generation BEFORE
+        // enqueueing — a manual clear requested while this
+        // resolve waits in the queue bumps it synchronously
+        // (see clearFailureMemory), and the sort then knows the
+        // failure memory it is about to read is stale. The
+        // capture is a lock-guarded counter read, safe on any
+        // calling thread.
+        let clearGenerationAtEnqueue = failureMemory.clearGeneration(songId: songId)
         workQueue.async {
             guard !songId.isEmpty else {
                 self.finishResolve(result: nil, truncated: false, completion: completion)
@@ -398,7 +429,8 @@ final class LXSourceResolver: SourceResolver {
                 totalDeadline: Date().addingTimeInterval(self.totalBudget),
                 background: background,
                 trialOnly: trialOnly,
-                excluding: excludedURLs)
+                excluding: excludedURLs,
+                clearGenerationAtEnqueue: clearGenerationAtEnqueue)
             self.runTierPasses(
                 state: state, songId: songId, platform: platform,
                 title: title, artist: artist, completion: completion)
@@ -453,7 +485,8 @@ final class LXSourceResolver: SourceResolver {
             tier: tier, songId: songId, platform: platform, title: title, artist: artist,
             budget: budget, skipTimedOut: state.skipTimedOut, skipPreviewed: state.skipPreviewed,
             trialOnly: state.trialOnly, excluding: state.excluding, background: state.background,
-            failuresBefore: state.startedAt
+            failuresBefore: state.startedAt,
+            clearGenerationAtEnqueue: state.clearGenerationAtEnqueue
         ) { [weak self] passResult, incomplete in
             guard let self = self else { return }
             state.truncated = state.truncated || incomplete
@@ -497,9 +530,10 @@ extension LXSourceResolver {
         excluding: Set<String>,
         background: Bool,
         failuresBefore: Date,
+        clearGenerationAtEnqueue: UInt64,
         completion: @escaping (PlayUrlResult?, Bool) -> Void
     ) {
-        let jobs = rankedJobs(platform: platform, tier: tier, songId: songId, title: title, artist: artist, failuresBefore: failuresBefore)
+        let jobs = rankedJobs(platform: platform, tier: tier, songId: songId, title: title, artist: artist, failuresBefore: failuresBefore, clearGenerationAtEnqueue: clearGenerationAtEnqueue)
         guard !jobs.isEmpty else {
             completion(nil, false)
             return
@@ -766,7 +800,8 @@ extension LXSourceResolver {
         songId: String,
         title: String,
         artist: String,
-        failuresBefore: Date
+        failuresBefore: Date,
+        clearGenerationAtEnqueue: UInt64
     ) -> [LXResolverJob] {
         // Test seam: a `jobListProvider` replaces the built-in +
         // script jobs; the ranking rules below still apply.
@@ -808,7 +843,24 @@ extension LXSourceResolver {
         // stays in the list — the memory only expires; a failure
         // recorded during this resolve (at >= failuresBefore) does
         // not skip the lower tiers of the same resolve.
-        jobs.removeAll { failureMemory.isFailed(sourceKey: $0.key, songId: songId, before: failuresBefore) }
+        // b49fix23 D25-3: the filter runs only when the clear
+        // generation has NOT moved since this resolve was
+        // enqueued. A manual clear requested while the resolve
+        // waited in the queue bumps it synchronously (see
+        // clearFailureMemory) — the async dict clear still sits
+        // behind this resolve in the FIFO, so without this check
+        // the sort would read the stale memory and skip sources
+        // the user just asked to re-ask. When the generation
+        // moved, the memory for this song is treated as cleared.
+        // (A clear requested after this sort — e.g. between tier
+        // passes — is caught the same way at the next tier's
+        // rankedJobs call, because the generation is re-read
+        // there.) The cooldown sort below is order-only, so a
+        // stale cooldown from the same window only reorders
+        // jobs; it never skips one.
+        if failureMemory.clearGeneration(songId: songId) == clearGenerationAtEnqueue {
+            jobs.removeAll { failureMemory.isFailed(sourceKey: $0.key, songId: songId, before: failuresBefore) }
+        }
         jobs.sort { a, b in
             let aCool = cooldown.isCoolingDown(a.key)
             let bCool = cooldown.isCoolingDown(b.key)

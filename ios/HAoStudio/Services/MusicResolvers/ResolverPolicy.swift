@@ -63,8 +63,10 @@ struct ResolverSpeedRecord: Codable {
     /// by those builds): treated as epoch, i.e. older than any
     /// stamped record, so old files keep the old memory-wins
     /// behaviour and still decode. A device clock far in the
-    /// future stamps its records newer; the merge follows the
-    /// stamps, as any timestamp merge must.
+    /// future stamps its records newer; the merge clamps a disk
+    /// stamp to now (b49fix23 D25-4), so a clock-ahead backup
+    /// cannot suppress live recordings — the stamp is the backup
+    /// device's wall clock, not this device's.
     var updatedAtMs: Int?
 
     enum CodingKeys: String, CodingKey {
@@ -279,6 +281,18 @@ final class ResolverCooldown {
     /// observer is added: this object is driven from the resolver's serial work
     /// queue, and a NotificationCenter observer would touch its state from an
     /// arbitrary thread.
+    /// Clamp a disk record's stamp to now (b49fix23 D25-4).
+    /// A record stamped in the future — the backup device's
+    /// clock was ahead — claims to be newer than any live
+    /// recording this device can ever make, so without the
+    /// clamp it would win every merge until this clock catches
+    /// up. Returns the record unchanged when its stamp is
+    /// absent (nil stays nil = epoch) or already <= now.
+    private func clampedDiskRecord(_ record: ResolverSpeedRecord, nowMs: Int) -> ResolverSpeedRecord {
+        guard let ms = record.updatedAtMs else { return record }
+        return ResolverSpeedRecord(avg: record.avg, fails: record.fails, cooledUntilMs: record.cooledUntilMs, updatedAtMs: min(ms, nowMs))
+    }
+
     private func saveLocked() {
         guard let dir = documentsDirectory ?? LocalStore.documentsDirectoryOrNil() else { return }
         lastSaveAt = now()
@@ -292,7 +306,14 @@ final class ResolverCooldown {
         }
         if let diskData = try? Data(contentsOf: dir.appendingPathComponent("\(Self.speedKey).json")),
            let disk = try? JSONDecoder().decode([String: ResolverSpeedRecord].self, from: diskData) {
+            // b49fix23 D25-4: clamp once, when a disk record
+            // enters the merge — the comparison, the backfill
+            // and the written file all see the clamped stamp, so
+            // a future stamp can neither win a comparison nor be
+            // backfilled into memory as an unbeatable stamp.
+            let nowMs = Int(now().timeIntervalSince1970 * 1000)
             for (key, record) in disk {
+                let record = clampedDiskRecord(record, nowMs: nowMs)
                 if map[key] == nil {
                     // Disk-only key (an imported speed): take it
                     // and backfill memory (b49fix21 D23-3).
@@ -304,8 +325,20 @@ final class ResolverCooldown {
                     let diskMs = record.updatedAtMs ?? 0
                     let memoryMs = updatedAt[key].map { Int($0.timeIntervalSince1970 * 1000) } ?? 0
                     if diskMs > memoryMs {
-                        map[key] = record
-                        backfill(key: key, record: record)
+                        // b49fix23 D25-5: avg is an append-only
+                        // measurement — a disk record that never
+                        // measured it (avg nil) must not erase
+                        // the live measured avg, in the file or
+                        // in memory. fails / cooledUntil /
+                        // updatedAt stay wholesale (their absence
+                        // means "cleared", see backfill).
+                        let merged = ResolverSpeedRecord(
+                            avg: record.avg ?? map[key]?.avg,
+                            fails: record.fails,
+                            cooledUntilMs: record.cooledUntilMs,
+                            updatedAtMs: record.updatedAtMs)
+                        map[key] = merged
+                        backfill(key: key, record: merged)
                     }
                     // Else memory wins — the live recording is
                     // fresher than the backup's, or a tie.
@@ -318,13 +351,21 @@ final class ResolverCooldown {
             options: [.atomic])
     }
 
-    /// Replaces memory's view of one key with a disk record,
-    /// wholesale (b49fix22 D24-1): a winning disk record's
-    /// absent fields mean "no value", not "keep memory's" — a
-    /// newer imported record that cleared a failure streak must
-    /// not leave the old streak behind in memory.
+    /// Replaces memory's view of one key with a disk record
+    /// (b49fix22 D24-1, b49fix23 D25-5): fails / cooledUntil /
+    /// updatedAt are wholesale — a winning disk record's absent
+    /// fields mean "no value", not "keep memory's", so a newer
+    /// imported record that cleared a failure streak must not
+    /// leave the old streak behind in memory. avg is the
+    /// exception: it is an append-only measurement with no
+    /// clearing path anywhere (record() only writes it, clear()
+    /// keeps it), so a nil avg means "the other side never
+    /// measured", not "measured empty" — it keeps memory's
+    /// measured value instead of deleting it. (The file-side
+    /// merge in saveLocked applies the same rule, so the file
+    /// and memory cannot drift on avg.)
     private func backfill(key: String, record: ResolverSpeedRecord) {
-        if let avg = record.avg { averages[key] = avg } else { averages.removeValue(forKey: key) }
+        if let avg = record.avg { averages[key] = avg }
         if let fails = record.fails { self.fails[key] = fails } else { self.fails.removeValue(forKey: key) }
         if let ms = record.cooledUntilMs {
             cooledUntil[key] = Date(timeIntervalSince1970: TimeInterval(ms) / 1000.0)
@@ -438,6 +479,38 @@ final class ResolveFailureMemory {
         for key in failedAt.keys where key.hasSuffix(suffix) {
             failedAt.removeValue(forKey: key)
         }
+    }
+
+    // MARK: - b49fix23 D25-3: per-song clear generation
+    //
+    // A synchronous signal that a manual clear was requested,
+    // without touching the failedAt dict (which only the
+    // resolver's serial work queue may touch, b49fix22 D24-3).
+    // clearFailureMemory bumps it on the caller's thread BEFORE
+    // enqueueing the async dict clear; a resolve enqueued
+    // BEFORE the clear captures the generation at enqueue time,
+    // and its sort ignores the failure memory when the
+    // generation has moved — otherwise the sort reads the stale
+    // memory (the async clear still sits behind the queued
+    // resolve) and skips sources the user just asked to re-ask,
+    // a spurious failure. A serial queue is a FIFO, so a barrier
+    // would be a plain async here — the generation is what
+    // carries the ordering information across the queue
+    // boundary. The counters are small per-song values retained
+    // for the session; they only ever grow.
+    private let generationLock = NSLock()
+    private var clearGenerations: [String: UInt64] = [:]
+
+    func bumpClearGeneration(songId: String) {
+        generationLock.lock()
+        defer { generationLock.unlock() }
+        clearGenerations[songId, default: 0] += 1
+    }
+
+    func clearGeneration(songId: String) -> UInt64 {
+        generationLock.lock()
+        defer { generationLock.unlock() }
+        return clearGenerations[songId] ?? 0
     }
 
     /// b49sweep P1-5: the source keys that failed for one song
