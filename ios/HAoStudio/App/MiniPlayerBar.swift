@@ -72,22 +72,26 @@ struct MiniPlayerBar: View {
                 toastPill
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: musicPlayer.toast)
+        .animation(.spring(duration: 0.3), value: musicPlayer.toast)
     }
 
     /// The shared toast pill (same text, style and 2 s lifetime
     /// as the full player's toast — one `playerVM.toast`, rendered
     /// wherever the user can see it). Empty when there is no toast.
+    /// b45-g (Coda §8.6, plan §11 C20): 12.5pt medium, radius 10,
+    /// shadow black 0.15 / radius 8 / y 4, spring 0.3 in/out;
+    /// position stays our bottom slot (see MusicPlayerView).
     @ViewBuilder
     private var toastPill: some View {
         if let toast = musicPlayer.toast {
             Text(toast)
-                .font(.haoFootnoteMedium)
+                .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(Color.black.opacity(0.7), in: Capsule())
-                .transition(.opacity)
+                .padding(.vertical, 9)
+                .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
                 .allowsHitTesting(false)
         }
     }
@@ -214,6 +218,21 @@ struct MiniPlayerBar: View {
                     .frame(height: 2)
                 }
             }
+            // b45-g (Coda §8.2, GlassTabBar): swipe up expands the
+            // strip into the full player — translation < −28pt or
+            // predicted < −72pt. simultaneousGesture, minimumDistance
+            // 8: a tap is still a tap (the strip's onTapGesture and
+            // the transport buttons keep their own hits), and a
+            // downward drag does nothing — only upward opens.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 8)
+                    .onEnded { value in
+                        if value.translation.height < -28
+                            || value.predictedEndTranslation.height < -72 {
+                            onTapFullPlayer()
+                        }
+                    }
+            )
             .accessibilityLabel("迷你播放器：\(item.title)，点按打开全屏播放器")
         }
 }

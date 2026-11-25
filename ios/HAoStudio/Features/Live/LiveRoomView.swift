@@ -260,18 +260,23 @@ struct LiveRoomView: View {
         // tap-to-play underneath).
         .overlay(alignment: .bottom) {
             if let toast = livePlayer.toast {
+                // b45-g: same Toast style params as the music
+                // player (Coda §8.6, plan §11 C20) — 12.5pt medium,
+                // radius 10, shadow black 0.15 / radius 8 / y 4,
+                // spring 0.3, bottom entry. Dwell stays 2.5s.
                 Text(toast)
-                    .font(.haoDenseBody)
+                    .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(Color.black.opacity(0.7), in: Capsule())
+                    .padding(.vertical, 9)
+                    .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
                     .padding(.bottom, 96)
                     .allowsHitTesting(false)
-                    .transition(.opacity)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: livePlayer.toast)
+        .animation(.spring(duration: 0.3), value: livePlayer.toast)
         .onChange(of: livePlayer.toast) { _, toast in
             toastWork?.cancel()
             guard toast != nil else { return }

@@ -27,8 +27,12 @@ final class MusicChartsViewModel: ObservableObject {
 
     private var topTracksLoadedAt: [String: Date] = [:]
     private var topTracksLoading: Set<String> = []
+    /// Chart list itself, cached 1800s (b45-g, Coda §3.1 榜单
+    /// 1800s — b45-b only cached the per-card top tracks).
+    private var chartsLoadedAt: Date? = nil
 
     static let topTracksCacheTTL: TimeInterval = 1800
+    static let chartsCacheTTL: TimeInterval = 1800
 
     /// The four canonical charts, pinned first in this order.
     static let pinnedNames = ["飙升榜", "新歌榜", "原创榜", "热歌榜"]
@@ -57,7 +61,15 @@ final class MusicChartsViewModel: ObservableObject {
         return head + rest
     }
 
-    func load() {
+    /// Chart list, cached 1800s (b45-g). A fresh cache answers
+    /// instantly on re-appear; pull-to-refresh forces a refetch.
+    /// A failed load never stamps the cache, so retry still works.
+    func load(force: Bool = false) {
+        if !force, let loadedAt = chartsLoadedAt,
+           Date().timeIntervalSince(loadedAt) < Self.chartsCacheTTL,
+           !charts.isEmpty {
+            return
+        }
         isLoading = true
         failed = false
         MusicAPIClient.shared.getJson(
@@ -74,6 +86,9 @@ final class MusicChartsViewModel: ObservableObject {
             let parsed = Self.parseNeteaseCharts(json)
             self.charts = parsed
             self.failed = parsed.isEmpty
+            if !parsed.isEmpty {
+                self.chartsLoadedAt = Date()
+            }
         }
     }
 
@@ -147,6 +162,9 @@ struct MusicChartsView: View {
                     .padding(.horizontal, 20)
                     .padding(.vertical, 12)
                     .haoBottomChromeContentPadding()
+                    // b45-g (Coda §8.2): pull-to-refresh bypasses
+                    // the 1800s chart-list cache.
+                    .refreshable { viewModel.load(force: true) }
                 }
             }
         }
