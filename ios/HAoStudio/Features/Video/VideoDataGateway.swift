@@ -159,6 +159,16 @@ protocol VideoDataGateway {
         line: PlayLine,
         completion: @escaping (Bool) -> Void
     )
+
+    /// Other CMS sources carrying this same title (sweep-2 P1-8):
+    /// the detail page used to say "换个片源试试" with nowhere
+    /// to switch to. Empty when no other source has the title.
+    func altSources(
+        title: String,
+        year: String,
+        excludeSourceId: Int,
+        completion: @escaping ([AltVideoSource]) -> Void
+    )
 }
 
 /// Default for the newest gateway method: gateways that predate
@@ -192,6 +202,18 @@ extension VideoDataGateway {
         completion: @escaping (Bool) -> Void
     ) {
         completion(false)
+    }
+
+    /// Default for altSources (sweep-2 P1-8): stubs that predate
+    /// it answer "no other source". The real gateway overrides
+    /// it below.
+    func altSources(
+        title: String,
+        year: String,
+        excludeSourceId: Int,
+        completion: @escaping ([AltVideoSource]) -> Void
+    ) {
+        completion([])
     }
 }
 
@@ -564,15 +586,26 @@ final class RealVideoDataGateway: VideoDataGateway {
             DispatchQueue.main.async { completion(false) }
             return
         }
-        cms.resolvePlayURL(detail: detail, episode: episode, line: line, excluding: []) { url in
+        // sweep-4 P2-49: HLS is read from the resolver's own
+        // evidence (suffix or #EXTM3U body), not the suffix
+        // alone — an extension-less HLS URL used to pass this
+        // gate and then save only the playlist file.
+        cms.resolvePlayURLWithKind(detail: detail, episode: episode, line: line, excluding: []) { url, isHLS in
             DispatchQueue.main.async {
-                guard let url = url else {
-                    completion(false)
-                    return
-                }
-                completion(url.pathExtension.lowercased() != "m3u8")
+                completion(url != nil && !isHLS)
             }
         }
+    }
+
+    /// Other CMS sources carrying this same title (sweep-2 P1-8).
+    /// The CmsClient search already answers on the main queue.
+    func altSources(
+        title: String,
+        year: String,
+        excludeSourceId: Int,
+        completion: @escaping ([AltVideoSource]) -> Void
+    ) {
+        cms.altSources(title: title, year: year, excludeSourceId: excludeSourceId, completion: completion)
     }
 
     /// Queue one episode for download. The URL resolves the same
@@ -601,8 +634,8 @@ final class RealVideoDataGateway: VideoDataGateway {
             DispatchQueue.main.async { completion(false) }
             return
         }
-        cms.resolvePlayURL(detail: detail, episode: episode, line: line, excluding: []) { url in
-            guard let url = url, url.pathExtension.lowercased() != "m3u8" else {
+        cms.resolvePlayURLWithKind(detail: detail, episode: episode, line: line, excluding: []) { url, isHLS in
+            guard let url = url, !isHLS else {
                 DispatchQueue.main.async { completion(false) }
                 return
             }

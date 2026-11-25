@@ -675,6 +675,9 @@ struct CmsTypeEntry {
 struct AltVideoSource: Equatable {
     let source: Int
     let vodId: String
+    /// Display name of the source (sweep-2 P1-8): the detail
+    /// page shows the alternate sources as tappable rows.
+    let name: String
 }
 
 /// By-type page result.
@@ -1122,7 +1125,7 @@ final class CmsClient: VideoPlayURLResolver {
                     let name = VideoJSON.asString(raw["vod_name"])
                     let y = VideoJSON.asString(raw["vod_year"])
                     if videoNormTitle(name) == qn && (year.isEmpty || y.isEmpty || y == year) {
-                        out.append(AltVideoSource(source: source.id, vodId: VideoJSON.asString(raw["vod_id"])))
+                        out.append(AltVideoSource(source: source.id, vodId: VideoJSON.asString(raw["vod_id"]), name: source.name))
                         break
                     }
                 }
@@ -1911,6 +1914,22 @@ final class CmsClient: VideoPlayURLResolver {
     /// starting with #EXTM3U) means the URL was a stream behind an
     /// odd path after all, so the original URL is handed out.
     func resolvePlayURL(detail: VideoDetail, episode: PlayEpisode, line: PlayLine, excluding: [URL], completion: @escaping (URL?) -> Void) {
+        resolvePlayURLWithKind(detail: detail, episode: episode, line: line, excluding: excluding) { url, _ in
+            completion(url)
+        }
+    }
+
+    /// Same resolution as `resolvePlayURL`, plus whether the
+    /// handed-out URL is an HLS playlist (sweep-4 P2-49): the
+    /// download gate used to test only the `.m3u8` suffix, so an
+    /// extension-less HLS URL (a playlist behind an odd path,
+    /// detected here by its #EXTM3U body) was treated as a
+    /// downloadable file. The flag comes from the resolver's own
+    /// evidence — the suffix, or the fetched body — never from a
+    /// second probe. Callers that only play keep using
+    /// `resolvePlayURL` (the `VideoPlayURLResolver` seam is
+    /// unchanged).
+    func resolvePlayURLWithKind(detail: VideoDetail, episode: PlayEpisode, line: PlayLine, excluding: [URL], completion: @escaping (URL?, Bool) -> Void) {
         let excluded = Set(excluding.map { $0.absoluteString })
         var candidates: [URL] = []
         if let url = line.episode(at: episode.index)?.url {
@@ -1944,10 +1963,14 @@ final class CmsClient: VideoPlayURLResolver {
     /// Walk the candidates in order, resolving each one: a direct
     /// stream is handed out immediately; a page-like URL gets one
     /// second-level fetch (see resolvePlayURL). Nil when the list
-    /// is exhausted.
-    private func resolveNextCandidate(candidates: [URL], index: Int, excluded: Set<String>, completion: @escaping (URL?) -> Void) {
+    /// is exhausted. The Bool is `isHLS`: true when the URL is a
+    /// playlist — by its `.m3u8` suffix, or by a fetched body
+    /// starting with #EXTM3U (sweep-4 P2-49). A 200 with binary
+    /// bytes (body decodes to nil) is a media file, not a
+    /// playlist — a text playlist would have decoded.
+    private func resolveNextCandidate(candidates: [URL], index: Int, excluded: Set<String>, completion: @escaping (URL?, Bool) -> Void) {
         guard index < candidates.count else {
-            completion(nil)
+            completion(nil, false)
             return
         }
         let url = candidates[index]
@@ -1956,29 +1979,29 @@ final class CmsClient: VideoPlayURLResolver {
             return
         }
         if Self.isDirectStreamURL(url) {
-            completion(url)
+            completion(url, url.pathExtension.lowercased() == "m3u8")
             return
         }
         textFetcher(url, ["User-Agent": Self.userAgent], 5) { [weak self] status, body in
             guard let self else {
-                completion(nil)
+                completion(nil, false)
                 return
             }
             // A stream behind an odd path: binary bytes decode as
             // nil, a playlist body starts with #EXTM3U — hand out
             // the original URL, not the next candidate.
             if status == 200, body == nil {
-                completion(url)
+                completion(url, false)
                 return
             }
             if status == 200, let body = body, body.contains("#EXTM3U") {
-                completion(url)
+                completion(url, true)
                 return
             }
             if status == 200, let body = body,
                let stream = Self.extractEmbeddedStreamURL(html: body, pageURL: url),
                !excluded.contains(stream.absoluteString) {
-                completion(stream)
+                completion(stream, stream.pathExtension.lowercased() == "m3u8")
                 return
             }
             self.resolveNextCandidate(candidates: candidates, index: index + 1, excluded: excluded, completion: completion)
