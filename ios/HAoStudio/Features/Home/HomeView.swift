@@ -31,6 +31,7 @@ enum HomeDestination: Hashable {
     case history
     case recent
     case hotLive
+    case daily
     case room(LiveRoom, [LiveRoom])
 }
 
@@ -40,6 +41,7 @@ struct HomeView: View {
 
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
     @Environment(\.haoTheme) private var theme
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -65,11 +67,30 @@ struct HomeView: View {
                             .padding(.top, 16)
                         Spacer(minLength: 16)
                     }
-                    .haoBottomChromeContentPadding()
+                    .haoBottomClearanceLandscapeAware(isLandscape: verticalSizeClass == .compact)
                 }
                 .haoChromeScrollTracking()
                 .haoReselectScrollToTop(tab: .home, proxy: proxy)
-                .refreshable { viewModel.reload() }
+                // Reselect while a page is pushed (b49-sweep):
+                // the stock modifier only scrolls the root list
+                // — a pushed page carries no anchor, so a
+                // reselect did nothing visible. Pop to the tab
+                // root first, then scroll to top once the pop
+                // lands. At the root (empty path) the stock
+                // modifier already handles it; this does nothing.
+                .onReceive(NotificationCenter.default.publisher(for: .haoTabReselected)) { note in
+                    guard (note.object as? HaoTab) == .home else { return }
+                    guard !path.isEmpty else { return }
+                    path.removeAll()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        proxy.scrollTo(HaoTabScrollTop.id(for: .home), anchor: .top)
+                    }
+                }
+                // Pull-to-refresh re-checks live status for
+                // real (forceLiveRecheck bypasses the 120 s
+                // throttle — a refresh the throttle used to
+                // swallow silently now really re-checks).
+                .refreshable { viewModel.reload(forceLiveRecheck: true) }
                 .haoBackdropLayer()
                 .haoTabBackground()
                 // b39: no system nav bar on this root. The large
@@ -98,6 +119,12 @@ struct HomeView: View {
                         HomeHotLiveView(viewModel: viewModel) { room, playlist in
                             openRoom(room, playlist: playlist)
                         }
+                    case .daily:
+                        // The discovery daily page, with its own
+                        // view model over the same per-day cache:
+                        // the full 20 (not home's first 10), with
+                        // play-all and "换一首" built in.
+                        MusicDailyView()
                     case .room(let room, let playlist):
                         LiveRoomView(room: room, playlist: playlist)
                     }
@@ -124,11 +151,11 @@ struct HomeView: View {
                 // auto-advance), and the store posts
                 // haoMusicRecentChanged — the music tab and 我的 both
                 // reload on it, home never did, so 最近播放 / 继续听
-                // stayed stale until the next tab switch. Direct
-                // reload(), not reloadForAppearance(): the data
-                // actually changed, so it must not be coalesced away.
+                // stayed stale until the next tab switch. Debounced,
+                // not direct: one user action can post several of
+                // these, and each used to pay for a full reload.
                 .onReceive(NotificationCenter.default.publisher(for: .haoMusicRecentChanged)) { _ in
-                    viewModel.reload()
+                    viewModel.reloadForNotification()
                 }
                 // Video-history change (A1): a film watched from the
                 // player, or a history row removed/cleared from the
@@ -136,7 +163,7 @@ struct HomeView: View {
                 // 继续观看 reloads without waiting for a tab switch
                 // or pop-back.
                 .onReceive(NotificationCenter.default.publisher(for: .haoVideoHistoryChanged)) { _ in
-                    viewModel.reload()
+                    viewModel.reloadForNotification()
                 }
                 // Live-history change (A2): entering a room, or a
                 // history row removed/cleared from the pushed list,
@@ -144,7 +171,7 @@ struct HomeView: View {
                 // reloads without waiting for a tab switch or
                 // pop-back.
                 .onReceive(NotificationCenter.default.publisher(for: .haoLiveHistoryChanged)) { _ in
-                    viewModel.reload()
+                    viewModel.reloadForNotification()
                 }
                 // Return-to-home refresh: NavigationStack's own
                 // onAppear does not re-fire when a pushed detail or
@@ -289,7 +316,7 @@ struct HomeView: View {
                 )
                 .padding(.horizontal, 24)
             } else {
-                LazyVGrid(columns: LiveGridLayout.gridColumns, spacing: LiveGridLayout.gridRowSpacing) {
+                LazyVGrid(columns: homeLiveGridColumns(), spacing: LiveGridLayout.gridRowSpacing) {
                     ForEach(viewModel.hotLive, id: \.id) { item in
                         let room = homeLiveRoom(from: item)
                         LiveRoomCard(room: room) {
@@ -310,7 +337,46 @@ struct HomeView: View {
 
     private var dailySection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionHeader(title: "每日推荐")
+            // Own header, not sectionHeader: daily also needs a
+            // play-all capsule next to "全部". Both hide while the
+            // list is empty — play-all on an empty list is a dead
+            // button, and "全部" would open an empty daily page.
+            HStack {
+                Text("每日推荐")
+                    .font(.haoSectionTitle)
+                    .foregroundStyle(theme.textPrimary)
+                Spacer()
+                if !viewModel.allDailyPicks.isEmpty {
+                    Button(action: {
+                        playerVM.playAll(
+                            viewModel.allDailyPicks,
+                            source: PlaySource(kind: .daily, id: "daily"),
+                            sourceDisplayName: "每日推荐")
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "play.fill")
+                                .font(.haoCaption2)
+                            Text("播放全部")
+                                .font(.haoDenseBody)
+                        }
+                        .padding(.vertical, 12)
+                        .contentShape(Rectangle())
+                    }
+                    .foregroundStyle(theme.accentText)
+                    Button(action: { path.append(.daily) }) {
+                        HStack(spacing: 2) {
+                            Text("全部")
+                                .font(.haoDenseBody)
+                            Image(systemName: "chevron.right")
+                                .font(.haoCaption2)
+                        }
+                        .padding(.vertical, 12)
+                        .contentShape(Rectangle())
+                    }
+                    .foregroundStyle(theme.accentText)
+                }
+            }
+            .padding(.horizontal, 24)
             if viewModel.daily.isEmpty {
                 MusicEmptyState(
                     icon: "calendar",
@@ -321,7 +387,21 @@ struct HomeView: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(viewModel.daily.enumerated()), id: \.element.id) { index, song in
-                        songRow(song: song, tracks: viewModel.daily, index: index, source: PlaySource(kind: .daily, id: "daily"), sourceDisplayName: "每日推荐")
+                        // Queue = the full 20, not the section's
+                        // first 10: pressing next on the 10th row
+                        // carries on into picks 11–20 instead of
+                        // stopping. Same order, so the index holds.
+                        HStack(spacing: 8) {
+                            songRow(song: song, tracks: viewModel.allDailyPicks, index: index, source: PlaySource(kind: .daily, id: "daily"), sourceDisplayName: "每日推荐")
+                            if !viewModel.dailySpares.isEmpty {
+                                Button("换一首") {
+                                    viewModel.replaceDailySong(song)
+                                }
+                                .font(.haoFootnoteStrong)
+                                .foregroundStyle(theme.accentText)
+                                .accessibilityLabel("不喜欢，换一首")
+                            }
+                        }
                     }
                 }
                 .padding(.horizontal, 24)
@@ -372,6 +452,7 @@ struct HomeView: View {
         MusicSongRow(
             song: song,
             isPlaying: isPlaying(song),
+            showFavHeart: true,
             onTap: {
                 playerVM.play(song: song, in: tracks, startAt: index, source: source, sourceDisplayName: sourceDisplayName)
             }
@@ -401,7 +482,10 @@ struct HomeView: View {
 /// ("bili", "ks"), then the Flutter site id ("bilibili",
 /// "kuaishou"), then the display name; an unknown value
 /// falls back to Bilibili so the room still opens instead
-/// of dropping the tap. File scope (not a HomeView method)
+/// of dropping the tap. The confirmed watching count rides
+/// along (0 = never confirmed — the card hides it) — the old
+/// build dropped it, so home cards never showed a count.
+/// File scope (not a HomeView method)
 /// so the home hot-live page below can build rooms too.
 fileprivate func homeLiveRoom(from item: HomeLiveItem) -> LiveRoom {
     LiveRoom(
@@ -410,8 +494,54 @@ fileprivate func homeLiveRoom(from item: HomeLiveItem) -> LiveRoom {
         title: item.title,
         streamer: item.nick,
         cover: item.cover,
+        onlineCount: item.onlineCount,
         isLive: item.isLive
     )
+}
+
+/// Live grid columns for the current screen width: 2 in
+/// portrait, 3–4 when the container is wide (landscape phone
+/// / iPad) — the fixed 2-column grid left tall 16:9 cells and
+/// the floating chrome eating a third of a landscape screen.
+/// Same width math as LiveGridLayout.columns(forWidth:); the
+/// GridItem array itself lives here because LiveDataGateway is
+/// Foundation-only (AppCore) and cannot build SwiftUI items.
+fileprivate func homeLiveGridColumns() -> [GridItem] {
+    let count = LiveGridLayout.columns(forWidth: Double(UIScreen.main.bounds.width))
+    return Array(
+        repeating: GridItem(.flexible(minimum: 0), spacing: CGFloat(LiveGridLayout.interItemSpacing)),
+        count: count
+    )
+}
+
+/// Bottom clearance inside home's scroll content, landscape-
+/// aware: the same value and mini-visibility rule as
+/// haoBottomChromeContentPadding (one source of truth:
+/// HaoLayout.floatingStackClearance), except in landscape the
+/// 12pt breathing room is reclaimed — the floating stack is the
+/// same height, so the clearance never drops below it and the
+/// last row still clears the chrome exactly, while a ~393pt-tall
+/// viewport keeps 12pt more content above the fold. Portrait is
+/// byte-identical to the stock modifier.
+private struct HomeBottomClearance: ViewModifier {
+    @EnvironmentObject private var coordinator: PlaybackCoordinator
+    @EnvironmentObject private var musicPlayer: MusicPlayerViewModel
+    var isLandscape: Bool
+
+    func body(content: Content) -> some View {
+        let miniVisible = coordinator.currentItem != nil || musicPlayer.miniFallbackSong != nil
+        let clearance = HaoLayout.floatingStackClearance(miniPlayerVisible: miniVisible)
+        content.padding(
+            .bottom,
+            isLandscape ? clearance - HaoLayout.contentBreathingRoom : clearance
+        )
+    }
+}
+
+extension View {
+    fileprivate func haoBottomClearanceLandscapeAware(isLandscape: Bool) -> some View {
+        modifier(HomeBottomClearance(isLandscape: isLandscape))
+    }
 }
 
 fileprivate func homeLivePlatform(from value: String) -> LivePlatform {
@@ -505,6 +635,7 @@ private struct HomeRecentPlaysView: View {
                         MusicSongRow(
                             song: song,
                             isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
+                            showFavHeart: true,
                             onTap: {
                                 // b46: recent plays are a reloadable place.
                                 playerVM.play(song: song, in: viewModel.allRecentPlays, startAt: index, source: PlaySource(kind: .recent, id: "recent"), sourceDisplayName: "最近播放")
@@ -571,7 +702,7 @@ private struct HomeHotLiveView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 0) {
-                        LazyVGrid(columns: LiveGridLayout.gridColumns, spacing: LiveGridLayout.gridRowSpacing) {
+                        LazyVGrid(columns: homeLiveGridColumns(), spacing: LiveGridLayout.gridRowSpacing) {
                             ForEach(viewModel.hotLive, id: \.id) { item in
                                 let room = homeLiveRoom(from: item)
                                 LiveRoomCard(room: room) {

@@ -149,16 +149,15 @@ struct MyView: View {
         NavigationStack {
             ScrollViewReader { proxy in
                 VStack(spacing: 0) {
-                    // b45 (chen 2026-11-25: 我的页标题上面还有
-                    // ~75pt 空): the title lives ABOVE the List,
-                    // not in it — a List keeps ~44pt of
-                    // navigation-bar reserve in its content inset
-                    // even with the bar hidden, plus the
-                    // insetGrouped first-section spacing, which put
-                    // the title ~75pt below the status bar. The
-                    // title is pinned while scrolling (the other
-                    // pages' titles scroll away — noted, 未验).
-                    myHeader
+                    // b49 sweep P2: the title is a row INSIDE the
+                    // List now (myHeader, first row of
+                    // entriesSection) — the pinned title above the
+                    // List never scrolled away while every other
+                    // tab's title did. The -51pt content margin
+                    // below still pulls the first row up to ~12pt
+                    // under the status bar (the b45 calibration);
+                    // whether the first fold row stays visible is
+                    // 改了、未验 (device check).
                     List {
                         entriesSection
                         migrationSection
@@ -180,8 +179,9 @@ struct MyView: View {
                     // b45: the List's hidden-nav-bar reserve (~63pt
                     // by the b44 measurement: 75pt gap − 12pt title
                     // padding) is pulled back with a −51pt top
-                    // content margin, so the first section sits
-                    // ~12pt under the title, like the other pages.
+                    // content margin, so the first row — the 我的
+                    // title row now, not a section — sits ~12pt
+                    // under the status bar, like the other pages.
                     .contentMargins(.top, -51, for: .scrollContent)
                     .haoChromeScrollTracking()
                     .haoReselectScrollToTop(tab: .my, proxy: proxy)
@@ -193,10 +193,10 @@ struct MyView: View {
                     .listSectionSpacing(12)
                     .scrollContentBackground(.hidden)
                     // b44: no system large title — the title is the
-                    // in-content myHeader above the List, exactly
-                    // like the other pages. The navigation bar stays
-                    // hidden so a pushed page's own bar / back
-                    // button is unaffected.
+                    // in-content myHeader row inside the List,
+                    // exactly like the other pages. The navigation
+                    // bar stays hidden so a pushed page's own bar /
+                    // back button is unaffected.
                     .toolbar(.hidden, for: .navigationBar)
                     // b45-b (Coda §3.3): new playlist via the system
                     // alert (textfield placeholder "歌单名称").
@@ -293,25 +293,32 @@ struct MyView: View {
         }
     }
 
-    // MARK: - In-content title (b44, moved above the List in b45)
+    // MARK: - In-content title (b44, moved into the List in b49)
 
     /// b44 (chen 2026-11-25: 我的页标题要和其他页面一样，标题下
     /// 空一大片): the title is an in-content title like the other
     /// tab roots (homeHeader pattern — 34pt bold, theme text
     /// colour, 12pt top padding), NOT the system large title.
-    /// b45: it lives ABOVE the List in the root VStack, not as a
-    /// List row — a List row of any content costs row height, and
-    /// the List's hidden-nav-bar reserve put the title ~75pt
-    /// below the status bar. The scroll-offset reader and the
-    /// reselect-scroll-to-top id now live on the first section
-    /// header instead (see entriesSection).
+    /// b49 sweep P2: it is a ROW inside the List now (first row
+    /// of entriesSection), not a pinned view above the List — the
+    /// pinned title never scrolled away while every other tab's
+    /// title did. It carries the reselect-scroll-to-top id and
+    /// the chrome scroll-offset reader (moved here from the fold
+    /// row — they live on the FIRST child of the scroll content).
+    /// The -51pt top content margin pulls it up to ~12pt under
+    /// the status bar (b45 calibration); the first fold row
+    /// staying visible is 改了、未验 (device check).
     private var myHeader: some View {
         Text("我的")
             .font(.system(size: 34, weight: .bold))
             .foregroundStyle(theme.textPrimary)
             .padding(.top, 12)
-            .padding(.leading, 20)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .id(HaoTabScrollTop.id(for: .my))
+            .background { HaoChromeScrollOffsetReader() }
+            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
     }
 
     // MARK: - My entries (b45-b, Coda §3.3 library groups)
@@ -324,20 +331,20 @@ struct MyView: View {
     /// vertical padding. Group titles sit at 16pt side margin
     /// (not 20). Everything is local — the login-gated hero /
     /// cloud / liked-albums blocks are replaced by these local
-    /// equivalents. b44's in-content title and anchor-free
-    /// structure above are untouched.
+    /// equivalents. b44's in-content title (now the first row of
+    /// this section) and anchor-free structure are untouched.
     private var entriesSection: some View {
         Section {
+            // b49 sweep P2: the title row (myHeader) is the first
+            // child of the scroll content now — it carries the
+            // reselect-scroll-to-top id and the chrome
+            // scroll-offset reader. The fold row below is the
+            // second child.
+            myHeader
             // b48: the fold is a row now, not a section header —
             // same reason as SettingsSectionFoldRow (the header is
             // hidden under the title by the -51pt content margin).
-            // The chrome scroll-offset reader and the
-            // reselect-scroll-to-top id stay on the FIRST child of
-            // the List's scroll content — the fold row is that
-            // child now.
             SettingsSectionFoldRow(section: .my)
-                .id(HaoTabScrollTop.id(for: .my))
-                .background { HaoChromeScrollOffsetReader() }
             if settings.sectionExpanded(SettingsSection.my.rawValue) {
                 libraryGroupHeader(title: "创建的歌单", showAdd: true)
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 16))
@@ -546,18 +553,19 @@ struct MyView: View {
         libraryFavPlaylistIds = MusicLibraryStore.favPlaylistIds()
     }
 
-    /// One entry row: a 28pt rounded-square icon chip (accent
-    /// soft fill + accent glyph, the app's own chip language —
-    /// see the video detail action row) + title + count. The
-    /// bare text rows read unfinished; the chip is what makes
-    /// the list look like a finished iOS settings page.
+    /// One entry row: a bare SF Symbol + title + count (Coda §4:
+    /// Settings rows use bare SF Symbols with no coloured-square
+    /// icon background). The 28pt accent-soft chip is removed —
+    /// only the 我的 entry rows deviated; the Settings groups
+    /// already use bare Labels. The 28×28 frame stays so the
+    /// title alignment does not shift; the icon colour follows
+    /// the bare-icon precedent (LiveTabView's header buttons).
     private func entryRow(icon: String, title: String, count: Int) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 16, weight: .semibold))  // icon size, not text
-                .foregroundStyle(theme.accentText)
+                .foregroundStyle(theme.textPrimary)
                 .frame(width: 28, height: 28)
-                .background(theme.accentSoft, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             Text(title)
                 .foregroundStyle(theme.textPrimary)
             Spacer()

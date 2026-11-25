@@ -650,6 +650,23 @@ enum MusicLibraryStore {
     /// truncated fetch can never poison the cache again.
     static let lyricsCacheVersion = 2
     private static let lyricsCacheVersionKey = "hao.lyricsCacheVersion"
+    /// Insertion order for the lyrics cache (b49sweep): a plain
+    /// Dictionary has no order, so evicting `cache.keys.first`
+    /// could drop the just-played song while keeping a stale
+    /// entry. The order list (oldest first) lives in
+    /// UserDefaults next to the version key; it is reconciled
+    /// against the file on every write (unknown keys — legacy
+    /// entries written before ordering — sort to the front so
+    /// they evict first, the just-written key goes last).
+    private static let lyricsCacheOrderKey = "hao.lyricsCacheOrder"
+
+    private static func lyricsCacheOrder() -> [String] {
+        UserDefaults.standard.stringArray(forKey: lyricsCacheOrderKey) ?? []
+    }
+
+    private static func saveLyricsCacheOrder(_ order: [String]) {
+        UserDefaults.standard.set(order, forKey: lyricsCacheOrderKey)
+    }
 
     static func cachedLyrics(for identityKey: String) -> [StoredLyricLine]? {
         guard UserDefaults.standard.integer(forKey: lyricsCacheVersionKey) == lyricsCacheVersion else {
@@ -660,18 +677,71 @@ enum MusicLibraryStore {
             UserDefaults.standard.set(lyricsCacheVersion, forKey: lyricsCacheVersionKey)
             return nil
         }
-        let dict = readObject(named: lyricsCacheCollection)
-        guard let raw = dict[identityKey] as? [[String: Any]] else { return nil }
-        return raw.map(StoredLyricLine.init(json:))
+        var dict = readObject(named: lyricsCacheCollection)
+        guard let raw = dict[identityKey] else { return nil }
+        // v2 entry with per-entry metadata: {"v", "dur", "count",
+        // "lines"}. "dur" is the song duration when the caller
+        // knew it, else the last line's time; "count" is the
+        // stored line count. A mismatched version / count, or a
+        // last line far short of the stored duration, is a
+        // truncated or corrupt entry — drop it so the caller
+        // re-fetches instead of serving it forever.
+        if let entry = raw as? [String: Any],
+           let lineDicts = entry["lines"] as? [[String: Any]] {
+            let version = MusicDict.int(entry, "v")
+            let count = MusicDict.int(entry, "count")
+            let duration = MusicDict.double(entry, "dur")
+            let lines = lineDicts.map(StoredLyricLine.init(json:))
+            let lastTime = lines.map(\.t).max() ?? 0
+            let invalid = version != lyricsCacheVersion
+                || count != lineDicts.count
+                || (duration > 0 && !lines.isEmpty && lastTime < duration * 0.8)
+            if invalid {
+                dict.removeValue(forKey: identityKey)
+                writeObject(named: lyricsCacheCollection, dict)
+                saveLyricsCacheOrder(lyricsCacheOrder().filter { $0 != identityKey })
+                return nil
+            }
+            return lines
+        }
+        // Legacy b49 entry: a plain line array with no metadata.
+        // Valid (the global version wipe above already cleared
+        // version-1 entries); it gains metadata on its next put.
+        guard let rawLines = raw as? [[String: Any]] else { return nil }
+        return rawLines.map(StoredLyricLine.init(json:))
     }
 
-    static func putLyrics(_ lines: [StoredLyricLine], for identityKey: String) {
+    /// Stores lyrics with per-entry metadata (b49sweep): cache
+    /// version + duration + line count, validated on read (see
+    /// cachedLyrics). `duration` is the song's duration when the
+    /// caller knows it (the player view model can pass
+    /// song.dur); 0 falls back to the last line's time, in which
+    /// case the read-side 80% check is a no-op and the b49
+    /// call-site truncation guard stays the live check.
+    /// Eviction is oldest-inserted first via the order list —
+    /// never `cache.keys.first`.
+    static func putLyrics(_ lines: [StoredLyricLine], for identityKey: String, duration: TimeInterval = 0) {
         var cache = readObject(named: lyricsCacheCollection)
-        cache[identityKey] = lines.map { $0.toJSON() }
+        let lastTime = lines.map(\.t).max() ?? 0
+        cache[identityKey] = [
+            "v": lyricsCacheVersion,
+            "dur": duration > 0 ? duration : lastTime,
+            "count": lines.count,
+            "lines": lines.map { $0.toJSON() },
+        ] as [String: Any]
+        var order = lyricsCacheOrder().filter { cache[$0] != nil }
+        order.removeAll(where: { $0 == identityKey })
+        let unknown = cache.keys
+            .filter { $0 != identityKey && !order.contains($0) }
+            .sorted()
+        order = unknown + order + [identityKey]
         while cache.count > maxLyricsCache {
-            if let first = cache.keys.first { cache.removeValue(forKey: first) }
+            guard let oldest = order.first(where: { $0 != identityKey }) else { break }
+            order.removeAll(where: { $0 == oldest })
+            cache.removeValue(forKey: oldest)
         }
         writeObject(named: lyricsCacheCollection, cache)
+        saveLyricsCacheOrder(order)
         UserDefaults.standard.set(lyricsCacheVersion, forKey: lyricsCacheVersionKey)
     }
 
@@ -761,6 +831,22 @@ enum MusicLibraryStore {
     static func saveDailyTracks(_ tracks: [MusicSong], for dayKey: String) {
         var dict = readObject(named: dailyCollection)
         dict[dayKey] = tracks.map { $0.toJSON() }
+        // b49sweep: prune day keys older than ~7 days on save —
+        // nothing ever pruned them, so the file grew one key per
+        // day forever. Only keys that parse as YYYY-MM-DD dates
+        // are pruned; an unparseable key is kept, never deleted
+        // on a guess. (Load-side validity — only today's key
+        // counts — lives in HomeViewModel.)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        let cutoff = Calendar.current.startOfDay(
+            for: Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date.distantPast)
+        for key in dict.keys where key != dayKey {
+            if let date = formatter.date(from: key), date < cutoff {
+                dict.removeValue(forKey: key)
+            }
+        }
         writeObject(named: dailyCollection, dict)
     }
 

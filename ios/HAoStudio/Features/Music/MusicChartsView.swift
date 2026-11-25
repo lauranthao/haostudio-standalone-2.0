@@ -24,6 +24,12 @@ final class MusicChartsViewModel: ObservableObject {
     /// Top tracks per chart for the grid cards (b45-b, Coda
     /// §3.9: the card shows the top 3). Lazy, cached 1800s.
     @Published private(set) var topTracks: [String: [MusicSong]] = [:]
+    /// Charts whose top-3 import failed or came back empty:
+    /// their cards offer a retry tap instead of a permanent
+    /// skeleton. (The old code stamped the cache and stored []
+    /// unconditionally, so a failed card never retried until a
+    /// whole-page pull-to-refresh.)
+    @Published private(set) var topTracksFailed: Set<String> = []
 
     private var topTracksLoadedAt: [String: Date] = [:]
     private var topTracksLoading: Set<String> = []
@@ -93,6 +99,10 @@ final class MusicChartsViewModel: ObservableObject {
     }
 
     /// Lazy top-3 tracks for one chart card, cached 1800s.
+    /// The cache is stamped only on a non-empty success: an
+    /// empty import (failure or an empty playlist) records the
+    /// failure instead, so the card can retry — stamping it
+    /// would have hidden the failure for 1800 s.
     func loadTopTracks(chart: PlaylistSummary) {
         let now = Date()
         if let loadedAt = topTracksLoadedAt[chart.id],
@@ -102,12 +112,27 @@ final class MusicChartsViewModel: ObservableObject {
         }
         guard !topTracksLoading.contains(chart.id) else { return }
         topTracksLoading.insert(chart.id)
+        topTracksFailed.remove(chart.id)
         MusicPlaylistImportAPI.shared.importWyPlaylist(chart.id) { [weak self] imported in
             guard let self = self else { return }
             self.topTracksLoading.remove(chart.id)
+            let tracks = Array(imported.tracks.map(MusicSong.init(from:)).prefix(3))
+            guard !tracks.isEmpty else {
+                self.topTracksFailed.insert(chart.id)
+                return
+            }
             self.topTracksLoadedAt[chart.id] = Date()
-            self.topTracks[chart.id] = Array(imported.tracks.map(MusicSong.init(from:)).prefix(3))
+            self.topTracks[chart.id] = tracks
         }
+    }
+
+    /// Retry one failed card (the "加载失败，点击重试" tap).
+    /// The failed flag is cleared so the card shows skeletons
+    /// while the retry is in flight; loadTopTracks refuses to
+    /// run twice for the same chart, so a double tap is safe.
+    func retryTopTracks(chart: PlaylistSummary) {
+        topTracksFailed.remove(chart.id)
+        loadTopTracks(chart: chart)
     }
 }
 
@@ -195,6 +220,14 @@ struct MusicChartsView: View {
                             .foregroundStyle(theme.textSecondary)
                             .lineLimit(1)
                     }
+                } else if viewModel.topTracksFailed.contains(chart.id) {
+                    Button("加载失败，点击重试") {
+                        viewModel.retryTopTracks(chart: chart)
+                    }
+                    .font(.haoCaption)
+                    .foregroundStyle(theme.accentText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
                 } else {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(0..<3, id: \.self) { _ in
@@ -209,13 +242,6 @@ struct MusicChartsView: View {
         .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .contentShape(Rectangle())
         .onAppear { viewModel.loadTopTracks(chart: chart) }
-    }
-
-    private func chartSubtitle(_ chart: PlaylistSummary) -> String {
-        var parts: [String] = []
-        if !chart.desc.isEmpty { parts.append(chart.desc) }
-        if chart.trackCount > 0 { parts.append("\(chart.trackCount) 首") }
-        return parts.joined(separator: " · ")
     }
 }
 

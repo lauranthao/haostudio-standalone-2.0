@@ -25,6 +25,9 @@ struct MusicSearchView: View {
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
     @StateObject private var searchVM = MusicSearchViewModel()
     @State private var query = ""
+    /// "清除" history confirmation: history deletion is
+    /// destructive with no undo, so it asks first.
+    @State private var showClearHistoryConfirm = false
 
     @Environment(\.haoTheme) private var theme
     @FocusState private var searchFocused: Bool
@@ -649,7 +652,7 @@ struct MusicSearchView: View {
                             .font(.haoBodyStrong)
                             .foregroundStyle(theme.textPrimary)
                         Spacer()
-                        Button("清除") { searchVM.clearHistory() }
+                        Button("清除") { showClearHistoryConfirm = true }
                             .font(.haoRowSubtitle)
                             .foregroundStyle(theme.accentText)
                             .buttonStyle(.plain)
@@ -703,6 +706,10 @@ struct MusicSearchView: View {
             }
         }
         .haoBottomChromePadding()
+        .confirmationDialog("清除搜索历史？", isPresented: $showClearHistoryConfirm, titleVisibility: .visible) {
+            Button("清除全部历史", role: .destructive) { searchVM.clearHistory() }
+            Button("取消", role: .cancel) {}
+        }
     }
 
 }

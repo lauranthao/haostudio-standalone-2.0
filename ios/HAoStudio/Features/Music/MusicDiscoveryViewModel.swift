@@ -99,6 +99,15 @@ final class MusicDiscoveryViewModel: ObservableObject {
     @Published private(set) var exploreSnapshots: [String: [PlaylistSummary]] = [:]
     @Published private(set) var exploreLoading: Set<String> = []
     @Published private(set) var exploreFailed: Set<String> = []
+    /// Categories the explore page actually renders (chips +
+    /// shelves). Only categories with a non-empty result from
+    /// the loaded plaza data are listed — the 26 chips used to
+    /// render unconditionally while most keyword filters matched
+    /// nothing, so most shelves were empty by construction ("该
+    /// 分类暂无歌单"). Starts as ["全部"] until the first plaza
+    /// fetch lands; "全部" itself is always valid (it is the
+    /// merged list, and its failure state carries the retry).
+    @Published private(set) var exploreAvailableCategories: [String] = ["全部"]
 
     private var exploreAllPlaylists: [PlaylistSummary] = []
     private var exploreAllLoadedAt: Date? = nil
@@ -133,11 +142,17 @@ final class MusicDiscoveryViewModel: ObservableObject {
     /// Daily picks, cached per day key (Coda §3.1: 86400s, day-keyed).
     /// A plain call serves the cache; `force` regenerates today
     /// (pull-to-refresh and the "刷新今日推荐" menu — the menu was
-    /// a no-op while the cache lived, b45-g).
+    /// a no-op while the cache lived, b45-g). The cache is trusted
+    /// only when it validates (HomeViewModel.validatedDailyTracks:
+    /// today's key, non-empty, every track with a real song id) —
+    /// a stale / empty / identity-less entry is recomputed instead
+    /// of shown, same rule as the home reader of this cache.
     func reloadDaily(force: Bool = false) {
         let dayKey = musicDayKey(of: Date())
         dailyDayKey = dayKey
-        if !force, let cached = MusicLibraryStore.dailyTracks(for: dayKey) {
+        if !force, let cached = HomeViewModel.validatedDailyTracks(
+            MusicLibraryStore.dailyTracks(for: dayKey), dayKey: dayKey
+        ) {
             dailyTracks = cached
             rebuildDailySpares()
             return
@@ -240,6 +255,21 @@ final class MusicDiscoveryViewModel: ObservableObject {
         }
     }
 
+    /// Categories with a non-empty result from the loaded plaza
+    /// data, in exploreCategories order. Pure: the same filter
+    /// the shelves use, so a listed category can never render an
+    /// empty shelf. "全部" is always listed (it is the merged
+    /// list itself — its failure state carries the retry).
+    /// No NetEase category/tag playlist endpoint exists in the
+    /// codebase (plaza is the only per-platform list source), so
+    /// no new network API is invented here: availability is
+    /// computed from the merged plaza data already loaded.
+    static func availableCategories(from all: [PlaylistSummary]) -> [String] {
+        exploreCategories.filter { category in
+            category == "全部" || !filterExplorePlaylists(all, category: category).isEmpty
+        }
+    }
+
     /// Merged plaza from all four platforms, loaded once and
     /// shared by every category snapshot.
     private func loadExploreAll(completion: @escaping ([PlaylistSummary]?) -> Void) {
@@ -264,6 +294,7 @@ final class MusicDiscoveryViewModel: ObservableObject {
                     } else {
                         self.exploreAllPlaylists = merged
                         self.exploreAllLoadedAt = Date()
+                        self.exploreAvailableCategories = Self.availableCategories(from: merged)
                         completion(merged)
                     }
                 }
@@ -378,9 +409,14 @@ final class MusicDiscoveryViewModel: ObservableObject {
             let day = dayFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(event.at) / 1000))
             byDay[day] = (byDay[day] ?? 0) + 1
         }
+        // No force unwraps: songOrder is built only from keys
+        // inserted into bySong in the same loop, but a lookup can
+        // still only be trusted via compactMap — one future edit
+        // to the loop would otherwise turn this into a crash.
         let topSongs = songOrder
-            .sorted { bySong[$0]!.plays > bySong[$1]!.plays }
-            .map { ListenReportTopSong(song: bySong[$0]!.song, plays: bySong[$0]!.plays) }
+            .compactMap { bySong[$0] }
+            .sorted { $0.plays > $1.plays }
+            .map { ListenReportTopSong(song: $0.song, plays: $0.plays) }
         let topArtists = byArtist
             .sorted { $0.value > $1.value }
             .map { ListenReportTopArtist(artist: $0.key, plays: $0.value) }

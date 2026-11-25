@@ -154,9 +154,13 @@ final class BackupUpdateFlow: ObservableObject {
                     self.alert = BackupUpdateAlert(
                         title: UpdateCheckLogic.importResultTitle(report: report),
                         message: UpdateCheckLogic.importResultMessage(report: report))
-                    if !report.rolledBack {
-                        NotificationCenter.default.post(name: .haoBackupImported, object: nil)
-                    }
+                    // b49sweep: no post here — the engine posts
+                    // `.haoBackupImported` once, on commit
+                    // (BackupEngineCore.applyPlannedImport). The
+                    // flow used to post it a second time per
+                    // import: harmless (idempotent reloads) but
+                    // double work, and the engine is the one
+                    // that knows commit vs rollback.
                 case .failure(let error):
                     self.alert = BackupUpdateAlert(
                         title: "导入失败",
@@ -306,28 +310,41 @@ enum UpdateSheetPhase: Equatable {
 /// IPA download failure reasons, shown as-is in the sheet.
 enum UpdateDownloadError: Error {
     case badStatus
+    case writeFailed
 
     var localizedDescription: String {
         switch self {
         case .badStatus:
             return "下载失败：服务器返回了错误，请稍后再试"
+        case .writeFailed:
+            return "下载失败：无法写入文件，请检查存储空间后重试"
         }
     }
 }
 
 /// IPA download with progress (completion handlers only, Swift
-/// 5.0). URLSessionDataDelegate accumulates bytes; the finished
-/// file lands in Documents so the Files app can see it. The
-/// URLSession retains its delegate until invalidated, so the
-/// downloader stays alive for the whole download.
+/// 5.0). The bytes stream straight to a file in Documents (the
+/// Files app can see it) — the old code accumulated the whole
+/// ~16 MB IPA in a Data buffer with no resume. The URLSession
+/// retains its delegate until invalidated, so the downloader
+/// stays alive for the whole download. A failed download
+/// deletes its partial file; a non-2xx status fails before a
+/// single byte is written.
 final class UpdateIPADownloader: NSObject, URLSessionDataDelegate {
     private let url: URL
     private let fileName: String
     private let progress: (Double) -> Void
     private let completion: (Result<URL, Error>) -> Void
-    private var received = Data()
+    private var receivedCount: Int64 = 0
     private var expectedLength: Int64 = 0
+    private var fileHandle: FileHandle?
     private var session: URLSession?
+    private var finished = false
+
+    /// The destination file, created on the first 2xx response.
+    private var fileURL: URL {
+        LocalStore.documentsDirectory().appendingPathComponent(fileName)
+    }
 
     static func download(
         url: URL,
@@ -368,38 +385,67 @@ final class UpdateIPADownloader: NSObject, URLSessionDataDelegate {
         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
         expectedLength = response.expectedContentLength
+        // Fail before writing anything on a non-2xx status.
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            completionHandler(.cancel)
+            finish(.failure(UpdateDownloadError.badStatus))
+            return
+        }
+        // Stream to disk: create (or truncate) the destination
+        // and hold a write handle for the incoming chunks.
+        let destination = fileURL
+        do {
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            guard FileManager.default.createFile(atPath: destination.path, contents: nil) else {
+                throw UpdateDownloadError.writeFailed
+            }
+            fileHandle = try FileHandle(forWritingTo: destination)
+        } catch {
+            completionHandler(.cancel)
+            finish(.failure(error))
+            return
+        }
         completionHandler(.allow)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        received.append(data)
+        fileHandle?.write(data)
+        receivedCount += Int64(data.count)
         if expectedLength > 0 {
-            progress(Double(received.count) / Double(expectedLength))
+            progress(Double(receivedCount) / Double(expectedLength))
         }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error = error {
+            removePartialFile()
             finish(.failure(error))
             return
         }
-        guard let http = task.response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            finish(.failure(UpdateDownloadError.badStatus))
+        // Already finished from the response handler (non-2xx or
+        // file-create failure): didCompleteWithError still fires
+        // after a cancel, and must not complete twice.
+        guard !finished else { return }
+        guard fileHandle != nil else {
+            finish(.failure(UpdateDownloadError.writeFailed))
             return
         }
-        let fileURL = LocalStore.documentsDirectory().appendingPathComponent(fileName)
-        do {
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                try FileManager.default.removeItem(at: fileURL)
-            }
-            try received.write(to: fileURL, options: [.atomic])
-            finish(.success(fileURL))
-        } catch {
-            finish(.failure(error))
-        }
+        finish(.success(fileURL))
+    }
+
+    /// Deletes a partially downloaded file after a failure, so
+    /// a broken IPA never sits in Documents looking complete.
+    private func removePartialFile() {
+        try? FileManager.default.removeItem(at: fileURL)
     }
 
     private func finish(_ result: Result<URL, Error>) {
+        guard !finished else { return }
+        finished = true
+        try? fileHandle?.close()
+        fileHandle = nil
         session?.finishTasksAndInvalidate()
         session = nil
         completion(result)
