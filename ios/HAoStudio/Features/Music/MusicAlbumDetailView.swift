@@ -11,6 +11,11 @@
 // the album name first and loading the first artist-matching
 // hit. A detail that still comes back empty shows an honest
 // empty state, never a fake track list.
+//
+// b45-b (Coda §3.6): the page uses the shared detail Hero +
+// PrimaryActions (cover on top, never a big play button in the
+// middle), metadata "N 首歌曲 · 总时长 · 发布日期", and "该歌手
+// 的其他专辑" (first 12, horizontal shelf).
 
 import SwiftUI
 
@@ -18,8 +23,10 @@ import SwiftUI
 final class MusicAlbumDetailViewModel: ObservableObject {
     @Published private(set) var detail = AlbumDetail(name: "")
     @Published private(set) var isLoading = true
+    @Published private(set) var otherAlbums: [AlbumSummary] = []
 
     private let album: AlbumSummary
+    private var otherAlbumsLoaded = false
 
     init(album: AlbumSummary) {
         self.album = album
@@ -35,6 +42,30 @@ final class MusicAlbumDetailViewModel: ObservableObject {
         let year = Calendar.current.component(
             .year, from: Date(timeIntervalSince1970: TimeInterval(album.publishTime) / 1000))
         return year > 0 ? "\(year)" : ""
+    }
+
+    var publishDateText: String {
+        guard album.publishTime > 0 else { return "" }
+        let date = Date(timeIntervalSince1970: TimeInterval(album.publishTime) / 1000)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy年M月d日"
+        return formatter.string(from: date)
+    }
+
+    var totalDurationText: String {
+        let total = detail.songs.compactMap { $0.duration }.reduce(0, +)
+        guard total > 0 else { return "" }
+        return musicDurationText(seconds: Int(total))
+    }
+
+    /// "N 首歌曲 · 总时长 · 发布日期" (Coda §3.6 album metadata).
+    var metadataText: String {
+        var parts: [String] = []
+        if !detail.songs.isEmpty { parts.append("\(detail.songs.count) 首歌曲") }
+        if !totalDurationText.isEmpty { parts.append(totalDurationText) }
+        if !publishDateText.isEmpty { parts.append(publishDateText) }
+        return parts.joined(separator: " · ")
     }
 
     /// A real platform album id. Kugou's `album|artist` key and
@@ -74,6 +105,27 @@ final class MusicAlbumDetailViewModel: ObservableObject {
             guard let self = self else { return }
             self.isLoading = false
             self.detail = loaded
+            self.loadOtherAlbums()
+        }
+    }
+
+    /// "该歌手的其他专辑" (Coda §3.6): the artist's albums via
+    /// the artist API, current album excluded, first 12.
+    func loadOtherAlbums() {
+        guard !otherAlbumsLoaded else { return }
+        otherAlbumsLoaded = true
+        let artistName = detail.artist.isEmpty ? album.artist : detail.artist
+        guard !artistName.isEmpty else { return }
+        MusicArtistAPI.shared.searchArtists(platform: album.platform, keyword: artistName) { [weak self] hits in
+            guard let self = self else { return }
+            let target = MusicText.normalizeName(artistName)
+            guard let match = hits.first(where: { MusicText.normalizeName($0.name) == target }) ?? hits.first else { return }
+            MusicArtistAPI.shared.artistDetail(platform: self.album.platform, id: match.id, name: match.name) { [weak self] artistDetail in
+                guard let self = self else { return }
+                self.otherAlbums = Array(artistDetail.albums.filter {
+                    $0.name != self.album.name
+                }.prefix(12))
+            }
         }
     }
 }
@@ -83,6 +135,7 @@ struct MusicAlbumDetailView: View {
 
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
     @StateObject private var viewModel: MusicAlbumDetailViewModel
+    @State private var isFavAlbum = false
 
     @Environment(\.haoTheme) private var theme
 
@@ -106,16 +159,45 @@ struct MusicAlbumDetailView: View {
             } else {
                 List {
                     Section {
-                        albumHeader
+                        MusicDetailHero(
+                            coverURL: viewModel.detail.pic,
+                            title: viewModel.detail.name.isEmpty ? album.name : viewModel.detail.name,
+                            subtitle: viewModel.detail.artist.isEmpty ? album.artist : viewModel.detail.artist,
+                            metadata: viewModel.metadataText
+                        )
                     }
                     .listRowBackground(theme.scaffoldBackground)
                     .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+                    Section {
+                        HStack {
+                            Spacer()
+                            MusicDetailPrimaryActions(
+                                isFavourite: isFavAlbum,
+                                onToggleFavourite: {
+                                    isFavAlbum = MusicLibraryStore.toggleFavAlbum(album)
+                                },
+                                onPlay: { playerVM.playAll(viewModel.songs) },
+                                playEnabled: !viewModel.songs.isEmpty
+                            ) {
+                                ShareLink(item: "《\(album.name)》 - \(album.artist)") {
+                                    Label("分享", systemImage: "square.and.arrow.up")
+                                }
+                            }
+                            Spacer()
+                        }
+                    }
+                    .listRowBackground(theme.scaffoldBackground)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
                     Section {
                         ForEach(Array(viewModel.songs.enumerated()), id: \.element.id) { index, song in
                             MusicSongRow(
                                 song: song,
                                 isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
                                 trackNumber: index + 1,
+                                compact: true,
+                                showFavHeart: true,
                                 onTap: {
                                     playerVM.play(song: song, in: viewModel.songs, startAt: index)
                                 }
@@ -123,6 +205,27 @@ struct MusicAlbumDetailView: View {
                             .listRowBackground(theme.scaffoldBackground)
                             .listRowSeparatorTint(theme.hairline)
                         }
+                    }
+                    if !viewModel.otherAlbums.isEmpty {
+                        Section {
+                            MusicCodaSectionHeader(title: "该歌手的其他专辑")
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(alignment: .top, spacing: 16) {
+                                    ForEach(viewModel.otherAlbums) { other in
+                                        NavigationLink(destination: MusicAlbumDetailView(album: other)) {
+                                            MusicCoverCardBody(
+                                                coverURL: other.cover, title: other.name,
+                                                subtitle: other.artist
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+                        .listRowBackground(theme.scaffoldBackground)
+                        .listRowSeparator(.hidden)
                     }
                 }
                 .haoBottomChromePadding()
@@ -133,73 +236,9 @@ struct MusicAlbumDetailView: View {
         .background(theme.scaffoldBackground)
         .navigationTitle(album.name)
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { viewModel.load() }
-    }
-
-    /// Apple Music's big filled play capsule, under the header.
-    /// The toolbar capsule is gone — one play control, in the
-    /// header, where Apple Music puts it. Same playAll, no new
-    /// function.
-    private var playAllButton: some View {
-        Button(action: { playerVM.playAll(viewModel.songs) }) {
-            HStack(spacing: 8) {
-                Image(systemName: "play.fill")
-                    .font(.haoCalloutStrong)
-                Text("播放")
-                    .font(.haoCalloutStrong)
-            }
-            .foregroundStyle(theme.onAccent)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
-            .background(theme.accent, in: Capsule())
+        .onAppear {
+            viewModel.load()
+            isFavAlbum = MusicLibraryStore.isFavAlbum(id: album.id, name: album.name)
         }
-        .buttonStyle(MusicPressScaleStyle())
-        .disabled(viewModel.songs.isEmpty)
-        .accessibilityLabel("播放全部")
-    }
-
-    private var albumHeader: some View {
-        // Apple Music album page: big centred cover, title below
-        // it, artist in the accent, year / count / platform in
-        // muted grey — not a small cover on the left with text
-        // squeezed beside it.
-        VStack(spacing: 12) {
-            MusicCoverView(urlString: viewModel.detail.pic, size: 200, cornerRadius: 16)
-                .shadow(color: .black.opacity(0.25), radius: 16, y: 8)
-            Text(viewModel.detail.name.isEmpty ? album.name : viewModel.detail.name)
-                .font(.haoDetailTitle)
-                .foregroundStyle(theme.textPrimary)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-            Text(viewModel.detail.artist.isEmpty ? album.artist : viewModel.detail.artist)
-                .font(.haoCallout)
-                .foregroundStyle(theme.accentText)
-                .lineLimit(1)
-            HStack(spacing: 8) {
-                if !viewModel.yearText.isEmpty {
-                    Text(viewModel.yearText)
-                        .font(.haoFootnote)
-                        .foregroundStyle(theme.textMuted)
-                }
-                if viewModel.detail.songs.count > 0 {
-                    Text("共 \(viewModel.detail.songs.count) 首")
-                        .font(.haoFootnote)
-                        .foregroundStyle(theme.textMuted)
-                }
-                Text(album.platform.badgeName)
-                    .font(.haoCaption2Strong)
-                    .foregroundStyle(theme.textSecondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .strokeBorder(theme.hairline, lineWidth: 0.5)
-                    }
-            }
-            playAllButton
-                .padding(.top, 4)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
     }
 }

@@ -135,6 +135,15 @@ struct MyView: View {
     @State private var counts = MyEntryCounts()
     @State private var selectedLiveRoom: LiveRoom?
     @State private var showMigrationNotice = MigrationStore.migrationNoticeNeeded()
+    // b45-b (Coda §3.3): library groups data — created
+    // playlists, favourited playlists, favourited albums,
+    // favourited artists. Local only, no login.
+    @State private var libraryLists: [UserPlaylist] = []
+    @State private var libraryFavAlbums: [AlbumSummary] = []
+    @State private var libraryFavArtists: [ArtistSummary] = []
+    @State private var libraryFavPlaylistIds: Set<String> = []
+    @State private var showCreateList = false
+    @State private var newListName = ""
 
     var body: some View {
         NavigationStack {
@@ -182,11 +191,25 @@ struct MyView: View {
                 // other pages. The navigation bar stays hidden so a
                 // pushed page's own bar / back button is unaffected.
                 .toolbar(.hidden, for: .navigationBar)
+                // b45-b (Coda §3.3): new playlist via the system
+                // alert (textfield placeholder "歌单名称").
+                .alert("新建歌单", isPresented: $showCreateList) {
+                    TextField("歌单名称", text: $newListName)
+                    Button("保存") {
+                        let name = newListName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !name.isEmpty else { return }
+                        _ = MusicLibraryStore.createList(named: name)
+                        counts = MyEntryCounts.reload()
+                        reloadLibrary()
+                    }
+                    Button("取消", role: .cancel) { }
+                }
                 .navigationDestination(item: $selectedLiveRoom) { room in
                     LiveRoomView(room: room, playlist: [room])
                 }
                 .onAppear {
                     counts = MyEntryCounts.reload()
+                    reloadLibrary()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .haoBackupImported)) { _ in
                     // b35-sweep-settings: 导入备份后本页不重进，
@@ -204,9 +227,11 @@ struct MyView: View {
                     // re-triggers onAppear. Reload on the
                     // notifications the music leg already posts.
                     counts = MyEntryCounts.reload()
+                    reloadLibrary()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { _ in
                     counts = MyEntryCounts.reload()
+                    reloadLibrary()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .haoVideoFavChanged)) { _ in
                     // Same staleness as the music/live counts above:
@@ -234,6 +259,7 @@ struct MyView: View {
                     // A3: same staleness for the 歌单 count — a
                     // delete from the pushed playlist list now posts.
                     counts = MyEntryCounts.reload()
+                    reloadLibrary()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .haoMusicDownloadChanged)) { _ in
                     // A3: same staleness for the 我的下载 count — a
@@ -281,13 +307,100 @@ struct MyView: View {
             .background { HaoChromeScrollOffsetReader() }
     }
 
-    // MARK: - My entries
+    // MARK: - My entries (b45-b, Coda §3.3 library groups)
 
+    /// Library groups, in Coda order: created playlists →
+    /// favourited playlists → favourited albums → favourited
+    /// artists. Each group has a SectionHeader + (for created
+    /// lists) a "+" new button, a horizontal shelf with 8pt
+    /// vertical padding, and a secondary empty text with 12pt
+    /// vertical padding. Group titles sit at 16pt side margin
+    /// (not 20). Everything is local — the login-gated hero /
+    /// cloud / liked-albums blocks are replaced by these local
+    /// equivalents. b44's in-content title and anchor-free
+    /// structure above are untouched.
     private var entriesSection: some View {
         Section(header: SettingsSectionHeader(section: .my)) {
             if settings.sectionExpanded(SettingsSection.my.rawValue) {
+                libraryGroupHeader(title: "创建的歌单", showAdd: true)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 16))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                if libraryLists.isEmpty {
+                    Text("还没有创建的歌单，点右上角 + 新建一个。")
+                        .font(.haoSubhead)
+                        .foregroundStyle(theme.textSecondary)
+                        .padding(.vertical, 12)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                } else {
+                    playlistShelf(libraryLists)
+                        .padding(.vertical, 8)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+                libraryGroupHeader(title: "收藏的歌单")
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 16))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                let favLists = libraryLists.filter { libraryFavPlaylistIds.contains($0.id) }
+                if favLists.isEmpty {
+                    Text("还没有收藏的歌单，在歌单页点星标收藏。")
+                        .font(.haoSubhead)
+                        .foregroundStyle(theme.textSecondary)
+                        .padding(.vertical, 12)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                } else {
+                    playlistShelf(favLists)
+                        .padding(.vertical, 8)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+                libraryGroupHeader(title: "收藏的专辑")
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 16))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                if libraryFavAlbums.isEmpty {
+                    Text("还没有收藏的专辑，在专辑页点星标收藏。")
+                        .font(.haoSubhead)
+                        .foregroundStyle(theme.textSecondary)
+                        .padding(.vertical, 12)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                } else {
+                    albumShelf(libraryFavAlbums)
+                        .padding(.vertical, 8)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+                libraryGroupHeader(title: "收藏的歌手")
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 16))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                if libraryFavArtists.isEmpty {
+                    Text("还没有收藏的歌手，在歌手页点星标收藏。")
+                        .font(.haoSubhead)
+                        .foregroundStyle(theme.textSecondary)
+                        .padding(.vertical, 12)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                } else {
+                    artistShelf(libraryFavArtists)
+                        .padding(.vertical, 8)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
                 NavigationLink(destination: MyPlaylistsView()) {
-                    entryRow(icon: "music.note.list", title: "我的歌单", count: counts.playlists)
+                    entryRow(icon: "music.note.list", title: "全部歌单", count: counts.playlists)
                 }
                 NavigationLink(destination: MusicFavouritesView()) {
                     entryRow(icon: "heart.fill", title: "音乐收藏", count: counts.favourites)
@@ -312,6 +425,108 @@ struct MyView: View {
                 }
             }
         }
+    }
+
+    /// Coda §3.3 group header: SectionHeader + "+" new button
+    /// (plus 13pt semibold, 44×44).
+    private func libraryGroupHeader(title: String, showAdd: Bool = false) -> some View {
+        HStack {
+            Text(title)
+                .font(.haoSectionTitle)
+                .foregroundStyle(theme.textPrimary)
+            Spacer()
+            if showAdd {
+                Button(action: {
+                    newListName = ""
+                    showCreateList = true
+                }) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(theme.accentText)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("新建歌单")
+            }
+        }
+    }
+
+    /// Playlist shelf: cover + name + "N 首" subtitle.
+    private func playlistShelf(_ lists: [UserPlaylist]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 16) {
+                ForEach(lists) { list in
+                    NavigationLink(destination: MusicPlaylistDetailView(listId: list.id)) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            MusicCoverView(urlString: list.cover, size: 120, cornerRadius: 12)
+                            Text(list.name.isEmpty ? "未命名歌单" : list.name)
+                                .font(.haoSubheadStrong)
+                                .foregroundStyle(theme.textPrimary)
+                                .lineLimit(1)
+                                .frame(width: 120, alignment: .leading)
+                            Text("\(list.trackCount) 首")
+                                .font(.haoFootnote)
+                                .foregroundStyle(theme.textSecondary)
+                                .frame(width: 120, alignment: .leading)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func albumShelf(_ albums: [AlbumSummary]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 16) {
+                ForEach(albums) { album in
+                    NavigationLink(destination: MusicAlbumDetailView(album: album)) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            MusicCoverView(urlString: album.cover, size: 120, cornerRadius: 12)
+                            Text(album.name)
+                                .font(.haoSubheadStrong)
+                                .foregroundStyle(theme.textPrimary)
+                                .lineLimit(1)
+                                .frame(width: 120, alignment: .leading)
+                            Text(album.artist)
+                                .font(.haoFootnote)
+                                .foregroundStyle(theme.textSecondary)
+                                .lineLimit(1)
+                                .frame(width: 120, alignment: .leading)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func artistShelf(_ artists: [ArtistSummary]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 16) {
+                ForEach(artists, id: \.name) { artist in
+                    NavigationLink(destination: MusicArtistDetailView(artist: artist)) {
+                        VStack(spacing: 6) {
+                            MusicCoverView(urlString: artist.cover, size: 80, cornerRadius: 40)
+                            Text(artist.name)
+                                .font(.haoSubheadStrong)
+                                .foregroundStyle(theme.textPrimary)
+                                .lineLimit(1)
+                                .frame(width: 96, alignment: .center)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func reloadLibrary() {
+        libraryLists = MusicLibraryStore.getLists()
+        libraryFavAlbums = MusicLibraryStore.favAlbums()
+        libraryFavArtists = MusicLibraryStore.favArtists()
+        libraryFavPlaylistIds = MusicLibraryStore.favPlaylistIds()
     }
 
     /// One entry row: a 28pt rounded-square icon chip (accent
@@ -386,6 +601,8 @@ private struct MyPlaylistsView: View {
     @State private var lists: [UserPlaylist] = MusicLibraryStore.getLists()
     @State private var deleteTarget: UserPlaylist?
     @State private var showDeleteList = false
+    @State private var showCreateList = false
+    @State private var newListName = ""
 
     @Environment(\.haoTheme) private var theme
 
@@ -432,8 +649,35 @@ private struct MyPlaylistsView: View {
         .background(theme.scaffoldBackground)
         .navigationTitle("我的歌单")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // b45-b (Coda §3.3): "+" new button (plus 13pt
+            // semibold, 44×44) + system alert, placeholder
+            // "歌单名称".
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: {
+                    newListName = ""
+                    showCreateList = true
+                }) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("新建歌单")
+            }
+        }
         .onAppear {
             lists = MusicLibraryStore.getLists()
+        }
+        .alert("新建歌单", isPresented: $showCreateList) {
+            TextField("歌单名称", text: $newListName)
+            Button("保存") {
+                let name = newListName.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { return }
+                _ = MusicLibraryStore.createList(named: name)
+                lists = MusicLibraryStore.getLists()
+            }
+            Button("取消", role: .cancel) { }
         }
         .alert("删除歌单", isPresented: $showDeleteList) {
             Button("删除", role: .destructive) {
@@ -456,12 +700,41 @@ private struct MyPlaylistsView: View {
 /// shared music player view model (same as MusicFavouritesView);
 /// the row's menu offers favourite / add to playlist
 /// (build 36, item 19).
+///
+/// b45-b (Coda §3.8 RecentsView): play-all + sort / search, and
+/// the list is a reloadable PlaySource (.recent) — one tap
+/// replays the whole recent context. Recent updates in real
+/// time (chen 2026-11-20): a song played anywhere moves to the
+/// top at once, no page switch, no re-entry.
 private struct MyRecentPlaysView: View {
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
 
     @State private var recent: [MusicSong] = MusicLibraryStore.getRecent()
+    @State private var searchText = ""
+    @State private var sortNewestFirst = true
 
     @Environment(\.haoTheme) private var theme
+
+    /// The recent context as a PlaySource (Coda §9.2): kind +
+    /// id identify it, so a rename never changes the identity
+    /// and the whole list replays with one tap.
+    private let source = MusicPlaySource.recent
+
+    private var displayedRecent: [MusicSong] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        var list = recent
+        if !query.isEmpty {
+            list = list.filter {
+                $0.title.localizedCaseInsensitiveContains(query)
+                    || $0.artist.localizedCaseInsensitiveContains(query)
+                    || $0.album.localizedCaseInsensitiveContains(query)
+            }
+        }
+        if !sortNewestFirst {
+            list.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        }
+        return list
+    }
 
     var body: some View {
         Group {
@@ -471,19 +744,30 @@ private struct MyRecentPlaysView: View {
                     note: "播过的歌曲会出现在这里，点一下就能再播。")
             } else {
                 List {
-                    ForEach(Array(recent.enumerated()), id: \.element.id) { index, song in
-                        MusicSongRow(
-                            song: song,
-                            isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
-                            onTap: {
-                                playerVM.play(song: song, in: recent, startAt: index)
-                            },
-                            onToggleFav: {
-                                recent = MusicLibraryStore.getRecent()
-                            }
-                        )
-                        .listRowBackground(theme.scaffoldBackground)
-                        .listRowSeparatorTint(theme.hairline)
+                    Section {
+                        searchField
+                    }
+                    .listRowBackground(theme.scaffoldBackground)
+                    .listRowSeparator(.hidden)
+                    if displayedRecent.isEmpty {
+                        MusicEmptyState(icon: "magnifyingglass", title: "没有匹配的歌曲", note: "试试其他歌名、歌手或专辑")
+                            .listRowBackground(theme.scaffoldBackground)
+                            .listRowSeparator(.hidden)
+                    } else {
+                        ForEach(Array(displayedRecent.enumerated()), id: \.element.id) { index, song in
+                            MusicSongRow(
+                                song: song,
+                                isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
+                                onTap: {
+                                    playerVM.play(song: song, in: displayedRecent, startAt: index)
+                                },
+                                onToggleFav: {
+                                    recent = MusicLibraryStore.getRecent()
+                                }
+                            )
+                            .listRowBackground(theme.scaffoldBackground)
+                            .listRowSeparatorTint(theme.hairline)
+                        }
                     }
                 }
                 .haoBottomChromePadding()
@@ -494,6 +778,25 @@ private struct MyRecentPlaysView: View {
         .background(theme.scaffoldBackground)
         .navigationTitle("最近播放")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                HStack(spacing: 12) {
+                    Menu {
+                        Button("最新在前") { sortNewestFirst = true }
+                        Button("按歌名") { sortNewestFirst = false }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                            .foregroundStyle(theme.textPrimary)
+                    }
+                    .accessibilityLabel("排序")
+                    MusicCapsuleButton(icon: "play.fill", label: "播放全部", enabled: !recent.isEmpty) {
+                        // One-tap replay of the recent context
+                        // (PlaySource .recent, kind + id).
+                        playerVM.playAll(recent)
+                    }
+                }
+            }
+        }
         .onAppear {
             recent = MusicLibraryStore.getRecent()
         }
@@ -503,5 +806,27 @@ private struct MyRecentPlaysView: View {
         .onReceive(NotificationCenter.default.publisher(for: .haoMusicRecentChanged)) { _ in
             recent = MusicLibraryStore.getRecent()
         }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(theme.textSecondary)
+            TextField("搜索歌名、歌手或专辑", text: $searchText)
+                .font(.haoSubhead)
+                .submitLabel(.search)
+            if !searchText.isEmpty {
+                Button(action: { searchText = "" }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(theme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("清除搜索")
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 44)
+        .background(Color.primary.opacity(0.06), in: Capsule())
     }
 }

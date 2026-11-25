@@ -291,3 +291,279 @@ enum MusicRadio {
         return counts.sorted { $0.value > $1.value }.prefix(limit).map { $0.key }
     }
 }
+
+// MARK: - FM local view (Coda §3.7, b45-b)
+
+/// FM mode: personal FM (seeded local pool) or heartbeat
+/// (liked songs, seeded). Both are local-only — no login.
+enum MusicFMMode: Hashable {
+    case fm
+    case heartbeat
+
+    var title: String {
+        switch self {
+        case .fm: return "私人漫游"
+        case .heartbeat: return "心动模式"
+        }
+    }
+}
+
+/// FM refill policy (Coda §9.2 PersonalFMRefill): an empty
+/// queue retries at most 3 times, 1s apart; a refill that was
+/// superseded (mode changed / view gone) is abandoned; a
+/// final failure surfaces a toast via the caller.
+enum MusicFMRefill {
+    static let maxAttempts = 3
+    static let retryInterval: TimeInterval = 1.0
+}
+
+@MainActor
+final class MusicFMViewModel: ObservableObject {
+    @Published private(set) var queue: [MusicSong] = []
+    @Published private(set) var refillFailed = false
+
+    private let mode: MusicFMMode
+    private var generation = 0
+
+    init(mode: MusicFMMode) {
+        self.mode = mode
+    }
+
+    var title: String { mode.title }
+
+    func buildQueue() {
+        generation += 1
+        refillFailed = false
+        queue = Self.queueFor(mode: mode)
+    }
+
+    static func queueFor(mode: MusicFMMode) -> [MusicSong] {
+        let seed = musicDayKey(of: Date())
+        switch mode {
+        case .fm:
+            return MusicRadio.fmQueue(
+                favourites: MusicLibraryStore.favSongs(),
+                recent: MusicLibraryStore.getRecent(),
+                listenTop: MusicRadio.mostPlayedSongs(from: MusicLibraryStore.getListenLog(), limit: 20),
+                dislikedIds: MusicLibraryStore.fmDislikedIds(),
+                seed: seed
+            )
+        case .heartbeat:
+            return MusicRadio.heartbeatQueue(
+                favourites: MusicLibraryStore.favSongs(), seed: seed
+            )
+        }
+    }
+
+    /// Refill an empty queue: up to 3 attempts, 1s apart, with
+    /// a fresh seed each time. A newer generation (rebuild /
+    /// mode change) abandons the loop; exhaustion sets
+    /// refillFailed so the view can toast. No async/await —
+    /// preflight 5e bans it; the retry is a DispatchWorkItem
+    /// chain (the same pattern the codebase uses for delayed
+    /// work), and the work item — not the bare async closure —
+    /// is what DispatchQueue.main.asyncAfter executes.
+    func refillIfEmpty() {
+        refillStep(generation: generation, attempt: 1)
+    }
+
+    private func refillStep(generation gen: Int, attempt: Int) {
+        guard gen == generation else { return }
+        guard queue.isEmpty else { return }
+        guard attempt <= MusicFMRefill.maxAttempts else {
+            refillFailed = true
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, gen == self.generation else { return }
+            self.queue = Self.queueFor(mode: self.mode)
+            if self.queue.isEmpty {
+                self.refillStep(generation: gen, attempt: attempt + 1)
+            }
+        }
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + MusicFMRefill.retryInterval, execute: work)
+    }
+}
+
+/// Local FM page (Coda FMView layout, local data): cover phone
+/// 240 / other 300 (min 110, max min(width−48, height×0.38)),
+/// r16, shadow black 0.35 / r28 / y14, paused scale 0.94
+/// bouncy; title detailTitle (small screen cardTitle), artist
+/// secondary; controls spacing 24 — centre play 64 circle
+/// accentGradient (shadow accent 0.4 / r12 / y4, icon 24 bold),
+/// sides (dislike trash / next forward.fill) 48 circle primary
+/// 6% (icon 17 medium secondary), like 16pt in a 48 circle.
+/// Start button "开始漫游": capsule, white body semibold,
+/// padding 24×12, accentGradient, shadow accent 0.35 / r10 /
+/// y3. No login anywhere.
+struct MusicFMView: View {
+    var mode: MusicFMMode
+
+    @EnvironmentObject private var playerVM: MusicPlayerViewModel
+    @StateObject private var fmVM: MusicFMViewModel
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.haoTheme) private var theme
+    @State private var isFavCurrent = false
+
+    init(mode: MusicFMMode) {
+        self.mode = mode
+        _fmVM = StateObject(wrappedValue: MusicFMViewModel(mode: mode))
+    }
+
+    private var currentSong: MusicSong? { playerVM.currentSong }
+
+    var body: some View {
+        GeometryReader { geo in
+            let coverSize = fmCoverSize(width: geo.size.width, height: geo.size.height)
+            VStack(spacing: 0) {
+                Spacer()
+                if let song = currentSong {
+                    MusicCoverView(urlString: song.cover, size: coverSize, cornerRadius: 16)
+                        .shadow(color: .black.opacity(0.35), radius: 28, y: 14)
+                        .scaleEffect(playerVM.isPlaying ? 1.0 : 0.94)
+                        .animation(.spring(response: 0.4, dampingFraction: 0.6), value: playerVM.isPlaying)
+                    Text(song.title.isEmpty ? "未知歌曲" : song.title)
+                        .font(horizontalSizeClass == .compact ? .haoBodyStrong : .haoDetailTitle)
+                        .foregroundStyle(theme.textPrimary)
+                        .lineLimit(1)
+                        .padding(.top, 24)
+                    Text(song.artist.isEmpty ? "未知艺人" : song.artist)
+                        .font(.haoSubhead)
+                        .foregroundStyle(theme.textSecondary)
+                        .lineLimit(1)
+                        .padding(.top, 4)
+                    controlsRow(song: song)
+                        .padding(.top, 24)
+                } else {
+                    startState
+                }
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 24)
+        }
+        .background(theme.scaffoldBackground)
+        .navigationTitle(fmVM.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            fmVM.buildQueue()
+            if !fmVM.queue.isEmpty, playerVM.currentSong == nil {
+                playerVM.playAll(fmVM.queue)
+            }
+            refreshFav()
+            fmVM.refillIfEmpty()
+        }
+        .onChange(of: playerVM.currentSong?.identityKey) { _, _ in refreshFav() }
+        .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { _ in refreshFav() }
+        .onChange(of: fmVM.refillFailed) { _, failed in
+            if failed { playerVM.showToast("私人漫游暂时不可用") }
+        }
+    }
+
+    private func fmCoverSize(width: CGFloat, height: CGFloat) -> CGFloat {
+        let target: CGFloat = horizontalSizeClass == .compact ? 240 : 300
+        let capped = min(target, width - 48, height * 0.38)
+        return max(110, capped)
+    }
+
+    private var startState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "waveform")
+                .font(.system(size: 52, weight: .light))
+                .foregroundStyle(theme.textMuted)
+            Text(mode == .fm ? "开始漫游" : "心动模式")
+                .font(.haoDetailTitle)
+                .foregroundStyle(theme.textPrimary)
+            Text("从你收藏和常听的歌里出发。")
+                .font(.haoSubhead)
+                .foregroundStyle(theme.textSecondary)
+            Button(action: startPlayback) {
+                Text("开始漫游")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .background(
+                        LinearGradient(
+                            colors: [theme.accent, theme.accent.opacity(0.7)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        ),
+                        in: Capsule()
+                    )
+                    .shadow(color: theme.accent.opacity(0.35), radius: 10, y: 3)
+            }
+            .buttonStyle(MusicPressScaleStyle())
+        }
+    }
+
+    private func startPlayback() {
+        fmVM.buildQueue()
+        if fmVM.queue.isEmpty {
+            fmVM.refillIfEmpty()
+            return
+        }
+        playerVM.playAll(fmVM.queue)
+    }
+
+    private func controlsRow(song: MusicSong) -> some View {
+        HStack(spacing: 24) {
+            Button(action: {
+                MusicLibraryStore.addFMDisliked(key: song.identityKey)
+                playerVM.next()
+            }) {
+                Image(systemName: "trash")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(theme.textSecondary)
+                    .frame(width: 48, height: 48)
+                    .background(Color.primary.opacity(0.06), in: Circle())
+            }
+            .buttonStyle(MusicPressScaleStyle())
+            .accessibilityLabel("不喜欢，下一首")
+            Button(action: {
+                isFavCurrent = MusicLibraryStore.toggleFav(song)
+            }) {
+                Image(systemName: isFavCurrent ? "heart.fill" : "heart")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(isFavCurrent ? theme.liveRed : theme.textSecondary)
+                    .frame(width: 48, height: 48)
+                    .background(Color.primary.opacity(0.06), in: Circle())
+            }
+            .buttonStyle(MusicPressScaleStyle())
+            .accessibilityLabel(isFavCurrent ? "取消收藏" : "收藏")
+            Button(action: { playerVM.togglePlayPause() }) {
+                Image(systemName: playerVM.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 64, height: 64)
+                    .background(
+                        LinearGradient(
+                            colors: [theme.accent, theme.accent.opacity(0.7)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        ),
+                        in: Circle()
+                    )
+                    .shadow(color: theme.accent.opacity(0.4), radius: 12, y: 4)
+            }
+            .buttonStyle(MusicPressScaleStyle())
+            .accessibilityLabel(playerVM.isPlaying ? "暂停" : "播放")
+            Button(action: { playerVM.next() }) {
+                Image(systemName: "forward.fill")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(theme.textSecondary)
+                    .frame(width: 48, height: 48)
+                    .background(Color.primary.opacity(0.06), in: Circle())
+            }
+            .buttonStyle(MusicPressScaleStyle())
+            .accessibilityLabel("下一首")
+        }
+    }
+
+    private func refreshFav() {
+        if let song = playerVM.currentSong {
+            isFavCurrent = MusicLibraryStore.isFav(song)
+        } else {
+            isFavCurrent = false
+        }
+    }
+}

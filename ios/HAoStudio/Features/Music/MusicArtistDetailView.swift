@@ -9,6 +9,14 @@
 // with an empty mid, or a name-only artist from the player)
 // resolves by searching the artist name first and loading the
 // first exact hit.
+//
+// b45-b (Coda §3.6): shared detail Hero (circular cover,
+// subtitle = aliases joined with " / " or "歌手") + Primary
+// Actions; sections in order: hot songs (horizontal shelf,
+// 7 rows per column) → albums → EP & singles → similar artists.
+// Albums cap 60, albums and EP/singles split by track count
+// (≥ 8 tracks = album). Similar artists have no API in this
+// app, so that section is omitted rather than faked.
 
 import SwiftUI
 
@@ -26,6 +34,17 @@ final class MusicArtistDetailViewModel: ObservableObject {
 
     var songs: [MusicSong] {
         detail.songs.map(MusicSong.init(from:))
+    }
+
+    /// Albums (≥ 8 tracks), capped at 60 total with EP/singles.
+    var albums: [AlbumSummary] {
+        Array(detail.albums.filter { $0.songCount >= 8 || $0.songCount == 0 }.prefix(60))
+    }
+
+    /// EP & singles (< 8 tracks), from the same capped pool.
+    var epsAndSingles: [AlbumSummary] {
+        let capped = Array(detail.albums.prefix(60))
+        return capped.filter { $0.songCount > 0 && $0.songCount < 8 }
     }
 
     func load() {
@@ -64,12 +83,24 @@ struct MusicArtistDetailView: View {
 
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
     @StateObject private var viewModel: MusicArtistDetailViewModel
+    @State private var isFavArtist = false
 
     @Environment(\.haoTheme) private var theme
 
     init(artist: ArtistSummary) {
         self.artist = artist
         _viewModel = StateObject(wrappedValue: MusicArtistDetailViewModel(artist: artist))
+    }
+
+    /// Coda §3.6 artist subtitle: aliases joined with " / ",
+    /// or "歌手" when there are none.
+    private var subtitleText: String {
+        let aliases = artist.alias
+            .split(separator: "/")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if aliases.isEmpty { return "歌手" }
+        return aliases.joined(separator: " / ")
     }
 
     var body: some View {
@@ -91,85 +122,70 @@ struct MusicArtistDetailView: View {
         .background(theme.scaffoldBackground)
         .navigationTitle(artist.name)
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { viewModel.load() }
-    }
-
-    /// Same big filled play capsule as the album header — one
-    /// play control, under the header. The toolbar capsule is
-    /// gone (see MusicAlbumDetailView).
-    private var playAllButton: some View {
-        Button(action: { playerVM.playAll(viewModel.songs) }) {
-            HStack(spacing: 8) {
-                Image(systemName: "play.fill")
-                    .font(.haoCalloutStrong)
-                Text("播放")
-                    .font(.haoCalloutStrong)
-            }
-            .foregroundStyle(theme.onAccent)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
-            .background(theme.accent, in: Capsule())
+        .onAppear {
+            viewModel.load()
+            isFavArtist = MusicLibraryStore.isFavArtist(id: artist.id, name: artist.name)
         }
-        .buttonStyle(MusicPressScaleStyle())
-        .disabled(viewModel.songs.isEmpty)
-        .accessibilityLabel("播放全部")
     }
 
     private var contentList: some View {
         List {
             Section {
-                artistHeader
+                MusicDetailHero(
+                    coverURL: viewModel.detail.pic,
+                    isCircular: true,
+                    title: viewModel.detail.name.isEmpty ? artist.name : viewModel.detail.name,
+                    subtitle: subtitleText,
+                    metadata: countsText
+                )
             }
             .listRowBackground(theme.scaffoldBackground)
             .listRowSeparator(.hidden)
-            if !viewModel.songs.isEmpty {
-                Section("热门歌曲") {
-                    ForEach(Array(viewModel.songs.prefix(30).enumerated()), id: \.element.id) { index, song in
-                        MusicSongRow(
-                            song: song,
-                            isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
-                            trackNumber: index + 1,
-                            onTap: {
-                                playerVM.play(song: song, in: viewModel.songs, startAt: index)
-                            }
-                        )
-                        .listRowBackground(theme.scaffoldBackground)
-                        .listRowSeparatorTint(theme.hairline)
+            .listRowInsets(EdgeInsets())
+            Section {
+                HStack {
+                    Spacer()
+                    MusicDetailPrimaryActions(
+                        isFavourite: isFavArtist,
+                        onToggleFavourite: {
+                            isFavArtist = MusicLibraryStore.toggleFavArtist(artist)
+                        },
+                        onPlay: { playerVM.playAll(viewModel.songs) },
+                        playEnabled: !viewModel.songs.isEmpty
+                    ) {
+                        ShareLink(item: artist.name) {
+                            Label("分享", systemImage: "square.and.arrow.up")
+                        }
                     }
+                    Spacer()
                 }
             }
-            if !viewModel.detail.albums.isEmpty {
-                Section("专辑") {
-                    // Apple Music artist page: albums are a
-                    // horizontal shelf of square cards, not a
-                    // vertical list of small rows.
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 16) {
-                            ForEach(viewModel.detail.albums) { album in
-                                NavigationLink(destination: MusicAlbumDetailView(album: album)) {
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        MusicCoverView(urlString: album.cover, size: 120, cornerRadius: 10)
-                                        Text(album.name)
-                                            .font(.haoFootnoteStrong)
-                                            .foregroundStyle(theme.textPrimary)
-                                            .lineLimit(2)
-                                            .frame(width: 120, alignment: .leading)
-                                        Text(albumRowSubtitle(album))
-                                            .font(.haoCaption)
-                                            .foregroundStyle(theme.textSecondary)
-                                            .lineLimit(1)
-                                            .frame(width: 120, alignment: .leading)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 0))
-                    .listRowBackground(theme.scaffoldBackground)
-                    .listRowSeparator(.hidden)
+            .listRowBackground(theme.scaffoldBackground)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets())
+            if !viewModel.songs.isEmpty {
+                Section {
+                    MusicCodaSectionHeader(title: "热门歌曲")
+                    hotSongsShelf
                 }
+                .listRowBackground(theme.scaffoldBackground)
+                .listRowSeparator(.hidden)
+            }
+            if !viewModel.albums.isEmpty {
+                Section {
+                    MusicCodaSectionHeader(title: "专辑")
+                    albumShelf(viewModel.albums)
+                }
+                .listRowBackground(theme.scaffoldBackground)
+                .listRowSeparator(.hidden)
+            }
+            if !viewModel.epsAndSingles.isEmpty {
+                Section {
+                    MusicCodaSectionHeader(title: "EP & 单曲")
+                    albumShelf(viewModel.epsAndSingles)
+                }
+                .listRowBackground(theme.scaffoldBackground)
+                .listRowSeparator(.hidden)
             }
         }
         .haoBottomChromePadding()
@@ -177,52 +193,60 @@ struct MusicArtistDetailView: View {
         .scrollContentBackground(.hidden)
     }
 
-    private var artistHeader: some View {
-        // Apple Music artist page: big centred portrait, name
-        // below it, counts in muted grey — not a small circle on
-        // the left with text squeezed beside it.
-        VStack(spacing: 12) {
-            MusicCoverView(urlString: viewModel.detail.pic, size: 160, cornerRadius: 80)
-                .shadow(color: .black.opacity(0.25), radius: 16, y: 8)
-            Text(viewModel.detail.name.isEmpty ? artist.name : viewModel.detail.name)
-                .font(.haoDetailTitle)
-                .foregroundStyle(theme.textPrimary)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-            if !artist.alias.isEmpty {
-                Text("又名 \(artist.alias)")
-                    .font(.haoRowSubtitle)
-                    .foregroundStyle(theme.textSecondary)
-                    .lineLimit(1)
-            }
-            if !countsText.isEmpty {
-                Text(countsText)
-                    .font(.haoFootnote)
-                    .foregroundStyle(theme.textMuted)
-            }
-            Text(artist.platform.badgeName)
-                .font(.haoCaption2Strong)
-                .foregroundStyle(theme.textSecondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .strokeBorder(theme.hairline, lineWidth: 0.5)
+    /// Hot songs as a horizontal shelf: 7 compact rows per
+    /// column (Coda §3.6). Column width from the real screen
+    /// width (page side margins), never hardcoded.
+    private var hotSongsShelf: some View {
+        let columnWidth = UIScreen.main.bounds.width - 40 - 20
+        let indexed = Array(viewModel.songs.enumerated())
+        let columns = indexed.chunked(into: 7)
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 16) {
+                ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
+                    VStack(spacing: 1) {
+                        ForEach(column, id: \.element.id) { item in
+                            MusicSongRow(
+                                song: item.element,
+                                isPlaying: playerVM.currentSong?.identityKey == item.element.identityKey && playerVM.isPlaying,
+                                trackNumber: item.offset + 1,
+                                compact: true,
+                                onTap: {
+                                    playerVM.play(song: item.element, in: viewModel.songs, startAt: item.offset)
+                                }
+                            )
+                            .frame(width: columnWidth, alignment: .leading)
+                        }
+                    }
+                    .frame(width: columnWidth, alignment: .leading)
                 }
-            playAllButton
-                .padding(.top, 4)
+            }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
+    }
+
+    private func albumShelf(_ albums: [AlbumSummary]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 16) {
+                ForEach(albums) { album in
+                    NavigationLink(destination: MusicAlbumDetailView(album: album)) {
+                        MusicCoverCardBody(
+                            coverURL: album.cover, title: album.name,
+                            subtitle: albumRowSubtitle(album)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.vertical, 4)
+        }
     }
 
     private var countsText: String {
         let songs = viewModel.detail.musicSize
         let albums = viewModel.detail.albumSize
         switch (songs > 0, albums > 0) {
-        case (true, true): return "歌曲 \(songs) 首 · 专辑 \(albums) 张"
-        case (true, false): return "歌曲 \(songs) 首"
-        case (false, true): return "专辑 \(albums) 张"
+        case (true, true): return "\(songs) 首歌曲 · \(albums) 张专辑"
+        case (true, false): return "\(songs) 首歌曲"
+        case (false, true): return "\(albums) 张专辑"
         case (false, false): return ""
         }
     }

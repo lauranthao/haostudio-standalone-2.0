@@ -85,6 +85,36 @@ final class MusicDiscoveryViewModel: ObservableObject {
     @Published private(set) var plazaLoading = false
     @Published private(set) var plazaFailed = false
 
+    // MARK: - Daily replacement spares (b45-b, Coda §3.5)
+
+    /// Spare picks behind today's daily list, so "不喜欢换一首"
+    /// can replace a song in place. Empty = no replacement left
+    /// (the button hides instead of going dead).
+    @Published private(set) var dailySpares: [MusicSong] = []
+
+    // MARK: - Explore snapshots (b45-b, Coda §3.9)
+
+    /// Per-category playlist snapshots, cached 15 minutes
+    /// (Coda §3.9: switching categories answers instantly).
+    @Published private(set) var exploreSnapshots: [String: [PlaylistSummary]] = [:]
+    @Published private(set) var exploreLoading: Set<String> = []
+    @Published private(set) var exploreFailed: Set<String> = []
+
+    private var exploreAllPlaylists: [PlaylistSummary] = []
+    private var exploreAllLoadedAt: Date? = nil
+    private var exploreLoadedAt: [String: Date] = [:]
+
+    /// Coda §3.9: 26 category chips. 排行榜 is deliberately
+    /// excluded — it already lives on the home / charts page.
+    static let exploreCategories = [
+        "全部", "推荐歌单", "精品歌单", "官方", "华语", "流行", "摇滚",
+        "民谣", "电子", "轻音乐", "说唱", "爵士", "古典", "影视原声",
+        "ACG", "古风", "怀旧", "治愈", "放松", "伤感", "快乐", "学习",
+        "工作", "运动", "驾车", "夜晚",
+    ]
+
+    static let exploreSnapshotTTL: TimeInterval = 900
+
     private var listenLog: [ListenEvent] = []
 
     init() {
@@ -105,6 +135,7 @@ final class MusicDiscoveryViewModel: ObservableObject {
         dailyDayKey = dayKey
         if let cached = MusicLibraryStore.dailyTracks(for: dayKey) {
             dailyTracks = cached
+            rebuildDailySpares()
             return
         }
         let picks = MusicRadio.dailyPicks(
@@ -118,6 +149,118 @@ final class MusicDiscoveryViewModel: ObservableObject {
         dailyTracks = picks
         if !picks.isEmpty {
             MusicLibraryStore.saveDailyTracks(picks, for: dayKey)
+        }
+        rebuildDailySpares()
+    }
+
+    /// Spares = the same ranked pool, past the first 20, so a
+    /// replacement is always a real next-ranked song, never a
+    /// random one.
+    private func rebuildDailySpares() {
+        let picks = MusicRadio.dailyPicks(
+            listenLog: listenLog,
+            favourites: MusicLibraryStore.favSongs(),
+            recent: MusicLibraryStore.getRecent(),
+            playlistTracks: MusicLibraryStore.getLists().flatMap { $0.tracks },
+            dislikedIds: MusicLibraryStore.fmDislikedIds(),
+            dayKey: dailyDayKey,
+            total: 40
+        )
+        let current = Set(dailyTracks.map { $0.identityKey })
+        dailySpares = picks.filter { !current.contains($0.identityKey) }
+    }
+
+    /// "不喜欢换一首" (Coda §3.5): replace the song in place
+    /// with the next spare, and persist the day's list. The
+    /// disliked song is also recorded so it never comes back.
+    func replaceDailySong(_ song: MusicSong) {
+        guard let index = dailyTracks.firstIndex(where: { $0.identityKey == song.identityKey }) else { return }
+        guard !dailySpares.isEmpty else { return }
+        MusicLibraryStore.addFMDisliked(key: song.identityKey)
+        dailyTracks[index] = dailySpares.removeFirst()
+        MusicLibraryStore.saveDailyTracks(dailyTracks, for: dailyDayKey)
+    }
+
+    // MARK: - Explore (b45-b, Coda §3.9)
+
+    func explorePlaylists(for category: String) -> [PlaylistSummary] {
+        return exploreSnapshots[category] ?? []
+    }
+
+    func loadExploreCategory(_ category: String) {
+        let now = Date()
+        if let loadedAt = exploreLoadedAt[category],
+           now.timeIntervalSince(loadedAt) < Self.exploreSnapshotTTL,
+           exploreSnapshots[category] != nil {
+            return
+        }
+        guard !exploreLoading.contains(category) else { return }
+        exploreLoading.insert(category)
+        exploreFailed.remove(category)
+        loadExploreAll { [weak self] all in
+            guard let self = self else { return }
+            self.exploreLoading.remove(category)
+            guard let all = all else {
+                if self.exploreSnapshots[category] == nil {
+                    self.exploreFailed.insert(category)
+                }
+                return
+            }
+            self.exploreLoadedAt[category] = Date()
+            self.exploreSnapshots[category] = Self.filterExplorePlaylists(all, category: category)
+        }
+    }
+
+    /// Merged plaza from all four platforms, loaded once and
+    /// shared by every category snapshot.
+    private func loadExploreAll(completion: @escaping ([PlaylistSummary]?) -> Void) {
+        let now = Date()
+        if let loadedAt = exploreAllLoadedAt,
+           now.timeIntervalSince(loadedAt) < Self.exploreSnapshotTTL,
+           !exploreAllPlaylists.isEmpty {
+            completion(exploreAllPlaylists)
+            return
+        }
+        let platforms: [MusicPlatform] = [.wy, .tx, .kg, .kw]
+        var merged: [PlaylistSummary] = []
+        var settled = 0
+        for platform in platforms {
+            MusicPlaylistImportAPI.shared.plaza(platform: platform) { [weak self] playlists in
+                guard let self = self else { return }
+                merged.append(contentsOf: playlists)
+                settled += 1
+                if settled == platforms.count {
+                    if merged.isEmpty {
+                        completion(nil)
+                    } else {
+                        self.exploreAllPlaylists = merged
+                        self.exploreAllLoadedAt = Date()
+                        completion(merged)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Category matching on the playlist's own text (name / desc /
+    /// creator). "全部" = everything; "推荐歌单" = NetEase plaza;
+    /// "精品歌单" = most-played; the rest match their keyword.
+    /// A category with no textual match shows an honest empty
+    /// state — no playlist is invented for it.
+    static func filterExplorePlaylists(_ all: [PlaylistSummary], category: String) -> [PlaylistSummary] {
+        switch category {
+        case "全部":
+            return all
+        case "推荐歌单":
+            return all.filter { $0.platform == .wy }
+        case "精品歌单":
+            return all.filter { $0.playCount >= 100_000 }.sorted { $0.playCount > $1.playCount }
+        default:
+            return all.filter {
+                $0.name.localizedCaseInsensitiveContains(category)
+                    || $0.desc.localizedCaseInsensitiveContains(category)
+                    || $0.creator.localizedCaseInsensitiveContains(category)
+            }
         }
     }
 
