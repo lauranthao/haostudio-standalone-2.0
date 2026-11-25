@@ -84,10 +84,8 @@ final class SettingsStore: ObservableObject {
     static let legacySongCacheEnabledKey = "hao_song_cache_enabled"
     static let legacySongCacheLimitMBKey = "hao_song_cache_limit_mb"
     /// Accepted disclaimer version (b45-coda 包 C, §4.3). Must
-    /// equal DisclaimerGate.currentVersion (3) to count.
+    /// equal DisclaimerGate.currentVersion (5) to count.
     static let disclaimerAcceptedVersionKey = "hao_disclaimer_accepted_version"
-    static let normalizationEnabledKey = "hao_music_normalization_enabled"
-    static let normalizationStrengthKey = "hao_music_normalization_strength"
     static let wallpaperEnabledKey = "hao_wallpaper_enabled"
     static let wallpaperCurrentKey = "hao_wallpaper_current"
     static let bgColorEnabledKey = "hao_bgcolor_enabled"
@@ -145,24 +143,6 @@ final class SettingsStore: ObservableObject {
     /// disagree.
     @Published var autoUpdateCheck: Bool {
         didSet { defaults.set(autoUpdateCheck, forKey: DefaultUpdateChecker.autoUpdateCheckKey) }
-    }
-
-    /// Music loudness normalisation on/off.
-    @Published var normalizationEnabled: Bool {
-        didSet { defaults.set(normalizationEnabled, forKey: Self.normalizationEnabledKey) }
-    }
-
-    /// Normalisation strength, 0...2 (0 weak, 2 strong). Clamped
-    /// on every write; default 1.
-    @Published var normalizationStrength: Int {
-        didSet {
-            let clamped = min(2, max(0, normalizationStrength))
-            if clamped != normalizationStrength {
-                normalizationStrength = clamped
-                return
-            }
-            defaults.set(normalizationStrength, forKey: Self.normalizationStrengthKey)
-        }
     }
 
     // MARK: - Video engine (VOD + live)
@@ -302,7 +282,7 @@ final class SettingsStore: ObservableObject {
     }
 
     /// Accepted disclaimer version (DisclaimerGate.currentVersion
-    /// = 3). 0 = never accepted.
+    /// = 5). 0 = never accepted.
     @Published var disclaimerAcceptedVersion: Int {
         didSet { defaults.set(disclaimerAcceptedVersion, forKey: Self.disclaimerAcceptedVersionKey) }
     }
@@ -416,8 +396,6 @@ final class SettingsStore: ObservableObject {
         self.mixWithOthers = SettingsStore.boolValue(defaults, key: Self.mixWithOthersKey, default: false)
         self.autoResume = SettingsStore.boolValue(defaults, key: Self.autoResumeKey, default: false)
         self.autoUpdateCheck = SettingsStore.boolValue(defaults, key: DefaultUpdateChecker.autoUpdateCheckKey, default: true)
-        self.normalizationEnabled = SettingsStore.boolValue(defaults, key: Self.normalizationEnabledKey, default: false)
-        self.normalizationStrength = SettingsStore.intValue(defaults, key: Self.normalizationStrengthKey, default: 1, range: 0...2)
 
         // Engine preference, with the one-time `videoPlayerKey` bridge.
         if defaults.object(forKey: Self.enginePreferenceKey) == nil,
@@ -502,8 +480,6 @@ final class SettingsStore: ObservableObject {
         mixWithOthers = SettingsStore.boolValue(defaults, key: Self.mixWithOthersKey, default: false)
         autoResume = SettingsStore.boolValue(defaults, key: Self.autoResumeKey, default: false)
         autoUpdateCheck = SettingsStore.boolValue(defaults, key: DefaultUpdateChecker.autoUpdateCheckKey, default: true)
-        normalizationEnabled = SettingsStore.boolValue(defaults, key: Self.normalizationEnabledKey, default: false)
-        normalizationStrength = SettingsStore.intValue(defaults, key: Self.normalizationStrengthKey, default: 1, range: 0...2)
 
         // Engine preference, with the one-time `videoPlayerKey` bridge.
         // b49fix2 P1-27: only assign when a key exists. The old

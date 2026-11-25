@@ -564,7 +564,12 @@ enum MusicLibraryStore {
             added = true
         }
         writeArray(named: favCollection, entries.map { $0.toJSON() })
-        NotificationCenter.default.post(name: .haoMusicFavChanged, object: nil)
+        // b49fix3 P2-22: the add/remove rides in the
+        // notification object — MainTabView's backup nudge fires
+        // on add only; the other listeners (star refresh, list
+        // reloads) ignore the object, so they still fire on
+        // remove as before.
+        NotificationCenter.default.post(name: .haoMusicFavChanged, object: added)
         return added
     }
 

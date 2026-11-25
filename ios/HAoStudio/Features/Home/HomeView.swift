@@ -60,15 +60,21 @@ struct HomeView: View {
                         HaoChromeScrollAnchor()
                             .id(HaoTabScrollTop.id(for: .home))
                         homeHeader
-                        welcomeCard
-                        continueWatchingSection
-                            .padding(.top, 12)
-                        continueListeningSection
-                            .padding(.top, 16)
-                        hotLiveSection
-                            .padding(.top, 16)
-                        dailySection
-                            .padding(.top, 16)
+                        // b49fix3 P1-3: the first frame shows the
+                        // title only — the welcome card + sections
+                        // appear once the first reload publishes
+                        // (isLoading), never as four empty states.
+                        if !viewModel.isLoading {
+                            welcomeCard
+                            continueWatchingSection
+                                .padding(.top, 12)
+                            continueListeningSection
+                                .padding(.top, 16)
+                            hotLiveSection
+                                .padding(.top, 16)
+                            dailySection
+                                .padding(.top, 16)
+                        }
                         Spacer(minLength: 16)
                     }
                     .haoBottomClearanceLandscapeAware(isLandscape: verticalSizeClass == .compact)
@@ -255,6 +261,26 @@ struct HomeView: View {
                     MusicCapsuleButton(icon: "music.note", label: "去音乐") {
                         NotificationCenter.default.post(name: .haoSwitchTab, object: HaoTab.music)
                     }
+                    MusicCapsuleButton(icon: "film", label: "去影视") {
+                        NotificationCenter.default.post(name: .haoSwitchTab, object: HaoTab.movies)
+                    }
+                }
+                HStack(spacing: 16) {
+                    // b49fix3 P1-14: first-run guidance — one
+                    // source-configuration action, no new
+                    // onboarding flow. Opens My → 设置 → 来源管理.
+                    Button("配置歌源/片源") {
+                        NotificationCenter.default.post(name: .haoSwitchTab, object: HaoTab.my)
+                        // Delayed: the My tab mounts on the next
+                        // render pass — a synchronous row post
+                        // would land before any listener exists
+                        // (same as the backup nudge in MainTabView).
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                            NotificationCenter.default.post(name: .haoOpenSettingsRow, object: "sources")
+                        }
+                    }
+                    .font(.haoFootnote)
+                    .foregroundStyle(theme.accentText)
                     Button("不再显示") {
                         welcomeDismissed = true
                     }
@@ -263,7 +289,7 @@ struct HomeView: View {
                 }
             }
             .padding(16)
-            .background(theme.accentSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(theme.accentSoft, in: RoundedRectangle(cornerRadius: HaoLayout.cornerLarge, style: .continuous))
             .padding(.horizontal, 24)
             .padding(.top, 12)
         }
@@ -279,7 +305,7 @@ struct HomeView: View {
     /// navigation bar.
     private var homeHeader: some View {
         Text("首页")
-            .font(.system(size: 34, weight: .bold))
+            .font(.haoScreenTitle)
             .foregroundStyle(theme.textPrimary)
             .padding(.horizontal, 24)
             .padding(.top, 12)
@@ -402,6 +428,21 @@ struct HomeView: View {
                     }
                 )
                 .onPreferenceChange(HomeLiveGridWidthKey.self) { liveGridWidth = $0 }
+                // b49fix3 P1-9: the status round failed for every
+                // room — the missing LIVE badges are a check
+                // failure, not "all offline". Retry re-checks
+                // (pull-to-refresh does the same, but this says
+                // so where the user is looking).
+                if viewModel.liveStatusFailed {
+                    Button("直播状态查不到，重试") {
+                        viewModel.reload(forceLiveRecheck: true)
+                    }
+                    .font(.haoFootnote)
+                    .foregroundStyle(theme.accentText)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 4)
+                    .accessibilityLabel("重试检查直播状态")
+                }
             }
         }
     }
@@ -493,7 +534,7 @@ struct HomeView: View {
                                 }
                                 .font(.haoFootnoteStrong)
                                 .foregroundStyle(theme.accentText)
-                                .accessibilityLabel("不喜欢，换一首")
+                                .accessibilityLabel("不喜欢《\(song.title)》，换一首")
                             }
                         }
                     }
@@ -711,11 +752,22 @@ private struct HomeHotLiveView: View {
     var body: some View {
         Group {
             if viewModel.hotLive.isEmpty {
-                MusicEmptyState(
-                    icon: "antenna.radiowaves.left.and.right",
-                    title: "暂无直播",
-                    note: "去直播里关注主播，开播后会出现在这里"
-                )
+                VStack(spacing: 0) {
+                    MusicEmptyState(
+                        icon: "antenna.radiowaves.left.and.right",
+                        title: "暂无直播",
+                        note: "去直播里关注主播，开播后会出现在这里"
+                    )
+                    // b49fix3 P1-10: the "全部" empty page gets
+                    // the same way forward as the section — a
+                    // capsule to the live tab. (homeEmptyCTA is
+                    // HomeView-private, so the equivalent is
+                    // inlined here.)
+                    MusicCapsuleButton(icon: "antenna.radiowaves.left.and.right", label: "去直播") {
+                        NotificationCenter.default.post(name: .haoSwitchTab, object: HaoTab.live)
+                    }
+                    .padding(.top, 6)
+                }
                 .haoBottomChromePadding()
             } else {
                 ScrollView {

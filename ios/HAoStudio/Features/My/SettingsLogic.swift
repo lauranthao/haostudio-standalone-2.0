@@ -529,7 +529,8 @@ enum SongCacheLimitOptions {
 enum DisclaimerGate {
     /// Current disclaimer version. Bump on any material change;
     /// the stored accepted version must equal this to count.
-    static let currentVersion = 4
+    /// b49fix3: 4 → 5 (clauses 5 + 6 rewritten to match the code).
+    static let currentVersion = 5
     static let acceptedVersionKey = "hao_disclaimer_accepted_version"
 
     static func isAccepted(storedVersion: Int?) -> Bool {
@@ -565,11 +566,11 @@ enum DisclaimerContent {
         ),
         DisclaimerClause(
             title: "5. 本地数据",
-            body: "你的歌单、收藏、播放记录、下载与各项设置只保存在本机，不会上传到任何服务器——你自己配置的 Emby 服务器除外：开启上报后，播放进度会同步到你的 Emby。卸载应用或清除数据后，这些内容将无法恢复。"
+            body: "你的歌单、收藏、播放记录、下载与各项设置只保存在本机，不会上传到我们的服务器——我们没有自己的服务器。搜索与播放仍会直接向你所选来源的服务器发请求（见设置里的“数据与来源”）；你自己配置的 Emby 服务器除外：开启上报后，播放进度会同步到你的 Emby。卸载应用或清除数据后，这些内容将无法恢复。"
         ),
         DisclaimerClause(
             title: "6. 下载与缓存",
-            body: "下载与缓存的内容仅供本机离线播放使用。下载的文件会一直保留，直到你手动删除，不会自动清理；音频缓存会在空间不足时被系统或应用自动清理，清理后需要重新获取。"
+            body: "下载与缓存的内容仅供本机离线播放使用。下载的文件会一直保留，直到你手动删除，不会自动清理；音频缓存放在系统缓存目录，空间不足时可能被系统清理，应用也会在缓存写满上限时按最近最少使用清理，清理后需要重新获取。"
         ),
         DisclaimerClause(
             title: "7. 网络与费用",

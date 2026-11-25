@@ -81,15 +81,15 @@ struct GlassTabBar: View {
                     }
                 } label: {
                     VStack(spacing: 2) {
-                        // b49fix2 A28: Coda §6.2 values — 23pt
-                        // semibold icons (was 22pt regular).
+                        // b49fix3 P1-22 / token contract: 23pt
+                        // semibold icons (Coda §6.2 value, was a
+                        // 23pt literal), 10pt medium labels
+                        // (haoTabLabel — was 10pt semibold).
                         Image(systemName: item.icon)
-                            .font(.system(size: 23, weight: .semibold))
+                            .font(.system(size: HaoLayout.tabIconSize, weight: .semibold))
                             .accessibilityHidden(true)
-                        // b49fix2 A28: labels semibold for ALL
-                        // tabs (was semibold only when selected).
                         Text(item.title)
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.haoTabLabel)
                     }
                     .foregroundStyle(
                         isSelected

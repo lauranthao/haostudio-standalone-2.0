@@ -448,6 +448,10 @@ final class DefaultUpdateChecker: UpdateChecker {
             releaseNotes: manifest.changelog?.localized(for: Locale.preferredLanguages.first ?? Locale.current.languageCode),
             requiresNewerOS: requiresNewerOS,
             isSkipped: isSkipped,
+            // b49fix3 P2-14: the single manifest-result funnel —
+            // every manifest-backed result (manual + auto) carries
+            // whether it came from a disagreeing fallback.
+            fromFallback: lastFallbackDisagreed,
             failureMessage: nil
         )
     }

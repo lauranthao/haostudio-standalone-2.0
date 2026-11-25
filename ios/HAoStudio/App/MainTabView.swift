@@ -188,7 +188,10 @@ struct MainTabView: View {
         guard !defaults.bool(forKey: "hao_backup_nudge_shown"),
               !defaults.bool(forKey: "hao_backup_exported_once"),
               !showDisclaimerGate else { return }
-        defaults.set(true, forKey: "hao_backup_nudge_shown")
+        // b49fix3 P2-23: the shown flag is written only when the
+        // user has seen / dismissed the alert (in its button
+        // actions below), not here — writing it before presenting
+        // marked the nudge shown even if the app died first.
         showingBackupNudge = true
     }
 
@@ -355,10 +358,23 @@ struct MainTabView: View {
         // the My tab, where the backup rows live in Settings.
         .alert("备份一次更安心", isPresented: $showingBackupNudge) {
             Button("去备份") {
+                // b49fix3 P2-23: the user has now seen the nudge.
+                UserDefaults.standard.set(true, forKey: "hao_backup_nudge_shown")
                 mountedTabs.insert(.my)
                 selectedTab = .my
+                // b49fix3 P2-24: direct to the 导入备份 row.
+                // Delayed: the My tab (and its settings page)
+                // mounts on the next render pass, so a synchronous
+                // post would land before any listener exists.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    NotificationCenter.default.post(name: .haoOpenSettingsRow, object: "backup")
+                }
             }
-            Button("以后再说", role: .cancel) {}
+            Button("以后再说", role: .cancel) {
+                // b49fix3 P2-23: dismissed counts as seen — the
+                // nudge is one-time per install either way.
+                UserDefaults.standard.set(true, forKey: "hao_backup_nudge_shown")
+            }
         } message: {
             Text("收藏和下载只保存在本机，换手机或重装会丢。导出一份备份，几秒钟就好。")
         }
@@ -396,7 +412,11 @@ struct MainTabView: View {
         // b49fix2 B5: first favourite / download → one-time
         // backup nudge. The download post arrives from the
         // engine's queue, so the @State write hops to main.
-        .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { _ in
+        // b49fix3 P2-22: toggleFav carries the add/remove in the
+        // notification object — only an ADD nudges; an
+        // unfavourite must not re-arm the backup prompt.
+        .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { note in
+            guard note.object as? Bool == true else { return }
             DispatchQueue.main.async { maybeShowBackupNudge() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .haoDownloadCompleted)) { _ in
