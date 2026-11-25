@@ -1073,10 +1073,8 @@ struct LiveRoomView: View {
     }
 
     /// Shareable room page URL: the resolver's `link` when it is
-    /// a real page URL (Bilibili/Douyu/Huya/Douyin), else the
-    /// platform's room page for this room id (Kuaishou stores
-    /// the liveStreamId in `link`, so it falls back to
-    /// live.kuaishou.com/u/<authorId>).
+    /// a real page URL (Bilibili/Douyu/Huya/Douyin/Kuaishou), else
+    /// the platform's room page for this room id.
     private var shareURL: URL? {
         let link = currentRoom.link
         if let url = URL(string: link), url.scheme == "https" {
