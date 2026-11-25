@@ -10,8 +10,12 @@
 //   storage are copied to Documents/migration_backup/ first.
 // - Any failure rolls the whole migration back to the pre-migration
 //   state; the done flag is set only after per-key verification.
-// - A missing, corrupt, or wrong-version snapshot is skipped, never
-//   fatal: the app starts on defaults and the My page shows the
+// - A missing snapshot means a fresh install: there is no old
+//   data to migrate, so the migration IS complete and the done
+//   flag is set — the My page must not show the "no old data"
+//   notice forever on a brand-new install (b49 sweep P1). A
+//   corrupt or wrong-version snapshot is skipped, never fatal:
+//   the app starts on defaults and the My page shows the
 //   "no old data" notice. Nothing is deleted: the Hive box and the
 //   snapshot file stay on disk until the user clears them by hand.
 // - A bad-typed key is skipped, never fatal; unknown keys are kept
@@ -328,6 +332,13 @@ enum MigrationStore {
         let docs = documentsURL ?? LocalStore.documentsDirectory()
         let snapshotURL = docs.appendingPathComponent(snapshotFileName)
         guard FileManager.default.fileExists(atPath: snapshotURL.path) else {
+            // b49 sweep P1: no snapshot = fresh install, no old
+            // data to migrate — the migration IS complete. Set
+            // the done flag so the My page stops showing the
+            // "旧版数据" notice on every launch; the state stays
+            // noSnapshot (the truthful outcome), only the flag
+            // the notice checks is set.
+            defaults.set(true, forKey: doneKey)
             defaults.set(stateNoSnapshot, forKey: stateKey)
             return MigrationReport.empty(.noSnapshot, detail: "no snapshot file")
         }

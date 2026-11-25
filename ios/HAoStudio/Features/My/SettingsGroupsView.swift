@@ -125,6 +125,15 @@ struct SettingsGroupsView: View {
     /// draft is written to the store; an invalid one reverts.
     @State private var bgHexDraft = ""
 
+    /// EQ on/off (hao_eq_enabled, written by
+    /// MusicEqualizerViewModel / NativeMusicPlayer). 音量归一化
+    /// can only measure loudness while EQ is on (the player
+    /// returns gain 1.0 otherwise), so the toggle is disabled
+    /// with an inline hint until EQ is on (b49 sweep P1).
+    /// @AppStorage observes the shared defaults, so flipping EQ
+    /// in the 均衡器 page re-enables the toggle here live.
+    @AppStorage("hao_eq_enabled") private var eqEnabled = false
+
     /// Cached size (bytes) shown in the 数据 group. Refreshed
     /// on appear and after clearing.
     @State private var cacheSizeBytes: Int = 0
@@ -278,13 +287,18 @@ struct SettingsGroupsView: View {
     }
 
     private var appearanceRow: some View {
-        Picker("外观", selection: $themeStore.appearance) {
-            ForEach(HaoAppearance.allCases) { mode in
-                Text(mode.displayName).tag(mode)
+        HStack {
+            Text("外观")
+                .font(.haoBody)
+                .foregroundStyle(theme.textPrimary)
+            Picker("外观", selection: $themeStore.appearance) {
+                ForEach(HaoAppearance.allCases) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
     }
 
     private var wallpaperRow: some View {
@@ -515,6 +529,13 @@ struct SettingsGroupsView: View {
                     MusicEqualizerView()
                 }
                 Toggle("音量归一化", isOn: $settings.normalizationEnabled)
+                    // b49 sweep P1: the toggle is a silent no-op
+                    // unless EQ is on (no measured loudness, gain
+                    // stays 1.0) — grey it out with an inline
+                    // hint until EQ is on, instead of letting it
+                    // look live. The 均衡器 entry sits directly
+                    // above this row.
+                    .disabled(!eqEnabled)
                     .onChange(of: settings.normalizationEnabled) { _, newValue in
                         // b35-sweep-settings: NativeMusicPlayer 只在
                         // init 读一次归一化开关/强度进内存变量，
@@ -523,7 +544,7 @@ struct SettingsGroupsView: View {
                         // 正播的歌，与 player 的注释一致）。
                         NativeMusicPlayer.shared.setNormalizationEnabled(newValue)
                     }
-                footnote("需开启均衡器才能测量响度")
+                footnote(eqEnabled ? "需开启均衡器才能测量响度" : "先开启均衡器，才能测量响度")
                 Stepper(
                     value: $settings.normalizationStrength,
                     in: 0...2,
@@ -596,15 +617,21 @@ struct SettingsGroupsView: View {
                 }
                 footnote("显示 / 隐藏 / 拖动排序")
                 videoFitRow
-                Toggle("Anime4K 超分", isOn: $settings.superResolution)
-                    .disabled(settings.interpolation || settings.sdrToHDR)
-                footnote("仅 MPV；三选一，互斥；着色器未打包，当前无实际效果")
+                // b49 sweep P2: the Anime4K 超分 row is removed —
+                // the shaders were never bundled, so the branch is
+                // a documented no-op in MpvPlayerBackend; a switch
+                // that admits it does nothing is a dead control.
+                // It returns when shaders ship. The stored value
+                // is cleared once in SettingsStore so a stale true
+                // cannot keep resolving to the no-op branch, and
+                // the two remaining branches stay mutually
+                // exclusive (二选一).
                 Toggle("插帧", isOn: $settings.interpolation)
-                    .disabled(settings.superResolution || settings.sdrToHDR)
-                footnote("仅 MPV，立即生效；三选一，互斥")
+                    .disabled(settings.sdrToHDR)
+                footnote("仅 MPV，立即生效；二选一，互斥")
                 Toggle("SDR 转 HDR", isOn: $settings.sdrToHDR)
-                    .disabled(settings.superResolution || settings.interpolation)
-                footnote("仅 MPV，立即生效；三选一，互斥")
+                    .disabled(settings.interpolation)
+                footnote("仅 MPV，立即生效；二选一，互斥")
                 Toggle("杜比视界 Profile 8 降级 HDR", isOn: $settings.dvP8Downgrade)
                 footnote("开：P8 可走系统播放器；关：P8 只走 MPV / IJK")
                 skipIntroRow
