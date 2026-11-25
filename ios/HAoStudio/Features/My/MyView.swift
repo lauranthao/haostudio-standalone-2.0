@@ -320,24 +320,49 @@ struct MyView: View {
     /// section expands in SettingsGroupsView's onChange (same
     /// runloop pass), so the first scroll waits 0.35s for the
     /// expanded rows to lay out — then one retry, because the
-    /// first scroll can still land before layout settles. After
-    /// the retry, clear the pending row, but only if it is still
-    /// this row: a newer deep link must not be cleared by an
-    /// older one. A cold start cannot drop the link: the row sits
-    /// in the store until this runs.
+    /// first scroll can still land before layout settles.
+    /// b49fix5 P2-13: scrollTo has no success callback, so the
+    /// retry clears the pending row only when the containing
+    /// section is expanded — the precondition for the row to
+    /// exist in the List. If it is not expanded yet (slow first
+    /// layout), pending stays and the next onAppear retries
+    /// instead of silently dropping the link.
+    /// b49fix5 P2-14: both delayed closures re-check that this
+    /// row is still the pending one before scrolling — a newer
+    /// deep link must not be jumped over by an older one.
+    /// b49fix5 P2-15: the first scroll also flashes the target
+    /// row (accentSoft, ~1s) so the user sees where it landed.
     private func scrollToDeepLinkRow(_ row: String, proxy: ScrollViewProxy) {
         let target: String
+        let sectionId: String
         switch row {
-        case "backup": target = "backupImport"
-        case "sources": target = "musicSources"
+        case "backup":
+            target = "backupImport"
+            sectionId = SettingsSection.data.rawValue
+        case "sources":
+            target = "musicSources"
+            sectionId = SettingsSection.sources.rawValue
         default: return
         }
+        // Hoist the store out of the @Sendable closures below:
+        // reading `settings` inside them would capture self (the
+        // View struct); the @MainActor store reference is Sendable
+        // on its own (Xcode 26 @Sendable-closure trap, AGENTS.md).
+        let store = settings
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            guard SettingsDeepLink.shared.pendingRow == row else { return }
             proxy.scrollTo(target, anchor: .top)
+            SettingsDeepLink.shared.highlightedRow = target
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                if SettingsDeepLink.shared.highlightedRow == target {
+                    SettingsDeepLink.shared.highlightedRow = nil
+                }
+            }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            guard SettingsDeepLink.shared.pendingRow == row else { return }
             proxy.scrollTo(target, anchor: .top)
-            if SettingsDeepLink.shared.pendingRow == row {
+            if store.sectionExpanded(sectionId) {
                 SettingsDeepLink.shared.pendingRow = nil
             }
         }
@@ -360,7 +385,7 @@ struct MyView: View {
     /// staying visible is 改了、未验 (device check).
     private var myHeader: some View {
         Text("我的")
-            .font(.system(size: 34, weight: .bold))
+            .font(.haoScreenTitle)
             .foregroundStyle(theme.textPrimary)
             .padding(.top, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -893,7 +918,7 @@ private struct MyRecentPlaysView: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.haoSubheadStrong)
                 .foregroundStyle(theme.textSecondary)
             TextField("搜索歌名、歌手或专辑", text: $searchText)
                 .font(.haoSubhead)
@@ -909,6 +934,14 @@ private struct MyRecentPlaysView: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 44)
-        .background(Color.primary.opacity(0.06), in: Capsule())
+        // b49fix5 P2-31: in-page capsule search uses the same
+        // surface + hairline as the page-top entries (the old
+        // 0.06 fill had no border); capsule shape and 44pt
+        // height are kept.
+        .background(theme.surface, in: Capsule())
+        .overlay {
+            Capsule()
+                .strokeBorder(theme.hairline, lineWidth: 0.5)
+        }
     }
 }

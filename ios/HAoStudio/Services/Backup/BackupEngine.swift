@@ -1354,6 +1354,37 @@ extension BackupEngineCore {
         )
     }
 
+    /// Safety-net snapshot taken immediately BEFORE a
+    /// user-triggered restore (b49fix5 P2-9): captures the
+    /// CURRENT value of exactly the keys/files the target
+    /// snapshot would touch, so restoring the wrong row can
+    /// itself be undone by restoring this new snapshot. Pruned
+    /// to keep-5 like imports. Returns the new snapshot dir, or
+    /// nil when the safety net could not be taken (the caller
+    /// still restores — the confirm dialog already warned — but
+    /// says so in the result).
+    static func createSafetyNetSnapshot(
+        for snapshotDir: URL,
+        documentsURL: URL,
+        defaults: UserDefaults = .standard
+    ) -> URL? {
+        guard let manifestData = try? Data(contentsOf: snapshotDir.appendingPathComponent("snapshot-manifest.json")),
+              let parsed = try? JSONSerialization.jsonObject(with: manifestData, options: []),
+              let manifest = parsed as? [String: Any]
+        else { return nil }
+        let present = manifest["defaultsPresent"] as? [String: Any] ?? [:]
+        var keys = Array(present.keys)
+        keys += (manifest["defaultsAbsent"] as? [String] ?? [])
+        var files = (manifest["filesPresent"] as? [String] ?? [])
+        files += (manifest["filesAbsent"] as? [String] ?? [])
+        guard let dir = createSnapshot(
+            defaultKeys: keys, filePaths: files,
+            documentsURL: documentsURL, defaults: defaults
+        ) else { return nil }
+        pruneSnapshots(documentsURL: documentsURL)
+        return dir
+    }
+
     /// Restores the pre-import state captured in one snapshot
     /// folder: defaults values from the manifest (decoded per
     /// key kind — Data from base64, section-expanded keys as
@@ -1409,8 +1440,15 @@ extension BackupEngineCore {
             }
         }
         for key in (manifest["defaultsAbsent"] as? [String] ?? []).sorted() {
-            defaults.removeObject(forKey: key)
-            result.restoredKeys += 1
+            // b49fix5 P2-8: only count a key that actually exists
+            // now. A key the snapshot says was absent — and still
+            // is — was already at its pre-import state; counting
+            // it inflated "已恢复 N 个设置" and posted
+            // .haoBackupImported for a pure no-op restore.
+            if defaults.object(forKey: key) != nil {
+                defaults.removeObject(forKey: key)
+                result.restoredKeys += 1
+            }
         }
         let filesPresent = manifest["filesPresent"] as? [String] ?? []
         result.failedFiles = restoreFilesFromSnapshot(

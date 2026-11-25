@@ -66,14 +66,16 @@ struct HomeView: View {
                         // (isLoading), never as four empty states.
                         if !viewModel.isLoading {
                             welcomeCard
+                            // b49fix5 P2-35: section tops use the
+                            // token, not a literal 16.
                             continueWatchingSection
-                                .padding(.top, 16)
+                                .padding(.top, HaoLayout.sectionTopSpacing)
                             continueListeningSection
-                                .padding(.top, 16)
+                                .padding(.top, HaoLayout.sectionTopSpacing)
                             hotLiveSection
-                                .padding(.top, 16)
+                                .padding(.top, HaoLayout.sectionTopSpacing)
                             dailySection
-                                .padding(.top, 16)
+                                .padding(.top, HaoLayout.sectionTopSpacing)
                         }
                         Spacer(minLength: 16)
                     }

@@ -861,6 +861,11 @@ struct SettingsGroupsView: View {
                 // b49fix3 P1-14: deep-link target for the welcome
                 // card's "配置歌源/片源" (see SettingsDeepLink).
                 .id("musicSources")
+                // b49fix5 P2-15: flash the row a deep link
+                // landed on (MyView sets highlightedRow when it
+                // scrolls; it clears ~1s later).
+                .listRowBackground(deepLink.highlightedRow == "musicSources" ? theme.accentSoft : nil)
+                .animation(.easeOut(duration: 0.4), value: deepLink.highlightedRow)
                 NavigationLink("影视源管理") {
                     CmsSourceManagementView()
                 }
@@ -912,6 +917,10 @@ struct SettingsGroupsView: View {
                     // b49fix3 P2-24: deep-link target for the
                     // backup nudge's "去备份" (see SettingsDeepLink).
                     .id("backupImport")
+                    // b49fix5 P2-15: flash the row a deep link
+                    // landed on (see musicSources above).
+                    .listRowBackground(deepLink.highlightedRow == "backupImport" ? theme.accentSoft : nil)
+                    .animation(.easeOut(duration: 0.4), value: deepLink.highlightedRow)
                 backupSnapshotRow
             }
         }
@@ -1170,7 +1179,7 @@ struct SettingsGroupsView: View {
         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 0.5)
+                .stroke(theme.hairline, lineWidth: 0.5)
         }
     }
 
@@ -1588,6 +1597,8 @@ struct BackupSnapshotView: View {
     @State private var isRestoring = false
     @State private var restoreResultText: String?
     @State private var showingRestoreResult = false
+    @State private var deleteTarget: BackupEngineCore.SnapshotInfo?
+    @State private var showingDeleteConfirm = false
 
     var body: some View {
         List {
@@ -1598,7 +1609,7 @@ struct BackupSnapshotView: View {
                         .foregroundStyle(theme.textSecondary)
                 } else {
                     ForEach(snapshots, id: \.url) { info in
-                        HStack {
+                        HStack(spacing: 16) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(dateLabel(for: info))
                                     .font(.haoBody)
@@ -1608,23 +1619,29 @@ struct BackupSnapshotView: View {
                                     .foregroundStyle(theme.textSecondary)
                             }
                             Spacer()
+                            // b49fix5 P2-34: 恢复 is the primary
+                            // action (semibold); both buttons get
+                            // vertical hit-target padding and real
+                            // spacing instead of the default 8pt.
                             Button("恢复") {
                                 restoreTarget = info
                                 showingRestoreConfirm = true
                             }
-                            .font(.haoBody)
+                            .font(.haoBodyStrong)
                             .foregroundStyle(theme.accentText)
+                            .padding(.vertical, 8)
                             Button("删除", role: .destructive) {
-                                BackupEngineCore.deleteSnapshot(at: info.url)
-                                reload()
+                                deleteTarget = info
+                                showingDeleteConfirm = true
                             }
                             .font(.haoBody)
+                            .padding(.vertical, 8)
                         }
                         .buttonStyle(.borderless)
                     }
                 }
             } footer: {
-                Text("快照只保留最近 5 份，超出自动清理；恢复会把数据恢复到导入前的状态，导入之后改动的内容会丢失；删除快照只去掉该次导入的安全网，不动现有数据。")
+                Text("快照只保留最近 5 份，超出自动清理；恢复只还原本次导入改动过的内容，导入后新建的歌单、下载不受影响；删除快照只去掉该次导入的安全网，不动现有数据。")
                     .font(.haoFootnote)
                     .foregroundStyle(theme.textSecondary)
             }
@@ -1641,12 +1658,23 @@ struct BackupSnapshotView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("恢复后会回到导入前的状态，导入之后改动的内容会丢失。")
+            Text("恢复本次导入改动的内容；导入后新建的歌单、下载不受影响。恢复前会先为当前状态保存一份快照。")
         }
         .alert("恢复快照", isPresented: $showingRestoreResult) {
             Button("好", role: .cancel) {}
         } message: {
             Text(restoreResultText ?? "")
+        }
+        .alert("删除此快照？", isPresented: $showingDeleteConfirm) {
+            Button("删除", role: .destructive) {
+                if let target = deleteTarget {
+                    BackupEngineCore.deleteSnapshot(at: target.url)
+                    reload()
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("删除后这次导入的安全网就没有了，无法再用它恢复。现有数据不受影响。")
         }
     }
 
@@ -1678,24 +1706,39 @@ struct BackupSnapshotView: View {
         // The restore copies file bytes; run it off the main
         // queue and report back on it.
         Task.detached {
+            // b49fix5 P2-9: safety net first — snapshot the
+            // current value of exactly what this restore will
+            // touch, so a wrong-row tap can be undone by
+            // restoring the new snapshot. A failed safety net
+            // does not block the restore; the result says so.
+            let safetyNetTaken = BackupEngineCore.createSafetyNetSnapshot(
+                for: target.url, documentsURL: docs
+            ) != nil
             let result = BackupEngineCore.restoreSnapshot(
                 at: target.url, documentsURL: docs
             )
             await MainActor.run {
                 isRestoring = false
-                restoreResultText = Self.restoreMessage(for: result)
+                restoreResultText = Self.restoreMessage(for: result, safetyNetTaken: safetyNetTaken)
                 showingRestoreResult = true
                 reload()
             }
         }
     }
 
-    private static func restoreMessage(for result: BackupEngineCore.SnapshotRestoreResult) -> String {
+    private static func restoreMessage(for result: BackupEngineCore.SnapshotRestoreResult, safetyNetTaken: Bool) -> String {
         if let error = result.manifestError {
             return error
         }
         if result.succeeded {
-            return "已恢复 \(result.restoredKeys) 个设置、\(result.restoredFiles) 个文件。"
+            // b49fix5 P2-8: a restore that changed nothing is
+            // not "已恢复 0 个" — say so plainly.
+            if result.restoredKeys + result.restoredFiles == 0 {
+                return "没有需要恢复的内容（当前状态与该快照一致）。"
+            }
+            var text = "已恢复 \(result.restoredKeys) 个设置、\(result.restoredFiles) 个文件。导入后新建的歌单、下载不受影响。"
+            text += safetyNetTaken ? "恢复前已为当前状态保存一份快照。" : "恢复前未能保存安全网快照。"
+            return text
         }
         var lines = ["恢复未完成："]
         if result.restoredKeys + result.restoredFiles > 0 {
@@ -1872,7 +1915,10 @@ struct DocumentSheetView: View {
                     .font(.system(.footnote, design: .monospaced))
                     .foregroundStyle(theme.textPrimary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
+                    // b49fix5 P2-42: sheet padding tokens, not a
+                    // bare .padding() (16 all round).
+                    .padding(.horizontal, HaoLayout.sheetHorizontalPadding)
+                    .padding(.vertical, HaoLayout.sheetTopPadding)
             }
             .background(theme.scaffoldBackground)
             .navigationTitle(title)
@@ -1950,7 +1996,11 @@ struct DisclaimerView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .padding(24)
+                // b49fix5 P2-32: sheet padding tokens (the old
+                // .padding(24) made the top 24, not the sheet
+                // standard 16).
+                .padding(.horizontal, HaoLayout.sheetHorizontalPadding)
+                .padding(.vertical, HaoLayout.sheetTopPadding)
             }
             Divider()
             VStack(spacing: 12) {

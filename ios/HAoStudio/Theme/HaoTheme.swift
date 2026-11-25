@@ -21,6 +21,12 @@
 //   accents are not blue and are unchanged.
 // - Higher transparency: glass surfaces are low-alpha + strong blur;
 //   readability comes from blur, never from darkening the background.
+// - Two deliberate off-token sizes (sweep 7 P2-36): the
+//   MusicHomeView function-tile titles are 20pt BOLD (one weight
+//   above the 20 semibold section title), and the toast pills are
+//   12.5pt medium (MiniPlayerBar, LiveRoomView — the same
+//   component language in both places). Neither is a drifted
+//   token; do not "fix" them into a role font.
 
 import SwiftUI
 import UIKit
