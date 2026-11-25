@@ -933,7 +933,7 @@ struct MusicPlayerView: View {
         let generation = lyricConfirmGeneration
         lyricConfirmIndex = index
         playerVM.seek(to: line.time)
-        let holdMs = UIAccessibility.isReduceMotion ? 150 : 380
+        let holdMs = UIAccessibility.isReduceMotionEnabled ? 150 : 380
         Task {
             try? await Task.sleep(for: .milliseconds(holdMs))
             guard !Task.isCancelled, lyricConfirmGeneration == generation else { return }
@@ -1187,8 +1187,10 @@ struct MusicPlayerView: View {
     /// no background — a pure white semibold symbol. Shuffle /
     /// repeat show their active state as an 8pt rounded rectangle
     /// in white 0.14 behind the glyph (easeInOut 0.2 s); disabled
-    /// buttons sit at 0.35 opacity. Symbol swaps use
-    /// symbolEffect(.replace, speed 1.6) + easeInOut 0.22.
+    /// buttons sit at 0.35 opacity. Symbol swaps animate with
+    /// easeInOut 0.22 (b45-fix #28: .replace is a
+    /// ContentTransitionSymbolEffect, not usable in symbolEffect
+    /// with a value — and the plain animated swap is the Coda way).
     private var transportRow: some View {
         HStack(spacing: 0) {
             transportButton(
@@ -1221,7 +1223,6 @@ struct MusicPlayerView: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 82)
                     .contentShape(Rectangle())
-                    .symbolEffect(.replace, options: .speed(1.6), value: playerVM.isPlaying)
                     .animation(.easeInOut(duration: 0.22), value: playerVM.isPlaying)
             }
             .buttonStyle(HaoCodaPressStyle())

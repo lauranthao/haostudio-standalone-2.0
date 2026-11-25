@@ -1129,9 +1129,9 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             }
             self.nowPlayingActive = true
             let center = MPRemoteCommandCenter.shared()
-            center.playCommand.addTarget(self, action: #selector(remotePlay))
-            center.pauseCommand.addTarget(self, action: #selector(remotePause))
-            center.togglePlayPauseCommand.addTarget(self, action: #selector(remoteToggle))
+            center.playCommand.addTarget(self, action: #selector(self.remotePlay))
+            center.pauseCommand.addTarget(self, action: #selector(self.remotePause))
+            center.togglePlayPauseCommand.addTarget(self, action: #selector(self.remoteToggle))
             self.updateNowPlayingInfo()
         }
     }
@@ -1156,7 +1156,7 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             guard self.nowPlayingActive, let room = self.currentRoom else { return }
             var info: [String: Any] = [:]
             info[MPMediaItemPropertyTitle] = room.title
-            info[MPMediaItemPropertyArtist] = room.streamer
+            info[MPMediaItemPropertyArtist] = room.artist ?? ""
             // Live is real-time: no duration, no elapsed time.
             info[MPNowPlayingInfoPropertyPlaybackRate] = self.isPlaying ? 1.0 : 0.0
             MPNowPlayingInfoCenter.default().nowPlayingInfo = info

@@ -1229,12 +1229,12 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             }
             self.nowPlayingActive = true
             let center = MPRemoteCommandCenter.shared()
-            center.playCommand.addTarget(self, action: #selector(remotePlay))
-            center.pauseCommand.addTarget(self, action: #selector(remotePause))
-            center.togglePlayPauseCommand.addTarget(self, action: #selector(remoteToggle))
-            center.changePlaybackPositionCommand.addTarget(self, action: #selector(remoteSeek(_:)))
-            center.nextTrackCommand.addTarget(self, action: #selector(remoteNext))
-            center.previousTrackCommand.addTarget(self, action: #selector(remotePrevious))
+            center.playCommand.addTarget(self, action: #selector(self.remotePlay))
+            center.pauseCommand.addTarget(self, action: #selector(self.remotePause))
+            center.togglePlayPauseCommand.addTarget(self, action: #selector(self.remoteToggle))
+            center.changePlaybackPositionCommand.addTarget(self, action: #selector(self.remoteSeek(_:)))
+            center.nextTrackCommand.addTarget(self, action: #selector(self.remoteNext))
+            center.previousTrackCommand.addTarget(self, action: #selector(self.remotePrevious))
             self.updateNowPlayingInfo()
         }
     }

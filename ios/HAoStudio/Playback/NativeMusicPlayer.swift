@@ -2200,7 +2200,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                 guard let self = self else { completion(nil, nil, false); return }
                 self.resolveURL?(item, []) { url, tier in
                     let isTrial = url.map {
-                        PreviewAudioClassifier.isPreviewURL($0, trialOnly: item.trialOnly)
+                        PreviewAudioClassifier.isPreviewURL($0.absoluteString, trialOnly: item.trialOnly)
                     } ?? false
                     completion(url, tier, isTrial)
                 }
