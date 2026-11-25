@@ -89,7 +89,7 @@ struct GlassTabBar: View {
                     }
                     .foregroundStyle(
                         isSelected
-                            ? (tabAccent ?? theme.tabSelected)
+                            ? haoTabTint(tabAccent, scheme: colorScheme, fallback: theme.tabSelected)
                             : Color.primary.opacity(0.8)
                     )
                     // Selected pill behind the whole item (icon +

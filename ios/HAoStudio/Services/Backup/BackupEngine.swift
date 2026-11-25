@@ -1274,7 +1274,14 @@ final class FileBackupEngine: BackupEngine {
         group.enter()
         var result: Result<URL, Error> = .failure(BackupError.exportFailed("备份导出失败"))
         workQueue.async {
-            let destination = FileManager.default.temporaryDirectory
+            // b49sweep: the export lives in Documents, not tmp —
+            // a tmp zip could be reclaimed before the user
+            // shares it, and it was invisible in the Files app.
+            // The test seam (documentsURL) still decides the
+            // directory under test; production uses the real
+            // container. The file name already carries a UUID,
+            // so repeated exports never collide.
+            let destination = (self.documentsURL ?? LocalStore.documentsDirectory())
                 .appendingPathComponent(BackupEngineCore.backupFileName())
             if let exported = BackupEngineCore.exportBackup(
                 to: destination, documentsURL: self.documentsURL,

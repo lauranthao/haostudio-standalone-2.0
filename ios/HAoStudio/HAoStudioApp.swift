@@ -101,11 +101,14 @@ struct HAoStudioApp: App {
     }
 
     /// The splash covers the first frame; it fades out at 1.5s
-    /// (animation #4) once the app reports ready. Foundation: ready
-    /// immediately — no async startup work yet. Later slices flip
-    /// `splashReady` only after their startup work finishes, which is
-    /// when the splash's spinner + subtitle path is used.
-    @State private var splashReady = true
+    /// (animation #4) once the app reports ready. Readiness is
+    /// real, not a hardcoded literal (b49sweep): init() already
+    /// ran the migration + store/engine wiring synchronously,
+    /// so the shell reports ready when it mounts (see the
+    /// onAppear below). The splash's spinner + subtitle path
+    /// is therefore live for any future async startup work —
+    /// it exits through SplashView's isReady onChange.
+    @State private var splashReady = false
     @State private var showingSplash = true
     /// S6: the launch-time automatic update check runs once per app
     /// launch (the 20 h throttle lives in the checker itself).
@@ -124,6 +127,21 @@ struct HAoStudioApp: App {
     /// caller). The session guards both calls, so the launch-time
     /// inactive -> active transition is a no-op.
     @Environment(\.scenePhase) private var scenePhase
+    /// System scheme (b49sweep): the splash palette below needs
+    /// the effective scheme, and the `.preferredColorScheme`
+    /// override applies to MainTabView's subtree only — the App
+    /// struct itself still sees the system scheme here.
+    @Environment(\.colorScheme) private var systemScheme
+
+    /// Palette for the splash (b49sweep): resolved from the
+    /// effective scheme — the appearance override when the user
+    /// set one, else the system scheme — so a dark-mode user
+    /// never gets a white flash. MainTabView resolves its own
+    /// palette from the same rule inside its subtree; the splash
+    /// sits outside it, so the app root supplies it here.
+    private var splashPalette: HaoThemePalette {
+        themeStore.palette(for: themeStore.appearance.preferredColorScheme ?? systemScheme)
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -131,6 +149,12 @@ struct HAoStudioApp: App {
                 MainTabView()
                     .preferredColorScheme(themeStore.appearance.preferredColorScheme)
                     .onAppear {
+                        // b49sweep: the shell mounted, and init()
+                        // already ran the migration + wiring
+                        // synchronously — the app is ready. This
+                        // is the real readiness signal for the
+                        // splash (was a hardcoded `true`).
+                        splashReady = true
                         // S6: one launch-time automatic update check.
                         // A newer build opens the same update sheet
                         // as a manual check; silence (throttled, up
@@ -197,6 +221,10 @@ struct HAoStudioApp: App {
                 .presentationDetents([.height(360), .large])
                 .presentationDragIndicator(.visible)
             }
+            // b49sweep: the splash reads its background from
+            // `.haoTheme`; it sits outside MainTabView, which is
+            // where the palette is normally resolved.
+            .environment(\.haoTheme, splashPalette)
             .environmentObject(themeStore)
             .environmentObject(settingsStore)
             .environmentObject(coordinator)

@@ -5,7 +5,10 @@
 // and the reference video). Implemented in SwiftUI with Animation.easeOut /
 // easeInOut — NOT a translation of the old UIView.animate code.
 //
-// Timeline (total ~1.5s, white background, standard logo asset):
+// Timeline (total ~1.5s, theme-scaffold background — b49sweep,
+// was a literal white that flashed on dark-mode launches —
+// standard logo asset, clipped to a rounded tile because the
+// asset's near-white background is baked in):
 //   0.0–1.0s  logo fades in (alpha 0 -> 1), floats up 22pt, scales
 //             0.97 -> 1.0 (ease-out)
 //   0.15–1.0s soft shadow grows beneath it (alpha -> 1, scale 0.7 -> 1.0,
@@ -36,12 +39,21 @@
 import SwiftUI
 
 struct SplashView: View {
-    /// Whether the app shell is ready to show. Foundation: the parent
-    /// passes `true` (no async init yet); later slices flip it when
-    /// their startup work (e.g. store migration) finishes.
+    /// Whether the app shell is ready to show. HAoStudioApp
+    /// flips this when the shell mounts (init already ran the
+    /// migration + store/engine wiring synchronously) — a real
+    /// readiness signal, not a hardcoded literal. If a future
+    /// slice adds async startup work, it flips this only when
+    /// that work lands, and the spinner path below exits
+    /// through the isReady onChange.
     @Binding var isReady: Bool
     /// Called after the 0.3s fade-out, when the splash may be removed.
     var onFinished: () -> Void
+    /// Theme palette, supplied by the app root (b49sweep): the
+    /// splash sits outside MainTabView, which is where the
+    /// palette is normally resolved, so without this the
+    /// background could only be a literal — white in dark mode.
+    @Environment(\.haoTheme) private var theme
 
     // MARK: - Animation state (all start at the spec's initial values)
 
@@ -62,7 +74,13 @@ struct SplashView: View {
 
     var body: some View {
         ZStack {
-            Color.white.ignoresSafeArea()
+            // b49sweep: theme scaffold, not a literal white —
+            // the old Color.white flashed white for 1.5s on
+            // every dark-mode launch. The logo asset itself has
+            // a near-white background baked in, so it is clipped
+            // to a rounded tile below and reads as a deliberate
+            // card on a dark scaffold instead of a white square.
+            theme.scaffoldBackground.ignoresSafeArea()
             VStack(spacing: 0) {
                 Spacer()
                 // Logo block: logo + shadow + dot + glow, positioned
@@ -90,6 +108,14 @@ struct SplashView: View {
                         .opacity(logoOpacity)
                         .offset(y: logoOffsetY)
                         .scaleEffect(logoScale)
+                        // b49sweep: the logo asset's near-white
+                        // background is baked in (opaque PNG), so
+                        // on a dark scaffold it needs a tile —
+                        // rounded corners make it deliberate
+                        // instead of a white square. The red dot
+                        // sits inside the square, so the clip
+                        // keeps it.
+                        .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
                         .overlay {
                             // Red dot + glow, positioned by PROPORTION
                             // of the logo square (0.678W / 0.409H),
@@ -148,6 +174,30 @@ struct SplashView: View {
         }
         .opacity(splashOpacity)
         .onAppear(perform: startAnimation)
+        .onChange(of: isReady) { _, ready in
+            // b49sweep: readiness landed while the spinner was
+            // showing — dismiss at once instead of waiting for
+            // another timer. (This was the dead path: the old
+            // code only checked isReady once, at 1.5s, so a
+            // late-ready would have spun forever.)
+            if ready && showWaiting {
+                finishSplash()
+            }
+        }
+    }
+
+    /// Fade out and finish, once. Used both by the 1.5s timer
+    /// (ready when the animation ends) and by the isReady
+    /// onChange above (readiness landing while waiting).
+    private func finishSplash() {
+        guard !finished else { return }
+        finished = true
+        withAnimation(.easeOut(duration: 0.3)) {
+            splashOpacity = 0
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            onFinished()
+        }
     }
 
     private func startAnimation() {
@@ -173,16 +223,14 @@ struct SplashView: View {
             glowOpacity = 0.55
         }
         // 1.5s: finish — fade out if ready, else show spinner + subtitle.
+        // The 1.5s is animation #4's timeline (preflight pins the
+        // literal), not a readiness wait: the app is ready before
+        // it fires, and a late readiness exits via finishSplash
+        // through the isReady onChange instead of another timer.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             guard !finished else { return }
-            finished = true
             if isReady {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    splashOpacity = 0
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    onFinished()
-                }
+                finishSplash()
             } else {
                 withAnimation(.easeOut(duration: 0.25)) {
                     showWaiting = true
