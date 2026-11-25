@@ -1205,8 +1205,16 @@ extension BackupEngineCore {
         documentsURL: URL,
         defaults: UserDefaults
     ) -> URL? {
+        // b49fix9 P2-7: the stamp carries milliseconds
+        // ("yyyyMMdd-HHmmssSSS"), so two snapshots taken in
+        // the same second — an import and its safety net —
+        // still order by the stamp when a whole-device
+        // migration rewrites every birthtime to one value.
+        // en_US_POSIX: the stamp must be ASCII digits in
+        // every locale, or it would not parse back.
         let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmssSSS"
         let stamp = formatter.string(from: Date()) + "-" + String(UUID().uuidString.prefix(8))
         let dir = documentsURL
             .appendingPathComponent(snapshotDirectoryName)
@@ -1285,17 +1293,39 @@ extension BackupEngineCore {
 
     // MARK: - Snapshot management (b49fix3 P1-6 / P2-17)
 
-    /// Parses the yyyyMMdd-HHmmss stamp at the start of a
-    /// snapshot folder name (the first 15 characters). Nil
-    /// when the name carries no stamp (e.g. a hand-made
-    /// folder). Shared by listSnapshots (ordering) and
-    /// snapshotInfo (display).
+    /// Parses the stamp at the start of a snapshot folder
+    /// name: 18 characters ("yyyyMMdd-HHmmssSSS") on folders
+    /// taken since b49fix9, 15 ("yyyyMMdd-HHmmss") before —
+    /// the millisecond stamp orders two snapshots taken in
+    /// the same second (an import and its safety net) even
+    /// when a whole-device migration rewrites every
+    /// birthtime to one value, where the old second stamp
+    /// tied and the order fell through to the random UUID
+    /// suffix. Both formats parse; the 15-char one stays
+    /// for old folders. en_US_POSIX: the stamp must be
+    /// ASCII digits in every locale. Nil when the name
+    /// carries no stamp (e.g. a hand-made folder). Shared
+    /// by listSnapshots (ordering) and snapshotInfo
+    /// (display).
     static func snapshotDate(fromName name: String) -> Date? {
-        // A stamp is exactly 15 characters ("yyyyMMdd-HHmmss");
-        // anything shorter cannot carry one (and an empty
-        // prefix must not parse — Linux Foundation accepts it).
+        // A stamp is at least 15 characters; anything
+        // shorter cannot carry one (and an empty prefix
+        // must not parse — Linux Foundation accepts it).
         guard name.count >= 15 else { return nil }
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        // The 16th character decides the format: a digit
+        // means a millisecond stamp, "-" means the old
+        // second stamp. (Parsing the 18-char prefix of an
+        // old name with the millisecond format is not
+        // relied on — the discriminator is explicit.)
+        if name.count >= 18,
+           name[name.index(name.startIndex, offsetBy: 15)].isNumber {
+            formatter.dateFormat = "yyyyMMdd-HHmmssSSS"
+            if let date = formatter.date(from: String(name.prefix(18))) {
+                return date
+            }
+        }
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         return formatter.date(from: String(name.prefix(15)))
     }
@@ -1303,9 +1333,11 @@ extension BackupEngineCore {
     /// Lists the import snapshots under
     /// `Documents/backup_snapshots/`, newest first (by file
     /// creation date — the folder name starts with a
-    /// yyyyMMdd-HHmmss stamp, but two snapshots in the same
-    /// second only differ by a random UUID suffix, so the name
-    /// alone cannot order them). Empty when no import ever ran.
+    /// yyyyMMdd-HHmmssSSS stamp (15-char seconds stamps on
+    /// folders taken before b49fix9), which orders
+    /// same-second snapshots; only two taken in the same
+    /// millisecond still tie on the name, so creation date
+    /// decides first). Empty when no import ever ran.
     /// b49fix4 P1-4: a snapshot is now user-restorable — the
     /// settings row offers restore per snapshot (restoreSnapshot
     /// below), on top of list + delete.
@@ -1314,8 +1346,8 @@ extension BackupEngineCore {
         let dir = docs.appendingPathComponent(snapshotDirectoryName)
         let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
         // b49fix8 P2-9: the sort key is computed ONCE per folder
-        // (creation date, then the yyyyMMdd-HHmmss stamp in the
-        // name), so the comparator never silently falls through
+        // (creation date, then the yyyyMMdd-HHmmssSSS stamp
+        // in the name), so the comparator never silently falls through
         // to the random UUID suffix in the name:
         //  * one side dateless (concurrent delete / filesystem
         //    anomaly) → the dateless folder sorts FIRST, i.e.
@@ -1329,8 +1361,11 @@ extension BackupEngineCore {
         //    value by a whole-device migration restore) → the
         //    name stamp still carries the original take time
         //    (folder names survive a migration), so it orders
-        //    before the full name. Only when the stamps tie too
-        //    does the full name decide, as a stable last resort.
+        //    before the full name. Since b49fix9 the stamp
+        //    carries milliseconds, so a tie now needs two
+        //    snapshots in the same millisecond. Only when the
+        //    stamps tie too does the full name decide, as a
+        //    stable last resort.
         struct DatedFolder {
             var url: URL
             var creationDate: Date?
@@ -1401,8 +1436,9 @@ extension BackupEngineCore {
     }
 
     /// Reads one snapshot folder's row info: the date from the
-    /// yyyyMMdd-HHmmss stamp (creation date as fallback) and
-    /// the key/file counts from its manifest.
+    /// yyyyMMdd-HHmmssSSS stamp (15-char seconds stamps on
+    /// folders taken before b49fix9; creation date as fallback)
+    /// and the key/file counts from its manifest.
     static func snapshotInfo(at url: URL) -> SnapshotInfo {
         let name = url.lastPathComponent
         var date = Self.snapshotDate(fromName: name)
@@ -1448,7 +1484,10 @@ extension BackupEngineCore {
     /// nothing (manifest failure, or a success that restored
     /// nothing) — it skips the prune and this safety net is
     /// deleted again (it captured a state identical to the live
-    /// one), so the list is left exactly as it was.
+    /// one), so the list is left exactly as it was. b49fix9
+    /// P2-3: a FAILED restore that restored nothing is not in
+    /// that exception — its zero-change is not provable, so the
+    /// prune still runs there (and the net is kept).
     static func createSafetyNetSnapshot(
         for snapshotDir: URL,
         documentsURL: URL,
