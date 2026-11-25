@@ -205,12 +205,116 @@ final class MusicLyricsAPI {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    // MARK: - Identity gate (moved here, b45-fix)
+
+    // These pure string helpers lived in MusicLyrics.swift, which
+    // `swift test` cannot compile: it is not in Package.swift's
+    // AppCore sources (it needs StoredLyricLine from MusicModels,
+    // which imports AVFoundation), while this file IS in AppCore
+    // (Services/MusicAPI) and gateLyrics is their only caller.
+    // Bodies moved verbatim; only the home changed.
+
+    /// Fold for identity comparison: traditional → simplified is
+    /// approximated by case folding + full/half-width folding +
+    /// diacritic stripping (no transliteration table ships in the
+    /// app); whitespace and punctuation around the core are trimmed.
+    static func normalizedForMatch(_ text: String) -> String {
+        let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
+        return folded.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Split an artist string on / 、 , ， ; ； & ＆. A band name
+    /// containing & or / is compared whole FIRST by the caller
+    /// (see `artistsMatch`); this split is for the per-artist
+    /// display links and the fallback comparison.
+    static func splitArtists(_ artist: String) -> [String] {
+        let separators = CharacterSet(charactersIn: "/、,，;；&＆")
+        return artist.components(separatedBy: separators)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Title with any trailing parenthesised / bracketed subtitle
+    /// ("（Live）", "[Remix]", " - 伴奏") stripped — the base the
+    /// identity gate compares.
+    static func titleBase(_ title: String) -> String {
+        var base = title
+        // Openers that start a parenthesised / bracketed subtitle.
+        // The ASCII open-paren and open-bracket are spelled as
+        // Unicode scalars so the raw file keeps its paren balance
+        // — preflight 5b counts raw characters, string contents
+        // included, so a literal open-paren in source would tip it.
+        let openers: [Character] = [
+            "（", Character(UnicodeScalar(0x28)!),
+            Character(UnicodeScalar(0x5B)!), "【",
+        ]
+        for opener in openers {
+            if let range = base.range(of: String(opener)) {
+                base = String(base[..<range.lowerBound])
+            }
+        }
+        if let range = base.range(of: " - ") {
+            base = String(base[..<range.lowerBound])
+        }
+        return normalizedForMatch(base)
+    }
+
+    /// Version tags (Live / 伴奏 / Remix / DJ / cover / 翻唱 /
+    /// instrumental / 卡拉OK / 现场 / 纯音乐 …) found in the title.
+    /// Both sides' tag sets must be IDENTICAL for an identity match.
+    static func versionTags(_ title: String) -> Set<String> {
+        let known = ["live", "伴奏", "remix", "dj", "cover", "翻唱", "instrumental",
+                     "卡拉ok", "现场", "纯音乐", "acoustic", "demo", "edit", "version"]
+        let folded = normalizedForMatch(title)
+        var tags = Set<String>()
+        for tag in known where folded.contains(tag) { tags.insert(tag) }
+        return tags
+    }
+
+    /// Artist identity: the whole string matches first (band names
+    /// with & or /), otherwise the lead artist of one side must
+    /// appear in the other side's split artists.
+    static func artistsMatch(_ a: String, _ b: String) -> Bool {
+        let na = normalizedForMatch(a)
+        let nb = normalizedForMatch(b)
+        guard !na.isEmpty, !nb.isEmpty else { return false }
+        if na == nb { return true }
+        let aParts = splitArtists(a).map(normalizedForMatch)
+        let bParts = splitArtists(b).map(normalizedForMatch)
+        guard let aLead = aParts.first, let bLead = bParts.first else { return false }
+        return bParts.contains(aLead) || aParts.contains(bLead)
+    }
+
+    /// Identity gate (not a score): the lead singer must match by
+    /// name or alias; the title base must be equal AND the version
+    /// tags must be exactly equal. Translation / "电视剧《X》插曲"
+    /// style notes never decide identity. Pure music is the only
+    /// exception: same title + same version with a duration gap
+    /// ≤ 2 s. `lyricDurationSeconds` is nil when the candidate
+    /// carries no duration.
+    static func lyricsIdentityMatches(
+        songTitle: String, songArtist: String, songDurationSeconds: Double,
+        lyricTitle: String, lyricArtist: String, lyricDurationSeconds: Double?,
+        isInstrumental: Bool
+    ) -> Bool {
+        guard titleBase(songTitle) == titleBase(lyricTitle),
+              !titleBase(songTitle).isEmpty,
+              versionTags(songTitle) == versionTags(lyricTitle),
+              artistsMatch(songArtist, lyricArtist)
+        else { return false }
+        if isInstrumental {
+            guard let lyricDuration = lyricDurationSeconds else { return false }
+            return abs(lyricDuration - songDurationSeconds) <= 2
+        }
+        return true
+    }
+
     /// Gate parsed lines against the song: nil identity in the
     /// candidate means "cannot check, keep as-is"; a failed check
     /// means empty (no matching lyrics for this song).
     static func gateLyrics(_ lines: [LyricsLine], candidate: (title: String, artist: String)?, song: MusicTrack) -> [LyricsLine] {
         guard let candidate = candidate else { return lines }
-        let matches = MusicLyrics.lyricsIdentityMatches(
+        let matches = lyricsIdentityMatches(
             songTitle: song.title, songArtist: song.artist, songDurationSeconds: song.duration ?? 0,
             lyricTitle: candidate.title, lyricArtist: candidate.artist, lyricDurationSeconds: nil,
             isInstrumental: false)
