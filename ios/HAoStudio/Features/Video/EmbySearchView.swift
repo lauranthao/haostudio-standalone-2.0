@@ -186,7 +186,15 @@ struct EmbySearchView: View {
                                         .foregroundStyle(theme.accentText)
                                 }
                                 .foregroundStyle(theme.textSecondary)
+                                // b49fix5 P2-17: the banner carries
+                                // its own top 12 (same as the
+                                // VideoSearch banners) — the parent
+                                // VStack has spacing 0 and the banner
+                                // is the first element of the results
+                                // branch, so without it the banner
+                                // sticks to the search field.
                                 .padding(.horizontal, HaoLayout.pushedPageMargin)
+                                .padding(.top, 12)
                             }
                             resultSection(items: viewModel.results)
                         }
