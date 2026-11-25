@@ -839,4 +839,20 @@ final class HomeAggregationTests: XCTestCase {
         XCTAssertFalse(HomeViewModel.shouldPublishDaily(
             startDayKey: "2026-11-25", publishDayKey: "2026-11-26"))
     }
+
+    func testShouldReloadForDayChange() {
+        // b49fix11 P2-1: the day-change / foreground trigger must
+        // fire exactly when the cached daily list is not today's —
+        // same day is a no-op (a same-day foreground costs
+        // nothing), a rolled-over day reloads, and an empty cache
+        // that never published (a first load skipped across
+        // midnight) is also stale: the daily section is absent,
+        // not today's.
+        XCTAssertFalse(HomeViewModel.shouldReloadForDayChange(
+            todayKey: "2026-11-26", cachedDayKey: "2026-11-26"))
+        XCTAssertTrue(HomeViewModel.shouldReloadForDayChange(
+            todayKey: "2026-11-26", cachedDayKey: "2026-11-25"))
+        XCTAssertTrue(HomeViewModel.shouldReloadForDayChange(
+            todayKey: "2026-11-26", cachedDayKey: ""))
+    }
 }

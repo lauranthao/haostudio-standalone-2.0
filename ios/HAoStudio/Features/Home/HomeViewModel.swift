@@ -44,6 +44,7 @@
 
 import Foundation
 import SwiftUI
+import UIKit // b49fix11 P2-1: UIApplication.didBecomeActiveNotification
 
 /// One live room on the home page. The identity is platform|roomId
 /// (LiveResumeKey), exactly like the follow / history rows — a room
@@ -272,6 +273,10 @@ final class HomeViewModel: ObservableObject {
     /// Pending debounced notification reload (see
     /// reloadForNotification): at most one is ever scheduled.
     private var notificationReloadWork: DispatchWorkItem?
+    /// Day-change observers (b49fix11 P2-1): at most one of each is
+    /// ever registered; removed in deinit. See reloadIfDayChanged.
+    private var dayChangedObserver: NSObjectProtocol?
+    private var didBecomeActiveObserver: NSObjectProtocol?
 
     /// `liveStatusChecker` nil = never confirm live status (all
     /// rooms stay isLive false). Tests pass nil or a stub; the app
@@ -282,6 +287,51 @@ final class HomeViewModel: ObservableObject {
     ) {
         self.liveStatusChecker = liveStatusChecker
         self.now = now
+        // b49fix11 P2-1: the round-10 skip (see shouldPublishDaily)
+        // stops a wrong publish, but nothing then triggers the
+        // recompute — no date-change listener existed anywhere, and
+        // foregrounding never reloaded Home, so yesterday's list
+        // could sit on screen for hours (and a first load skipped
+        // across midnight left the daily section empty for a round).
+        // Two triggers, both gated by shouldReloadForDayChange so a
+        // same-day foreground costs nothing: the calendar-day
+        // notification fires at midnight while the app is
+        // foregrounded; the become-active check catches a midnight
+        // crossed while backgrounded (the day-change notification
+        // is not delivered to a suspended app). Either trigger's
+        // reload supersedes an in-flight straddling reload through
+        // the background generation guard.
+        dayChangedObserver = NotificationCenter.default.addObserver(forName: .NSCalendarDayChanged, object: nil, queue: .main) { [weak self] _ in
+            // Explicit main-actor hop: the observer block is
+            // @Sendable, so the reload cannot happen inside it
+            // directly (same shape as the settle Timer hop in
+            // MusicSearchViewModel; a direct call fails Swift 6
+            // type-check with [#ActorIsolatedCall]).
+            Task { @MainActor [weak self] in self?.reloadIfDayChanged() }
+        }
+        didBecomeActiveObserver = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.reloadIfDayChanged() }
+        }
+    }
+
+    deinit {
+        // b49fix11 P2-1: the observers live exactly as long as the
+        // tokens — remove them here (same token-retained shape as
+        // the MusicPlayerViewModel observers, b49fix2 P1-30).
+        if let token = dayChangedObserver { NotificationCenter.default.removeObserver(token) }
+        if let token = didBecomeActiveObserver { NotificationCenter.default.removeObserver(token) }
+    }
+
+    /// Day-change / foreground re-check (b49fix11 P2-1): reload
+    /// only when the cached daily list is not today's — the
+    /// predicate makes a same-day foreground a no-op, and the
+    /// reload itself is the ordinary path (background read +
+    /// generation-guarded publish), so a trigger that lands while
+    /// another reload is in flight just supersedes it.
+    private func reloadIfDayChanged() {
+        if Self.shouldReloadForDayChange(todayKey: musicDayKey(of: now()), cachedDayKey: dailyDayKey) {
+            reload()
+        }
     }
 
     /// Reload for an appearance trigger (HomeView onAppear /
@@ -341,10 +391,23 @@ final class HomeViewModel: ObservableObject {
     /// XCTest can pin it: same key publishes, a rolled-over
     /// day skips the daily part of the round (the non-daily
     /// sections still publish, so the first-frame loading state
-    /// still ends) and the next reload recomputes under
-    /// today's key.
+    /// still ends) and the day-change / foreground observer
+    /// (b49fix11 P2-1) triggers the next reload, which recomputes
+    /// under today's key.
     nonisolated static func shouldPublishDaily(startDayKey: String, publishDayKey: String) -> Bool {
         startDayKey == publishDayKey
+    }
+
+    /// Whether a day-change / foreground trigger should reload
+    /// (b49fix11 P2-1): the on-screen daily list belongs to
+    /// `cachedDayKey` and today is `todayKey`. Same key = nothing
+    /// to do; a different key — including an empty cache that never
+    /// published (a first load skipped across midnight) — means the
+    /// list on screen is yesterday's (or absent) and the next
+    /// reload must recompute under today's key. Pure so XCTest can
+    /// pin it, like shouldPublishDaily above.
+    nonisolated static func shouldReloadForDayChange(todayKey: String, cachedDayKey: String) -> Bool {
+        todayKey != cachedDayKey
     }
 
     func reload(forceLiveRecheck: Bool = false) {
@@ -382,8 +445,10 @@ final class HomeViewModel: ObservableObject {
                 // skip the daily part of THIS round: publish the
                 // non-daily sections with the daily list exactly
                 // as it is (dayKey "" leaves dailyDayKey
-                // untouched) and write nothing to disk. The next
-                // reload recomputes under today's key. On a first
+                // untouched) and write nothing to disk. The
+                // day-change / foreground observer (b49fix11
+                // P2-1) triggers the next reload, which
+                // recomputes under today's key. On a first
                 // load this leaves the daily section empty for one
                 // round — honest, and the loading state still
                 // ends — instead of stamping yesterday's list as
