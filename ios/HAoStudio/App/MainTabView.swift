@@ -12,10 +12,13 @@
 // the stack, but it does NOT inset tab content: the content sits in a
 // NavigationStack, whose UIKit navigation controller owns the safe
 // area there, so on device (chen 2026-11-24 build 33) the last rows
-// slid under the bar and could not be dragged into view. Every
-// vertical scroll page under the stack therefore adds its own bottom
-// clearance from HaoLayout (haoBottomChromePadding()), sized to the
-// stack height above the safe-area bottom edge. No tab content relies
+// slid under the bar and could not be dragged into view. The five
+// tab roots therefore add their own bottom clearance INSIDE their
+// scroll content (haoBottomChromeContentPadding(), b40 —
+// safeAreaPadding on the ScrollView never reached the content, and
+// the last row stayed under the chrome on build 39), sized to the
+// stack height above the safe-area bottom edge. Pushed pages keep
+// haoBottomChromePadding() (safeAreaPadding). No tab content relies
 // on this inset for clearance.
 //
 // No TabView is used: the built-in tab bar cannot be replaced by a

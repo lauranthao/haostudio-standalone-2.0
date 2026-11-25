@@ -256,8 +256,8 @@ struct VideoTabView: View {
                     }
                     Spacer(minLength: 16)
                 }
+                .haoBottomChromeContentPadding()
             }
-            .haoBottomChromePadding()
             .haoChromeScrollTracking()
             .haoReselectScrollToTop(tab: .movies, proxy: proxy)
             .refreshable { viewModel.loadFresh() }

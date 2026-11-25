@@ -56,8 +56,8 @@ struct MusicHomeView: View {
                         Spacer(minLength: 16)
                     }
                     .padding(.horizontal, 20)
+                    .haoBottomChromeContentPadding()
                 }
-                .haoBottomChromePadding()
                 .haoChromeScrollTracking()
                 .haoReselectScrollToTop(tab: .music, proxy: proxy)
                 .background(theme.scaffoldBackground)

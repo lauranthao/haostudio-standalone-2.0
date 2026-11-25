@@ -65,8 +65,8 @@ struct HomeView: View {
                             .padding(.top, 16)
                         Spacer(minLength: 16)
                     }
+                    .haoBottomChromeContentPadding()
                 }
-                .haoBottomChromePadding()
                 .haoChromeScrollTracking()
                 .haoReselectScrollToTop(tab: .home, proxy: proxy)
                 .refreshable { viewModel.reload() }
