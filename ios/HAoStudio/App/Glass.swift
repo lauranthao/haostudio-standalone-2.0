@@ -300,15 +300,17 @@ struct HaoChromeScrollOffsetReader: View {
 /// ~85pt after b42): the b42 reshape did not remove the gap on
 /// device — a List row costs row height in ANY form, and the
 /// anchor row was ~44pt of the gap. The My tab no longer carries
-/// an anchor row at all: its in-content title row carries
-/// HaoChromeScrollOffsetReader in its background instead, and the
-/// title itself replaced the system large title. Only the four
-/// ScrollView tab roots (Home/Music/Live/Video) still carry an
-/// anchor row. A page pushed inside a tab has no anchor:
-/// scrolling it leaves the chrome as it was when the page was
-/// pushed, and the state self-corrects from the root anchor when
-/// the user pops back. Wiring every pushed scroll page is a later
-/// pass, not this leg.
+/// an anchor row at all: the title moved ABOVE the List in b45
+/// (a List keeps ~44pt of nav-bar reserve in its content inset
+/// even with the bar hidden), and the first section header
+/// carries HaoChromeScrollOffsetReader in its background
+/// instead. Only the four ScrollView tab roots
+/// (Home/Music/Live/Video) still carry an anchor row. A page
+/// pushed inside a tab has no anchor: scrolling it leaves the
+/// chrome as it was when the page was pushed, and the state
+/// self-corrects from the root anchor when the user pops back.
+/// Wiring every pushed scroll page is a later pass, not this
+/// leg.
 struct HaoChromeScrollAnchor: View {
     var body: some View {
         Color.clear

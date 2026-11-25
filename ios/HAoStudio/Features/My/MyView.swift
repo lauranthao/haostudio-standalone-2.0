@@ -148,124 +148,134 @@ struct MyView: View {
     var body: some View {
         NavigationStack {
             ScrollViewReader { proxy in
-                List {
-                    // b44: in-content title, same as the other tab
-                    // roots (Home/Music/Live/Video) — see myHeader
-                    // below. The system large title is gone, and
-                    // with it the anchor List row: a List row of ANY
-                    // content costs row height (b42's Color.clear
-                    // reshape did not remove the gap on device), so
-                    // the scroll-offset reader now lives in the title
-                    // row's background instead.
+                VStack(spacing: 0) {
+                    // b45 (chen 2026-11-25: 我的页标题上面还有
+                    // ~75pt 空): the title lives ABOVE the List,
+                    // not in it — a List keeps ~44pt of
+                    // navigation-bar reserve in its content inset
+                    // even with the bar hidden, plus the
+                    // insetGrouped first-section spacing, which put
+                    // the title ~75pt below the status bar. The
+                    // title is pinned while scrolling (the other
+                    // pages' titles scroll away — noted, 未验).
                     myHeader
-                    entriesSection
-                    migrationSection
-                    settingsSection
-                    // b40: bottom clearance lives INSIDE the list as
-                    // a trailing clear row (same value as the other
-                    // tab roots' in-content padding) — safeAreaPadding
-                    // on the List never reached the rows inside a
-                    // NavigationStack, so the last row stayed under
-                    // the chrome. Zero-height row + bottom padding =
-                    // exactly the clearance, no visible row.
-                    Color.clear
-                        .frame(height: 0)
-                        .haoBottomChromeContentPadding()
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                }
-                .haoChromeScrollTracking()
-                .haoReselectScrollToTop(tab: .my, proxy: proxy)
-                .listStyle(.insetGrouped)
-                // b44: tighten the section rhythm to the other tab
-                // roots' 12pt rhythm — the grouped default leaves a
-                // wide band between the title and the first section
-                // header, which was part of the "空这么多" gap.
-                .listSectionSpacing(12)
-                .scrollContentBackground(.hidden)
-                .haoBackdropLayer()
-                .haoTabBackground()
-                // b44: no system large title — the title is the
-                // in-content myHeader row above, exactly like the
-                // other pages. The navigation bar stays hidden so a
-                // pushed page's own bar / back button is unaffected.
-                .toolbar(.hidden, for: .navigationBar)
-                // b45-b (Coda §3.3): new playlist via the system
-                // alert (textfield placeholder "歌单名称").
-                .alert("新建歌单", isPresented: $showCreateList) {
-                    TextField("歌单名称", text: $newListName)
-                    Button("保存") {
-                        let name = newListName.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !name.isEmpty else { return }
-                        _ = MusicLibraryStore.createList(named: name)
+                    List {
+                        entriesSection
+                        migrationSection
+                        settingsSection
+                        // b40: bottom clearance lives INSIDE the list as
+                        // a trailing clear row (same value as the other
+                        // tab roots' in-content padding) — safeAreaPadding
+                        // on the List never reached the rows inside a
+                        // NavigationStack, so the last row stayed under
+                        // the chrome. Zero-height row + bottom padding =
+                        // exactly the clearance, no visible row.
+                        Color.clear
+                            .frame(height: 0)
+                            .haoBottomChromeContentPadding()
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                    }
+                    // b45: the List's hidden-nav-bar reserve (~63pt
+                    // by the b44 measurement: 75pt gap − 12pt title
+                    // padding) is pulled back with a −51pt top
+                    // content margin, so the first section sits
+                    // ~12pt under the title, like the other pages.
+                    .contentMargins(.top, -51, for: .scrollContent)
+                    .haoChromeScrollTracking()
+                    .haoReselectScrollToTop(tab: .my, proxy: proxy)
+                    .listStyle(.insetGrouped)
+                    // b44: tighten the section rhythm to the other tab
+                    // roots' 12pt rhythm — the grouped default leaves a
+                    // wide band between the title and the first section
+                    // header, which was part of the "空这么多" gap.
+                    .listSectionSpacing(12)
+                    .scrollContentBackground(.hidden)
+                    // b44: no system large title — the title is the
+                    // in-content myHeader above the List, exactly
+                    // like the other pages. The navigation bar stays
+                    // hidden so a pushed page's own bar / back
+                    // button is unaffected.
+                    .toolbar(.hidden, for: .navigationBar)
+                    // b45-b (Coda §3.3): new playlist via the system
+                    // alert (textfield placeholder "歌单名称").
+                    .alert("新建歌单", isPresented: $showCreateList) {
+                        TextField("歌单名称", text: $newListName)
+                        Button("保存") {
+                            let name = newListName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !name.isEmpty else { return }
+                            _ = MusicLibraryStore.createList(named: name)
+                            counts = MyEntryCounts.reload()
+                            reloadLibrary()
+                        }
+                        Button("取消", role: .cancel) { }
+                    }
+                    .navigationDestination(item: $selectedLiveRoom) { room in
+                        LiveRoomView(room: room, playlist: [room])
+                    }
+                    .onAppear {
                         counts = MyEntryCounts.reload()
                         reloadLibrary()
                     }
-                    Button("取消", role: .cancel) { }
+                    .onReceive(NotificationCenter.default.publisher(for: .haoBackupImported)) { _ in
+                        // b35-sweep-settings: 导入备份后本页不重进，
+                        // onAppear 不触发，8 个计数还停在导入前（例如导
+                        // 入 5 个歌单仍显示 0）。导入成功即重读计数与
+                        // 迁移提示（提示本身的判定见 MigrationStore）。
+                        counts = MyEntryCounts.reload()
+                        showMigrationNotice = MigrationStore.migrationNoticeNeeded()
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: .haoMusicRecentChanged)) { _ in
+                        // b36 item 8, F7: counts went stale while this
+                        // page was on screen — playing from the mini
+                        // player changes recent plays, a favourite toggle
+                        // anywhere changes favourites, and neither
+                        // re-triggers onAppear. Reload on the
+                        // notifications the music leg already posts.
+                        counts = MyEntryCounts.reload()
+                        reloadLibrary()
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { _ in
+                        counts = MyEntryCounts.reload()
+                        reloadLibrary()
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: .haoVideoFavChanged)) { _ in
+                        // Same staleness as the music/live counts above:
+                        // the video store already posts on every favourite
+                        // toggle; this page just never listened, so the
+                        // "影视收藏" count stayed stale after an
+                        // unfavourite from the pushed list.
+                        counts = MyEntryCounts.reload()
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: .haoVideoHistoryChanged)) { _ in
+                        // A1: same staleness for the 影视历史 count —
+                        // a watch / remove / clear-all from the player or
+                        // the pushed history list now posts, so the count
+                        // updates while this page is on screen.
+                        counts = MyEntryCounts.reload()
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: .haoLiveHistoryChanged)) { _ in
+                        // A2: same staleness for the 直播历史 count —
+                        // entering a room, or a delete from the pushed
+                        // history list, now posts, so the count updates
+                        // while this page is on screen.
+                        counts = MyEntryCounts.reload()
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: .haoMusicPlaylistChanged)) { _ in
+                        // A3: same staleness for the 歌单 count — a
+                        // delete from the pushed playlist list now posts.
+                        counts = MyEntryCounts.reload()
+                        reloadLibrary()
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: .haoMusicDownloadChanged)) { _ in
+                        // A3: same staleness for the 我的下载 count — a
+                        // download removed from the pushed list now posts.
+                        counts = MyEntryCounts.reload()
+                    }
                 }
-                .navigationDestination(item: $selectedLiveRoom) { room in
-                    LiveRoomView(room: room, playlist: [room])
-                }
-                .onAppear {
-                    counts = MyEntryCounts.reload()
-                    reloadLibrary()
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .haoBackupImported)) { _ in
-                    // b35-sweep-settings: 导入备份后本页不重进，
-                    // onAppear 不触发，8 个计数还停在导入前（例如导
-                    // 入 5 个歌单仍显示 0）。导入成功即重读计数与
-                    // 迁移提示（提示本身的判定见 MigrationStore）。
-                    counts = MyEntryCounts.reload()
-                    showMigrationNotice = MigrationStore.migrationNoticeNeeded()
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .haoMusicRecentChanged)) { _ in
-                    // b36 item 8, F7: counts went stale while this
-                    // page was on screen — playing from the mini
-                    // player changes recent plays, a favourite toggle
-                    // anywhere changes favourites, and neither
-                    // re-triggers onAppear. Reload on the
-                    // notifications the music leg already posts.
-                    counts = MyEntryCounts.reload()
-                    reloadLibrary()
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { _ in
-                    counts = MyEntryCounts.reload()
-                    reloadLibrary()
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .haoVideoFavChanged)) { _ in
-                    // Same staleness as the music/live counts above:
-                    // the video store already posts on every favourite
-                    // toggle; this page just never listened, so the
-                    // "影视收藏" count stayed stale after an
-                    // unfavourite from the pushed list.
-                    counts = MyEntryCounts.reload()
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .haoVideoHistoryChanged)) { _ in
-                    // A1: same staleness for the 影视历史 count —
-                    // a watch / remove / clear-all from the player or
-                    // the pushed history list now posts, so the count
-                    // updates while this page is on screen.
-                    counts = MyEntryCounts.reload()
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .haoLiveHistoryChanged)) { _ in
-                    // A2: same staleness for the 直播历史 count —
-                    // entering a room, or a delete from the pushed
-                    // history list, now posts, so the count updates
-                    // while this page is on screen.
-                    counts = MyEntryCounts.reload()
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .haoMusicPlaylistChanged)) { _ in
-                    // A3: same staleness for the 歌单 count — a
-                    // delete from the pushed playlist list now posts.
-                    counts = MyEntryCounts.reload()
-                    reloadLibrary()
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .haoMusicDownloadChanged)) { _ in
-                    // A3: same staleness for the 我的下载 count — a
-                    // download removed from the pushed list now posts.
-                    counts = MyEntryCounts.reload()
-                }
+                .haoBackdropLayer()
+                .haoTabBackground()
             }
             .onReceive(NotificationCenter.default.publisher(for: .haoLiveFollowChanged)) { _ in
                 // Same staleness as the music counts above: a
@@ -283,28 +293,25 @@ struct MyView: View {
         }
     }
 
-    // MARK: - In-content title (b44)
+    // MARK: - In-content title (b44, moved above the List in b45)
 
     /// b44 (chen 2026-11-25: 我的页标题要和其他页面一样，标题下
-    /// 空一大片): the title is an in-content row like the other
+    /// 空一大片): the title is an in-content title like the other
     /// tab roots (homeHeader pattern — 34pt bold, theme text
-    /// colour, 12pt top padding), NOT the system large title, so
-    /// the first section header sits tight under it. The row also
-    /// carries the chrome scroll-offset reader in its background
-    /// (the reselect-scroll-to-top id lives here too), which is
-    /// what let the anchor List row be deleted — see Glass.swift:
-    /// a List row of any content costs row height, and the anchor
-    /// row was ~44pt of the ~85pt gap.
+    /// colour, 12pt top padding), NOT the system large title.
+    /// b45: it lives ABOVE the List in the root VStack, not as a
+    /// List row — a List row of any content costs row height, and
+    /// the List's hidden-nav-bar reserve put the title ~75pt
+    /// below the status bar. The scroll-offset reader and the
+    /// reselect-scroll-to-top id now live on the first section
+    /// header instead (see entriesSection).
     private var myHeader: some View {
         Text("我的")
             .font(.system(size: 34, weight: .bold))
             .foregroundStyle(theme.textPrimary)
             .padding(.top, 12)
-            .id(HaoTabScrollTop.id(for: .my))
-            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
-            .background { HaoChromeScrollOffsetReader() }
+            .padding(.leading, 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - My entries (b45-b, Coda §3.3 library groups)
@@ -320,7 +327,16 @@ struct MyView: View {
     /// equivalents. b44's in-content title and anchor-free
     /// structure above are untouched.
     private var entriesSection: some View {
-        Section(header: SettingsSectionHeader(section: .my)) {
+        Section(header: SettingsSectionHeader(section: .my)
+            // b45: the chrome scroll-offset reader and the
+            // reselect-scroll-to-top id live on the first section
+            // header now that the title is above the List — the
+            // reader must be the first child of the List's scroll
+            // content (see HaoChromeScrollAnchor in Glass.swift),
+            // and the id is what a tab reselect scrolls to.
+            .id(HaoTabScrollTop.id(for: .my))
+            .background { HaoChromeScrollOffsetReader() }
+        ) {
             if settings.sectionExpanded(SettingsSection.my.rawValue) {
                 libraryGroupHeader(title: "创建的歌单", showAdd: true)
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 16))
