@@ -1648,7 +1648,7 @@ struct BackupSnapshotView: View {
                     }
                 }
             } footer: {
-                Text("快照只保留最近 5 份，超出自动清理；恢复只还原本次导入改动过的内容，导入后新建的歌单、下载不受影响；删除快照只去掉该次导入的安全网，不动现有数据。")
+                Text("快照只保留最近 5 份，超出自动清理；恢复时目标快照不会被清理；恢复只还原本次导入改动过的内容，导入后新建的歌单、下载不受影响；删除快照只去掉该次导入的安全网，不动现有数据。")
                     .font(.haoFootnote)
                     .foregroundStyle(theme.textSecondary)
             }
@@ -1724,15 +1724,18 @@ struct BackupSnapshotView: View {
             let result = BackupEngineCore.restoreSnapshot(
                 at: target.url, documentsURL: docs
             )
-            // b49fix6 P1-1: prune only after a SUCCESSFUL
-            // restore. Pruning before (inside the safety-net
-            // call) deleted the restore target whenever it was
-            // the oldest snapshot. On a failed restore nothing
-            // is pruned, so the target stays retryable; the next
-            // successful import prunes the extra folder.
-            if result.succeeded {
-                BackupEngineCore.pruneSnapshots(documentsURL: docs)
-            }
+            // b49fix7 P1-1/P2-7: prune after EVERY restore, and
+            // always excluding the target. b49fix6 pruned only
+            // after success, which left two holes: a successful
+            // restore still deleted a snapshot (the target when
+            // it was the oldest, otherwise the oldest unrelated
+            // one — the safety net counts toward keep-5), and
+            // every failed restore left its safety net behind,
+            // so the list grew to 6, 7, 8 folders until the next
+            // success. The target is never pruned here, so it
+            // stays restorable; the safety net is the newest
+            // folder and always survives.
+            BackupEngineCore.pruneSnapshots(excluding: target.url, documentsURL: docs)
             await MainActor.run {
                 isRestoring = false
                 restoreResultText = Self.restoreMessage(for: result, safetyNetTaken: safetyNetTaken)
