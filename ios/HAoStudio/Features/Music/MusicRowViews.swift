@@ -91,10 +91,14 @@ struct MusicCoverView: View {
 /// add to playlist / play next / download / share / view artist
 /// / view album), hiding the ones that don't apply.
 ///
-/// Apple Music shape: 56pt cover, 10pt radius, title 16 semibold,
-/// artist 14 secondary, duration right. Album / chart / playlist
-/// track lists pass `trackNumber` instead: Apple Music numbers
-/// tracks in detail pages (01, 02…) and shows no cover per row.
+/// b45-b (Coda §3.2 TrackRow): height 64 (compact 50), cover
+/// 48×48 r6, row HStack spacing 12, title body medium 1 line
+/// (playing = theme accent), subtitle subheadline 1 line,
+/// duration caption monospacedDigit tertiary width 36, heart
+/// 18pt in a 24×24 box shown only when favourited, rank column
+/// 28 wide (12pt mono, top 3 red), unplayable opacity 0.45.
+/// Chart rows pass rankWide for the 52-wide rank column
+/// (rank 13 medium mono + 7pt trend triangle).
 struct MusicSongRow: View {
     var song: MusicSong
     var showPlatformBadge: Bool = true
@@ -103,6 +107,17 @@ struct MusicSongRow: View {
     /// the number replaces the cover — the row keeps the same
     /// title / artist / duration layout.
     var trackNumber: Int? = nil
+    /// Coda chart rank (1-based). When set, a rank column leads
+    /// the row (28 wide, 52 when rankWide).
+    var rank: Int? = nil
+    var rankWide: Bool = false
+    /// Chart rank movement: > 0 up, < 0 down, 0 / nil = flat.
+    var rankTrend: Int? = nil
+    /// Coda compact row (album tracks): 50pt high, 40pt cover.
+    var compact: Bool = false
+    /// Show the 18pt heart when this song is favourited
+    /// (Coda: the heart only renders for liked rows).
+    var showFavHeart: Bool = false
     var onTap: () -> Void
     /// Post-toggle hook only: the row toggles the favourite itself
     /// (MusicSongMenuHost) and refreshes its own star from the
@@ -113,6 +128,9 @@ struct MusicSongRow: View {
     var onToggleFav: (() -> Void)? = nil
     /// Queue-only extra menu item ("不喜欢"): nil everywhere else.
     var onDislike: (() -> Void)? = nil
+    /// Playlist-detail extra menu item ("从歌单中删除",
+    /// destructive): nil everywhere else.
+    var onRemoveFromList: (() -> Void)? = nil
     /// Menu-action injection (build 36, item 10, leg 3): when a
     /// caller already holds the player view model it may pass its
     /// play-next / download actions here. Nil everywhere else —
@@ -124,26 +142,35 @@ struct MusicSongRow: View {
     var onDownload: ((MusicSong) -> Void)? = nil
 
     @Environment(\.haoTheme) private var theme
+    @State private var isFavRow = false
+
+    /// Unplayable when the resolver left a reason (trial-only /
+    /// VIP-only / no copyright): the row dims to 0.45 and shows
+    /// the reason tag instead of pretending to play.
+    private var isUnplayable: Bool { !song.reasonKey.isEmpty }
 
     var body: some View {
         // The "…" button is a SIBLING of the play button, never
         // nested inside it (nested buttons double-fire — build 35
         // search-history / MiniPlayerBar fix).
-        MusicSongMenuHost(song: song, onFavToggled: onToggleFav, onDislike: onDislike, onPlayNext: onPlayNext, onDownload: onDownload) { menu in
+        MusicSongMenuHost(song: song, onFavToggled: onToggleFav, onDislike: onDislike, onPlayNext: onPlayNext, onDownload: onDownload, onRemoveFromList: onRemoveFromList.map { remove in { (_: MusicSong) in remove() } }) { menu in
             HStack(spacing: 8) {
                 Button(action: onTap) {
                     HStack(spacing: 12) {
+                        if let rank = rank {
+                            MusicRankLabel(rank: rank, trend: rankTrend, wide: rankWide)
+                        }
                         if let trackNumber = trackNumber {
                             Text("\(trackNumber)")
                                 .font(.haoSubheadMedium)
                                 .foregroundStyle(theme.textSecondary)
                                 .frame(width: 28, alignment: .center)
                         } else {
-                            MusicCoverView(urlString: song.cover, size: 56, cornerRadius: 10)
+                            MusicCoverView(urlString: song.cover, size: compact ? 40 : 48, cornerRadius: 6)
                         }
                         VStack(alignment: .leading, spacing: 2) {
                             Text(song.title.isEmpty ? "未知歌曲" : song.title)
-                                .font(.haoCalloutStrong)
+                                .font(.system(size: 17, weight: .medium))
                                 .foregroundStyle(isPlaying ? theme.accentText : theme.textPrimary)
                                 .lineLimit(1)
                             HStack(spacing: 6) {
@@ -159,31 +186,510 @@ struct MusicSongRow: View {
                                         }
                                 }
                                 Text(song.artist.isEmpty ? "未知艺人" : song.artist)
-                                    .font(.haoRowSubtitle)
+                                    .font(.haoSubhead)
                                     .foregroundStyle(theme.textSecondary)
                                     .lineLimit(1)
                             }
+                            if isUnplayable {
+                                MusicUnplayableTag(text: song.reasonArg.isEmpty ? "不可播" : song.reasonArg)
+                            }
                         }
                         Spacer()
+                        if showFavHeart && isFavRow {
+                            Image(systemName: "heart.fill")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(theme.liveRed)
+                                .frame(width: 24, height: 24)
+                        }
                         if song.dur > 0 {
                             Text(musicDurationText(seconds: song.dur))
-                                .font(.haoFootnote)
+                                .font(.caption.monospacedDigit())
                                 .foregroundStyle(theme.textMuted)
+                                .frame(width: 36, alignment: .trailing)
                         }
                         if isPlaying {
                             MusicPlayingEQView()
                         }
                     }
+                    .frame(minHeight: compact ? 50 : 64)
                     .contentShape(Rectangle())
+                    .opacity(isUnplayable ? 0.45 : 1.0)
                 }
                 .buttonStyle(.plain)
                 MusicSongMenuButton(handle: menu)
             }
             .contextMenu { menu.menuContent() }
+            .onAppear { isFavRow = MusicLibraryStore.isFav(song) }
+            .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { _ in
+                isFavRow = MusicLibraryStore.isFav(song)
+            }
         }
     }
 }
 
+// MARK: - Coda §3.2 shared rows / cards (b45-b)
+
+/// Compact play-count number (Coda PlayCountBadge text):
+/// 1.2万 / 3.4亿, never a ".0" tail.
+func musicCompactCount(_ count: Int) -> String {
+    if count <= 0 { return "" }
+    if count >= 100_000_000 {
+        let formatted = String(format: "%.1f亿", Double(count) / 100_000_000)
+        if formatted.hasSuffix(".0亿") { return String(formatted.dropLast(3)) + "亿" }
+        return formatted
+    }
+    if count >= 10_000 {
+        let value = Double(count) / 10_000
+        if value >= 100 { return "\(Int(value))万" }
+        let formatted = String(format: "%.1f万", value)
+        if formatted.hasSuffix(".0万") { return String(formatted.dropLast(3)) + "万" }
+        return formatted
+    }
+    return "\(count)"
+}
+
+/// Coda chart rank column: 28 wide (52 wide on chart pages),
+/// 12pt mono (13pt wide), top 3 in the meaningful red, plus a
+/// 7pt trend triangle (up = red, down = muted).
+struct MusicRankLabel: View {
+    var rank: Int
+    var trend: Int? = nil
+    var wide: Bool = false
+
+    @Environment(\.haoTheme) private var theme
+
+    var body: some View {
+        VStack(spacing: 1) {
+            Text("\(rank)")
+                .font(.system(size: wide ? 13 : 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(rank <= 3 ? theme.liveRed : theme.textSecondary)
+            if let trend = trend, trend != 0 {
+                Image(systemName: "triangle.fill")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(trend > 0 ? theme.liveRed : theme.textMuted)
+                    .rotationEffect(.degrees(trend > 0 ? 0 : 180))
+            }
+        }
+        .frame(width: wide ? 52 : 28, alignment: .center)
+    }
+}
+
+/// Coda unplayable-reason tag: 10pt medium, quaternary fill,
+/// r4, padding 5×2.
+struct MusicUnplayableTag: View {
+    var text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(Color.secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+    }
+}
+
+/// Coda CoverCard: 178×178, r8 + 0.5pt primary 0.08 stroke,
+/// cover→text 8, title→subtitle 4, title cardTitle max 2 lines,
+/// subtitle secondary max 1 line. Play-count badge overlays the
+/// cover's top-trailing corner (8pt margin).
+struct MusicCoverCard: View {
+    var coverURL: String
+    var title: String
+    var subtitle: String
+    var playCount: Int? = nil
+    var isVIP: Bool = false
+    var size: CGFloat = 178
+    var onTap: (() -> Void)? = nil
+
+    @Environment(\.haoTheme) private var theme
+
+    var body: some View {
+        Button(action: { onTap?() }) {
+            VStack(alignment: .leading, spacing: 8) {
+                MusicCoverView(urlString: coverURL, size: size, cornerRadius: 8)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        if let playCount = playCount, playCount > 0 {
+                            MusicPlayCountBadge(count: playCount)
+                                .padding(8)
+                        }
+                    }
+                    .overlay(alignment: .topLeading) {
+                        if isVIP {
+                            MusicVIPBadge()
+                                .padding(8)
+                        }
+                    }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title.isEmpty ? "未知" : title)
+                        .font(.haoBodyStrong)
+                        .foregroundStyle(theme.textPrimary)
+                        .lineLimit(2)
+                    Text(subtitle)
+                        .font(.haoFootnote)
+                        .foregroundStyle(theme.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(width: size, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .disabled(onTap == nil)
+    }
+}
+
+/// Coda CoverCardBody (home / grid variant): r22 cover, title
+/// body medium max 2 lines, subtitle caption 13 max 1 line.
+struct MusicCoverCardBody: View {
+    var coverURL: String
+    var title: String
+    var subtitle: String
+    var size: CGFloat = 178
+    var onTap: (() -> Void)? = nil
+
+    @Environment(\.haoTheme) private var theme
+
+    var body: some View {
+        Button(action: { onTap?() }) {
+            VStack(alignment: .leading, spacing: 8) {
+                MusicCoverView(urlString: coverURL, size: size, cornerRadius: 22)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title.isEmpty ? "未知" : title)
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(theme.textPrimary)
+                        .lineLimit(2)
+                    Text(subtitle)
+                        .font(.system(size: 13))
+                        .foregroundStyle(theme.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(width: size, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .disabled(onTap == nil)
+    }
+}
+
+/// Coda PlayCountBadge: 8pt bold play icon + badge semibold,
+/// white, padding 8×4, black 0.35 + ultraThinMaterial 0.6,
+/// capsule, cover top-trailing corner.
+struct MusicPlayCountBadge: View {
+    var count: Int
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "play.fill")
+                .font(.system(size: 8, weight: .bold))
+            Text(musicCompactCount(count))
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.black.opacity(0.35), in: Capsule())
+        .background(.ultraThinMaterial, in: Capsule())
+        .opacity(0.9)
+    }
+}
+
+/// Coda VIP badge: "VIP" badge bold, theme accent, padding 4×2,
+/// 1pt accent 0.8 stroke, r3.
+struct MusicVIPBadge: View {
+    @Environment(\.haoTheme) private var theme
+
+    var body: some View {
+        Text("VIP")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(theme.accentText)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .overlay {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .strokeBorder(theme.accent.opacity(0.8), lineWidth: 1)
+            }
+    }
+}
+
+/// Coda skeleton block: quaternary 0.5 fill. Static (no sweep)
+/// — the shimmer sweep is a polish item, not a layout value.
+struct MusicSkeletonBlock: View {
+    var width: CGFloat? = nil
+    var height: CGFloat
+    var cornerRadius: CGFloat = 6
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(Color.primary.opacity(0.08))
+            .frame(width: width, height: height)
+    }
+}
+
+/// One skeleton song row (48 cover + two text bars), Coda
+/// loading state for track lists.
+struct MusicSkeletonRow: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            MusicSkeletonBlock(width: 48, height: 48, cornerRadius: 6)
+            VStack(alignment: .leading, spacing: 6) {
+                MusicSkeletonBlock(width: 160, height: 14)
+                MusicSkeletonBlock(width: 110, height: 11)
+            }
+            Spacer()
+        }
+        .frame(minHeight: 64)
+    }
+}
+
+/// One skeleton cover card (178 cover + two text bars).
+struct MusicSkeletonCard: View {
+    var size: CGFloat = 178
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            MusicSkeletonBlock(width: size, height: size, cornerRadius: 22)
+            MusicSkeletonBlock(width: size * 0.8, height: 14)
+            MusicSkeletonBlock(width: size * 0.6, height: 11)
+        }
+        .frame(width: size, alignment: .leading)
+    }
+}
+
+// MARK: - Coda §3.6 detail Hero + primary actions (b45-b)
+
+/// Shared detail Hero (playlist / album / artist, Coda
+/// PlaylistDetailHero): cover min(available width × 0.68, 300),
+/// square, r12, shadow black 0.18 / radius 18 / y 10; title
+/// detailTitle (title2 bold) centred max 2 lines, top padding
+/// 24, side margin 20; subtitle row avatar 24×24 circle +
+/// subtitle secondary 1 line, spacing 8, top padding 8;
+/// metadata secondary + medium 1 line, minimum scale 0.8, top
+/// padding 8; hero vertical padding 20. The top of a detail
+/// page is the cover — never a big play button in the middle
+/// (chen 2026-11-24, VidHub direction).
+struct MusicDetailHero: View {
+    var coverURL: String
+    var isCircular: Bool = false
+    var title: String
+    var subtitle: String
+    var avatarURL: String = ""
+    var metadata: String
+
+    @Environment(\.haoTheme) private var theme
+
+    /// Cover from the real screen width (never a hardcoded
+    /// number): min((screen − 40) × 0.68, 300). Detail pages are
+    /// full-width on iPhone, so the screen width is the available
+    /// width minus the page's side margins.
+    private var coverSize: CGFloat {
+        min((UIScreen.main.bounds.width - 40) * 0.68, 300)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            MusicCoverView(
+                urlString: coverURL, size: coverSize,
+                cornerRadius: isCircular ? coverSize / 2 : 12
+            )
+            .shadow(color: .black.opacity(0.18), radius: 18, y: 10)
+            Text(title.isEmpty ? "未知" : title)
+                .font(.haoDetailTitle)
+                .foregroundStyle(theme.textPrimary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .padding(.top, 24)
+                .padding(.horizontal, 20)
+            HStack(spacing: 8) {
+                if !avatarURL.isEmpty {
+                    MusicCoverView(urlString: avatarURL, size: 24, cornerRadius: 12)
+                }
+                Text(subtitle)
+                    .font(.haoSubhead)
+                    .foregroundStyle(theme.textSecondary)
+                    .lineLimit(1)
+            }
+            .padding(.top, 8)
+            if !metadata.isEmpty {
+                Text(metadata)
+                    .font(.haoFootnoteMedium)
+                    .foregroundStyle(theme.textSecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .padding(.top, 8)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 20)
+    }
+}
+
+/// Coda PlaylistPrimaryActions: height 56, max width 328, side
+/// margin 20, HStack spacing 12. Favourite 56×56 glass circle;
+/// play capsule min width 116, stretched, height 56, headline
+/// font, theme accent background + on-accent text (recomputed
+/// from the theme — never hardcoded black-on-white /
+/// white-on-black); more ellipsis title2 semibold 56×56 glass
+/// circle. The caller supplies the "…" menu content.
+struct MusicDetailPrimaryActions<More: View>: View {
+    var isFavourite: Bool
+    var onToggleFavourite: () -> Void
+    var onPlay: () -> Void
+    var playEnabled: Bool = true
+    @ViewBuilder var more: () -> More
+
+    @Environment(\.haoTheme) private var theme
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: onToggleFavourite) {
+                Image(systemName: isFavourite ? "checkmark" : "star")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(isFavourite ? theme.accentText : theme.textPrimary)
+                    .frame(width: 56, height: 56)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .overlay { Circle().strokeBorder(theme.hairline, lineWidth: 0.5) }
+            }
+            .buttonStyle(MusicPressScaleStyle())
+            .accessibilityLabel(isFavourite ? "已收藏" : "收藏")
+            Button(action: onPlay) {
+                HStack(spacing: 8) {
+                    Image(systemName: "play.fill")
+                    Text("播放")
+                }
+                .font(.headline)
+                .foregroundStyle(theme.onAccent)
+                .frame(minWidth: 116, maxWidth: .infinity, minHeight: 56, maxHeight: 56)
+                .background(theme.accent, in: Capsule())
+            }
+            .buttonStyle(MusicPressScaleStyle())
+            .disabled(!playEnabled)
+            .accessibilityLabel("播放全部")
+            Menu {
+                more()
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+                    .frame(width: 56, height: 56)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .overlay { Circle().strokeBorder(theme.hairline, lineWidth: 0.5) }
+            }
+            .accessibilityLabel("更多操作")
+        }
+        .frame(maxWidth: 328)
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+    }
+}
+
+// MARK: - Coda §3.6 playlist sort (b45-b)
+
+/// Coda PlaylistTrackSort: add-time (new→old / old→new), song
+/// name, album name, artist name — localizedStandardCompare,
+/// ties keep the original order (stable sort).
+enum MusicPlaylistSortOrder: String, CaseIterable {
+    case addedDesc
+    case addedAsc
+    case title
+    case album
+    case artist
+
+    var label: String {
+        switch self {
+        case .addedDesc: return "添加时间（由新到旧）"
+        case .addedAsc: return "添加时间（由旧到新）"
+        case .title: return "歌曲名"
+        case .album: return "专辑名"
+        case .artist: return "歌手名"
+        }
+    }
+}
+
+func musicSortedPlaylistTracks(_ tracks: [MusicSong], by order: MusicPlaylistSortOrder) -> [MusicSong] {
+    switch order {
+    case .addedDesc:
+        return Array(tracks.reversed())
+    case .addedAsc:
+        return tracks
+    case .title, .album, .artist:
+        return tracks.enumerated().sorted { lhs, rhs in
+            let left: String
+            let right: String
+            switch order {
+            case .title: left = lhs.element.title; right = rhs.element.title
+            case .album: left = lhs.element.album; right = rhs.element.album
+            case .artist: left = lhs.element.artist; right = rhs.element.artist
+            default: left = ""; right = ""
+            }
+            let compared = left.localizedStandardCompare(right)
+            if compared != .orderedSame { return compared == .orderedAscending }
+            return lhs.offset < rhs.offset
+        }.map { $0.element }
+    }
+}
+
+// MARK: - Coda §9.2 PlaySource / PlayContext (b45-b)
+
+/// A reloadable playback "place" (Coda PlaySource): playlist /
+/// album / artist / daily / recent / heartbeat / FM. Identity
+/// is kind + id — a rename never changes the identity.
+enum MusicPlaySourceKind: String {
+    case playlist
+    case album
+    case artist
+    case daily
+    case recent
+    case heartbeat
+    case fm
+}
+
+struct MusicPlaySource: Hashable, Equatable {
+    var kind: MusicPlaySourceKind
+    var id: String
+
+    static let recent = MusicPlaySource(kind: .recent, id: "recent")
+    static let daily = MusicPlaySource(kind: .daily, id: "daily")
+    static let fm = MusicPlaySource(kind: .fm, id: "fm")
+    static let heartbeat = MusicPlaySource(kind: .heartbeat, id: "heartbeat")
+}
+
+// MARK: - Coda §3.1 SectionHeader (b45-b)
+
+/// Coda SectionHeader: sectionTitle semibold + 13pt semibold
+/// accent chevron (hover: chevron +2pt in 0.15s — iOS has no
+/// hover, so the chevron is fixed 13pt); header min height 44,
+/// 16pt gap to the content below. Non-collapsible: taps the
+/// action (usually "view all") when one is given.
+struct MusicCodaSectionHeader: View {
+    var title: String
+    var action: (() -> Void)? = nil
+
+    @Environment(\.haoTheme) private var theme
+
+    var body: some View {
+        Button(action: { action?() }) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.haoSectionTitle)
+                    .foregroundStyle(theme.textPrimary)
+                Spacer()
+                if action != nil {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(theme.accentText)
+                }
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(action == nil)
+    }
+}
 // MARK: - Shared song actions menu (build 36, item 12)
 
 /// Pure, testable availability for the shared song menu: an item
@@ -226,6 +732,9 @@ struct MusicSongMenuContent: View {
     var onShowArtist: () -> Void
     var onShowAlbum: () -> Void
     var onDislike: (() -> Void)? = nil
+    /// Coda §8.5: destructive "从歌单中删除" — only when the
+    /// row is rendered inside its own playlist.
+    var onRemoveFromList: (() -> Void)? = nil
 
     var body: some View {
         Group {
@@ -261,6 +770,11 @@ struct MusicSongMenuContent: View {
                     Label("不喜欢（私人漫游不再推）", systemImage: "hand.thumbsdown")
                 }
             }
+            if let onRemoveFromList = onRemoveFromList {
+                Button(role: .destructive, action: onRemoveFromList) {
+                    Label("从歌单中删除", systemImage: "trash")
+                }
+            }
         }
     }
 }
@@ -288,6 +802,7 @@ struct MusicSongMenuHandle {
     var showDownload: Bool = true
     var onFavToggled: (() -> Void)? = nil
     var onDislike: (() -> Void)? = nil
+    var onRemoveFromList: (() -> Void)? = nil
 
     func menuContent() -> MusicSongMenuContent {
         MusicSongMenuContent(
@@ -303,7 +818,8 @@ struct MusicSongMenuHandle {
             onDownload: { onDownload(song) },
             onShowArtist: { showArtist.wrappedValue = true },
             onShowAlbum: { showAlbum.wrappedValue = true },
-            onDislike: onDislike
+            onDislike: onDislike,
+            onRemoveFromList: onRemoveFromList
         )
     }
 }
@@ -352,6 +868,7 @@ struct MusicSongMenuHost<Content: View>: View {
     /// call sites need no change.
     var onPlayNext: ((MusicSong) -> Void)? = nil
     var onDownload: ((MusicSong) -> Void)? = nil
+    var onRemoveFromList: ((MusicSong) -> Void)? = nil
     @ViewBuilder var content: (MusicSongMenuHandle) -> Content
 
     /// Non-subscribing read of the shared player view model (see
@@ -418,7 +935,8 @@ struct MusicSongMenuHost<Content: View>: View {
             showArtist: $showArtist,
             showDownload: showDownload,
             onFavToggled: onFavToggled,
-            onDislike: onDislike
+            onDislike: onDislike,
+            onRemoveFromList: onRemoveFromList.map { remove in { [song] in remove(song) } }
         )
     }
 }
@@ -493,8 +1011,10 @@ struct MusicSectionHeader: View {
                         .font(titleFont)
                         .foregroundStyle(theme.textPrimary)
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.haoDenseTitle)
-                        .foregroundStyle(theme.textSecondary)
+                        // b45-b (Coda §3.1 SectionHeader): 13pt
+                        // semibold accent chevron.
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(theme.accentText)
                         .animation(HaoLayout.settleSpring, value: expanded)
                 }
             }
@@ -504,6 +1024,8 @@ struct MusicSectionHeader: View {
                 trailing()
             }
         }
+        // b45-b: header min height 44 (Coda §3.1).
+        .frame(minHeight: 44)
     }
 }
 

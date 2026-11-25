@@ -19,8 +19,17 @@
 
 import SwiftUI
 
-// MARK: - Daily
+// MARK: - Daily (Coda §3.5, local version, b45-b)
 
+/// Daily picks, local seeds only (recent + likes): no server
+/// daily, no login. VStack spacing 16 (phone); header =
+/// PlaylistHeader (cover = first song's album, title = daily
+/// title, subtitle = platform/local, metadata "N 首歌曲 · 每天
+/// 6:00 更新"); actions have NO save button; "不喜欢换一首"
+/// replaces the song in place; title inline; empty state
+/// calendar.badge.clock "暂无推荐歌曲", min height 300; cache
+/// 24h per day key (hao_daily, see MusicDiscoveryViewModel).
+/// No big date header, no big cover hero.
 struct MusicDailyView: View {
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
     @StateObject private var discoveryVM = MusicDiscoveryViewModel()
@@ -31,21 +40,51 @@ struct MusicDailyView: View {
         Group {
             if discoveryVM.dailyTracks.isEmpty {
                 MusicEmptyState(
-                    icon: "calendar", title: "今天还没有推荐",
+                    icon: "calendar.badge.clock", title: "暂无推荐歌曲",
                     note: "先收藏几首歌或播几首歌，每日推荐会从你听过的歌里挑。"
                 )
+                .frame(minHeight: 300)
             } else {
                 List {
-                    ForEach(Array(discoveryVM.dailyTracks.enumerated()), id: \.element.id) { index, song in
-                        MusicSongRow(
-                            song: song,
-                            isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
-                            onTap: {
-                                playerVM.play(song: song, in: discoveryVM.dailyTracks, startAt: index)
+                    Section {
+                        dailyHeader
+                    }
+                    .listRowBackground(theme.scaffoldBackground)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+                    Section {
+                        HStack {
+                            Spacer()
+                            dailyActions
+                            Spacer()
+                        }
+                    }
+                    .listRowBackground(theme.scaffoldBackground)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+                    Section {
+                        ForEach(Array(discoveryVM.dailyTracks.enumerated()), id: \.element.id) { index, song in
+                            HStack(spacing: 8) {
+                                MusicSongRow(
+                                    song: song,
+                                    isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
+                                    showFavHeart: true,
+                                    onTap: {
+                                        playerVM.play(song: song, in: discoveryVM.dailyTracks, startAt: index)
+                                    }
+                                )
+                                if !discoveryVM.dailySpares.isEmpty {
+                                    Button("换一首") {
+                                        discoveryVM.replaceDailySong(song)
+                                    }
+                                    .font(.haoFootnoteStrong)
+                                    .foregroundStyle(theme.accentText)
+                                    .accessibilityLabel("不喜欢，换一首")
+                                }
                             }
-                        )
-                        .listRowBackground(theme.scaffoldBackground)
-                        .listRowSeparatorTint(theme.hairline)
+                            .listRowBackground(theme.scaffoldBackground)
+                            .listRowSeparatorTint(theme.hairline)
+                        }
                     }
                 }
                 .haoBottomChromePadding()
@@ -56,14 +95,252 @@ struct MusicDailyView: View {
         .background(theme.scaffoldBackground)
         .navigationTitle("每日推荐")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                MusicCapsuleButton(icon: "play.fill", label: "播放全部", enabled: !discoveryVM.dailyTracks.isEmpty) {
-                    playerVM.playAll(discoveryVM.dailyTracks)
+        .onAppear { discoveryVM.reload() }
+    }
+
+    /// PlaylistHeader: cover = first song's album cover, title
+    /// = daily title, subtitle = local source, metadata
+    /// "N 首歌曲 · 每天 6:00 更新".
+    private var dailyHeader: some View {
+        let first = discoveryVM.dailyTracks.first
+        return MusicDetailHero(
+            coverURL: first?.cover ?? "",
+            title: "每日推荐",
+            subtitle: "本地推荐",
+            metadata: "\(discoveryVM.dailyTracks.count) 首歌曲 · 每天 6:00 更新"
+        )
+    }
+
+    /// Actions without a save button (Coda §3.5): play capsule
+    /// (theme accent, headline) + a refresh-today menu.
+    private var dailyActions: some View {
+        HStack(spacing: 12) {
+            Button(action: { playerVM.playAll(discoveryVM.dailyTracks) }) {
+                HStack(spacing: 8) {
+                    Image(systemName: "play.fill")
+                    Text("播放")
+                }
+                .font(.headline)
+                .foregroundStyle(theme.onAccent)
+                .frame(minWidth: 116, maxWidth: .infinity, minHeight: 56, maxHeight: 56)
+                .background(theme.accent, in: Capsule())
+            }
+            .buttonStyle(MusicPressScaleStyle())
+            .accessibilityLabel("播放全部")
+            Menu {
+                Button("刷新今日推荐") { discoveryVM.reloadDaily() }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+                    .frame(width: 56, height: 56)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .overlay { Circle().strokeBorder(theme.hairline, lineWidth: 0.5) }
+            }
+            .accessibilityLabel("更多操作")
+        }
+        .frame(maxWidth: 328)
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+    }
+}
+
+// MARK: - Explore (Coda §3.9, b45-b)
+
+/// Explore = search empty state + ExploreShelves. 26 category
+/// chips (排行榜 excluded — it already lives on home/charts);
+/// each category snapshot caches 15 minutes, so switching
+/// categories answers instantly; each category is one two-row
+/// playlist shelf with its own loading state; the header arrow
+/// opens the category's full page. There is no ExploreView
+/// struct — this view is the explore page.
+struct MusicExploreView: View {
+    @StateObject private var discoveryVM = MusicDiscoveryViewModel()
+    @State private var selectedCategory = "全部"
+    @State private var showCategoryFull = false
+
+    @Environment(\.haoTheme) private var theme
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                categoryChips
+                    .padding(.top, 12)
+                    .padding(.bottom, 16)
+                ForEach(MusicDiscoveryViewModel.exploreCategories, id: \.self) { category in
+                    exploreShelf(category: category)
+                        .padding(.top, 32)
+                }
+                Spacer(minLength: 12)
+            }
+            .padding(.horizontal, 20)
+            .haoBottomChromeContentPadding()
+        }
+        .background(
+            // One hidden link for every shelf header's arrow:
+            // the header sets selectedCategory, then flips this.
+            NavigationLink(
+                destination: MusicExploreCategoryView(category: selectedCategory),
+                isActive: $showCategoryFull
+            ) { EmptyView() }
+            .hidden()
+        )
+        .background(theme.scaffoldBackground)
+        .navigationTitle("探索")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { discoveryVM.loadExploreCategory("全部") }
+    }
+
+    private var categoryChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(MusicDiscoveryViewModel.exploreCategories, id: \.self) { category in
+                    Button(action: {
+                        selectedCategory = category
+                        discoveryVM.loadExploreCategory(category)
+                    }) {
+                        Text(category)
+                            .font(.haoSubheadMedium)
+                            .foregroundStyle(selectedCategory == category ? theme.onAccent : theme.textPrimary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(
+                                selectedCategory == category ? theme.accent : Color.primary.opacity(0.06),
+                                in: Capsule()
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("分类：\(category)")
                 }
             }
         }
-        .onAppear { discoveryVM.reload() }
+    }
+
+    /// One category: header (min height 44, 16pt to content) +
+    /// a two-row playlist shelf. Each shelf loads independently.
+    private func exploreShelf(category: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            MusicCodaSectionHeader(title: category) {
+                // The header arrow opens the category's full page.
+                selectedCategory = category
+                showCategoryFull = true
+            }
+            .padding(.bottom, 16)
+            if discoveryVM.exploreLoading.contains(category) && discoveryVM.explorePlaylists(for: category).isEmpty {
+                HStack(spacing: 16) {
+                    ForEach(0..<3, id: \.self) { _ in MusicSkeletonCard() }
+                }
+            } else if discoveryVM.exploreFailed.contains(category) {
+                MusicEmptyState(
+                    icon: "square.grid.2x2", title: "该分类加载失败",
+                    note: "稍后再试。",
+                    onRetry: { discoveryVM.loadExploreCategory(category) }
+                )
+            } else {
+                let playlists = discoveryVM.explorePlaylists(for: category)
+                if playlists.isEmpty {
+                    // Not loaded yet (below the fold): trigger the
+                    // load and show a compact empty state, never a
+                    // blank hole.
+                    Color.clear
+                        .frame(height: 0)
+                        .onAppear { discoveryVM.loadExploreCategory(category) }
+                    Text("该分类暂无歌单。")
+                        .font(.haoFootnote)
+                        .foregroundStyle(theme.textSecondary)
+                        .frame(minHeight: 120, alignment: .center)
+                        .frame(maxWidth: .infinity)
+                } else {
+                    let columns = Array(playlists.prefix(12).chunked(into: 2))
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(alignment: .top, spacing: 24) {
+                            ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
+                                VStack(alignment: .leading, spacing: 24) {
+                                    ForEach(Array(column.enumerated()), id: \.offset) { _, summary in
+                                        NavigationLink(destination: MusicPlazaDetailView(summary: summary)) {
+                                            MusicCoverCardBody(
+                                                coverURL: summary.cover, title: summary.name,
+                                                subtitle: summary.creator
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One category's full page: all of its snapshot, client-side
+/// paging (20 per page, "加载更多" appends the next page).
+struct MusicExploreCategoryView: View {
+    var category: String
+
+    @StateObject private var discoveryVM = MusicDiscoveryViewModel()
+    @State private var shownCount = 20
+
+    @Environment(\.haoTheme) private var theme
+
+    private var playlists: [PlaylistSummary] {
+        discoveryVM.explorePlaylists(for: category)
+    }
+
+    var body: some View {
+        Group {
+            if discoveryVM.exploreLoading.contains(category) && playlists.isEmpty {
+                VStack(spacing: 16) {
+                    ForEach(0..<6, id: \.self) { _ in MusicSkeletonCard() }
+                }
+                .padding(.horizontal, 20)
+            } else if playlists.isEmpty {
+                MusicEmptyState(
+                    icon: "square.grid.2x2", title: "该分类暂无歌单",
+                    note: "换个分类试试。",
+                    onRetry: { discoveryVM.loadExploreCategory(category) }
+                )
+            } else {
+                ScrollView {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(), spacing: 16),
+                            GridItem(.flexible(), spacing: 16),
+                        ],
+                        spacing: 24
+                    ) {
+                        ForEach(Array(playlists.prefix(shownCount).enumerated()), id: \.offset) { _, summary in
+                            NavigationLink(destination: MusicPlazaDetailView(summary: summary)) {
+                                MusicCoverCardBody(
+                                    coverURL: summary.cover, title: summary.name,
+                                    subtitle: summary.creator,
+                                    size: (UIScreen.main.bounds.width - 40 - 16) / 2
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    if shownCount < playlists.count {
+                        Button("加载更多") { shownCount += 20 }
+                            .font(.haoFootnoteStrong)
+                            .foregroundStyle(theme.accentText)
+                            .frame(minHeight: 44)
+                            .frame(maxWidth: .infinity)
+                    }
+                    Spacer(minLength: 12)
+                }
+                .haoBottomChromeContentPadding()
+            }
+        }
+        .background(theme.scaffoldBackground)
+        .navigationTitle(category)
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { discoveryVM.loadExploreCategory(category) }
     }
 }
 

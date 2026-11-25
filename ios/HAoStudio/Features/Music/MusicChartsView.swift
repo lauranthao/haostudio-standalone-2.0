@@ -21,6 +21,14 @@ final class MusicChartsViewModel: ObservableObject {
     @Published private(set) var charts: [PlaylistSummary] = []
     @Published private(set) var isLoading = true
     @Published private(set) var failed = false
+    /// Top tracks per chart for the grid cards (b45-b, Coda
+    /// §3.9: the card shows the top 3). Lazy, cached 1800s.
+    @Published private(set) var topTracks: [String: [MusicSong]] = [:]
+
+    private var topTracksLoadedAt: [String: Date] = [:]
+    private var topTracksLoading: Set<String> = []
+
+    static let topTracksCacheTTL: TimeInterval = 1800
 
     /// The four canonical charts, pinned first in this order.
     static let pinnedNames = ["飙升榜", "新歌榜", "原创榜", "热歌榜"]
@@ -68,6 +76,24 @@ final class MusicChartsViewModel: ObservableObject {
             self.failed = parsed.isEmpty
         }
     }
+
+    /// Lazy top-3 tracks for one chart card, cached 1800s.
+    func loadTopTracks(chart: PlaylistSummary) {
+        let now = Date()
+        if let loadedAt = topTracksLoadedAt[chart.id],
+           now.timeIntervalSince(loadedAt) < Self.topTracksCacheTTL,
+           topTracks[chart.id] != nil {
+            return
+        }
+        guard !topTracksLoading.contains(chart.id) else { return }
+        topTracksLoading.insert(chart.id)
+        MusicPlaylistImportAPI.shared.importWyPlaylist(chart.id) { [weak self] imported in
+            guard let self = self else { return }
+            self.topTracksLoading.remove(chart.id)
+            self.topTracksLoadedAt[chart.id] = Date()
+            self.topTracks[chart.id] = Array(imported.tracks.map(MusicSong.init(from:)).prefix(3))
+        }
+    }
 }
 
 struct MusicChartsView: View {
@@ -98,43 +124,73 @@ struct MusicChartsView: View {
                     Spacer()
                 }
             } else {
-                List {
-                    ForEach(Array(viewModel.charts.enumerated()), id: \.element.id) { index, chart in
-                        NavigationLink(destination: MusicChartDetailView(chart: chart)) {
-                            HStack(spacing: 12) {
-                                // Apple Music charts: a big bold rank
-                                // number leads each row.
-                                Text("\(index + 1)")
-                                    .font(.haoDetailTitle)
-                                    .foregroundStyle(theme.textPrimary)
-                                    .frame(width: 28, alignment: .center)
-                                MusicCoverView(urlString: chart.cover, size: 56, cornerRadius: 10)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(chart.name)
-                                        .font(.haoCalloutStrong)
-                                        .foregroundStyle(theme.textPrimary)
-                                        .lineLimit(1)
-                                    Text(chartSubtitle(chart))
-                                        .font(.haoRowSubtitle)
-                                        .foregroundStyle(theme.textSecondary)
-                                        .lineLimit(1)
-                                }
-                                Spacer()
+                // b45-b (Coda §3.9): adaptive grid (min 300, max
+                // 420, group spacing 24, section spacing 20).
+                // Each card: 110×110 r8 cover, padding 12,
+                // primary 0.04 background, r12; name secondary
+                // semibold, update frequency caption tertiary,
+                // top 3 as "1. 歌名 - 歌手" caption secondary.
+                ScrollView {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.adaptive(minimum: 300, maximum: 420), spacing: 24),
+                        ],
+                        spacing: 20
+                    ) {
+                        ForEach(viewModel.charts, id: \.id) { chart in
+                            NavigationLink(destination: MusicChartDetailView(chart: chart)) {
+                                chartCard(chart)
                             }
+                            .buttonStyle(.plain)
                         }
-                        .listRowBackground(theme.scaffoldBackground)
-                        .listRowSeparatorTint(theme.hairline)
                     }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .haoBottomChromeContentPadding()
                 }
-                .haoBottomChromePadding()
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
             }
         }
         .background(theme.scaffoldBackground)
         .navigationTitle("排行榜")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { viewModel.load() }
+    }
+
+    private func chartCard(_ chart: PlaylistSummary) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            MusicCoverView(urlString: chart.cover, size: 110, cornerRadius: 8)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(chart.name)
+                    .font(.haoSubheadStrong)
+                    .foregroundStyle(theme.textSecondary)
+                    .lineLimit(1)
+                if !chart.desc.isEmpty {
+                    Text(chart.desc)
+                        .font(.haoCaption)
+                        .foregroundStyle(theme.textMuted)
+                        .lineLimit(1)
+                }
+                if let tracks = viewModel.topTracks[chart.id] {
+                    ForEach(Array(tracks.prefix(3).enumerated()), id: \.element.id) { index, song in
+                        Text("\(index + 1). \(song.title) - \(song.artist)")
+                            .font(.haoCaption)
+                            .foregroundStyle(theme.textSecondary)
+                            .lineLimit(1)
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(0..<3, id: \.self) { _ in
+                            MusicSkeletonBlock(width: 160, height: 11)
+                        }
+                    }
+                }
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(Rectangle())
+        .onAppear { viewModel.loadTopTracks(chart: chart) }
     }
 
     private func chartSubtitle(_ chart: PlaylistSummary) -> String {

@@ -373,6 +373,123 @@ enum MusicLibraryStore {
         }
     }
 
+    // MARK: - Favourited playlists / albums / artists (b45-b)
+
+    /// Coda §3.3/§3.4: "收藏的歌单 / 收藏的专辑 / 收藏的歌手"
+    /// are local-only favourites (no login anywhere). Playlist
+    /// favourites are a set of list ids; album/artist favourites
+    /// are minimal JSON dicts (id/name/cover + artist/platform
+    /// for albums, counts/alias for artists) in their own
+    /// collections, so a favourited album/artist survives even
+    /// when its songs are not in the local library.
+    static let favPlaylistsCollection = "hao_fav_playlists"
+    static let favAlbumsCollection = "hao_fav_albums"
+    static let favArtistsCollection = "hao_fav_artists"
+
+    static func favPlaylistIds() -> Set<String> {
+        return Set(readStringArray(named: favPlaylistsCollection))
+    }
+
+    static func isFavPlaylist(id: String) -> Bool {
+        return favPlaylistIds().contains(id)
+    }
+
+    @discardableResult
+    static func toggleFavPlaylist(id: String) -> Bool {
+        var ids = favPlaylistIds()
+        let added: Bool
+        if ids.contains(id) {
+            ids.remove(id)
+            added = false
+        } else {
+            ids.insert(id)
+            added = true
+        }
+        writeStringArray(named: favPlaylistsCollection, Array(ids))
+        NotificationCenter.default.post(name: .haoMusicPlaylistChanged, object: nil)
+        return added
+    }
+
+    static func favAlbums() -> [AlbumSummary] {
+        return readArray(named: favAlbumsCollection).compactMap { dict in
+            let id = MusicDict.string(dict, "id")
+            let name = MusicDict.string(dict, "name")
+            guard !name.isEmpty else { return nil }
+            return AlbumSummary(
+                id: id, name: name, cover: MusicDict.string(dict, "cover"),
+                artist: MusicDict.string(dict, "artist"),
+                publishTime: MusicDict.int(dict, "publishTime"),
+                songCount: MusicDict.int(dict, "songCount"),
+                platform: MusicPlatform.fromCode(MusicDict.string(dict, "platform"))
+            )
+        }
+    }
+
+    static func isFavAlbum(id: String, name: String) -> Bool {
+        return favAlbums().contains { $0.id == id && $0.name == name }
+    }
+
+    @discardableResult
+    static func toggleFavAlbum(_ album: AlbumSummary) -> Bool {
+        var albums = favAlbums()
+        if let index = albums.firstIndex(where: { $0.id == album.id && $0.name == album.name }) {
+            albums.remove(at: index)
+            writeArray(named: favAlbumsCollection, albums.map { albumDict($0) })
+            return false
+        }
+        albums.append(album)
+        writeArray(named: favAlbumsCollection, albums.map { albumDict($0) })
+        return true
+    }
+
+    private static func albumDict(_ album: AlbumSummary) -> [String: Any] {
+        return [
+            "id": album.id, "name": album.name, "cover": album.cover,
+            "artist": album.artist, "publishTime": album.publishTime,
+            "songCount": album.songCount, "platform": album.platform.rawValue,
+        ]
+    }
+
+    static func favArtists() -> [ArtistSummary] {
+        return readArray(named: favArtistsCollection).compactMap { dict in
+            let name = MusicDict.string(dict, "name")
+            guard !name.isEmpty else { return nil }
+            return ArtistSummary(
+                id: MusicDict.string(dict, "id"), name: name,
+                cover: MusicDict.string(dict, "cover"),
+                musicSize: MusicDict.int(dict, "musicSize"),
+                albumSize: MusicDict.int(dict, "albumSize"),
+                platform: MusicPlatform.fromCode(MusicDict.string(dict, "platform")),
+                alias: MusicDict.string(dict, "alias")
+            )
+        }
+    }
+
+    static func isFavArtist(id: String, name: String) -> Bool {
+        return favArtists().contains { $0.id == id && $0.name == name }
+    }
+
+    @discardableResult
+    static func toggleFavArtist(_ artist: ArtistSummary) -> Bool {
+        var artists = favArtists()
+        if let index = artists.firstIndex(where: { $0.id == artist.id && $0.name == artist.name }) {
+            artists.remove(at: index)
+            writeArray(named: favArtistsCollection, artists.map { artistDict($0) })
+            return false
+        }
+        artists.append(artist)
+        writeArray(named: favArtistsCollection, artists.map { artistDict($0) })
+        return true
+    }
+
+    private static func artistDict(_ artist: ArtistSummary) -> [String: Any] {
+        return [
+            "id": artist.id, "name": artist.name, "cover": artist.cover,
+            "musicSize": artist.musicSize, "albumSize": artist.albumSize,
+            "platform": artist.platform.rawValue, "alias": artist.alias,
+        ]
+    }
+
     // MARK: - Favourites
 
     static func favEntries() -> [MusicFavEntry] {
