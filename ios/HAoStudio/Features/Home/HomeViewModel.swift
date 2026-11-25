@@ -376,27 +376,50 @@ final class HomeViewModel: ObservableObject {
                 // complete newer list and already excludes the
                 // replaced song. The dislike filter is re-applied
                 // with the ids as of now, then re-split at the 20
-                // boundary. If the re-read yields nothing usable,
-                // fall back to the computed result (the next
-                // reload recomputes, same as the all-disliked
-                // fall-through in the load).
+                // boundary.
+                // b49fix7 P2-1: the ≥40 cache-hit branch now
+                // returns saveTracks too, so this CAS + re-read
+                // runs on EVERY branch (it used to be skipped
+                // entirely when saveTracks was nil — the most
+                // common branch, where the stale publish lived).
+                // b49fix7 P2-2: when the CAS refuses, NEVER fall
+                // back to the stale picks unfiltered. If the
+                // on-disk list re-reads and filters to nothing
+                // (every on-disk song was disliked since this
+                // reload started) or the disk is unreadable,
+                // publish the stale picks filtered by the
+                // dislikes as of now instead — the survivors are
+                // still valid, and the disliked songs stay dead.
+                // If even that is empty, the section is honestly
+                // empty and the next reload recomputes (the
+                // all-disliked cache falls through to a fresh
+                // ranking in the load).
                 var picksToPublish = dailyResult.picks
                 var sparesToPublish = dailyResult.spares
                 if let saveTracks = dailyResult.saveTracks {
                     let saved = MusicLibraryStore.saveDailyTracksIfUnchanged(
                         saveTracks, for: dayKey,
                         expectedKeys: dailyResult.expectedDiskKeys)
-                    if !saved,
-                       let fresh = MusicLibraryStore.dailyTracks(for: dayKey),
-                       let valid = Self.validatedDailyTracks(fresh, dayKey: dayKey, todayKey: dayKey),
-                       !valid.isEmpty {
+                    if !saved {
                         let dislikedNow = MusicLibraryStore.fmDislikedIds()
-                        let freshFiltered = valid.filter {
-                            !dislikedNow.contains($0.identityKey) && !dislikedNow.contains($0.songId)
+                        let notDislikedNow: (MusicSong) -> Bool = {
+                            !dislikedNow.contains($0.identityKey)
+                                && !dislikedNow.contains($0.songId)
                         }
-                        if !freshFiltered.isEmpty {
-                            picksToPublish = Array(freshFiltered.prefix(20))
-                            sparesToPublish = Array(freshFiltered.dropFirst(20))
+                        if let fresh = MusicLibraryStore.dailyTracks(for: dayKey),
+                           let valid = Self.validatedDailyTracks(fresh, dayKey: dayKey, todayKey: dayKey),
+                           !valid.isEmpty {
+                            let freshFiltered = Self.dedupeDailyTracksBySongId(valid.filter(notDislikedNow))
+                            if !freshFiltered.isEmpty {
+                                picksToPublish = Array(freshFiltered.prefix(20))
+                                sparesToPublish = Array(freshFiltered.dropFirst(20))
+                            } else {
+                                picksToPublish = dailyResult.picks.filter(notDislikedNow)
+                                sparesToPublish = dailyResult.spares.filter(notDislikedNow)
+                            }
+                        } else {
+                            picksToPublish = dailyResult.picks.filter(notDislikedNow)
+                            sparesToPublish = dailyResult.spares.filter(notDislikedNow)
                         }
                     }
                 }
@@ -692,8 +715,15 @@ final class HomeViewModel: ObservableObject {
     struct DailyLoadResult {
         var picks: [MusicSong]
         var spares: [MusicSong]
-        /// Full list (picks + spares, ≤ 40) to persist, or nil
-        /// when the cache-hit branch needed no write.
+        /// Full list (picks + spares, ≤ 40) to persist. Always
+        /// non-nil when the list is non-empty — the ≥40
+        /// cache-hit branch returns it too (b49fix7 P2-1): the
+        /// write is a compare-and-swap no-op when the disk is
+        /// unchanged, and the CAS doubles as the staleness
+        /// detector, so a replaceDailySong that landed while
+        /// this reload was computing is caught on EVERY
+        /// branch, not just the <40 / recompute ones. Nil only
+        /// when there is nothing to persist.
         var saveTracks: [MusicSong]?
         /// identityKeys of the on-disk list as read at the start
         /// of this load — the save is a compare-and-swap against
@@ -721,15 +751,26 @@ final class HomeViewModel: ObservableObject {
             // Cache hit: filter out songs disliked since the list
             // was saved (P2-32 — FM "不喜欢" must clear them from
             // today's recommendations, not just from FM itself).
-            let filtered = cached.filter {
+            // b49fix7 P2-4: dedupe by songId — a list saved
+            // before the pool dedupe can hold the same songId on
+            // two platforms.
+            let filtered = Self.dedupeDailyTracksBySongId(cached.filter {
                 !dislikedIds.contains($0.identityKey) && !dislikedIds.contains($0.songId)
-            }
+            })
             if !filtered.isEmpty {
                 if filtered.count >= 40 {
+                    // b49fix7 P2-1: the cache-hit branch returns
+                    // saveTracks too (it used to return nil, so
+                    // the caller's CAS + re-read never ran on the
+                    // most common branch). The write is a
+                    // compare-and-swap no-op when the disk is
+                    // unchanged; when a replace landed mid-reload
+                    // the CAS refuses and the caller publishes
+                    // the on-disk list instead.
                     return DailyLoadResult(
                         picks: Array(filtered.prefix(20)),
                         spares: Array(filtered.dropFirst(20).prefix(20)),
-                        saveTracks: nil, expectedDiskKeys: expectedDiskKeys)
+                        saveTracks: Array(filtered.prefix(40)), expectedDiskKeys: expectedDiskKeys)
                 }
                 // Old 20-only cache, or filtered below 40: one
                 // total-40 run for the spares only. The cached
@@ -751,36 +792,63 @@ final class HomeViewModel: ObservableObject {
                 // meaningful boundary — picks stay short and the
                 // same fill runs again next time (deterministic:
                 // dailyPicks is never shuffled).
-                let ranked = MusicRadio.dailyPicks(
+                // b49fix7 P2-3: the fills / spares draw from the
+                // day's PINNED ranking pool, never from a fresh
+                // ranking. The old code ran MusicRadio.dailyPicks
+                // on every reload while the cache was short, so
+                // the fills tracked the live listenLog and the
+                // picks drifted mid-day. The pool is computed once
+                // (first load of the day, or force-refresh) and
+                // fixed to disk; later loads read it back, so the
+                // fills are pinned the moment they are chosen —
+                // the next load reads them back as surviving and
+                // never re-draws them. A song favourited / heard
+                // at noon enters tomorrow's pool (or a force
+                // refresh), never today's list mid-day.
+                // Structural note (b49fix7 P2-3): the old "fills
+                // prefer the OLD cached spares" was vacuous for
+                // picks — surviving is filtered.prefix(20), so
+                // surviving < 20 implies filtered < 20 implies
+                // the old-spares tail is empty, exactly when
+                // fills are needed; conversely when the tail is
+                // non-empty, surviving is already 20 and the
+                // fills never reach the picks. The oldSpares
+                // preference below is real only for the SPARE
+                // tail (where the disk tail exists); the picks
+                // fills come from the pinned pool alone.
+                // b49fix7 P2-4: the assembly dedupes by songId as
+                // well as identityKey (the pool and the disk list
+                // are already songId-deduped; this is the last
+                // line of defence against a legacy duplicate).
+                let ranked = Self.pinnedRankingPool(
                     listenLog: listenLog, favourites: favourites, recent: recent,
                     playlistTracks: playlistTracks, dislikedIds: dislikedIds,
-                    dayKey: dayKey, total: 40)
+                    dayKey: dayKey, force: force
+                ).filter {
+                    !dislikedIds.contains($0.identityKey) && !dislikedIds.contains($0.songId)
+                }
                 let surviving = Array(filtered.prefix(20))
                 let survivingKeys = Set(surviving.map { $0.identityKey })
-                // b49fix6 P2-2: fills prefer the OLD cached spares.
-                // The fresh ranking's input (listenLog / recent)
-                // moves during the day, so filling from it on every
-                // reload lets picks drift mid-day; the cached
-                // spares were ranked this morning and are stable.
-                // The old spares also survive on disk now: the old
-                // code built spares from the fresh ranking only, so
-                // a cached spare outside the new top 40 silently
-                // vanished from the "换一首" pool.
+                let survivingSongIds = Set(surviving.map { $0.songId }.filter { !$0.isEmpty })
                 let oldSpares = Array(filtered.dropFirst(20)).filter {
                     !survivingKeys.contains($0.identityKey)
                 }
-                let oldSpareKeys = Set(oldSpares.map { $0.identityKey })
-                let fills = oldSpares + ranked.filter {
+                let oldSpareSongIds = Set(oldSpares.map { $0.songId }.filter { !$0.isEmpty })
+                let fills = ranked.filter {
                     !survivingKeys.contains($0.identityKey)
-                        && !oldSpareKeys.contains($0.identityKey)
+                        && ($0.songId.isEmpty || (!survivingSongIds.contains($0.songId) && !oldSpareSongIds.contains($0.songId)))
                 }
                 let picks = Array((surviving + fills).prefix(20))
                 let pickKeys = Set(picks.map { $0.identityKey })
+                let pickSongIds = Set(picks.map { $0.songId }.filter { !$0.isEmpty })
                 var seenKeys = pickKeys
+                var seenSongIds = pickSongIds
                 var spares: [MusicSong] = []
                 for song in oldSpares + ranked where spares.count < 20 {
                     guard !seenKeys.contains(song.identityKey) else { continue }
+                    guard song.songId.isEmpty || !seenSongIds.contains(song.songId) else { continue }
                     seenKeys.insert(song.identityKey)
+                    if !song.songId.isEmpty { seenSongIds.insert(song.songId) }
                     spares.append(song)
                 }
                 let all = picks + spares
@@ -793,15 +861,27 @@ final class HomeViewModel: ObservableObject {
             // Every cached song was disliked away — fall through
             // and recompute instead of showing an empty day.
         }
-        let ranked = MusicRadio.dailyPicks(
+        // b49fix7 P2-3: the recompute also draws from the day's
+        // pinned ranking pool (same source as the <40 branch),
+        // filtered by the current dislikes — never from a fresh
+        // ranking. The pool is deeper than the 40-list on
+        // purpose (total 100), so the spares are capped here:
+        // without the cap the 100-deep pool would widen the
+        // saved list past 40.
+        let ranked = Self.pinnedRankingPool(
             listenLog: listenLog, favourites: favourites, recent: recent,
             playlistTracks: playlistTracks, dislikedIds: dislikedIds,
-            dayKey: dayKey, total: 40)
+            dayKey: dayKey, force: force
+        ).filter {
+            !dislikedIds.contains($0.identityKey) && !dislikedIds.contains($0.songId)
+        }
         let picks = Array(ranked.prefix(20))
+        let spares = Array(ranked.dropFirst(picks.count).prefix(20))
+        let all = picks + spares
         return DailyLoadResult(
             picks: picks,
-            spares: Array(ranked.dropFirst(picks.count)),
-            saveTracks: ranked.isEmpty ? nil : ranked,
+            spares: spares,
+            saveTracks: all.isEmpty ? nil : all,
             expectedDiskKeys: expectedDiskKeys)
     }
 
@@ -824,6 +904,74 @@ final class HomeViewModel: ObservableObject {
         let valid = cached.filter { !$0.songId.isEmpty }
         guard !valid.isEmpty else { return nil }
         return valid
+    }
+
+    /// Dedupe a daily list by songId (b49fix7 P2-4): the same
+    /// songId on two platforms is one song — keep the first
+    /// occurrence (the higher-ranked / earlier-cached copy).
+    /// An empty songId is not an identity and never dedupes.
+    /// The ranking pool already dedupes (MusicRadio.dailyPicks);
+    /// this covers lists read back from disk that were saved
+    /// before the pool dedupe existed, and the CAS re-read in
+    /// reload(). Nonisolated (pure).
+    nonisolated static func dedupeDailyTracksBySongId(_ tracks: [MusicSong]) -> [MusicSong] {
+        var seen: Set<String> = []
+        var out: [MusicSong] = []
+        out.reserveCapacity(tracks.count)
+        for song in tracks {
+            if song.songId.isEmpty { out.append(song); continue }
+            guard seen.insert(song.songId).inserted else { continue }
+            out.append(song)
+        }
+        return out
+    }
+
+    /// The day's pinned ranking pool (b49fix7 P2-3): the
+    /// total-100 ranking for the day, computed once and fixed
+    /// to disk. Later loads read it back instead of re-ranking,
+    /// so the fills / spares — and therefore the picks — cannot
+    /// drift as the listen log grows during the day. The pool is
+    /// computed with the dislikes as of pin time excluded and
+    /// filtered again by the CURRENT disliked ids at use time,
+    /// so a song disliked after pinning still drops out. The
+    /// pool is deeper than the 40-list on purpose: the list
+    /// holds 40, so a 40-deep pool would have almost no song
+    /// the list does not already hold, and the fills would have
+    /// nowhere to draw from once dislikes eat into it.
+    /// `force` recomputes and re-pins (explicit refresh).
+    /// Saving the pool inside the load is a deliberate exception
+    /// to the b49fix5 P2-4 "the load never saves" rule: the pool
+    /// holds no replacements — it is a pure function of the
+    /// day's inputs — so a superseded reload writing it cannot
+    /// undo a replace; the worst case is two valid day rankings
+    /// racing, and the last write still pins a valid one. The
+    /// atomic file write makes a concurrent read see either the
+    /// old or the new pool, both valid.
+    /// Nonisolated: the background reload calls it off the main
+    /// thread.
+    nonisolated static func pinnedRankingPool(
+        listenLog: [ListenEvent],
+        favourites: [MusicSong],
+        recent: [MusicSong],
+        playlistTracks: [MusicSong],
+        dislikedIds: Set<String>,
+        dayKey: String,
+        force: Bool = false
+    ) -> [MusicSong] {
+        if !force,
+           let pool = MusicLibraryStore.dailyPool(for: dayKey),
+           let valid = validatedDailyTracks(pool, dayKey: dayKey, todayKey: dayKey),
+           !valid.isEmpty {
+            return valid
+        }
+        let pool = MusicRadio.dailyPicks(
+            listenLog: listenLog, favourites: favourites, recent: recent,
+            playlistTracks: playlistTracks, dislikedIds: dislikedIds,
+            dayKey: dayKey, total: 100)
+        if !pool.isEmpty {
+            MusicLibraryStore.saveDailyPool(pool, for: dayKey)
+        }
+        return pool
     }
 
     /// "不喜欢换一首" on home (same as the discovery daily

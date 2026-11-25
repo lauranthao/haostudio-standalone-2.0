@@ -184,4 +184,29 @@ final class MusicSearchOffsetTests: XCTestCase {
         XCTAssertTrue(decision.fire)
         XCTAssertEqual(decision.streak, 0)
     }
+
+    func testStreakResetByFirstPageLetsLoadMoreFire() {
+        // b49fix7 P2-5 repro: the 综合 tab's load-more fired an
+        // identical (20, 20) request once (streak 1) — then the
+        // user switched to the single-kind tab, whose first page
+        // landed and reset the kind's guard state (finishCategory
+        // clears lastNextPageRequest / zeroGrowthStreak on
+        // isFirstPage). Deduping the new page down to 20 rows,
+        // the next load-more is again (20, 20) — but the baseline
+        // is gone, so it must FIRE (streak 0), not close the
+        // kind. Before the fix the stale streak made the
+        // identical request close the kind without any fetch.
+        let decision = MusicSearchViewModel.loadMoreStreakDecision(
+            lastOffset: nil, lastLoadedCount: nil, streak: 0,
+            offset: 20, loadedCount: 20)
+        XCTAssertTrue(decision.fire)
+        XCTAssertEqual(decision.streak, 0)
+        // And the stale state, had it survived, WOULD have closed
+        // it — the guard against a regression in the reset itself.
+        let stale = MusicSearchViewModel.loadMoreStreakDecision(
+            lastOffset: 20, lastLoadedCount: 20, streak: 1,
+            offset: 20, loadedCount: 20)
+        XCTAssertFalse(stale.fire)
+        XCTAssertEqual(stale.streak, 2)
+    }
 }

@@ -1324,6 +1324,10 @@ struct MusicPlayerView: View {
     /// its own row. Hit-testing is off. No label (no song /
     /// unknown tier) collapses to zero size, so the row is just
     /// the two times.
+    /// b49fix7 P2-24: 10.5 medium is deliberate — it is the
+    /// Coda §2.4 spec value for this badge and no 10.5 token
+    /// exists (haoBadge is 10 bold; using it would deviate from
+    /// the spec). Not a missed tokenisation.
     private var qualityBadgeOverlay: some View {
         Group {
             if let label = playerVM.qualityBadgeLabel {

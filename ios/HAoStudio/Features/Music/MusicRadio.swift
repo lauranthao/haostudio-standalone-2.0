@@ -139,8 +139,19 @@ enum MusicRadio {
         // 2. Candidate pool: union of log + favourites + recent +
         //    playlist tracks. Favourites first so their fuller
         //    metadata (album, cover) wins the merge.
+        // b49fix7 P2-4: the pool is keyed by identityKey
+        // (platform|id), so the same songId on two platforms was
+        // two pool entries and could take two slots in the day's
+        // list. A non-empty songId is now also deduped: the first
+        // copy wins (favourites first, so the fullest metadata
+        // wins); an empty songId is not an identity and never
+        // dedupes. (The per-platform play stats stay split by
+        // identityKey — the kept copy scores on its own
+        // platform's plays; merging stats across platforms is a
+        // bigger change than the slot bug needs.)
         var pool: [String: MusicSong] = [:]
         var poolOrder: [String] = []
+        var poolSongIds: Set<String> = []
         func addToPool(_ song: MusicSong) {
             let key = song.identityKey
             if var kept = pool[key] {
@@ -148,6 +159,8 @@ enum MusicRadio {
                 if kept.album.isEmpty, !song.album.isEmpty { kept.album = song.album }
                 pool[key] = kept
             } else {
+                if !song.songId.isEmpty, poolSongIds.contains(song.songId) { return }
+                if !song.songId.isEmpty { poolSongIds.insert(song.songId) }
                 pool[key] = song
                 poolOrder.append(key)
             }
