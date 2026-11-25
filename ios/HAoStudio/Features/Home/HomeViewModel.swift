@@ -178,9 +178,13 @@ final class HomeViewModel: ObservableObject {
     /// accepts today's key), so the replacement was lost
     /// (b49fix10 P2-3). The save now takes a fresh key at save
     /// time and updates this to match, so it always names the
-    /// key the list on disk actually lives under. Set by the
-    /// publish overload of reload(); empty until the first
-    /// reload (the fallback then is today's key, as before).
+    /// key the list on disk actually lives under — but only
+    /// when this key is still today (b49fix12 P2-1): after
+    /// midnight the save is skipped and a recompute is
+    /// triggered instead, so yesterday's ranking is never
+    /// stamped as today's cache. Set by the publish overload
+    /// of reload(); empty until the first reload (the fallback
+    /// then is today's key, as before).
     private var dailyDayKey = ""
     /// The full recent list (up to MusicLibraryStore.maxRecent).
     /// Feeds the 继续听 resume queue (the resume song first,
@@ -277,6 +281,21 @@ final class HomeViewModel: ObservableObject {
     /// ever registered; removed in deinit. See reloadIfDayChanged.
     private var dayChangedObserver: NSObjectProtocol?
     private var didBecomeActiveObserver: NSObjectProtocol?
+    /// Day key a day-change reload was already issued for
+    /// (b49fix12 P2-3): when the app comes back from background
+    /// across midnight the system can deliver both the
+    /// day-change and the become-active notification, and both
+    /// pass the predicate below (the publish is an async
+    /// background read, so dailyDayKey is still yesterday when
+    /// the second one checks) — without this memo the second
+    /// trigger would start a second full reload that the
+    /// generation guard then throws away. Memoising the issued
+    /// day key dedupes that deterministically: a reload issued
+    /// for a day always publishes for that day (or is superseded
+    /// by a newer reload that does), so the memo can never
+    /// strand a needed reload. Keyed by day, so a later day's
+    /// trigger is never blocked by an earlier day's memo.
+    private var dayChangeReloadIssuedKey: String?
 
     /// `liveStatusChecker` nil = never confirm live status (all
     /// rooms stay isLive false). Tests pass nil or a stub; the app
@@ -328,10 +347,18 @@ final class HomeViewModel: ObservableObject {
     /// reload itself is the ordinary path (background read +
     /// generation-guarded publish), so a trigger that lands while
     /// another reload is in flight just supersedes it.
+    /// b49fix12 P2-3: gated by shouldTriggerDayChangeReload —
+    /// no trigger before the first publish (cold start is
+    /// onAppear's job), and at most one trigger per day (the
+    /// backgrounded-across-midnight double notification).
     private func reloadIfDayChanged() {
-        if Self.shouldReloadForDayChange(todayKey: musicDayKey(of: now()), cachedDayKey: dailyDayKey) {
-            reload()
-        }
+        let todayKey = musicDayKey(of: now())
+        guard Self.shouldTriggerDayChangeReload(
+            hasLoadedOnce: hasLoadedOnce, todayKey: todayKey,
+            cachedDayKey: dailyDayKey, issuedKey: dayChangeReloadIssuedKey
+        ) else { return }
+        dayChangeReloadIssuedKey = todayKey
+        reload()
     }
 
     /// Reload for an appearance trigger (HomeView onAppear /
@@ -408,6 +435,53 @@ final class HomeViewModel: ObservableObject {
     /// pin it, like shouldPublishDaily above.
     nonisolated static func shouldReloadForDayChange(todayKey: String, cachedDayKey: String) -> Bool {
         todayKey != cachedDayKey
+    }
+
+    /// Whether a day-change / foreground trigger should fire
+    /// (b49fix12 P2-3). `hasLoadedOnce` first: before the first
+    /// publish the predicate above is always true (dailyDayKey
+    /// starts ""), and onAppear's reloadForAppearance() already
+    /// covers the cold-start load, so without this gate every
+    /// cold start paid for two full background reloads (the
+    /// second superseding the first through the generation
+    /// guard). The first-load-skipped-across-midnight case is
+    /// unaffected: that branch still publishes (non-daily
+    /// sections + loading ends), so hasLoadedOnce is true and
+    /// the predicate is still true (dailyDayKey ""), and the
+    /// trigger recomputes as before. `issuedKey` second: when
+    /// the app comes back from background across midnight the
+    /// system can deliver both notifications, and both pass the
+    /// predicate — memoising the issued day key dedupes that
+    /// deterministically (see dayChangeReloadIssuedKey). Pure
+    /// so XCTest can pin it. Do NOT route through
+    /// reloadForAppearance() instead: its 1 s coalescing
+    /// window would swallow a genuine midnight trigger that
+    /// lands right after a 23:59:59.5 pull-to-refresh.
+    nonisolated static func shouldTriggerDayChangeReload(
+        hasLoadedOnce: Bool, todayKey: String, cachedDayKey: String, issuedKey: String?
+    ) -> Bool {
+        hasLoadedOnce
+            && shouldReloadForDayChange(todayKey: todayKey, cachedDayKey: cachedDayKey)
+            && issuedKey != todayKey
+    }
+
+    /// Whether a "换一首" replacement may be saved (b49fix12
+    /// P2-1): the list on screen belongs to `cachedDayKey`;
+    /// it may only be written under today's key when it IS
+    /// today's list. After midnight the cached key is
+    /// yesterday — saving the on-screen list under today's key
+    /// would stamp yesterday's ranking as today's cache, and
+    /// the next reload would take the cache-hit branch and
+    /// never recompute, locking yesterday's list in for the
+    /// whole day (b49-sweep14 deepread P2-1). The complement
+    /// of shouldReloadForDayChange above: a stale list is
+    /// exactly the list a day-change reload must recompute —
+    /// so an empty cache that never published also refuses
+    /// the save and recomputes instead (the safe fallback:
+    /// reload() recomputes under today's key). Pure so XCTest
+    /// can pin it.
+    nonisolated static func shouldSaveReplacedDaily(cachedDayKey: String, todayKey: String) -> Bool {
+        !shouldReloadForDayChange(todayKey: todayKey, cachedDayKey: cachedDayKey)
     }
 
     func reload(forceLiveRecheck: Bool = false) {
@@ -602,8 +676,11 @@ final class HomeViewModel: ObservableObject {
     /// with; tests that omit it leave dailyDayKey untouched
     /// (fallback: today). replaceDailySong no longer relies on
     /// this key — it takes a fresh key at save time (b49fix10
-    /// P2-3), so a midnight crossing cannot strand a replace
-    /// under yesterday's key.
+    /// P2-3), and only saves when the cached key is still today
+    /// (b49fix12 P2-1: after midnight it records the dislike
+    /// and triggers a recompute instead of stamping yesterday's
+    /// list as today's cache), so a midnight crossing cannot
+    /// strand a replace under yesterday's key.
     func reload(
         videoHistory: [VideoHistoryEntry],
         recent: [MusicSong],
@@ -1169,16 +1246,37 @@ final class HomeViewModel: ObservableObject {
     /// a FRESH day key at save time, not the cached dailyDayKey
     /// — the cached key goes stale across midnight, and saving
     /// under yesterday's key lost the replacement (the next
-    /// load only accepts today's key). The list on screen
-    /// (yesterday's ranking with the user's replacement) becomes
-    /// today's cached list; a force refresh recomputes it from
-    /// today's pool.
+    /// load only accepts today's key). b49fix12 P2-1: the save
+    /// is gated on the cached key still being today — after
+    /// midnight the on-screen list is yesterday's ranking, and
+    /// saving it under today's key would stamp it as today's
+    /// cache; the next reload would take the cache-hit branch
+    /// and never recompute, locking yesterday's list in for the
+    /// whole day. So on rollover the save is skipped: the
+    /// dislike is already recorded above, and a recompute is
+    /// triggered instead — the recompute naturally excludes the
+    /// disliked song, so the user's intent still lands and
+    /// today's list is computed today. (The b49fix10 note that
+    /// the on-screen list "becomes today's cached list until a
+    /// force refresh recomputes it" is void per b49-sweep14
+    /// ruling §2: once saved under today's key the next reload
+    /// takes the cache-hit branch, so the force refresh never
+    /// comes.)
     func replaceDailySong(_ song: MusicSong) {
         guard let index = allDailyPicks.firstIndex(where: { $0.identityKey == song.identityKey }) else { return }
         MusicLibraryStore.addFMDisliked(key: song.identityKey)
         guard !dailySpares.isEmpty else { return }
         allDailyPicks[index] = dailySpares.removeFirst()
         daily = Array(allDailyPicks.prefix(Self.sectionLimit))
+        // b49fix12 P2-1: only persist when the on-screen list
+        // still belongs to today (see the doc above). On
+        // rollover, do NOT save — trigger a recompute instead;
+        // the in-memory swap above stays visible until the
+        // recompute publishes today's list.
+        guard Self.shouldSaveReplacedDaily(cachedDayKey: dailyDayKey, todayKey: musicDayKey(of: Date())) else {
+            reload()
+            return
+        }
         let key = musicDayKey(of: Date())
         dailyDayKey = key
         MusicLibraryStore.saveDailyTracks(allDailyPicks + dailySpares, for: key)
