@@ -313,7 +313,13 @@ struct VideoTabView: View {
                         if viewModel.homeRefreshFailed {
                             HStack(spacing: 8) {
                                 Image(systemName: "wifi.exclamationmark")
-                                Text("影视源没有响应，显示 \(viewModel.homeCacheAgeText) 的缓存")
+                                // (sweep-4 P2-53) homeCacheAgeText
+                                // is "旧缓存" when the cache
+                                // predates timestamps — "显示 旧缓存
+                                // 的缓存" reads as a stutter.
+                                Text(viewModel.homeCacheAgeText == "旧缓存"
+                                    ? "影视源没有响应，显示旧缓存"
+                                    : "影视源没有响应，显示 \(viewModel.homeCacheAgeText) 的缓存")
                                     .font(.haoFootnote)
                                 Spacer()
                                 Button("重试") { viewModel.loadFresh() }
