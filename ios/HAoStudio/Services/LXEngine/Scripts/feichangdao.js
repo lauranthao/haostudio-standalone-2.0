@@ -20,12 +20,9 @@
 const { EVENT_NAMES, request, on, send } = globalThis.lx
 
 // ========== API 端点 ==========
-const CHKSZ_API = 'https://api.chksz.top/api'
+const CHKSZ_API = 'https://api.chksz.com/api' // 2026-11-25 b49fix2 (P2-38): .top 已 404，改 .com（仍需 apikey，设计如此）
 const XINGHAI_API = 'https://music-api.gdstudio.xyz/api.php?use_xbridge3=true&loader_name=forest&need_sec_link=1&sec_link_scene=im&theme=light'
-const SUYIN_QQ_API = 'https://oiapi.net/api/QQ_Music'
-const SUYIN_QQ_KEY = 'oiapi-ef6133b7-ac2f-dc7d-878c-d3e207a82575'
 const SUYIN_163_API = 'https://oiapi.net/api/Music_163'
-const SUYIN_KW_API = 'https://oiapi.net/api/Kuwo'
 const SUYIN_MG_API = 'https://api.xcvts.cn/api/music/migu'
 const QISHUI_SEARCH_API = 'https://api-vehicle.volcengine.com/v2/search/type'
 const QISHUI_H5_API = 'https://api.qishui.com/luna/h5/track'
@@ -38,26 +35,11 @@ const CHKSZ_FALLBACK = {
   exhigh: ['exhigh', 'standard'],
   standard: ['standard'],
 }
+// chksz level -> 实际音质档位（降级命中时如实上报）
+const CHKSZ_LEVEL_QUALITY = { standard: '128k', exhigh: '320k', lossless: 'flac', jymaster: 'flac24bit' }
 const XINGHAI_BR = { '128k': '128', '192k': '192', '320k': '320', 'flac': '740', 'flac24bit': '999' }
-const XINGHAI_SRC = { wy: 'netease', tx: 'tencent', kw: 'kuwo', kg: 'kugou', mg: 'migu' }
-const SUYIN_QQ_BR = { '128k': 7, '320k': 5, 'flac': 4, 'hires': 3, 'flac24bit': 1, 'master': 1 }
-const SUYIN_KW_BR = { 'flac': 1, '320k': 5, '128k': 7 }
+const XINGHAI_SRC = { wy: 'netease' } // 2026-11-25 b49fix2 (P1-13): gdstudio 只认 netease，其余 source 一律 400
 
-// ========== 长青/念心 URL 模板 ==========
-const CHANGQING = {
-  tx: 'http://175.27.166.236/kgqq/qq.php?type=mp3&id={id}&level={level}',
-  wy: 'http://175.27.166.236/wy/wy.php?type=mp3&id={id}&level={level}',
-  kw: 'https://musicapi.haitangw.net/music/kw.php?type=mp3&id={id}&level={level}',
-  kg: 'https://music.haitangw.cc/kgqq/kg.php?type=mp3&id={id}&level={level}',
-  mg: 'https://music.haitangw.cc/musicapi/mg.php?type=mp3&id={id}&level={level}',
-}
-const NIANXIN = {
-  tx: 'https://music.nxinxz.com/kgqq/tx.php?id={id}&level={level}&type=mp3',
-  wy: 'http://music.nxinxz.com/wy.php?id={id}&level={level}&type=mp3',
-  kw: 'http://music.nxinxz.com/kw.php?id={id}&level={level}&type=mp3',
-  kg: 'https://music.nxinxz.com/kgqq/kg.php?id={id}&level={level}&type=mp3',
-  mg: 'http://music.nxinxz.com/mg.php?id={id}&level={level}&type=mp3',
-}
 
 // ========== 缓存 ==========
 const cache = new Map()
@@ -97,19 +79,7 @@ function getSongId(info) {
   return (info.hash || info.songmid || info.id || info.rid || info.songId || '').toString()
 }
 
-function getQqSongId(info) {
-  const mid = info.meta?.qq?.mid || info.meta?.mid || info.songmid || (typeof info.id === 'string' && !/^\d+$/.test(info.id) ? info.id : null)
-  if (mid) return { type: 'mid', value: mid }
-  const songid = info.meta?.qq?.songid || info.meta?.songid || info.id
-  if (songid) return { type: 'songid', value: songid }
-  return null
-}
 
-function qualityToLevel(q) {
-  if (['flac', 'flac24bit', '24bit', 'hires', 'master'].includes(q)) return 'lossless'
-  if (['320k', '192k'].includes(q)) return 'exhigh'
-  return 'standard'
-}
 
 function cleanText(text) {
   if (!text) return ''
@@ -151,7 +121,8 @@ async function chkszGetUrl(info, quality) {
   for (const lv of levels) {
     try {
       const body = await httpGet(`${CHKSZ_API}/163_music?id=${id}&level=${lv}`, { headers: { Referer: 'https://cp.chksz.top/' } })
-      if (body?.code === 200 && body.data?.url) return body.data.url
+      // 2026-11-25 b49fix2 (P1-15): 降级命中哪个 level 就报哪个档位。
+      if (body?.code === 200 && body.data?.url) return { url: body.data.url, quality: CHKSZ_LEVEL_QUALITY[lv] || '128k' }
     } catch { continue }
   }
   throw new Error('CHKSZ失败')
@@ -167,28 +138,7 @@ async function xinghaiGetUrl(platform, info, quality) {
   return validateUrl(body?.url)
 }
 
-// ========== Provider: 溯音QQ ==========
-async function suyinQQGetUrl(info, quality) {
-  const qqId = getQqSongId(info)
-  if (!qqId) throw new Error('缺少QQ歌曲ID')
-  const startBr = SUYIN_QQ_BR[quality] || 5
-  const brs = [...new Set([startBr, 4, 5, 7])]
-  for (const br of brs) {
-    try {
-      const params = `key=${SUYIN_QQ_KEY}&type=json&br=${br}&n=1&${qqId.type}=${qqId.value}`
-      const body = await httpGet(`${SUYIN_QQ_API}?${params}`)
-      const url = body?.data?.music || body?.data?.url || extractUrlFromMsg(body?.data?.message || body?.message)
-      if (url) return validateUrl(url)
-    } catch { continue }
-  }
-  throw new Error('溯音QQ失败')
-}
 
-function extractUrlFromMsg(msg) {
-  if (!msg) return null
-  const m = msg.match(/https?:\/\/[^\s"'<>]+/)
-  return m ? m[0] : null
-}
 
 // ========== Provider: 溯音163 ==========
 async function suyin163GetUrl(info) {
@@ -199,19 +149,6 @@ async function suyin163GetUrl(info) {
   return validateUrl(data?.url)
 }
 
-// ========== Provider: 溯音酷我 (搜索式) ==========
-async function suyinKwGetUrl(info, quality) {
-  const br = SUYIN_KW_BR[quality] || 5
-  for (const { kw, strict } of buildSearchKeywords(info)) {
-    try {
-      const body = await httpGet(`${SUYIN_KW_API}?msg=${encodeURIComponent(kw)}&n=1&br=${br}`)
-      const url = body?.data?.url || extractUrlFromMsg(body?.data?.message || body?.message)
-      if (url && (!strict || checkSongMatch(body?.data?.song || '', body?.data?.singer || '', info)))
-        return validateUrl(url)
-    } catch { continue }
-  }
-  throw new Error('溯音酷我失败')
-}
 
 // ========== Provider: 溯音咪咕 (搜索式) ==========
 async function suyinMgGetUrl(info) {
@@ -227,17 +164,6 @@ async function suyinMgGetUrl(info) {
   throw new Error('溯音咪咕失败')
 }
 
-// ========== Provider: 模板URL (长青/念心) ==========
-async function templateGetUrl(platform, info, quality, templates) {
-  const tpl = templates[platform]
-  if (!tpl) throw new Error('模板不支持该平台')
-  const id = getSongId(info)
-  if (!id) throw new Error('缺少ID')
-  const level = qualityToLevel(quality)
-  const url = tpl.replace('{id}', encodeURIComponent(id)).replace('{level}', level)
-  const body = await httpGet(url)
-  return validateUrl(body?.url || body?.data?.url || extractUrlFromMsg(typeof body === 'string' ? body : JSON.stringify(body)))
-}
 
 // ========== Provider: 汽水H5 (免费直链) ==========
 async function qishuiH5GetUrl(info) {
@@ -252,40 +178,28 @@ async function qishuiH5GetUrl(info) {
 }
 
 // ========== 回退链 ==========
+// 2026-11-25 b49fix2 (P1-12/P1-13): tx/kw/kg 已无存活后端，整条链删除 —
+// 溯音QQ/酷我端点下线，星海腿只认 netease，长青/念心模板全 404/401。
+// 只剩 wy [CHKSZ, 星海, 溯音163]、mg [溯音咪咕]、qs [汽水H5]。
 const CHAINS = {
   wy: [
     { name: 'CHKSZ', fn: (si, q) => chkszGetUrl(si, q) },
     { name: '星海', fn: (si, q) => xinghaiGetUrl('wy', si, q) },
     { name: '溯音163', fn: (si, q) => suyin163GetUrl(si) },
-    { name: '长青', fn: (si, q) => templateGetUrl('wy', si, q, CHANGQING) },
-    { name: '念心', fn: (si, q) => templateGetUrl('wy', si, q, NIANXIN) },
-  ],
-  tx: [
-    { name: '溯音QQ', fn: (si, q) => suyinQQGetUrl(si, q) },
-    { name: '星海', fn: (si, q) => xinghaiGetUrl('tx', si, q) },
-    { name: '长青', fn: (si, q) => templateGetUrl('tx', si, q, CHANGQING) },
-    { name: '念心', fn: (si, q) => templateGetUrl('tx', si, q, NIANXIN) },
-  ],
-  kw: [
-    { name: '星海', fn: (si, q) => xinghaiGetUrl('kw', si, q) },
-    { name: '溯音酷我', fn: (si, q) => suyinKwGetUrl(si, q) },
-    { name: '长青', fn: (si, q) => templateGetUrl('kw', si, q, CHANGQING) },
-    { name: '念心', fn: (si, q) => templateGetUrl('kw', si, q, NIANXIN) },
-  ],
-  kg: [
-    { name: '星海', fn: (si, q) => xinghaiGetUrl('kg', si, q) },
-    { name: '长青', fn: (si, q) => templateGetUrl('kg', si, q, CHANGQING) },
-    { name: '念心', fn: (si, q) => templateGetUrl('kg', si, q, NIANXIN) },
   ],
   mg: [
-    { name: '星海', fn: (si, q) => xinghaiGetUrl('mg', si, q) },
     { name: '溯音咪咕', fn: (si, q) => suyinMgGetUrl(si) },
-    { name: '长青', fn: (si, q) => templateGetUrl('mg', si, q, CHANGQING) },
-    { name: '念心', fn: (si, q) => templateGetUrl('mg', si, q, NIANXIN) },
   ],
   qs: [
     { name: '汽水H5', fn: (si, q) => qishuiH5GetUrl(si) },
   ],
+}
+
+// 2026-11-25 b49fix2 (P1-15): 统一归一化为 {url, quality}；裸字符串
+// 的后端记 quality: null（档位未知，引擎保留请求档位）。
+function toUrlResult(r) {
+  if (typeof r === 'string') return { url: validateUrl(r), quality: null }
+  return { url: validateUrl(r.url), quality: r.quality || null }
 }
 
 async function getUrlWithFallback(platform, songInfo, quality) {
@@ -299,17 +213,17 @@ async function getUrlWithFallback(platform, songInfo, quality) {
   // Phase 1: 前3个源并发竞速
   const concurrent = chain.slice(0, 3)
   try {
-    const url = await Promise.any(concurrent.map(s => s.fn(songInfo, quality).then(validateUrl)))
-    cacheSet(key, url)
-    return url
+    const result = await Promise.any(concurrent.map(s => s.fn(songInfo, quality).then(toUrlResult)))
+    cacheSet(key, result)
+    return result
   } catch {}
 
   // Phase 2: 剩余源顺序尝试
   for (const s of chain.slice(3)) {
     try {
-      const url = validateUrl(await s.fn(songInfo, quality))
-      cacheSet(key, url)
-      return url
+      const result = toUrlResult(await s.fn(songInfo, quality))
+      cacheSet(key, result)
+      return result
     } catch { continue }
   }
 
@@ -344,7 +258,6 @@ async function handleSearch(source, info) {
 
   switch (source) {
     case 'wy': return await searchChksz(keyword, limit)
-    case 'kw': return await searchKuwo(keyword, limit)
     case 'mg': return await searchMigu(keyword, limit)
     case 'qs': return await searchQishui(keyword, limit)
     default: throw new Error('该平台不支持搜索')
@@ -364,24 +277,6 @@ async function searchChksz(keyword, limit) {
   }))
 }
 
-async function searchKuwo(keyword, limit) {
-  const results = []
-  for (let page = 1; results.length < limit && page <= 3; page++) {
-    try {
-      const body = await httpGet(`${SUYIN_KW_API}?msg=${encodeURIComponent(keyword)}&n=${page}`)
-      const d = body?.data
-      if (!d?.song) break
-      results.push({
-        name: d.song || '', singer: d.singer || '', albumName: d.album || '',
-        id: d.rid || `kw_${Date.now()}_${page}`, source: 'kw',
-        interval: formatDuration(d.duration || d.time),
-        meta: { kw: { id: d.rid || d.id } }
-      })
-    } catch { break }
-  }
-  if (!results.length) throw new Error('未找到相关歌曲')
-  return results
-}
 
 async function searchMigu(keyword, limit) {
   const results = []
@@ -389,10 +284,15 @@ async function searchMigu(keyword, limit) {
     try {
       const body = await httpGet(`${SUYIN_MG_API}?gm=${encodeURIComponent(keyword)}&n=${page}&num=1&type=json`)
       if (body?.code !== 200 || !body.title) break
+      // 2026-11-25 b49fix2 (P1-11): 咪咕曲目 id 必须是后端返回的真实 id，
+      // 不能用随机串 — 随机 id 播放时后端无法取流。
+      const realId = body.id != null && body.id !== ''
+        ? String(body.id)
+        : ('mg_' + cleanText(body.title || '') + '_' + cleanText(body.artist || ''))
       results.push({
         name: body.title || '', singer: body.artist || '', albumName: body.album || '',
-        id: `mg_${Date.now()}_${page}`, source: 'mg', interval: body.duration || '00:00',
-        meta: { mg: { id: body.id || '' } }
+        id: realId, source: 'mg', interval: body.duration || '00:00',
+        meta: { mg: { id: body.id != null ? String(body.id) : '' } }
       })
     } catch { break }
   }
@@ -444,12 +344,9 @@ send(EVENT_NAMES.inited, {
   openDevTools: false,
   sources: {
     wy: { name: '网易云音乐', type: 'music', actions: ['musicUrl', 'search'], qualitys: ['128k', '320k', 'flac', 'flac24bit'], defaultQuality: 'flac' },
-    tx: { name: 'QQ音乐', type: 'music', actions: ['musicUrl'], qualitys: ['128k', '320k', 'flac', 'flac24bit'] },
-    kw: { name: '酷我音乐', type: 'music', actions: ['musicUrl', 'search'], qualitys: ['128k', '320k', 'flac'] },
-    kg: { name: '酷狗音乐', type: 'music', actions: ['musicUrl'], qualitys: ['128k', '320k', 'flac', 'flac24bit'] },
     mg: { name: '咪咕音乐', type: 'music', actions: ['musicUrl', 'search'], qualitys: ['128k', '320k', 'flac'] },
     qs: { name: '汽水音乐', type: 'music', actions: ['musicUrl', 'search', 'lyric'], qualitys: ['128k'] },
   }
 })
 
-console.log('[非常刀] v4 已加载 - 网易/QQ/酷我/酷狗/咪咕/汽水 多源聚合')
+console.log('[非常刀] v4 已加载 - 网易/咪咕/汽水 多源聚合')

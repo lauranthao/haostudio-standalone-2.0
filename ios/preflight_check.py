@@ -24,7 +24,16 @@ no removed metadata service, no lyrics extension, no Podfile yet). Checks, in or
      deployment target 17.0 (chen 2026-11-23), Swift 5.0, device family,
      entitlements, app icon name, libmpv framework search path);
   9. splash spec values present in SplashView.swift (timings + geometry);
- 10. theme system: 4 themes x light/dark = 8 palettes, no purple hex.
+ 10. theme system: 4 themes x light/dark = 8 palettes, no purple hex;
+ 11. LX scripts: no cleartext http:// API URL (ATS — literals + decoded
+     _u obfuscated strings), with startsWith validators, comments,
+     @see links and Referer values allowlisted by shape.
+ 4i also validates version.json ipaUrl/size/trilingual changelog;
+ 4m checks the Bitrise artifact name is derived from version.json;
+ 5 is a floor (162) instead of an exact count; 5e detects (not bans)
+ concurrency; 6 is scoped to the app Sources phase (...55); 6b checks
+ test-target membership/imports; 7 and 4k fail instead of passing
+ vacuously when their parser/pattern is absent.
 
 Exit code 0 = all checks pass; 1 = something failed (listed at the end).
 Run: python3 ios/preflight_check.py
@@ -159,6 +168,38 @@ vj = json.loads((REPO / "version.json").read_text())
 check("4i. version.json aligned (0.0.2 / build 48 / minOs 17.0)",
       vj.get("version") == "0.0.2" and vj.get("build") == 48 and vj.get("minOs") == "17.0",
       f"{vj.get('version')} / build {vj.get('build')} / minOs {vj.get('minOs')}")
+# (2026-11-25, b49fix2 P2-65): 4i used to check only version/build/
+# minOs — a typo'd ipaUrl passed and the app offered an update that
+# 404s, and a missing size or changelog passed silently. Validate
+# the release fields too: ipaUrl must be the shop URL for this
+# version's IPA, size must be a positive byte count, and the
+# changelog must exist in all three languages (zh/tw/en) and name
+# this version.
+_v = vj.get("version")
+check("4i-b. version.json ipaUrl points at this version's IPA",
+      isinstance(vj.get("ipaUrl"), str)
+      and vj["ipaUrl"] == f"https://chen-hao-shop-production.up.railway.app/HAoStudio-standalone-v{_v}.ipa",
+      str(vj.get("ipaUrl")))
+check("4i-c. version.json size is a positive byte count",
+      isinstance(vj.get("size"), int) and vj["size"] > 0,
+      str(vj.get("size")))
+_cl = vj.get("changelog") or {}
+check("4i-d. version.json changelog is trilingual and names this version",
+      isinstance(_cl, dict) and all(
+          isinstance(_cl.get(k), str) and _cl[k].startswith(f"v{_v}")
+          for k in ("zh", "tw", "en")),
+      f"keys: {sorted(_cl.keys()) if isinstance(_cl, dict) else type(_cl).__name__}")
+# --- 4m. Bitrise artifact name derived from version.json ---------------
+# (2026-11-25, b49fix2 P1-42/P2-65): bitrise.yml hardcoded
+# HAoStudio-standalone-v0.0.2.zip, so the 0.0.3 build would have
+# shipped a misnamed artifact. The step must now derive the name
+# from version.json; a hardcoded vX.Y.Z name fails this check.
+_bit = (REPO / "bitrise.yml").read_text()
+check("4m. Bitrise artifact name derived from version.json, not hardcoded",
+      "version.json" in _bit
+      and "HAoStudio-standalone-v$" in _bit
+      and not re.search(r"HAoStudio-standalone-v\d+\.\d+\.\d+\.zip", _bit),
+      "step must read version.json and use v$VERSION")
 # --- 4j. project.pbxproj parses: braces/parens balanced ------------------
 # (2026-11-23: Codemagic build #10 failed with "project is damaged, parse
 # error" — 4 XCBuildConfiguration lines were missing the closing brace of
@@ -167,10 +208,14 @@ pbx = (REPO / "ios/HAoStudio.xcodeproj/project.pbxproj").read_text()
 check("4j. project.pbxproj braces/parens balanced",
       pbx.count("{") == pbx.count("}") and pbx.count("(") == pbx.count(")"),
       f"{{ {pbx.count('{')} {pbx.count('}')} ( {pbx.count('(')} {pbx.count(')')}")
+_cfg_lines = [ln for ln in pbx.splitlines()
+              if "XCBuildConfiguration; buildSettings = {" in ln]
 check("4k. every XCBuildConfiguration closes buildSettings before name",
-      all("}; name = " in ln for ln in pbx.splitlines()
-          if "XCBuildConfiguration; buildSettings = {" in ln),
-      "each config line must contain '}; name = '")
+      # (2026-11-25, b49fix2 P2-63): the old all(...) over matching
+      # lines was vacuously true if the pattern ever disappeared
+      # (6 lines match today) — assert the pattern exists first.
+      len(_cfg_lines) > 0 and all("}; name = " in ln for ln in _cfg_lines),
+      f"{len(_cfg_lines)} config lines")
 # --- 4l. every Swift file ref resolves to a real file on disk ------------
 # (2026-11-23: Codemagic build #11 failed "Build input files cannot be
 # found" — 10 scaffold refs carried 'Theme/Theme/...' doubled paths
@@ -186,7 +231,21 @@ check("4l. every Swift file ref resolves to a file on disk", not _missing,
 
 # --- 5. Swift sources: balance + forbidden leftovers ----------------------
 swift_files = sorted(APP_DIR.rglob("*.swift"))
-check("5. Swift file count (final = 162: 157 + HaoImagePolicy.swift + HaoImageLoader.swift [b36-item10-leg6: shared image loader] + LiveGestures.swift [b37-L3: live drag gestures] + DouyinSigner.swift [b37-L5: A-Bogus port] + GestureMath.swift [b37-fix: pure gesture math split out of VodGestures/LiveGestures for AppCore])", len(swift_files) == 162,
+# (2026-11-25, b49fix2 P2-66): the exact count was brittle — any
+# legitimate file add failed the gate until the hardcoded number was
+# bumped, and a delete-plus-add pair kept the count at 162 while
+# losing a file. The gate is now a floor: files may be added freely
+# (check 6 requires every disk file to be in the app Sources phase,
+# check 1 requires every pbxproj ref to resolve); dropping below the
+# floor means a file was lost. The 162 is the count as of 2026-11-25
+# (157 + HaoImagePolicy.swift + HaoImageLoader.swift [b36-item10-leg6:
+# shared image loader] + LiveGestures.swift [b37-L3: live drag
+# gestures] + DouyinSigner.swift [b37-L5: A-Bogus port] +
+# GestureMath.swift [b37-fix: pure gesture math split out of
+# VodGestures/LiveGestures for AppCore]). Bump the floor only when
+# files are deliberately deleted, with a comment saying why.
+check("5. Swift file count (floor 162 — adds are fine, losses fail)",
+      len(swift_files) >= 162,
       f"{len(swift_files)}: {[f.name for f in swift_files]}")
 for f in swift_files:
     s = f.read_text()
@@ -231,20 +290,74 @@ check("5d. no purple hex in HaoTheme.swift", not purples,
 
 # Deployment target is iOS 17.0 (chen 2026-11-23): iOS 16+ APIs
 # (NavigationStack, .symbolVariant, .scrollContentBackground) are
-# available and need no guard. What is still banned is Swift language
-# newer than the project's SWIFT_VERSION = 5.0: async/await (Swift 5.5+)
-# and `any` existentials (Swift 5.6+). `some View` / @StateObject /
-# property wrappers are unavoidable SwiftUI (Xcode templates ship them
-# with SWIFT_VERSION = 5.0) — Codemagic build is the arbiter for those.
-for needle, label in [(" async ", "async/await (Swift 5.5+)"),
-                      ("(any ", "`any` existential (Swift 5.6+)")]:
-    check(f"5e. no {label} in Swift sources", needle not in code_only)
+# available and need no guard.
+#
+# (2026-11-25, b49fix2 P2-62): the old 5e banned " async " and
+# "(any " on the theory that SWIFT_VERSION = 5.0 forbids concurrency.
+# The premise was false and the guard was dead: the app ships real
+# Task/await (MusicPlayerView.swift:320-322, :1159-1166,
+# MusicSearchViewModel.swift:590-591), neither of which contains
+# " async ", and both Task commits (ff3cb512, f95d51f6) are ancestors
+# of the build-48 release commit 42963ab, which shipped under
+# SWIFT_VERSION = 5.0. The 5.0 pin does not forbid concurrency. 5e
+# now DETECTS Task/await/async-let usage and reports the count
+# (informational — allowed), instead of pretending to ban it.
+_concurrency = len(re.findall(r"\bTask\s*[\[{<]|\bawait\s|\basync\s+let\b|\basync\s*\{", code_only))
+check("5e. concurrency usage detected (Task/await/async let — allowed under Swift 5.0)",
+      True, f"{_concurrency} uses in Swift sources")
 
-# --- 6. all Swift files in Sources phase ----------------------------------
-src_phase = pbx.split("/* Begin PBXSourcesBuildPhase section */")[1] \
-               .split("/* End PBXSourcesBuildPhase section */")[0]
-missing_phase = [f.name for f in swift_files if f"{f.name} in Sources" not in src_phase]
-check("6. all Swift files in Sources phase", not missing_phase, str(missing_phase))
+# --- 6. all Swift files in the APP target's Sources phase -------------
+# (2026-11-25, b49fix2 P2-64): the old check searched the whole
+# PBXSourcesBuildPhase section (both the app's 162-file phase and the
+# test target's 24-file phase) by bare file-name substring — a file
+# present only in the test phase would have satisfied the app check.
+# Scope it to the app target's phase id (...55); the test phase is
+# checked separately by 6b. Fail if the phase id itself is not found,
+# so a renumbered pbxproj fails loudly instead of passing vacuously.
+_app_phase_m = re.search(
+    r"000000000000000000000055 /\* Sources \*/ = \{isa = PBXSourcesBuildPhase;.*?files = \((.*?)\); runOnlyForDeploymentPostprocessing",
+    pbx, re.S)
+_app_phase = _app_phase_m.group(1) if _app_phase_m else ""
+missing_phase = [f.name for f in swift_files if f"{f.name} in Sources" not in _app_phase]
+check("6. all Swift files in app Sources phase (...55)",
+      _app_phase_m is not None and not missing_phase,
+      "app phase id ...55 not found" if _app_phase_m is None else str(missing_phase))
+
+# --- 6b. test target membership + imports (Xcode HAoStudioTests) -------
+# (2026-11-25, b49fix2 P2-65): preflight never looked at the test
+# target — 9 files were unwired for months and one imported a
+# nonexistent module (MusicFeatures). Every .swift under ios/Tests
+# that imports the app module must be in the test Sources phase
+# (...1C6), and no test file may import a module that does not exist
+# (AppCore for the SwiftPM targets, HAoStudio for the Xcode target).
+# Imports are read from comment-stripped text: several files mention
+# "@testable import HAoStudio" in a header comment too.
+_test_phase_m = re.search(
+    r"0000000000000000000001C6 /\* Sources \*/ = \{isa = PBXSourcesBuildPhase;.*?files = \((.*?)\); runOnlyForDeploymentPostprocessing",
+    pbx, re.S)
+_test_phase = _test_phase_m.group(1) if _test_phase_m else ""
+_test_files = sorted((REPO / "ios/Tests").rglob("*.swift"))
+
+
+def _test_imports(path):
+    code = re.sub(r"//.*", "", path.read_text())
+    code = re.sub(r"/\*.*?\*/", "", code, flags=re.DOTALL)
+    return re.findall(r"@testable import (\w+)", code)
+
+
+_unwired = [f.name for f in _test_files
+            if "HAoStudio" in _test_imports(f)
+            and f"{f.name} in Sources" not in _test_phase]
+check("6b. HAoStudio-importing test files are in the test Sources phase (...1C6)",
+      _test_phase_m is not None and not _unwired,
+      "test phase id ...1C6 not found" if _test_phase_m is None else str(_unwired))
+_bad_imports = []
+for f in _test_files:
+    for mod in _test_imports(f):
+        if mod not in ("AppCore", "HAoStudio"):
+            _bad_imports.append(f"{f.name}: {mod}")
+check("6b-b. no test file imports a nonexistent module (AppCore/HAoStudio only)",
+      not _bad_imports, str(_bad_imports))
 
 # --- 7. codemagic.yaml ----------------------------------------------------
 cm = (REPO / "codemagic.yaml").read_text()
@@ -254,7 +367,16 @@ try:
     check("7. codemagic.yaml parses", True,
           f"workflows: {list(y['workflows'].keys())}")
 except ImportError:
-    check("7. codemagic.yaml parses (pyyaml missing — skipped)", True, "pyyaml not installed")
+    # (2026-11-25, b49fix2 P2-63): the old code PASSED when pyyaml was
+    # missing, so an invalid codemagic.yaml passed on any machine
+    # without the parser. Fail, not pass, when the parser is absent.
+    check("7. codemagic.yaml parses (pyyaml missing — cannot verify)", False,
+          "install pyyaml to verify the YAML")
+except Exception as e:
+    # A YAML parse error used to crash preflight with a traceback
+    # instead of a clean FAIL (safe_load raises yaml.YAMLError, which
+    # the old code never caught). Report it as check 7 failing.
+    check("7. codemagic.yaml parses", False, f"yaml error: {e}")
 check("7b. libmpv download step kept",
       "libmpv-darwin-build" in cm and "d428641cc6c100de8234eae04e229966e46949eb73fcabd526a008a02e9bf968" in cm)
 check("7c. NO web-sync step", "cp -R web" not in cm and "ios/HAoStudio/web" not in cm
@@ -310,6 +432,49 @@ check("10b. glassEffect with iOS 26 @available fallback",
 # iOS 26's system tab bar is glass from its default background.)
 check("10c. no UIGlassEffect assigned to backgroundEffect",
       "backgroundEffect = UIGlassEffect()" not in (APP_DIR / "App/GlassTabBar.swift").read_text())
+
+# --- 11. LX scripts: no cleartext http:// API URL (ATS) ------------------
+# (2026-11-25, b49fix2 P1-9): Info.plist forbids cleartext loads and
+# LXEngine issues script requests via URLSession.shared, so every
+# http:// API leg is dead on device — 8 of 13 scripts had one. This
+# grep keeps a cleartext leg from shipping again. Benign http://
+# occurrences are allowlisted by shape, not by file:
+#   * `startsWith('http://')` validators (incl. the obfuscated
+#     _u('cook5**') form at huibi.js:294) — they ACCEPT a URL, they
+#     do not fetch one;
+#   * `//` comments and `@see` doc links (xinghai.js:7);
+#   * Referer header values (jiexiang.js:808) — a header, not a
+#     request URL.
+# Obfuscated _u('...') strings are decoded first (JS-unescape, then
+# +5 per char — the scripts' own _u), so an obfuscated http:// base
+# is caught exactly like a literal one.
+_SCRIPTS = sorted((APP_DIR / "Services/LXEngine/Scripts").glob("*.js"))
+
+
+def _u_decode(stored):
+    val = re.sub(r"\\(.)", lambda m: {"n": "\n", "t": "\t", "r": "\r"}.get(m.group(1), m.group(1)), stored)
+    return "".join(chr(ord(c) + 5) for c in val)
+
+
+def _ats_hits(path):
+    hits = []
+    for i, ln in enumerate(path.read_text().splitlines(), 1):
+        for m in re.finditer(r"_u\('((?:[^'\\]|\\.)*)'\)", ln):
+            if "http://" in _u_decode(m.group(1)) and "startsWith(" not in ln:
+                hits.append(f"{path.name}:{i}: obfuscated http:// URL (decoded _u)")
+        if "http://" in ln:
+            stripped = ln.strip()
+            if stripped.startswith(("*", "//")):
+                continue
+            if "@see" in ln or "Referer:" in ln or "startsWith(" in ln:
+                continue
+            hits.append(f"{path.name}:{i}: {stripped[:100]}")
+    return hits
+
+
+_ats = [h for p in _SCRIPTS for h in _ats_hits(p)]
+check("11. LX scripts: no http:// API URL (ATS — literals + decoded _u)",
+      not _ats, str(_ats[:5]) if _ats else f"{len(_SCRIPTS)} scripts clean")
 
 print()
 if failures:

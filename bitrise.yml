@@ -93,6 +93,33 @@ workflows:
                 CODE_SIGNING_REQUIRED=NO
             fi
     - script@1:
+        title: Xcode test target compiles (device build-for-testing)
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -e
+            cd ios
+            # (2026-11-25, b49fix2 T5): the Xcode HAoStudioTests target
+            # never executed anywhere — no workflow ran xcodebuild test
+            # and there was no shared scheme (now committed at
+            # HAoStudio.xcodeproj/xcshareddata/xcschemes/). This step
+            # proves the test target COMPILES (build-for-testing,
+            # device SDK, unsigned). It does NOT run the tests: the
+            # simulator link is broken by IJK (arm64 device-only
+            # static lib) and there is no device on CI, so a real
+            # `xcodebuild test` run needs an IJK simulator slice
+            # first. Do not add a simulator test step that cannot link
+            # and call it a fix.
+            xcodebuild -project HAoStudio.xcodeproj \
+              -scheme HAoStudioTests \
+              -configuration Debug \
+              -sdk iphoneos \
+              -derivedDataPath build \
+              build-for-testing \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO
+    - script@1:
         title: Package IPA
         inputs:
         - content: |-
@@ -117,6 +144,11 @@ workflows:
             # embedded.mobileprovision). Ship the same bytes as a
             # .zip — an IPA is a zip — so the step uploads it as a
             # generic file; it is renamed back to .ipa after download.
-            cp HAoStudio.ipa "$BITRISE_DEPLOY_DIR/HAoStudio-standalone-v0.0.2.zip"
+            # (2026-11-25, b49fix2 P1-42): the artifact name used to
+            # hardcode v0.0.2 and would have misnamed the 0.0.3
+            # build. It is now derived from version.json, the same
+            # source preflight check 4m verifies.
+            VERSION=$(python3 -c "import json; print(json.load(open('../version.json'))['version'])")
+            cp HAoStudio.ipa "$BITRISE_DEPLOY_DIR/HAoStudio-standalone-v$VERSION.zip"
             ls -lh "$BITRISE_DEPLOY_DIR/"
     - deploy-to-bitrise-io@2: {}

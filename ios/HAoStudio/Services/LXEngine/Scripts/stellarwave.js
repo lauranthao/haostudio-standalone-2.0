@@ -28,7 +28,16 @@
 /*
  * HAo Studio 2.0 — bundled LX script (de-keyed 2026-11-23, B leg).
  * Source: Flutter 1.1.6+32 assets/lx_scripts/stellarwave.js.
- * Removed: NetEase EAPI key (wyEapi now throws explicitly); HelloWorld signing secret (no API-key const in this script; its HelloWorld legs carry no key); HYWmusic card key; Canxiang fixed token; key values hidden inside obfuscated URLs — yunmge token, 317aak ckey (emptied in place). Kept: fish sign uses the song id, not a secret.
+ * Removed: NetEase EAPI key (wyEapi now throws explicitly); HelloWorld signing secret (no API-key const in this script; its HelloWorld legs carry no key); Canxiang fixed token; key values hidden inside obfuscated URLs — yunmge token, 317aak ckey (emptied in place). Kept: fish sign uses the song id, not a secret.
+ * Audited 2026-11-25 (b49fix2, P2-36): the audit header used to claim the
+ * HYWmusic card key was "Removed" — that was wrong, it is still bundled.
+ * Key policy (2026-11-25, b49fix2): this script deliberately bundles ONE
+ * shared public card key for the HYWmusic public API (the same key is
+ * shared by the HYW legs in hyw.js / helloworld.js / stellarwave.js).
+ * It is a public API key for a free service, not a user credential and
+ * not a secret: it buys no account access. If the author rotates it,
+ * the HYW legs fail explicitly and the fallback chains move on.
+ * No other key/secret/token is bundled in this script.
  * Degradation: any backend that needed a removed key now fails its own
  * request and the script's fallback chain moves to the next backend —
  * an explicit per-backend failure, never a silent wrong result.
@@ -1084,36 +1093,6 @@ const TX_BACKENDS = [
     },
   },
 
-  // === 备用接口: baimusic QQ ===
-  {
-    name: 'baimusic QQ',
-    fetch: async (songmid, quality, musicInfo) => {
-      const mid = String(musicInfo?.songmid ?? '')
-      if (!mid) throw new Error('baimusic QQ: 缺少歌曲ID')
-      const q = quality === 'hires' ? 'flac24bit' : quality
-      const plain = JSON.stringify({ mid: mid, quality: q })
-      const enc = _magicAesEncrypt(plain)
-      const sig = _hmacSha256Hex(_HMAC_KEY, _utf8Encode(enc))
-      const res = await httpFetch('http://106.55.0.102/baimusic/qqhoturl.php', {
-        method: 'POST', timeout: 15000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Linux; Android 15; V2453A Build/AP3A.240905.015.A2_V000L1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.7390.5 Mobile Safari/537.36',
-          Accept: '*/*',
-          'Accept-Language': 'zh-CN,zh;q=0.9',
-          'Content-Type': 'application/octet-stream',
-          'X-Sig': sig,
-        },
-        body: enc,
-      })
-      const d = res.body
-      if (!d || typeof d !== 'object' || !d.d) {
-        throw new Error('baimusic QQ: 响应缺少d字段' + (d?.error ? ': ' + d.error : ''))
-      }
-      const dec = JSON.parse(_rc4Decrypt(d.d))
-      if (!dec.url) throw new Error('baimusic QQ: ' + (dec.error || '获取URL失败'))
-      return dec.url
-    },
-  },
 
   {
     name: 'QQ官方',
@@ -1196,16 +1175,6 @@ const TX_BACKENDS = [
       const url = extractUrl(res.body, [['url'], ['data', 'url']])
       if (url) return url
       throw new Error('317ak: 无数据')
-    },
-  },
-  {
-    name: '念心直链',
-    fetch: async (songmid, quality) => {
-      const res = await httpFetch(_u('cookn5**hpnd^)isdisu)^jh*fbll*os)kck:d_8') + songmid + '&level=' + quality + '&type=mp3', { method: 'GET', timeout: 8000, headers: { 'User-Agent': 'Mozilla/5.0' } })
-      const d = res.body
-      if (typeof d === 'string' && (d.startsWith(_u('cook5**')) || d.startsWith(_u('cookn5**')))) return d
-      if (d?.url) return d.url
-      throw new Error('念心直链: 无数据')
     },
   },
   {
@@ -1293,16 +1262,6 @@ const WY_BACKENDS = [
     },
   },
   {
-    name: '念心直链',
-    fetch: async (songmid, quality) => {
-      const res = await httpFetch(_u('cook5**hpnd^)isdisu)^jh*rt)kck:d_8') + songmid + '&level=' + quality + '&type=mp3', { method: 'GET', timeout: 8000, headers: { 'User-Agent': 'Mozilla/5.0' } })
-      const d = res.body
-      if (typeof d === 'string' && (d.startsWith(_u('cook5**')) || d.startsWith(_u('cookn5**')))) return d
-      if (d?.url) return d.url
-      throw new Error('念心直链: 无数据')
-    },
-  },
-  {
     name: 'FishAPI',
     fetch: async (songmid, quality) => {
       const brMap = { '128k': 128, '320k': 320, flac: 740, flac24bit: 999 }
@@ -1326,16 +1285,6 @@ const WY_BACKENDS = [
 
 // ==================== 酷我后端池 ====================
 const KW_BACKENDS = [
-  {
-    name: '酷我流媒体',
-    fetch: async (songmid, quality, musicInfo) => {
-      const level = KW_STREAM_LEVEL_MAP[quality] || 'master'
-      const songIdTmp = musicInfo?.songmid || musicInfo?.id || musicInfo?.hash || musicInfo?.songId || musicInfo?.musicId || songmid
-      if (!songIdTmp) throw new Error('酷我流媒体: 找不到歌曲ID')
-      const songId = String(songIdTmp).trim()
-      return _u('cook5**,20)-2),11)-.1534-3*frnom`\\h:d_8') + encodeURIComponent(songId) + '&level=' + level + '&stream=1'
-    },
-  },
   {
     name: '星海主后端',
     fetch: async (songmid, quality, musicInfo) => {
@@ -1417,17 +1366,6 @@ const KW_BACKENDS = [
       if (d?.code === 200 && d?.data?.url) return d.data.url
       if (d?.code === 200 && d?.data?.surl) return d.data.surl
       throw new Error('酷我手机版: 无数据')
-    },
-  },
-  {
-    name: '念心直链',
-    fetch: async (songmid, quality) => {
-      const level = qualityToLevel(quality)
-      const res = await httpFetch(_u('cookn5**hpnd^)isdisu)^jh*fbll*fr)kck:d_8') + songmid + '&level=' + level + '&type=mp3', { method: 'GET', timeout: 8000, headers: { 'User-Agent': 'Mozilla/5.0' } })
-      const d = res.body
-      if (typeof d === 'string' && (d.startsWith(_u('cook5**')) || d.startsWith(_u('cookn5**')))) return d
-      if (d?.url) return d.url
-      throw new Error('念心直链: 无数据')
     },
   },
   {
@@ -1534,17 +1472,6 @@ const KG_BACKENDS = [
       if (d?.status === 1 && d?.data?.play_backup_url) return d.data.play_backup_url
       if (d?.status === 1 && d?.data?.play_url) return d.data.play_url
       throw new Error('酷狗官方: 无数据')
-    },
-  },
-  {
-    name: '念心KG',
-    fetch: async (songmid, quality) => {
-      const level = KG_LEVEL_MAP[quality] || 'standard'
-      const res = await httpFetch(_u('cookn5**hpnd^)isdisu)^jh*fbll*fb)kck:d_8') + songmid + '&level=' + level + '&type=mp3', { method: 'GET', timeout: 8000, headers: { 'User-Agent': 'Mozilla/5.0' } })
-      const d = res.body
-      if (d?.code === 200 && d.url) return d.url
-      if (typeof d === 'string' && (d.startsWith(_u('cook5**')) || d.startsWith(_u('cookn5**')))) return d
-      throw new Error('念心KG: 无数据')
     },
   },
   { name: '星海酷狗', fetch: getXinghaiKg },
@@ -1699,7 +1626,8 @@ const withUrlCache = async (cacheKey, loader) => {
   const pending = INFLIGHT.get(cacheKey)
   if (pending) return pending
   const task = (async () => {
-    await acquireRateSlot()
+    // 2026-11-25 b49fix2 (P2-33): 限流槽不在这里拿 — handleGetMusicUrl
+    // 每轮解析只拿一次，档位降级/多后端重试不再重复消耗窗口。
     const url = await loader()
     URL_CACHE.set(cacheKey, { url: url, expire: Date.now() + CACHE_TTL })
     if (URL_CACHE.size > CACHE_MAX_ENTRIES) pruneCache()
@@ -1762,6 +1690,15 @@ const resolveFromBackends = async (backends, songId, quality, musicInfo) => {
 
 // ==================== 获取音乐URL ====================
 
+// 2026-11-25 b49fix2 (P2-32): 降级候选 = 该源自己的支持列表，从请求档位
+// 向下取（用源自己的顺序，不跨源乱排）。
+const qualityCandidates = (source, requested) => {
+  const supported = MUSIC_QUALITY[source] || ['128k']
+  let idx = supported.indexOf(requested)
+  if (idx < 0) idx = supported.length - 1
+  return supported.slice(0, idx + 1).reverse()
+}
+
 const handleGetMusicUrl = async (source, musicInfo, quality) => {
   const songId = musicInfo?.hash ?? musicInfo?.songmid ?? musicInfo?.id
   if (!songId) throw new Error('无法获取歌曲ID')
@@ -1769,13 +1706,25 @@ const handleGetMusicUrl = async (source, musicInfo, quality) => {
   const pool = BACKEND_POOLS[source]
   if (!pool) throw new Error('未知音源: ' + source)
 
-  const supported = MUSIC_QUALITY[source] || ['128k']
-  const targetQuality = supported.includes(quality) ? quality : (supported[supported.length - 1] || '128k')
+  // 2026-11-25 b49fix2 (P2-33): 每轮解析只拿一个限流槽。
+  await acquireRateSlot()
 
-  const cacheKey = source + '-' + songId + '-' + targetQuality
-  return withUrlCache(cacheKey, () =>
-    resolveFromBackends(pickBackends(source, targetQuality, pool), String(songId), targetQuality, musicInfo)
-  )
+  const candidates = qualityCandidates(source, quality)
+  const errors = []
+  for (const targetQuality of candidates) {
+    const cacheKey = source + '-' + songId + '-' + targetQuality
+    try {
+      const url = await withUrlCache(cacheKey, () =>
+        resolveFromBackends(pickBackends(source, targetQuality, pool), String(songId), targetQuality, musicInfo)
+      )
+      // 2026-11-25 b49fix2 (P1-15): 返回 {url, quality}，按实际命中的
+      // 降级档位标，不冒充请求的音质。
+      return { url, quality: targetQuality === '192k' ? '128k' : targetQuality }
+    } catch (e) {
+      errors.push(targetQuality + ': ' + (e && e.message ? e.message : String(e)))
+    }
+  }
+  throw new Error('所有音质均失败（已尝试：' + candidates.join(', ') + '）\n' + errors.join('\n'))
 }
 
 // ==================== 注册请求事件 ====================

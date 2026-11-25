@@ -100,6 +100,29 @@ workflows:
               CODE_SIGN_IDENTITY="" \
               CODE_SIGNING_REQUIRED=NO
           fi
+      - name: Xcode test target compiles (device build-for-testing)
+        script: |
+          cd ios
+          # (2026-11-25, b49fix2 T5): the Xcode HAoStudioTests target
+          # never executed anywhere — no workflow ran xcodebuild test
+          # and there was no shared scheme (now committed at
+          # HAoStudio.xcodeproj/xcshareddata/xcschemes/). This step
+          # proves the test target COMPILES (build-for-testing,
+          # device SDK, unsigned). It does NOT run the tests: the
+          # simulator link is broken by IJK (arm64 device-only
+          # static lib) and there is no device on CI, so a real
+          # `xcodebuild test` run needs an IJK simulator slice
+          # first. Do not add a simulator test step that cannot link
+          # and call it a fix.
+          xcodebuild -project HAoStudio.xcodeproj \
+            -scheme HAoStudioTests \
+            -configuration Debug \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            build-for-testing \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO
       - name: Package IPA
         script: |
           cd ios
@@ -108,7 +131,12 @@ workflows:
           rm -rf Payload HAoStudio.ipa
           mkdir -p Payload
           cp -r "$APP_PATH" Payload/
-          zip -r HAoStudio.ipa Payload
+          # LCSign (2026-11-24, b37) cannot import a `zip -r` IPA: it
+          # puts Payload/*.app/Info.plist last and LCSign's
+          # shallow/local-header scan never reaches it. package_ipa.py
+          # writes Info.plist third, plain deflate, no extra fields,
+          # no data descriptors — same packager Bitrise uses.
+          python3 package_ipa.py Payload HAoStudio.ipa
           ls -lh HAoStudio.ipa
     artifacts:
       - ios/HAoStudio.ipa
@@ -157,11 +185,18 @@ workflows:
       - name: Build simulator app
         script: |
           cd ios
-          # Same sources as the device build, simulator SDK. IJK is a
-          # static arm64 archive (no platform marker in its objects)
-          # and libmpv ships simulator slices, so this links; if the
-          # link ever fails on a device-only dependency, that is a
-          # real finding, not a reason to drop the workflow.
+          # Same sources as the device build, simulator SDK. KNOWN
+          # BROKEN (2026-11-25, b49fix2 T5): IJKMediaFramework is an
+          # arm64 device-only static library — the simulator link
+          # fails ("building for 'iOS-simulator', but linking in
+          # object file built for 'iOS'"). libmpv ships simulator
+          # slices; IJK is the blocker. This manual-only workflow is
+          # kept as the record of that failure: it goes green again
+          # when IJK gains a simulator slice or is conditional-
+          # compiled out for simulator builds. The device
+          # build-for-testing step in ios-unsigned is the honest
+          # gate until then — do not add a simulator test step here
+          # and call it a fix.
           if [ -d HAoStudio.xcworkspace ]; then
             xcodebuild -workspace HAoStudio.xcworkspace \
               -scheme HAoStudio \

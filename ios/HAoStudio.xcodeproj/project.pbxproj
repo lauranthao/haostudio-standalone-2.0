@@ -244,6 +244,15 @@
 		0000000000000000000001BC /* LiveDriverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001BB /* LiveDriverTests.swift */; };
 		0000000000000000000001BE /* VideoPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001BD /* VideoPlayerTests.swift */; };
 		0000000000000000000001DC /* WiringFollowupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000001DD /* WiringFollowupTests.swift */; };
+		000000000000000000000214 /* MiniPlayerB35Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000213 /* MiniPlayerB35Tests.swift */; };
+		000000000000000000000216 /* MusicAuditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000215 /* MusicAuditTests.swift */; };
+		000000000000000000000218 /* MusicFavStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000217 /* MusicFavStoreTests.swift */; };
+		00000000000000000000021A /* MusicPlayerLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000219 /* MusicPlayerLayoutTests.swift */; };
+		00000000000000000000021C /* MusicSongActionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000021B /* MusicSongActionsTests.swift */; };
+		00000000000000000000021E /* LiveCrashB35Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000021D /* LiveCrashB35Tests.swift */; };
+		000000000000000000000220 /* LiveSweepB35Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000021F /* LiveSweepB35Tests.swift */; };
+		000000000000000000000222 /* MusicPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000221 /* MusicPlayerTests.swift */; };
+		000000000000000000000224 /* MusicPlayerAuditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000223 /* MusicPlayerAuditTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -469,6 +478,15 @@
 		0000000000000000000001BB /* LiveDriverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveDriverTests.swift; sourceTree = "<group>"; };
 		0000000000000000000001BD /* VideoPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlayerTests.swift; sourceTree = "<group>"; };
 		0000000000000000000001DD /* WiringFollowupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiringFollowupTests.swift; sourceTree = "<group>"; };
+		000000000000000000000213 /* MiniPlayerB35Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniPlayerB35Tests.swift; sourceTree = "<group>"; };
+		000000000000000000000215 /* MusicAuditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicAuditTests.swift; sourceTree = "<group>"; };
+		000000000000000000000217 /* MusicFavStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicFavStoreTests.swift; sourceTree = "<group>"; };
+		000000000000000000000219 /* MusicPlayerLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicPlayerLayoutTests.swift; sourceTree = "<group>"; };
+		00000000000000000000021B /* MusicSongActionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicSongActionsTests.swift; sourceTree = "<group>"; };
+		00000000000000000000021D /* LiveCrashB35Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCrashB35Tests.swift; sourceTree = "<group>"; };
+		00000000000000000000021F /* LiveSweepB35Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveSweepB35Tests.swift; sourceTree = "<group>"; };
+		000000000000000000000221 /* MusicPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicPlayerTests.swift; sourceTree = "<group>"; };
+		000000000000000000000223 /* MusicPlayerAuditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicPlayerAuditTests.swift; sourceTree = "<group>"; };
 		0000000000000000000001BF /* HAoStudioTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HAoStudioTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0000000000000000000001C0 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -819,12 +837,23 @@
 				0000000000000000000001B7 /* MusicSearchMergeTests.swift */,
 				0000000000000000000001CF /* MusicS7PolishTests.swift */,
 				0000000000000000000001B9 /* MusicSleepTimerTests.swift */,
+				000000000000000000000213 /* MiniPlayerB35Tests.swift */,
+				000000000000000000000215 /* MusicAuditTests.swift */,
+				000000000000000000000217 /* MusicFavStoreTests.swift */,
+				000000000000000000000219 /* MusicPlayerLayoutTests.swift */,
+				00000000000000000000021B /* MusicSongActionsTests.swift */,
 			); path = MusicFeaturesTests; sourceTree = "<group>"; };
 		0000000000000000000001C4 /* VideoPlayerTests */ = {isa = PBXGroup; children = (
 				0000000000000000000001BB /* LiveDriverTests.swift */,
 				0000000000000000000001BD /* VideoPlayerTests.swift */,
 				0000000000000000000001DD /* WiringFollowupTests.swift */,
+				00000000000000000000021D /* LiveCrashB35Tests.swift */,
+				00000000000000000000021F /* LiveSweepB35Tests.swift */,
 			); path = VideoPlayerTests; sourceTree = "<group>"; };
+		000000000000000000000212 /* MusicPlayerTests */ = {isa = PBXGroup; children = (
+				000000000000000000000221 /* MusicPlayerTests.swift */,
+				000000000000000000000223 /* MusicPlayerAuditTests.swift */,
+			); path = MusicPlayerTests; sourceTree = "<group>"; };
 		0000000000000000000001C5 /* HAoStudioTests */ = {isa = PBXGroup; children = (
 				0000000000000000000001C0 /* Info.plist */,
 				0000000000000000000001D7 /* HomeAggregationTests.swift */,
@@ -837,6 +866,7 @@
 				0000000000000000000001C3 /* MusicFeaturesTests */,
 				0000000000000000000001C4 /* VideoPlayerTests */,
 				0000000000000000000001C5 /* HAoStudioTests */,
+				000000000000000000000212 /* MusicPlayerTests */,
 			); path = Tests; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
@@ -1086,6 +1116,15 @@
 				0000000000000000000001F5 /* HaoThemeAccentTests.swift in Sources */,
 				0000000000000000000001EA /* VideoBrowseViewModelTests.swift in Sources */,
 				0000000000000000000001DC /* WiringFollowupTests.swift in Sources */,
+				000000000000000000000214 /* MiniPlayerB35Tests.swift in Sources */,
+				000000000000000000000216 /* MusicAuditTests.swift in Sources */,
+				000000000000000000000218 /* MusicFavStoreTests.swift in Sources */,
+				00000000000000000000021A /* MusicPlayerLayoutTests.swift in Sources */,
+				00000000000000000000021C /* MusicSongActionsTests.swift in Sources */,
+				00000000000000000000021E /* LiveCrashB35Tests.swift in Sources */,
+				000000000000000000000220 /* LiveSweepB35Tests.swift in Sources */,
+				000000000000000000000222 /* MusicPlayerTests.swift in Sources */,
+				000000000000000000000224 /* MusicPlayerAuditTests.swift in Sources */,
 			); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 

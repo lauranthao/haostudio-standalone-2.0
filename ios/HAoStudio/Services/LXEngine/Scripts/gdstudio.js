@@ -40,21 +40,17 @@ var QUALITY_FALLBACKS = {
 }
 
 /* ======================= 音源映射 =========================== */
+// 2026-11-25 b49fix2 (P1-14): gdstudio 只提供 source=netease（实测其余
+// source 一律 400 "Value of `source` is not supported"）。kg/mg 以前被
+// 映射到 netease、按歌名+歌手搜索，命中的可能是另一首同名歌。
+// 本脚本只注册 wy；kg/mg 由支持这些平台的后端解析。
 var SOURCE_MAP = {
   wy: 'netease',
-  kw: 'kuwo',
-  tx: 'tencent',
-  kg: 'netease',
-  mg: 'netease',
 }
 
-var SUPPORTED_SOURCES = ['wy', 'kw', 'tx', 'kg', 'mg']
+var SUPPORTED_SOURCES = ['wy']
 var MUSIC_QUALITY = {
   wy: ['128k', '320k', 'flac', 'flac24bit'],
-  kw: ['128k', '320k', 'flac', 'flac24bit'],
-  tx: ['128k', '320k', 'flac', 'flac24bit'],
-  kg: ['128k', '320k', 'flac', 'flac24bit'],
-  mg: ['128k', '320k', 'flac', 'flac24bit'],
 }
 
 /* ===================== LX 环境变量 ========================== */
@@ -132,7 +128,8 @@ var calcSimilarity = function (a, b) {
 
 var selectBestMatch = function (list, targetName, targetSinger) {
   if (!list || !list.length) return null
-  if (list.length === 1) return list[0]
+  // 2026-11-25 b49fix2 (P2-37): 单条结果也要过同样的 20 分阈值 —
+  // 以前 list[0] 直接返回，错版同名歌也会被采用。
 
   var tName = (targetName || '').toLowerCase().trim()
   var tSinger = getFirstSinger(targetSinger)
@@ -248,6 +245,9 @@ var searchSong = async function (lxSource, targetSource, name, singer) {
 
 /* ====================== Action 处理 ========================= */
 
+// br -> 实际音质档位（gdstudio 的 br 就是实际档位，降级 br 要如实上报）
+var BR_QUALITY = { 128: '128k', 320: '320k', 740: 'flac', 999: 'flac24bit' }
+
 var handleMusicUrl = async function (lxSource, musicInfo, quality) {
   var targetSource = SOURCE_MAP[lxSource]
   if (!targetSource) throw new Error('Unsupported source: ' + lxSource)
@@ -267,7 +267,9 @@ var handleMusicUrl = async function (lxSource, musicInfo, quality) {
         if (br !== requestedBr) {
           console.log('[gdstudio] quality fallback: ' + quality + '(' + requestedBr + ') -> br=' + br)
         }
-        return body.url
+        // 2026-11-25 b49fix2 (P1-15): 返回 {url, quality}，按实际命中的
+        // br 标档位，不冒充请求的音质。
+        return { url: body.url, quality: BR_QUALITY[br] || '128k' }
       }
     } catch (_) {}
   }

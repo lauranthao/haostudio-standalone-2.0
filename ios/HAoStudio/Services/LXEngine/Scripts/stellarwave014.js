@@ -250,17 +250,11 @@ const YUNMGE_TOKEN = config.yunmge_token || ''
 const APIZERO_KEY = config.apizero_key || ''
 
 // 自建咪咕 H5 v2.4：维护者固定接口，带固定防爬 headers，不需要用户填写（v0.0.12 约定）
-const MIGU_H5V24_BASE = 'http://111.170.163.118:3037/migu/url/h5v2.4'
-const MIGU_H5V24_TOKEN = ''
-const MIGU_H5V24_KONEKO = ''
-const MIGU_H5V24_YNX = ''
-const MIGU_H5V24_DES = ''
-
 // 其余密钥（卡密/ckey/token 同样只走保险库）
 const HYW_CARD_KEY = ''
 const AK317_CKEY = ''
 const CANXIANG_TOKEN = ''
-const HYW_API_BASE = 'http://103.79.184.97'
+const HYW_API_BASE = 'https://103.79.184.97' // 2026-11-25 b49fix2 (P1-9): http -> https（ATS 在真机上拦 http）
 
 // ==================== 音质列表（对齐官方自定义源文档有效值） ====================
 const MUSIC_QUALITY = {
@@ -294,8 +288,8 @@ const MG_TONE_FLAG_MAP = { '128k': 'PQ', '320k': 'HQ', flac: 'SQ', flac24bit: 'Z
 
 const WY_FISH_BR_MAP = { '128k': 128, '320k': 320, flac: 740, flac24bit: 999 }
 
-// ==================== LRU 缓存（6 小时 / 300 条） ====================
-const CACHE_TTL_MS = 21600000
+// ==================== LRU 缓存（20 分钟 / 300 条） ====================
+const CACHE_TTL_MS = 1200000 // 2026-11-25 b49fix2 (P1-17): 6 小时 -> 20 分钟（签名直链会在 6 小时内过期，旧缓存会毒化播放）
 const CACHE_MAX_SIZE = 300
 const urlCache = new Map()
 
@@ -538,18 +532,6 @@ const TX_BACKENDS = [
     fetch: async (songmid, quality) => getHywUrl('tx', songmid, quality),
   },
   {
-    name: '念心TX',
-    fetch: async (songmid, quality) => {
-      const res = await httpFetch('https://music.nxinxz.com/kgqq/tx.php?id=' + encodeURIComponent(songmid) + '&level=' + encodeURIComponent(quality) + '&type=mp3', {
-        method: 'GET', timeout: 6000, headers: { 'User-Agent': 'Mozilla/5.0' },
-      })
-      const d = res.body
-      if (typeof d === 'string' && (d.startsWith('http://') || d.startsWith('https://'))) return d
-      if (d && d.url) return d.url
-      throw new Error('念心TX: 无数据')
-    },
-  },
-  {
     name: 'ygking',
     fetch: async (songmid, quality) => {
       const qMap = { '128k': '128', '320k': '320', flac: 'flac', flac24bit: 'flac24bit' }
@@ -656,18 +638,6 @@ const WY_BACKENDS = [
     },
   },
   {
-    name: '念心WY',
-    fetch: async (songmid, quality) => {
-      const res = await httpFetch('http://music.nxinxz.com/wy.php?id=' + encodeURIComponent(songmid) + '&level=' + encodeURIComponent(quality) + '&type=mp3', {
-        method: 'GET', timeout: 6000, headers: { 'User-Agent': 'Mozilla/5.0' },
-      })
-      const d = res.body
-      if (typeof d === 'string' && (d.startsWith('http://') || d.startsWith('https://'))) return d
-      if (d && d.url) return d.url
-      throw new Error('念心WY: 无数据')
-    },
-  },
-  {
     name: '星海WY',
     fetch: async (songmid, quality) => getXinghaiUrl('netease', { songmid, quality }),
   },
@@ -716,16 +686,6 @@ const KW_BACKENDS = [
       if (d && d.code === 200 && d.data && d.data.url) return d.data.url
       if (d && d.code === 200 && d.data && d.data.surl) return d.data.surl
       throw new Error('酷我手机版: 无数据')
-    },
-  },
-  {
-    name: '酷我流媒体',
-    fetch: async (songmid, quality, musicInfo = {}) => {
-      const level = KW_STREAM_LEVEL_MAP[quality]
-      if (!level) throw new Error('酷我流媒体: 不支持的音质')
-      const songId = getKwRid(musicInfo, songmid)
-      if (!songId) throw new Error('酷我流媒体: 找不到歌曲ID')
-      return 'http://175.27.166.236:8928/kwstream?id=' + encodeURIComponent(songId) + '&level=' + level + '&stream=1'
     },
   },
   {
@@ -879,19 +839,6 @@ const KG_BACKENDS = [
     },
   },
   {
-    name: '念心KG',
-    fetch: async (songmid, quality) => {
-      const level = KG_LEVEL_MAP[quality] || 'standard'
-      const res = await httpFetch('https://music.nxinxz.com/kgqq/kg.php?id=' + encodeURIComponent(songmid) + '&level=' + encodeURIComponent(level) + '&type=mp3', {
-        method: 'GET', timeout: 6000, headers: { 'User-Agent': 'Mozilla/5.0' },
-      })
-      const d = res.body
-      if (typeof d === 'string' && (d.startsWith('http://') || d.startsWith('https://'))) return d
-      if (d && d.code === 200 && d.url) return d.url
-      throw new Error('念心KG: 无数据')
-    },
-  },
-  {
     name: '星海KG',
     fetch: async (songmid, quality, musicInfo = {}) => {
       const hash = musicInfo.hash || musicInfo.songmid || songmid
@@ -915,111 +862,11 @@ const getMiguContentIds = (musicInfo = {}, fallback = '') => {
   return { contentId: String(contentId || '').trim(), copyrightId: String(copyrightId || '').trim() }
 }
 
-// LX 的咪咕 musicInfo 通常只带 copyrightId（songmid），没有真实 contentId；
-// 而自建 H5 v2.4 接口的 contentId 必须是真实值，否则上游 500。
-// 这里用咪咕公开搜索接口按「歌名 + 歌手」匹配，解析出真实 contentId/copyrightId 并缓存。
-const MIGU_ID_CACHE_TTL_MS = 21600000 // 6 小时
-const miguIdCache = new Map()
 
-const fetchMiguSearch = async (keyword) => {
-  const url = 'https://app.c.nf.migu.cn/MIGUM2.0/v1.0/content/search_all.do?text='
-    + encodeURIComponent(keyword)
-    + '&pageNo=1&pageSize=10&searchSwitch=' + encodeURIComponent('{"song":1}')
-  const res = await httpFetch(url, {
-    method: 'GET', timeout: 8000,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36',
-      Accept: 'application/json',
-      Referer: 'https://m.music.migu.cn/',
-    },
-  })
-  const d = res.body
-  const rows = (d && d.songResultData && d.songResultData.result) || []
-  return Array.isArray(rows) ? rows : []
-}
 
-const normalizeCn = (s) => String(s || '').toLowerCase().replace(/\s+/g, '').replace(/[(（].*?[)）]/g, '')
 
-const resolveMiguIds = async (musicInfo = {}, songmid = '') => {
-  const cacheKey = 'mgid_' + songmid
-  const cached = miguIdCache.get(cacheKey)
-  if (cached && Date.now() - cached.timestamp < MIGU_ID_CACHE_TTL_MS) return cached.ids
-
-  // 先按歌名+歌手匹配，再按歌名匹配
-  const name = musicInfo.name || musicInfo.songName || musicInfo.title || ''
-  const singer = musicInfo.singer || musicInfo.artist || musicInfo.author || ''
-  const candidates = []
-  if (name && singer) candidates.push((name + ' ' + singer).trim())
-  if (name) candidates.push(name)
-
-  const normName = normalizeCn(name)
-  const normSinger = normalizeCn(singer)
-  for (const keyword of candidates) {
-    let rows = []
-    try { rows = await fetchMiguSearch(keyword) } catch (e) { rows = [] }
-    let hit = null
-    for (const row of rows) {
-      if (!row || !row.contentId || !row.copyrightId) continue
-      const rowName = normalizeCn(row.name)
-      const rowSinger = normalizeCn((row.singers || []).map(x => x && x.name).join(','))
-      const nameOk = normName ? (rowName === normName || rowName.indexOf(normName) >= 0) : true
-      const singerOk = normSinger ? rowSinger.indexOf(normSinger) >= 0 : true
-      if (nameOk && singerOk) { hit = row; break }
-    }
-    if (!hit) continue
-    const ids = { contentId: String(hit.contentId).trim(), copyrightId: String(hit.copyrightId).trim() }
-    miguIdCache.set(cacheKey, { ids, timestamp: Date.now() })
-    return ids
-  }
-
-  // 搜索无结果：回退到 musicInfo 自带字段（若有真实 contentId 则可用）
-  const guess = getMiguContentIds(musicInfo, songmid)
-  const hasRealContentId = !!(musicInfo.contentId || musicInfo.content_id || musicInfo.contentid)
-  if (hasRealContentId && guess.contentId && guess.copyrightId) {
-    miguIdCache.set(cacheKey, { ids: guess, timestamp: Date.now() })
-    return guess
-  }
-  throw new Error('咪咕搜索解析: 未匹配到歌曲（' + String(name || songmid || '').slice(0, 40) + '）')
-}
-
-const miguFetchH5v24 = async (ids, toneFlag) => {
-  const api = MIGU_H5V24_BASE
-    + '?token=' + encodeURIComponent(MIGU_H5V24_TOKEN)
-    + '&contentId=' + encodeURIComponent(ids.contentId)
-    + '&copyrightId=' + encodeURIComponent(ids.copyrightId)
-    + '&toneFlag=' + encodeURIComponent(toneFlag)
-  const res = await httpFetch(api, {
-    method: 'GET', timeout: 10000,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Linux; Android)',
-      Koneko: MIGU_H5V24_KONEKO,
-      ynx: MIGU_H5V24_YNX,
-      des: MIGU_H5V24_DES,
-      Accept: 'application/json',
-    },
-  })
-  const d = res.body
-  const play = extractMiguUrl(d)
-  if (play && !isMiguInvalidUrl(play)) return play
-  throw new Error('自建咪咕H5v2.4: ' + ((d && (d.msg || d.message)) || '无可用直链'))
-}
 
 const MG_BACKENDS = [
-  {
-    name: '自建咪咕H5v2.4',
-    fetch: async (songmid, quality, musicInfo = {}) => {
-      if (!MIGU_H5V24_BASE || !MIGU_H5V24_TOKEN) throw new Error('自建咪咕H5v2.4: 未配置接口')
-      const toneFlag = MG_TONE_FLAG_MAP[quality] || 'PQ'
-      // 优先用 musicInfo 自带的真实 contentId；失败则走搜索解析兜底
-      const guess = getMiguContentIds(musicInfo, songmid)
-      const hasRealContentId = !!(musicInfo.contentId || musicInfo.content_id || musicInfo.contentid)
-      if (hasRealContentId && guess.contentId && guess.copyrightId) {
-        try { return await miguFetchH5v24(guess, toneFlag) } catch (e) { /* 落入搜索解析兜底 */ }
-      }
-      const ids = await resolveMiguIds(musicInfo, songmid)
-      return miguFetchH5v24(ids, toneFlag)
-    },
-  },
   {
     name: 'Migu直接源',
     fetch: async (songmid, quality, musicInfo = {}) => {
@@ -1101,12 +948,9 @@ const getQualityCandidates = (source, requestedQuality) => {
 // ==================== 核心请求（缓存 + 分批并发兜底） ====================
 const handleGetMusicUrl = async (source, musicInfo = {}, quality = LOWEST_QUALITY) => {
   let songId = getSongIdBySource(source, musicInfo)
-  if (!songId && source === 'mg') {
-    // 咪咕兜底：musicInfo 缺少 ID 时允许纯搜索解析（按歌名+歌手）
-    const name = musicInfo.name || musicInfo.songName || musicInfo.title || ''
-    const singer = musicInfo.singer || musicInfo.artist || musicInfo.author || ''
-    if ((name + singer).trim()) songId = 'search:' + name + ' ' + singer
-  }
+  // 2026-11-25 b49fix2 (P2-34): 删掉 mg 的 'search:' + 歌名兜底 — 没有
+  // 任何 mg 后端认 search: 前缀，它只会被 URL 编码进 copyrightId= 参数
+  // 然后每个后端都失败，白白烧掉任务预算。缺 id 就如实抛错。
   if (!songId) throw new Error('无法获取歌曲ID')
 
   const backends = { tx: TX_BACKENDS, wy: WY_BACKENDS, kw: KW_BACKENDS, kg: KG_BACKENDS, mg: MG_BACKENDS }[source]
@@ -1120,6 +964,7 @@ const handleGetMusicUrl = async (source, musicInfo = {}, quality = LOWEST_QUALIT
     const cached = getCachedUrl(cacheKey)
     if (cached) {
       console.log('[新星澜] 缓存命中: ' + source + ' ' + songId + ' ' + targetQuality)
+      // 2026-11-25 b49fix2 (P1-15): 缓存里存的就是 {url, quality} 对象。
       return cached
     }
 
@@ -1130,8 +975,11 @@ const handleGetMusicUrl = async (source, musicInfo = {}, quality = LOWEST_QUALIT
         if (isPlayableUrl(url, source)) return normalizeUrl(url)
         throw new Error(backend.name + ' 返回无效URL')
       }))
-      setCachedUrl(cacheKey, normalizeUrl(result))
-      return normalizeUrl(result)
+      // 2026-11-25 b49fix2 (P1-15): 返回 {url, quality}，按实际命中的
+      // 降级档位标；缓存里存对象。
+      const firstResult = { url: normalizeUrl(result), quality: targetQuality }
+      setCachedUrl(cacheKey, firstResult)
+      return firstResult
     } catch (err) {
       if (err && err.message) errors.push(targetQuality + ' 梯队1: ' + err.message)
     }
@@ -1141,7 +989,7 @@ const handleGetMusicUrl = async (source, musicInfo = {}, quality = LOWEST_QUALIT
       try {
         const url = await backend.fetch(songId, targetQuality, musicInfo)
         if (isPlayableUrl(url, source)) {
-          const clean = normalizeUrl(url)
+          const clean = { url: normalizeUrl(url), quality: targetQuality }
           setCachedUrl(cacheKey, clean)
           return clean
         }

@@ -1,9 +1,8 @@
 // HAo Studio 2.0 — music player tests (S2, leg A).
 //
-// SwiftPM style, same shape as S1's MigrationCoreTests: the
-// coordinator adds a `MusicCore` target over `HAoStudio/Playback`
-// and a `MusicPlayerTests` test target over this directory in
-// `ios/Package.swift` (not edited by this leg).
+// Wired into the Xcode HAoStudioTests target (project.pbxproj
+// Sources phase); imports the app module directly — there is no
+// MusicCore target.
 //
 // The player is driven through a fake engine and a fake resolver,
 // never real audio: the open timeout uses a short injected
@@ -19,7 +18,7 @@
 import Foundation
 import XCTest
 
-@testable import MusicCore
+@testable import HAoStudio
 
 // MARK: - Fakes
 

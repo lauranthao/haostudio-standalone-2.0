@@ -27,8 +27,9 @@ if (typeof globalThis.lx === 'undefined') {
   console.log('运行环境:', globalThis.lx.env);
   
   // 源映射
+  // 2026-11-25 b49fix2 (P1-14): gdstudio 只提供 source=netease，kw
+  // 映射到 kuwo 实测 400，本脚本只注册 wy。
   var sourceMap = {
-    'kw': 'kuwo',
     'wy': 'netease'
   };
   
@@ -43,7 +44,6 @@ if (typeof globalThis.lx === 'undefined') {
   
   // 各源支持的音质
   var sourceQualitys = {
-    'kw': ['128k', '192k', '320k', 'flac'], // 酷我支持16bit flac
     'wy': ['128k', '320k', 'flac']          // 网易云支持flac
   };
   
@@ -247,7 +247,9 @@ if (typeof globalThis.lx === 'undefined') {
             
             if (musicUrl) {
               console.log('成功获取', currentQuality, '音质URL');
-              resolve(musicUrl);
+              // 2026-11-25 b49fix2 (P1-15): 返回 {url, quality}，按实际
+              // 命中的档位标；192k 没有对应档位，如实标 128k。
+              resolve({ url: musicUrl, quality: currentQuality === '192k' ? '128k' : currentQuality });
             } else {
               console.log('音质', currentQuality, '无法提取URL');
               tryQualityChain(index + 1);
@@ -289,12 +291,6 @@ if (typeof globalThis.lx === 'undefined') {
     
     var config = {
       sources: {
-        kw: {
-          name: '酷我音乐',
-          type: 'music',
-          actions: ['musicUrl'],
-          qualitys: ['128k', '192k', '320k', 'flac'] // 添加flac支持
-        },
         wy: {
           name: '网易云音乐',
           type: 'music',
