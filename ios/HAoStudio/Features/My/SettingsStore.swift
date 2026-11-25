@@ -60,7 +60,6 @@ final class SettingsStore: ObservableObject {
     static let blurUnwatchedPostersKey = "hao_vod_spoiler_blur_unwatched"
     static let audioOnlyBackgroundKey = "hao_vod_audio_only"
     static let videoFitKey = "hao_vod_video_fit"
-    static let superResolutionKey = "hao_vod_super_resolution"
     static let interpolationKey = "hao_vod_interpolation"
     static let sdrToHDRKey = "hao_vod_sdr_to_hdr"
     static let dvP8DowngradeKey = "hao_vod_dv_p8_downgrade"
@@ -84,7 +83,7 @@ final class SettingsStore: ObservableObject {
     static let legacySongCacheEnabledKey = "hao_song_cache_enabled"
     static let legacySongCacheLimitMBKey = "hao_song_cache_limit_mb"
     /// Accepted disclaimer version (b45-coda 包 C, §4.3). Must
-    /// equal DisclaimerGate.currentVersion (5) to count.
+    /// equal DisclaimerGate.currentVersion (6) to count.
     static let disclaimerAcceptedVersionKey = "hao_disclaimer_accepted_version"
     static let wallpaperEnabledKey = "hao_wallpaper_enabled"
     static let wallpaperCurrentKey = "hao_wallpaper_current"
@@ -197,11 +196,6 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(videoFit.rawValue, forKey: Self.videoFitKey) }
     }
 
-    /// MPV super-resolution upscaling.
-    @Published var superResolution: Bool {
-        didSet { defaults.set(superResolution, forKey: Self.superResolutionKey) }
-    }
-
     /// MPV frame interpolation.
     @Published var interpolation: Bool {
         didSet { defaults.set(interpolation, forKey: Self.interpolationKey) }
@@ -282,7 +276,7 @@ final class SettingsStore: ObservableObject {
     }
 
     /// Accepted disclaimer version (DisclaimerGate.currentVersion
-    /// = 5). 0 = never accepted.
+    /// = 6). 0 = never accepted.
     @Published var disclaimerAcceptedVersion: Int {
         didSet { defaults.set(disclaimerAcceptedVersion, forKey: Self.disclaimerAcceptedVersionKey) }
     }
@@ -414,8 +408,6 @@ final class SettingsStore: ObservableObject {
         self.audioOnlyBackground = SettingsStore.boolValue(defaults, key: Self.audioOnlyBackgroundKey, default: false)
         let savedFit = defaults.string(forKey: Self.videoFitKey)
         self.videoFit = VideoFit(rawValue: savedFit ?? "") ?? .aspectFit
-        Self.clearOrphanedSuperResolution(defaults: defaults)
-        self.superResolution = SettingsStore.boolValue(defaults, key: Self.superResolutionKey, default: false)
         self.interpolation = SettingsStore.boolValue(defaults, key: Self.interpolationKey, default: false)
         self.sdrToHDR = SettingsStore.boolValue(defaults, key: Self.sdrToHDRKey, default: false)
         self.dvP8Downgrade = SettingsStore.boolValue(defaults, key: Self.dvP8DowngradeKey, default: true)
@@ -506,8 +498,6 @@ final class SettingsStore: ObservableObject {
         audioOnlyBackground = SettingsStore.boolValue(defaults, key: Self.audioOnlyBackgroundKey, default: false)
         let savedFit = defaults.string(forKey: Self.videoFitKey)
         videoFit = VideoFit(rawValue: savedFit ?? "") ?? .aspectFit
-        Self.clearOrphanedSuperResolution(defaults: defaults)
-        superResolution = SettingsStore.boolValue(defaults, key: Self.superResolutionKey, default: false)
         interpolation = SettingsStore.boolValue(defaults, key: Self.interpolationKey, default: false)
         sdrToHDR = SettingsStore.boolValue(defaults, key: Self.sdrToHDRKey, default: false)
         dvP8Downgrade = SettingsStore.boolValue(defaults, key: Self.dvP8DowngradeKey, default: true)
@@ -559,18 +549,6 @@ final class SettingsStore: ObservableObject {
         }
         if defaults.object(forKey: Self.legacySongCacheLimitMBKey) != nil {
             defaults.removeObject(forKey: Self.legacySongCacheLimitMBKey)
-        }
-    }
-
-    /// One-time clear of a stored Anime4K 超分 = true (b49 sweep
-    /// P2: the row is removed — the shaders never shipped and the
-    /// branch is a documented no-op — so a stored true would keep
-    /// resolving to the no-op branch with no UI left to turn it
-    /// off). Absent key = no-op. No playback code changes: the
-    /// driver still reads the same key, it just never sees true.
-    static func clearOrphanedSuperResolution(defaults: UserDefaults) {
-        if defaults.object(forKey: Self.superResolutionKey) != nil {
-            defaults.removeObject(forKey: Self.superResolutionKey)
         }
     }
 

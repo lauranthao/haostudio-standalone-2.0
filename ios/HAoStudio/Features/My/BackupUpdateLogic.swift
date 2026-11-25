@@ -64,6 +64,14 @@ struct BackupImportReport {
     /// the engine produced these but FileBackupEngine dropped
     /// them, so the user never saw them.
     var warnings: [String] = []
+    /// b49fix4 P2-36: relative paths the rollback could not put
+    /// back (copy / removal failure, or an unreadable snapshot
+    /// manifest). Empty means the rollback restored everything.
+    var rollbackFailures: [String] = []
+    /// True when nothing was ever written — the plan was
+    /// rejected before any write, or the pre-import snapshot
+    /// failed. There was nothing to roll back.
+    var nothingWritten: Bool = false
 }
 
 // MARK: - Update check result (C leg)
@@ -89,13 +97,21 @@ struct UpdateCheckResult: Identifiable {
     var requiresNewerOS: Bool
     /// True when this version+build was skipped by the user.
     var isSkipped: Bool
-    /// b49fix3 P2-14: true when the manifest behind this result
-    /// came from the fallback (GitHub raw) AND disagreed with
-    /// the last-seen primary manifest. The prompt sheet says so
-    /// instead of presenting fallback version info as if it came
-    /// from the primary server. Set by the checker (its single
-    /// manifest-result funnel), so manual + auto checks agree.
+    /// b49fix4 P2-43: true when the manifest behind this result
+    /// came from the fallback (GitHub raw) — driven by the
+    /// checker's lastManifestSource, not by the drift flag. The
+    /// prompt sheet says "版本信息来自备用源" whenever this is
+    /// true. (Before this fix it was driven by the drift flag,
+    /// so a clean fallback result showed no source note at all.)
     var fromFallback: Bool = false
+    /// b49fix4 P2-43: true when the fallback manifest disagreed
+    /// with the last-seen primary manifest (drift). Kept apart
+    /// from `fromFallback`: any fallback-sourced result shows
+    /// "版本信息来自备用源"; only a drifted one adds "与上次主站
+    /// 版本不一致". Before this fix both were driven by the
+    /// drift flag, so a clean fallback result showed no source
+    /// note at all.
+    var fallbackDisagreed: Bool = false
     /// Non-nil when the check itself failed; the message is shown as-is.
     var failureMessage: String?
 
@@ -198,6 +214,15 @@ enum UpdateCheckLogic {
     /// Alert title for an import report.
     static func importResultTitle(report: BackupImportReport) -> String {
         if report.rolledBack {
+            // b49fix4 P2-36: three different failures, three
+            // different titles — "已回滚" is only true when the
+            // rollback actually restored everything.
+            if report.nothingWritten {
+                return "导入失败"
+            }
+            if !report.rollbackFailures.isEmpty {
+                return "导入失败，回滚未完成"
+            }
             return "导入失败，已回滚"
         }
         return "导入完成"
@@ -209,7 +234,13 @@ enum UpdateCheckLogic {
     static func importResultMessage(report: BackupImportReport) -> String {
         var lines: [String] = []
         if report.rolledBack {
-            lines.append("导入中途失败，已全部回滚，现有数据未动。")
+            if report.nothingWritten {
+                lines.append("导入失败，未写入任何内容，现有数据未动。")
+            } else if !report.rollbackFailures.isEmpty {
+                lines.append("导入中途失败，回滚未完成，未恢复：\(report.rollbackFailures.joined(separator: "、"))。请检查这些项目。")
+            } else {
+                lines.append("导入中途失败，已全部回滚，现有数据未动。")
+            }
         } else {
             lines.append("成功导入 \(report.importedCount) 项。")
         }

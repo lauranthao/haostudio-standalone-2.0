@@ -289,7 +289,7 @@ struct MusicCommentRow: View {
                         }
                     }
                     .padding(8)
-                    .background(theme.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .background(theme.surface, in: RoundedRectangle(cornerRadius: HaoLayout.cornerSmall, style: .continuous))
                 }
                 Text(musicCommentDateText(milliseconds: comment.time))
                     .font(.haoCaption2)

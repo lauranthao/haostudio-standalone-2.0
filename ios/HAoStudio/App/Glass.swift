@@ -10,6 +10,7 @@
 // radius 12, y 4; bottomMargin 6; content height 56 + 4pt inset).
 
 import SwiftUI
+import Combine
 import UIKit
 
 /// Shared dimensions for the floating bottom stack (tab bar, and the
@@ -163,6 +164,19 @@ enum HaoLayout {
     /// for cards and sheets. Rectangular selection cells are NOT
     /// on this scale — they use selectionCellCornerRadius (10,
     /// sweep 5 P2-41); pill chips stay Capsule.
+    /// b49fix4 P2-27: every literal `cornerRadius:` in the repo is
+    /// either wired to a token above or deliberately literal —
+    /// a purpose-named token must not be used for unrelated UI:
+    /// 0 square posters; 1/2/3/5 hairline dots and dividers; 4
+    /// chips and badges; 6 the 48pt song-row covers + the 28pt
+    /// settings swatch; 10 non-selection (toasts, covers,
+    /// skeletons, badges, clips); 18 geometric, always half of
+    /// 36 (tab pill, 36pt avatar); 24 equalizer cards only;
+    /// 36/40/64 circles, always half of the size. The two
+    /// off-scale wirings are deliberate: 14 -> cornerMedium
+    /// (nearest below, so compact cards do not grow) and the
+    /// 18pt surface card -> cornerXLarge (rounder than medium
+    /// by design, so the next rung up, not down to 16).
     static let cornerSmall: CGFloat = 8
     static let cornerMedium: CGFloat = 12
     static let cornerLarge: CGFloat = 16
@@ -411,12 +425,6 @@ extension Notification.Name {
     /// `object` is the HaoTab to switch to. MainTabView listens
     /// and selects the tab; nothing else listens.
     static let haoSwitchTab = Notification.Name("haoSwitchTab")
-    /// Posted together with haoSwitchTab when the destination is
-    /// a specific row inside Settings (b49fix3 P2-24 / P1-14).
-    /// `object` is the row id ("backup" = 导入备份,
-    /// "sources" = 来源管理). SettingsGroupsView expands the
-    /// containing section; MyView scrolls the List to the row.
-    static let haoOpenSettingsRow = Notification.Name("haoOpenSettingsRow")
     /// Posted by LocalStore when a corrupt collection file is
     /// quarantined (b49fix2 P0-1). `object` is the collection
     /// name. MainTabView listens and shows a one-time notice.
@@ -430,6 +438,31 @@ extension Notification.Name {
     /// `.completed` (b49fix2 B5). `object` is the task key.
     /// MainTabView listens for the first-run backup nudge.
     static let haoDownloadCompleted = Notification.Name("haoDownloadCompleted")
+}
+
+/// Stateful deep link into a Settings row (b49fix4 P2-37).
+/// Replaces the old two-hop 0.35s delayed `haoOpenSettingsRow`
+/// NotificationCenter posts: a delayed post is fire-and-forget
+/// — if the listener is not mounted yet (cold start, tab switch
+/// in flight) the post is lost silently and the user lands on
+/// the wrong section. A pending row survives in this store until
+/// a consumer reads it, so a cold start cannot drop it.
+///
+/// Row ids: "backup" = 导入备份, "sources" = 来源管理.
+/// Senders set the row and switch tab; consumers read it on
+/// appear AND on change (a value set before the tab mounts is
+/// only seen on appear; a value set while mounted is only seen
+/// on change). Only MyView clears it — after its scroll + retry
+/// — because it is the last actor in the chain and both
+/// consumers must have seen the value first.
+final class SettingsDeepLink: ObservableObject {
+    static let shared = SettingsDeepLink()
+
+    @Published var pendingRow: String?
+
+    func open(row: String) {
+        pendingRow = row
+    }
 }
 
 /// Scroll-to-top anchor id for a tab root's vertical scroll content.

@@ -702,7 +702,7 @@ struct MusicPlayerView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
             .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: HaoLayout.cornerSmall, style: .continuous)
                     .strokeBorder(.white.opacity(0.35), lineWidth: 0.5)
             }
             .buttonStyle(.plain)
@@ -977,7 +977,7 @@ struct MusicPlayerView: View {
             urlString: playerVM.currentSong?.cover ?? "",
             size: size,
             // b45-a (Coda §2.2): corner radius 12 continuous.
-            cornerRadius: 12
+            cornerRadius: HaoLayout.cornerMedium
         )
         .id(playerVM.currentSong?.identityKey ?? "")
         .transition(.opacity)
@@ -1026,7 +1026,7 @@ struct MusicPlayerView: View {
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
                             .overlay {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                RoundedRectangle(cornerRadius: HaoLayout.cornerSmall, style: .continuous)
                                     .strokeBorder(.white.opacity(0.35), lineWidth: 0.5)
                             }
                             .buttonStyle(.plain)
@@ -1146,7 +1146,7 @@ struct MusicPlayerView: View {
                                 isConfirmed
                                     ? Color.white.opacity(0.12)
                                     : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                in: RoundedRectangle(cornerRadius: HaoLayout.cornerLarge, style: .continuous)
                             )
                         }
                         .buttonStyle(LyricRowPressStyle())
@@ -1686,7 +1686,7 @@ struct MusicPlayerView: View {
                     isActive
                         ? Color.white.opacity(0.14)
                         : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    in: RoundedRectangle(cornerRadius: HaoLayout.cornerSmall, style: .continuous)
                 )
                 .animation(.easeInOut(duration: 0.2), value: isActive)
                 .contentShape(Rectangle())
@@ -1772,7 +1772,7 @@ struct MusicPlayerView: View {
                 .frame(width: 44, height: 44)
                 .background(
                     isSelected ? Color.white.opacity(0.16) : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    in: RoundedRectangle(cornerRadius: HaoLayout.selectionCellCornerRadius, style: .continuous)
                 )
                 .contentShape(Rectangle())
         }
@@ -2006,7 +2006,7 @@ struct LyricRowPressStyle: ButtonStyle {
                 configuration.isPressed
                     ? Color.white.opacity(0.12)
                     : Color.clear,
-                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                in: RoundedRectangle(cornerRadius: HaoLayout.cornerLarge, style: .continuous)
             )
             .animation(
                 .easeOut(duration: configuration.isPressed ? 0.10 : 0.38),

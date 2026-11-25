@@ -147,6 +147,35 @@ struct BackupEnvelope {
         self.counts = counts
     }
 
+    /// b49fix4 P2-38: the preview sheet used to show the raw ISO
+    /// string ("2026-11-25T21:00:00Z"). The export time is
+    /// local-timezone formatted here. Unparseable input falls
+    /// back to the raw string instead of showing nothing.
+    var formattedExportedAt: String {
+        let parser = ISO8601DateFormatter()
+        guard let date = parser.date(from: exportedAt) else { return exportedAt }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    /// b49fix4 P2-38: "设置 12 项、集合 8 个、文件 3 个" — the
+    /// old preview said "内容 N 项" (the zip entry count, which
+    /// says nothing about what is inside). Skipped keys ride
+    /// along when present ("跳过 2 个坏键"). Zero sections are
+    /// omitted; an empty counts dict falls back to the entry
+    /// count.
+    var contentsSummary: String {
+        var parts: [String] = []
+        if let keys = counts["keys"], keys > 0 { parts.append("设置 \(keys) 项") }
+        if let collections = counts["collections"], collections > 0 { parts.append("集合 \(collections) 个") }
+        if let files = counts["files"], files > 0 { parts.append("文件 \(files) 个") }
+        if let skipped = counts["skippedKeys"], skipped > 0 { parts.append("跳过 \(skipped) 个坏键") }
+        if parts.isEmpty { return "\(contents.count) 项" }
+        return parts.joined(separator: "、")
+    }
+
     init?(dictionary: [String: Any]) {
         guard let format = dictionary["format"] as? String,
               let schema = MigrationStore.numberValue(dictionary["schema"] as Any),

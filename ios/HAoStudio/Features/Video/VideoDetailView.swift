@@ -502,7 +502,7 @@ struct VideoDetailContentView: View {
                                             }
                                             .padding(.horizontal, 16)
                                             .padding(.vertical, 12)
-                                            .background(theme.surfaceStrong, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                            .background(theme.surfaceStrong, in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
                                         }
                                         .buttonStyle(.plain)
                                         .accessibilityLabel("切换到片源\(alt.name)")
@@ -764,7 +764,7 @@ struct VideoDetailContentView: View {
             }
             .foregroundStyle(theme.onAccent)
             .padding(.vertical, 16)
-            .background(theme.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(theme.accent, in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(!viewModel.canPlay)
@@ -927,9 +927,9 @@ struct VideoDetailContentView: View {
                             .background(
                                 index == viewModel.selectedEpisodeIndex
                                     ? theme.accent : theme.surface,
-                                in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                in: RoundedRectangle(cornerRadius: HaoLayout.selectionCellCornerRadius, style: .continuous))
                             .overlay {
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                RoundedRectangle(cornerRadius: HaoLayout.selectionCellCornerRadius, style: .continuous)
                                     .strokeBorder(theme.hairline, lineWidth: 0.5)
                             }
                     }

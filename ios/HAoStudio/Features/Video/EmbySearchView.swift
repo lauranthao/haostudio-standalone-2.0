@@ -236,9 +236,9 @@ struct EmbySearchView: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 40)
-        .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous)
                 .strokeBorder(theme.hairline, lineWidth: 0.5)
         }
     }

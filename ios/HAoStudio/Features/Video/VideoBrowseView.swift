@@ -776,7 +776,7 @@ private struct BrowseSidebarView: View {
             .padding(.vertical, 10)
             .background {
                 if selected {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    RoundedRectangle(cornerRadius: HaoLayout.selectionCellCornerRadius, style: .continuous)
                         .fill(theme.accentSoft)
                 }
             }

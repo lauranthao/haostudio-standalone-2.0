@@ -448,10 +448,14 @@ final class DefaultUpdateChecker: UpdateChecker {
             releaseNotes: manifest.changelog?.localized(for: Locale.preferredLanguages.first ?? Locale.current.languageCode),
             requiresNewerOS: requiresNewerOS,
             isSkipped: isSkipped,
-            // b49fix3 P2-14: the single manifest-result funnel —
+            // b49fix4 P2-43: the single manifest-result funnel —
             // every manifest-backed result (manual + auto) carries
-            // whether it came from a disagreeing fallback.
-            fromFallback: lastFallbackDisagreed,
+            // its source. `fromFallback` is the source itself
+            // (lastManifestSource), NOT the drift flag — the old
+            // code showed no source note for a clean fallback
+            // result. Drift rides separately in fallbackDisagreed.
+            fromFallback: lastManifestSource == .fallback,
+            fallbackDisagreed: lastFallbackDisagreed,
             failureMessage: nil
         )
     }

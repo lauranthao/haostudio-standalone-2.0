@@ -65,7 +65,6 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertFalse(settings.blurUnwatchedPosters)
         XCTAssertFalse(settings.audioOnlyBackground)
         XCTAssertEqual(settings.videoFit, .aspectFit)
-        XCTAssertFalse(settings.superResolution)
         XCTAssertFalse(settings.interpolation)
         XCTAssertFalse(settings.sdrToHDR)
         XCTAssertTrue(settings.dvP8Downgrade)

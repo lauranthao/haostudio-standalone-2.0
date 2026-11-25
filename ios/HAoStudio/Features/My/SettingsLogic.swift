@@ -519,9 +519,9 @@ enum SongCacheLimitOptions {
 
 // MARK: - 免责声明 (b45-coda 包 C, §4.3)
 //
-// Disclaimer text, version 4 (b49fix2: clauses 5 and 6 were
-// corrected — clause 5 omitted the Emby upload, clause 6
-// over-promised auto-cleanup for downloads; the change is
+// Disclaimer text, version 6 (b49fix4: clause 5 rewritten to
+// match the Emby progress-reporting switch — reporting is ON
+// by default, closable in Emby settings; the change is
 // material, so the version bumps and consent is re-asked).
 // Written for THIS app (local-only, no login, third-party
 // sources) — never copied from Coda's text, which names its
@@ -530,7 +530,9 @@ enum DisclaimerGate {
     /// Current disclaimer version. Bump on any material change;
     /// the stored accepted version must equal this to count.
     /// b49fix3: 4 → 5 (clauses 5 + 6 rewritten to match the code).
-    static let currentVersion = 5
+    /// b49fix4: 5 → 6 (clause 5 rewritten to match the Emby
+    /// switch: reporting defaults ON, closable in Emby settings).
+    static let currentVersion = 6
     static let acceptedVersionKey = "hao_disclaimer_accepted_version"
 
     static func isAccepted(storedVersion: Int?) -> Bool {
@@ -566,7 +568,7 @@ enum DisclaimerContent {
         ),
         DisclaimerClause(
             title: "5. 本地数据",
-            body: "你的歌单、收藏、播放记录、下载与各项设置只保存在本机，不会上传到我们的服务器——我们没有自己的服务器。搜索与播放仍会直接向你所选来源的服务器发请求（见设置里的“数据与来源”）；你自己配置的 Emby 服务器除外：开启上报后，播放进度会同步到你的 Emby。卸载应用或清除数据后，这些内容将无法恢复。"
+            body: "你的歌单、收藏、播放记录、下载与各项设置只保存在本机，不会上传到我们的服务器——我们没有自己的服务器。搜索与播放仍会直接向你所选来源的服务器发请求（见设置里的“数据与来源”）；你自己配置的 Emby 服务器除外：播放进度上报默认开启，可在 Emby 设置里关闭；开启时，看片时每 15 秒向你的 Emby 服务器上报一次播放进度，用于继续观看。卸载应用或清除数据后，这些内容将无法恢复。"
         ),
         DisclaimerClause(
             title: "6. 下载与缓存",

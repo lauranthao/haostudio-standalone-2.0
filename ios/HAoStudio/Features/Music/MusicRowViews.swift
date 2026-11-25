@@ -502,7 +502,7 @@ struct MusicSkeletonCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            MusicSkeletonBlock(width: size, height: size, cornerRadius: 22)
+            MusicSkeletonBlock(width: size, height: size, cornerRadius: HaoLayout.cornerXXLarge)
             MusicSkeletonBlock(width: size * 0.8, height: 14)
             MusicSkeletonBlock(width: size * 0.6, height: 11)
         }
