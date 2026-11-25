@@ -437,13 +437,17 @@ struct VideoBrowseView: View {
                 }
                 .haoSensoryFeedback(.selection, trigger: viewModel.mode)
                 if viewModel.mode == "emby" && !viewModel.isEmbyConfigured {
+                    // b49fix6 P2-15: no top padding here — the
+                    // component carries its own vertical 24, and
+                    // this was the only one of 79 MusicEmptyState
+                    // call sites with an extra top (48 total vs
+                    // 24 everywhere else).
                     MusicEmptyState(
                         icon: "server.rack",
                         title: "未配置 Emby 服务器",
                         note: "在设置 → Emby 连接里添加服务器地址并登录后，这里会显示你的媒体库。"
                     )
                     .padding(.horizontal, HaoLayout.pushedPageMargin)
-                    .padding(.top, 24)
                     Spacer()
                 } else if viewModel.mode == "emby" {
                     // Emby libraries + genres live in the sidebar;

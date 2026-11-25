@@ -220,7 +220,7 @@ struct EmbyTabView: View {
                                 .padding(.top, 12)
                             if !viewModel.resumeItems.isEmpty {
                                 embyContinueSection
-                                    .padding(.top, 16)
+                                    .padding(.top, HaoLayout.sectionTopSpacing)
                             }
                             libraryStrip
                                 .padding(.top, 12)
