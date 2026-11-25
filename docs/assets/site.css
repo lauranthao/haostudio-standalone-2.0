@@ -38,11 +38,16 @@ code { background: #f5f5f7; padding: 2px 6px; border-radius: 6px; font-size: 14p
 .version-note { color: #86868b; font-size: 14px; }
 
 section { max-width: 960px; margin: 0 auto; padding: 40px 20px; }
-.shots { text-align: center; }
+.shots { text-align: center; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
 .shots img {
-  width: calc(25% - 12px); margin: 0 5px; border-radius: 16px;
+  width: calc(25% - 12px); margin: 0; border-radius: 16px;
   box-shadow: 0 4px 20px rgba(0,0,0,0.12); vertical-align: top;
 }
+.shots-3 img { width: calc(33.333% - 12px); }
+.shots-row .shots { margin-top: 16px; }
+.gallery { border-top: 1px solid #e8e8ed; }
+.gallery h2 { text-align: center; }
+.gallery .shots img { margin-bottom: 12px; }
 .shot-note { color: #86868b; font-size: 13px; margin-top: 12px; }
 
 .platforms h2 { text-align: center; }
@@ -70,7 +75,7 @@ footer {
   .hero h1 { font-size: 34px; }
   .tagline { font-size: 19px; }
   h2 { font-size: 23px; }
-  .shots img { width: calc(50% - 10px); margin: 0 4px 12px; }
+  .shots img { width: calc(50% - 10px); margin: 0; }
   .platform-groups { flex-direction: column; }
   .btn-primary, .btn-secondary { display: block; margin: 8px auto; max-width: 280px; }
 }
