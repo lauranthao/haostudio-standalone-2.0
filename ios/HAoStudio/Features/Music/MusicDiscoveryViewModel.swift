@@ -17,6 +17,7 @@
 // MusicChartsView.swift (S3-C).
 
 import SwiftUI
+import UIKit // b49fix12 P2-2: UIApplication.didBecomeActiveNotification
 
 /// One listen-report range. Calendar ranges, matching the labels
 /// (Flutter ListenReport.compute).
@@ -132,9 +133,59 @@ final class MusicDiscoveryViewModel: ObservableObject {
 
     private var listenLog: [ListenEvent] = []
 
+    /// Day-change / foreground observers (b49fix12 P2-2): the
+    /// daily page had none — it sat across midnight showing
+    /// yesterday's list while Home's observers refreshed Home
+    /// (b49-sweep14 deepread P2-2). Same shape as Home's
+    /// (b49fix11 P2-1): at most one of each, removed in deinit.
+    /// Every pushed instance registers its own pair (a new
+    /// @StateObject per push); a duplicate recompute across two
+    /// live instances is harmless — reloadDaily runs on the main
+    /// thread and its save is compare-and-swap guarded, so both
+    /// compute the same list.
+    private var dayChangedObserver: NSObjectProtocol?
+    private var didBecomeActiveObserver: NSObjectProtocol?
+
     init() {
         plazaPlatform = MusicLibraryStore.plazaPlatform()
         dailyDayKey = musicDayKey(of: Date())
+        // b49fix12 P2-2: two triggers, both gated by
+        // shouldReloadForDayChange so a same-day foreground costs
+        // nothing: the calendar-day notification fires at midnight
+        // while the app is foregrounded; the become-active check
+        // catches a midnight crossed while backgrounded (the
+        // day-change notification is not delivered to a suspended
+        // app). The init seeds dailyDayKey with today's key, so a
+        // notification right after the push is a no-op too.
+        dayChangedObserver = NotificationCenter.default.addObserver(forName: .NSCalendarDayChanged, object: nil, queue: .main) { [weak self] _ in
+            // Explicit main-actor hop: the observer block is
+            // @Sendable, so the reload cannot happen inside it
+            // directly (same shape as the settle Timer hop in
+            // MusicSearchViewModel; a direct call fails Swift 6
+            // type-check with [#ActorIsolatedCall]).
+            Task { @MainActor [weak self] in self?.reloadDailyIfDayChanged() }
+        }
+        didBecomeActiveObserver = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.reloadDailyIfDayChanged() }
+        }
+    }
+
+    deinit {
+        if let token = dayChangedObserver { NotificationCenter.default.removeObserver(token) }
+        if let token = didBecomeActiveObserver { NotificationCenter.default.removeObserver(token) }
+    }
+
+    /// Day-change / foreground re-check (b49fix12 P2-2): reload
+    /// the daily list only when the cached list is not today's
+    /// — the predicate makes a same-day foreground a no-op.
+    /// Calls reload() rather than reloadDaily() so the recompute
+    /// also refreshes the listen log (a stale log would rank
+    /// today's list on yesterday's listening) and the report;
+    /// all three are local reads, no network.
+    private func reloadDailyIfDayChanged() {
+        if HomeViewModel.shouldReloadForDayChange(todayKey: musicDayKey(of: Date()), cachedDayKey: dailyDayKey) {
+            reload()
+        }
     }
 
     func reload() {
@@ -208,11 +259,36 @@ final class MusicDiscoveryViewModel: ObservableObject {
     /// by init / reloadDaily), or a replace after midnight
     /// saved under yesterday's key and the next load dropped
     /// it. The cached key is updated to match.
+    /// b49fix12 P2-1: the save is gated on the cached key
+    /// still being today — after midnight the on-screen list
+    /// is yesterday's ranking, and saving it under today's
+    /// key would stamp it as today's cache; the next reload
+    /// would take the cache-hit branch and never recompute,
+    /// locking yesterday's list in for the whole day
+    /// (b49-sweep14 deepread P2-1). So on rollover the save
+    /// is skipped: the dislike is already recorded above, and
+    /// a recompute is triggered instead — the recompute
+    /// naturally excludes the disliked song, so the user's
+    /// intent still lands and today's list is computed today.
+    /// (The b49fix10 note that the on-screen list "becomes
+    /// today's cached list until a force refresh recomputes
+    /// it" is void per b49-sweep14 ruling §2: once saved under
+    /// today's key the next reload takes the cache-hit branch,
+    /// so the force refresh never comes.)
     func replaceDailySong(_ song: MusicSong) {
         guard let index = dailyTracks.firstIndex(where: { $0.identityKey == song.identityKey }) else { return }
         MusicLibraryStore.addFMDisliked(key: song.identityKey)
         guard !dailySpares.isEmpty else { return }
         dailyTracks[index] = dailySpares.removeFirst()
+        // b49fix12 P2-1: only persist when the on-screen list
+        // still belongs to today (see the doc above). On
+        // rollover, do NOT save — reload() recomputes today's
+        // list (and refreshes the listen log + report); the
+        // in-memory swap above stays visible until it lands.
+        guard HomeViewModel.shouldSaveReplacedDaily(cachedDayKey: dailyDayKey, todayKey: musicDayKey(of: Date())) else {
+            reload()
+            return
+        }
         let key = musicDayKey(of: Date())
         dailyDayKey = key
         MusicLibraryStore.saveDailyTracks(dailyTracks + dailySpares, for: key)

@@ -855,4 +855,50 @@ final class HomeAggregationTests: XCTestCase {
         XCTAssertTrue(HomeViewModel.shouldReloadForDayChange(
             todayKey: "2026-11-26", cachedDayKey: ""))
     }
+
+    func testShouldSaveReplacedDaily() {
+        // b49fix12 P2-1: a "换一首" replacement may only be saved
+        // when the on-screen list is still today's — after
+        // midnight the cached key is yesterday and saving the
+        // list under today's key would stamp yesterday's
+        // ranking as today's cache (the next reload takes the
+        // cache-hit branch and never recomputes). Same key
+        // saves; a rolled-over day — or a cache that never
+        // published — recomputes instead.
+        XCTAssertTrue(HomeViewModel.shouldSaveReplacedDaily(
+            cachedDayKey: "2026-11-26", todayKey: "2026-11-26"))
+        XCTAssertFalse(HomeViewModel.shouldSaveReplacedDaily(
+            cachedDayKey: "2026-11-25", todayKey: "2026-11-26"))
+        XCTAssertFalse(HomeViewModel.shouldSaveReplacedDaily(
+            cachedDayKey: "", todayKey: "2026-11-26"))
+    }
+
+    func testShouldTriggerDayChangeReload() {
+        // b49fix12 P2-3: the day-change / foreground trigger
+        // must not fire before the first publish (cold start is
+        // onAppear's job — without this gate every cold start
+        // paid for two background reloads), and at most once
+        // per day (the backgrounded-across-midnight double
+        // notification). The first-load-skipped case (loaded,
+        // empty cache) still triggers, and a new day is never
+        // blocked by the previous day's memo.
+        XCTAssertFalse(HomeViewModel.shouldTriggerDayChangeReload(
+            hasLoadedOnce: false, todayKey: "2026-11-26",
+            cachedDayKey: "", issuedKey: nil))
+        XCTAssertFalse(HomeViewModel.shouldTriggerDayChangeReload(
+            hasLoadedOnce: true, todayKey: "2026-11-26",
+            cachedDayKey: "2026-11-26", issuedKey: nil))
+        XCTAssertTrue(HomeViewModel.shouldTriggerDayChangeReload(
+            hasLoadedOnce: true, todayKey: "2026-11-26",
+            cachedDayKey: "2026-11-25", issuedKey: nil))
+        XCTAssertTrue(HomeViewModel.shouldTriggerDayChangeReload(
+            hasLoadedOnce: true, todayKey: "2026-11-26",
+            cachedDayKey: "", issuedKey: nil))
+        XCTAssertFalse(HomeViewModel.shouldTriggerDayChangeReload(
+            hasLoadedOnce: true, todayKey: "2026-11-26",
+            cachedDayKey: "2026-11-25", issuedKey: "2026-11-26"))
+        XCTAssertTrue(HomeViewModel.shouldTriggerDayChangeReload(
+            hasLoadedOnce: true, todayKey: "2026-11-27",
+            cachedDayKey: "2026-11-26", issuedKey: "2026-11-26"))
+    }
 }
