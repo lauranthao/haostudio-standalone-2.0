@@ -25,6 +25,7 @@
 
 import SwiftUI
 import PhotosUI
+import UIKit
 import UniformTypeIdentifiers
 
 /// Shared collapsible-section header: tap the title to fold /
@@ -116,6 +117,20 @@ struct SettingsGroupsView: View {
     /// Cache-clear confirmation.
     @State private var showingClearCacheAlert = false
 
+    /// Disclaimer sheet (read-only, from the About section).
+    @State private var showingDisclaimer = false
+
+    /// Storage section state (b45-coda 包 C, §4.4). Refreshed on
+    /// appear and after every clear.
+    @State private var storageTotalBytes: Int64 = 0
+    @State private var storageFreeBytes: Int64 = 0
+    @State private var storageAppBytes: Int64 = 0
+    @State private var storageNetworkBytes: Int64 = 0
+    @State private var storageTempBytes: Int64 = 0
+    @State private var storageDownloadsBytes: Int64 = 0
+    @State private var storageLoaded = false
+    @State private var clearingStorageCategory: String?
+
     var body: some View {
         Group {
             appearanceSection
@@ -124,6 +139,7 @@ struct SettingsGroupsView: View {
             videoSection
             sourcesSection
             dataSection
+            storageSection
             aboutSection
         }
         .fileImporter(
@@ -158,6 +174,15 @@ struct SettingsGroupsView: View {
         )
         .onAppear {
             backupFlow.refreshUpdateState()
+        }
+        // b45-coda 包 C: sheets hang on the Form (this Group),
+        // never on a Section / row — iOS dismisses a sheet
+        // attached to a Section when the List re-renders.
+        .sheet(isPresented: $showingDisclaimer) {
+            DisclaimerView(mode: .readOnly)
+        }
+        .sheet(isPresented: $backupFlow.showingUpdateStatus) {
+            UpdateStatusSheet()
         }
     }
 
@@ -882,63 +907,396 @@ struct SettingsGroupsView: View {
         }
     }
 
-    // MARK: - 关于
+    // MARK: - 存储空间 (b45-coda 包 C, §4.4)
 
-    private var aboutSection: some View {
+    /// Capacity bar + per-category cleanup + song-cache cap.
+    /// The audio cache engine itself is 包 F's — this section
+    /// only renders the UI and calls the cleanup that exists
+    /// today (URLCache + .part files via CacheManager's public
+    /// facts); categories with no cleanup API are listed in the
+    /// footnote instead of getting a dead delete button.
+    private var storageSection: some View {
         Section(
-            header: SettingsSectionHeader(section: .about),
-            // Page-ending footer (the last section): a deliberate
-            // bottom edge instead of dead space, and the honest
-            // statement of what this app is — local-only, no
-            // login, nothing uploaded.
-            footer: Text("HAo Studio 仅使用本地数据，不上传服务器，也不需要登录")
-                .font(.haoFootnote)
-                .foregroundStyle(theme.textMuted)
+            header: SettingsSectionHeader(section: .storage),
+            footer: Text("可删除的项目会在需要时重新获取或生成；最近 10 分钟内写入的歌曲与临时文件会暂时保留。")
+                .font(.haoCaption)
+                .foregroundStyle(theme.textSecondary)
         ) {
-            if isExpanded(.about) {
-                HStack {
-                    Text("版本")
-                        .font(.haoBody)
-                        .foregroundStyle(theme.textPrimary)
-                    Spacer()
-                    Text(bundleVersion)
-                        .font(.haoBody)
-                        .foregroundStyle(theme.textSecondary)
+            if isExpanded(.storage) {
+                storageCapacityBlock
+                storageAppUsageRow
+                storageDownloadsRow
+                storageCategoryRow(
+                    id: "network",
+                    title: "网络缓存",
+                    detail: "接口与图片的网络缓存，清理后重新加载。",
+                    size: storageNetworkBytes,
+                    onClear: clearNetworkCache
+                )
+                storageCategoryRow(
+                    id: "temp",
+                    title: "临时文件",
+                    detail: "下载中断留下的临时文件，10 分钟内在用的会保留。",
+                    size: storageTempBytes,
+                    onClear: clearTempFiles
+                )
+                Toggle("歌曲缓存", isOn: $settings.songCacheEnabled)
+                Picker(
+                    "缓存上限",
+                    selection: $settings.songCacheLimitMB
+                ) {
+                    ForEach(SongCacheLimitOptions.values, id: \.self) { megabytes in
+                        Text(SongCacheLimitOptions.label(for: megabytes)).tag(megabytes)
+                    }
                 }
-                checkUpdateRow
-                skippedVersionRow
-                Toggle("启动时自动检查更新", isOn: $settings.autoUpdateCheck)
+                .disabled(!settings.songCacheEnabled)
+                footnote("歌曲缓存、图片、分析、模型、诊断与离线索引暂无单独清理入口，可在“数据”分组用“清理缓存”一并清理；上限的执行由音频缓存引擎负责。")
+            }
+        }
+        .onAppear {
+            refreshStorage()
+        }
+    }
+
+    /// Top capacity block: device name + "已用 X，共 Y" + the
+    /// three-segment bar + legend. Coda values (§4.4): bar 18pt,
+    /// corner 4 continuous, hairline stroke; segments app /
+    /// other / free; legend via ViewThatFits.
+    private var storageCapacityBlock: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text(UIDevice.current.name)
+                    .font(.haoBodyStrong)
+                    .foregroundStyle(theme.textPrimary)
+                Spacer()
+                Text(storageCapacityLabel)
+                    .font(.haoBody)
+                    .foregroundStyle(theme.textSecondary)
+                    .monospacedDigit()
+            }
+            storageCapacityBar
+            storageLegend
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var storageCapacityLabel: String {
+        guard storageLoaded, storageTotalBytes > 0 else { return "正在统计…" }
+        let used = storageTotalBytes - storageFreeBytes
+        return "已用 \(formattedBytes(used))，共 \(formattedBytes(storageTotalBytes))"
+    }
+
+    private var storageCapacityBar: some View {
+        let fractions = StorageCapacityMath.segments(
+            app: storageAppBytes,
+            used: storageTotalBytes - storageFreeBytes,
+            total: storageTotalBytes
+        )
+        return GeometryReader { geometry in
+            HStack(spacing: 0) {
+                if fractions.app > 0 {
+                    theme.accent
+                        .frame(width: max(0, geometry.size.width * fractions.app))
+                }
+                if fractions.app > 0 && fractions.other > 0 {
+                    theme.scaffoldBackground.frame(width: 1)
+                }
+                if fractions.other > 0 {
+                    Color.gray.opacity(0.45)
+                        .frame(width: max(0, geometry.size.width * fractions.other))
+                }
+                if fractions.other > 0 && fractions.free > 0 {
+                    theme.scaffoldBackground.frame(width: 1)
+                }
+                if fractions.free > 0 {
+                    Color.primary.opacity(0.04)
+                        .frame(width: max(0, geometry.size.width * fractions.free))
+                }
+            }
+        }
+        .frame(height: 18)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 0.5)
+        }
+    }
+
+    private var storageLegend: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 16) {
+                storageLegendItems
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                storageLegendItems
             }
         }
     }
 
-    // MARK: - 关于：检查更新 (S6-B)
+    private var storageLegendItems: some View {
+        Group {
+            storageLegendItem(color: theme.accent, text: "HAo Studio")
+            storageLegendItem(color: Color.gray.opacity(0.55), text: "其他已用")
+            storageLegendItem(color: Color.primary.opacity(0.12), text: "可用")
+        }
+    }
 
-    /// Check row: the 版本 row above already shows the current
-    /// version, so this row shows the last check time + the
-    /// check button. The auto-check switch already exists (S5)
-    /// and is NOT duplicated here.
-    private var checkUpdateRow: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("检查更新")
+    private func storageLegendItem(color: Color, text: String) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(color)
+                .frame(width: 7, height: 7)
+            Text(text)
+                .font(.haoCaption)
+                .foregroundStyle(theme.textSecondary)
+        }
+    }
+
+    private var storageAppUsageRow: some View {
+        LabeledContent {
+            Text(formattedBytes(storageAppBytes))
+                .font(.haoBodyStrong)
+                .foregroundStyle(theme.textPrimary)
+                .monospacedDigit()
+        } label: {
+            Label("HAo Studio 占用", systemImage: "internaldrive")
+        }
+    }
+
+    private var storageDownloadsRow: some View {
+        NavigationLink(destination: MusicDownloadsView()) {
+            HStack {
+                Label("已下载", systemImage: "arrow.down.circle")
+                Spacer()
+                Text(formattedBytes(storageDownloadsBytes))
                     .font(.haoBody)
-                    .foregroundStyle(theme.textPrimary)
-                Text(UpdateCheckLogic.lastCheckLabel(date: backupFlow.lastCheckDate, now: Date()))
-                    .font(.haoFootnote)
-                    .foregroundStyle(theme.textMuted)
-            }
-            Spacer()
-            if backupFlow.isCheckingUpdate {
-                ProgressView()
-            } else {
-                Button("检查") {
-                    backupFlow.checkForUpdate()
-                }
-                .font(.haoBody)
-                .foregroundStyle(theme.accentText)
+                    .foregroundStyle(theme.textSecondary)
+                    .monospacedDigit()
             }
         }
+        .tint(theme.accent)
+    }
+
+    /// One clearable category row: title + size on the first
+    /// baseline, caption detail below, borderless destructive
+    /// delete (disabled at 0 or while clearing, ProgressView
+    /// while clearing).
+    private func storageCategoryRow(
+        id: String,
+        title: String,
+        detail: String,
+        size: Int64,
+        onClear: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(title)
+                    .font(.haoBody)
+                    .foregroundStyle(theme.textPrimary)
+                Spacer()
+                Text(formattedBytes(size))
+                    .font(.haoBody)
+                    .foregroundStyle(theme.textSecondary)
+                    .monospacedDigit()
+                if clearingStorageCategory == id {
+                    ProgressView()
+                } else {
+                    Button("删除", role: .destructive, action: onClear)
+                        .font(.haoBody)
+                        .buttonStyle(.borderless)
+                        .disabled(size <= 0)
+                }
+            }
+            Text(detail)
+                .font(.haoFootnote)
+                .foregroundStyle(theme.textSecondary)
+        }
+    }
+
+    private func formattedBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    private func refreshStorage() {
+        let values = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        storageTotalBytes = (values?[.systemSize] as? NSNumber)?.int64Value ?? 0
+        storageFreeBytes = (values?[.systemFreeSize] as? NSNumber)?.int64Value ?? 0
+        storageNetworkBytes = Int64(URLCache.shared.currentDiskUsage)
+        storageTempBytes = CacheManager.partFilesSize()
+        storageDownloadsBytes = directorySize(
+            at: LocalStore.documentsDirectory().appendingPathComponent(DownloadEngine.downloadSubdir),
+            excludingPartFiles: true
+        )
+        CacheManager.totalSizeBytes { total in
+            // CacheManager counts URLCache + .part files; the
+            // downloads dir is the app's other on-disk footprint.
+            self.storageAppBytes = total + self.storageDownloadsBytes
+            self.storageLoaded = true
+        }
+    }
+
+    private func directorySize(at url: URL, excludingPartFiles: Bool) -> Int64 {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []
+        var total: Int64 = 0
+        for name in names {
+            if excludingPartFiles && name.hasSuffix(".part") { continue }
+            let fileURL = url.appendingPathComponent(name)
+            if let size = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value {
+                total += size
+            }
+        }
+        return total
+    }
+
+    private func clearNetworkCache() {
+        clearingStorageCategory = "network"
+        URLCache.shared.removeAllCachedResponses()
+        DispatchQueue.main.async {
+            self.storageNetworkBytes = Int64(URLCache.shared.currentDiskUsage)
+            self.clearingStorageCategory = nil
+            self.refreshStorage()
+        }
+    }
+
+    /// Delete .part files, keeping anything written in the last
+    /// 10 minutes (Coda's inUseWindow); the directory itself is
+    /// never removed.
+    private func clearTempFiles() {
+        clearingStorageCategory = "temp"
+        DispatchQueue.global(qos: .utility).async {
+            let dir = LocalStore.documentsDirectory().appendingPathComponent(DownloadEngine.downloadSubdir)
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+            let cutoff = Date().addingTimeInterval(-600)
+            for name in names where name.hasSuffix(".part") {
+                let url = dir.appendingPathComponent(name)
+                let modified = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date) ?? .distantPast
+                if modified < cutoff {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
+            DispatchQueue.main.async {
+                self.storageTempBytes = CacheManager.partFilesSize()
+                self.clearingStorageCategory = nil
+                self.refreshStorage()
+            }
+        }
+    }
+
+    // MARK: - 关于 (b45-coda 包 C, §4.2 / §4.3)
+
+    /// About is the LAST Section of the settings container, not
+    /// a separate page. Hero + identity rows + update rows +
+    /// link rows + licence / disclaimer rows. All copy is ours
+    /// (Coda's platform-naming / AGPL wording is never copied).
+    private var aboutSection: some View {
+        Section(
+            header: SettingsSectionHeader(section: .about),
+            footer: aboutFooter
+        ) {
+            if isExpanded(.about) {
+                aboutHero
+                aboutVersionRow
+                aboutBuildRow
+                aboutDeveloperRow
+                aboutAutoCheckRow
+                aboutCheckUpdateRow
+                skippedVersionRow
+                aboutWebsiteRow
+                aboutRepoRow
+                aboutIssuesRow
+                aboutReleasesRow
+                aboutLicensesRow
+                aboutDisclaimerRow
+            }
+        }
+    }
+
+    /// Hero (§4.2): VStack spacing 10, centred, vertical
+    /// padding 8; our logo 72×72, iOS bundle-icon corner 16
+    /// continuous, no shadow / border; name .title2.bold()
+    /// (22pt); slogan .subheadline secondary.
+    private var aboutHero: some View {
+        VStack(spacing: 10) {
+            Image("Logo")
+                .resizable()
+                .frame(width: 72, height: 72)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            Text("HAo Studio")
+                .font(.title2.bold())
+                .foregroundStyle(theme.textPrimary)
+                .multilineTextAlignment(.center)
+            Text("音乐、视频与直播，一处尽享")
+                .font(.subheadline)
+                .foregroundStyle(theme.textSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+    }
+
+    /// Identity rows: LabeledContent, left title + right value,
+    /// values copyable (.textSelection(.enabled)). Version and
+    /// build are SEPARATE rows. The commit row only renders when
+    /// a commit value exists and is not "unknown" — this build
+    /// carries none, so the row is omitted (not faked).
+    private var aboutVersionRow: some View {
+        aboutIdentityRow(
+            icon: "number",
+            title: "版本",
+            value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        )
+    }
+
+    private var aboutBuildRow: some View {
+        aboutIdentityRow(
+            icon: "hammer",
+            title: "构建号",
+            value: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
+        )
+    }
+
+    private var aboutDeveloperRow: some View {
+        aboutIdentityRow(icon: "person", title: "开发者", value: "lauranthao")
+    }
+
+    private func aboutIdentityRow(icon: String, title: String, value: String) -> some View {
+        LabeledContent {
+            Text(value)
+                .font(.haoBody)
+                .foregroundStyle(theme.textSecondary)
+                .textSelection(.enabled)
+        } label: {
+            Label(title, systemImage: icon)
+        }
+    }
+
+    private var aboutAutoCheckRow: some View {
+        Toggle(isOn: $settings.autoUpdateCheck) {
+            Label("启动时自动检查更新", systemImage: "clock.arrow.circlepath")
+        }
+    }
+
+    /// "检查更新" button: plain, full row, left-aligned, drives
+    /// the existing UpdateChecker interactive check.
+    private var aboutCheckUpdateRow: some View {
+        Button(action: {
+            backupFlow.checkForUpdate()
+        }) {
+            HStack {
+                Label("检查更新", systemImage: "arrow.triangle.2.circlepath")
+                Spacer()
+                if backupFlow.isCheckingUpdate {
+                    ProgressView()
+                } else {
+                    Text(UpdateCheckLogic.lastCheckLabel(date: backupFlow.lastCheckDate, now: Date()))
+                        .font(.haoFootnote)
+                        .foregroundStyle(theme.textMuted)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(theme.textPrimary)
     }
 
     /// "已跳过 X 版本，点按取消跳过" — only when the checker
@@ -961,13 +1319,285 @@ struct SettingsGroupsView: View {
         }
     }
 
-    /// Bundle version (Info.plist CFBundleShortVersionString /
-    /// build) — same computation as MyPlaceholderView.
-    private var bundleVersion: String {
-        let bundle = Bundle.main
-        let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
-        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
-        return "\(version) (build \(build))"
+    private var aboutWebsiteRow: some View {
+        AboutLinkRow(
+            title: "官网",
+            icon: "globe",
+            url: URL(string: "https://chen-hao-shop-production.up.railway.app")!,
+            detail: "chen-hao-shop-production.up.railway.app"
+        )
+    }
+
+    private var aboutRepoRow: some View {
+        AboutLinkRow(
+            title: "GitHub 仓库",
+            icon: "chevron.left.forwardslash.chevron.right",
+            url: URL(string: "https://github.com/lauranthao/haostudio-standalone-2.0")!,
+            detail: "lauranthao/haostudio-standalone-2.0"
+        )
+    }
+
+    private var aboutIssuesRow: some View {
+        AboutLinkRow(
+            title: "问题反馈",
+            icon: "exclamationmark.bubble",
+            url: URL(string: "https://github.com/lauranthao/haostudio-standalone-2.0/issues")!,
+            detail: nil
+        )
+    }
+
+    private var aboutReleasesRow: some View {
+        AboutLinkRow(
+            title: "版本发布",
+            icon: "shippingbox",
+            url: URL(string: "https://github.com/lauranthao/haostudio-standalone-2.0/releases")!,
+            detail: nil
+        )
+    }
+
+    private var aboutLicensesRow: some View {
+        NavigationLink(destination: OpenSourceLicensesView()) {
+            Label("开源许可与致谢", systemImage: "doc.text")
+        }
+        .tint(theme.accent)
+    }
+
+    private var aboutDisclaimerRow: some View {
+        Button(action: {
+            showingDisclaimer = true
+        }) {
+            HStack {
+                Label("查看完整免责声明", systemImage: "exclamationmark.shield")
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(theme.textPrimary)
+    }
+
+    /// About Section footer (VStack leading, spacing 4 = tight),
+    /// rewritten for this app — never Coda's identity copy.
+    private var aboutFooter: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("HAo Studio 是一款免费的独立站应用，音乐、视频与直播内容均来自公开的第三方来源，版权归原权利人所有。")
+            Text("本应用不设账号、不上传任何数据，所有内容均保存在本机。")
+        }
+        .font(.haoFootnote)
+        .foregroundStyle(theme.textMuted)
+    }
+}
+
+// MARK: - 关于链接行 (b45-coda 包 C, §4.3)
+
+/// Link row: Link → HStack(spacing 12): Label (title, icon) +
+/// Spacer(minLength 8) + optional detail + arrow.up.right
+/// (caption, tertiary). Whole row tappable.
+struct AboutLinkRow: View {
+    let title: String
+    let icon: String
+    let url: URL
+    let detail: String?
+
+    @Environment(\.haoTheme) private var theme
+
+    var body: some View {
+        Link(destination: url) {
+            HStack(spacing: 12) {
+                Label(title, systemImage: icon)
+                Spacer(minLength: 8)
+                if let detail = detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.subheadline)
+                        .foregroundStyle(theme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Image(systemName: "arrow.up.right")
+                    .font(.caption)
+                    .foregroundStyle(theme.textMuted)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(theme.textPrimary)
+    }
+}
+
+// MARK: - 开源许可与致谢 (b45-coda 包 C, §4.3)
+
+/// Licences sub-page: our MIT licence + thanks. There is no
+/// local third-party-notices document in this repo, so the
+/// fallback "致谢" group + "在 GitHub 查看第三方声明" link is
+/// what ships (per §4.3 fallback). Structure copied, content
+/// rewritten — Coda's AGPL/GPL rows are never copied.
+struct OpenSourceLicensesView: View {
+    @Environment(\.haoTheme) private var theme
+    @State private var showingMIT = false
+
+    var body: some View {
+        List {
+            Section("许可证") {
+                Button(action: {
+                    showingMIT = true
+                }) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("HAo Studio")
+                            .font(.haoBody)
+                            .foregroundStyle(theme.textPrimary)
+                        Text("MIT 许可证")
+                            .font(.haoFootnote)
+                            .foregroundStyle(theme.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+            }
+            Section("致谢") {
+                Text(OpenSourceLicenses.thanksText)
+                    .font(.haoFootnote)
+                    .foregroundStyle(theme.textSecondary)
+                AboutLinkRow(
+                    title: "在 GitHub 查看第三方声明",
+                    icon: "chevron.left.forwardslash.chevron.right",
+                    url: URL(string: "https://github.com/lauranthao/haostudio-standalone-2.0")!,
+                    detail: nil
+                )
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(theme.scaffoldBackground)
+        .navigationTitle("开源许可与致谢")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showingMIT) {
+            DocumentSheetView(title: OpenSourceLicenses.mitTitle, text: OpenSourceLicenses.mitText)
+        }
+    }
+}
+
+// MARK: - 文档 sheet (b45-coda 包 C, §4.3)
+
+/// ScrollView + monospaced footnote text + padding; title =
+/// file name; "完成" top-right.
+struct DocumentSheetView: View {
+    let title: String
+    let text: String
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.haoTheme) private var theme
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(text)
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(theme.textPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+            .background(theme.scaffoldBackground)
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 免责声明 (b45-coda 包 C, §4.3)
+
+/// Disclaimer page, version 3 (DisclaimerGate). Read-only mode
+/// = bordered "关闭"; first-launch gate mode = prominent
+/// "同意并继续" (accent tint) + plain "不同意". The gate's
+/// presentation on first launch + exit-on-decline lives in the
+/// app shell (HAoStudioApp, not a 包 C file) — this view only
+/// records the consent.
+struct DisclaimerView: View {
+    enum Mode {
+        case readOnly
+        case gate
+    }
+
+    let mode: Mode
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.haoTheme) private var theme
+    @EnvironmentObject private var settings: SettingsStore
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(spacing: 18) {
+                    VStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.shield")
+                            .font(.system(size: 34, weight: .medium))
+                            .foregroundStyle(theme.accentText)
+                        Text("免责声明")
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundStyle(theme.textPrimary)
+                        Text(DisclaimerContent.summary)
+                            .font(.subheadline)
+                            .foregroundStyle(theme.textSecondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    ForEach(DisclaimerContent.clauses, id: \.title) { clause in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(clause.title)
+                                .font(.headline)
+                                .foregroundStyle(theme.textPrimary)
+                            Text(clause.body)
+                                .font(.callout)
+                                .foregroundStyle(theme.textSecondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(24)
+            }
+            Divider()
+            VStack(spacing: 12) {
+                if mode == .gate {
+                    Button(action: {
+                        settings.disclaimerAcceptedVersion = DisclaimerGate.currentVersion
+                        dismiss()
+                    }) {
+                        Text("同意并继续")
+                            .font(.haoBodyStrong)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(theme.accent)
+                    Button("不同意") {
+                        dismiss()
+                    }
+                    .font(.haoBodyStrong)
+                    .foregroundStyle(theme.accentText)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .buttonStyle(.plain)
+                } else {
+                    Button(action: {
+                        dismiss()
+                    }) {
+                        Text("关闭")
+                            .font(.haoBodyStrong)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
+        }
+        .background(theme.scaffoldBackground)
     }
 }
 
