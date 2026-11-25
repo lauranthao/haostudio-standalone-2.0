@@ -502,7 +502,7 @@ struct MusicDetailHero: View {
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
                 .padding(.top, 24)
-                .padding(.horizontal, 20)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
             HStack(spacing: 8) {
                 if !avatarURL.isEmpty {
                     MusicCoverView(urlString: avatarURL, size: 24, cornerRadius: 12)
@@ -542,6 +542,22 @@ struct MusicDetailHero: View {
 /// Coda PlaylistPrimaryActions: height 56, max width 328, side
 /// margin 20, HStack spacing 12. Favourite 56×56 glass circle;
 /// play capsule min width 116, stretched, height 56, headline
+/// Shared geometry for the primary-actions rows (b49fix6 P2-13):
+/// the daily row (MusicDiscoveryViews.dailyActions) and the
+/// detail row (MusicDetailPrimaryActions) are two different rows
+/// — the daily row has no favourite star — but their frame is one
+/// value (328 max width, pushed margin, sheet top), so it lives
+/// here once instead of being copied at both call sites. Fix one
+/// place, both rows move.
+struct MusicPrimaryActionsLayout: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: 328)
+            .padding(.horizontal, HaoLayout.pushedPageMargin)
+            .padding(.top, HaoLayout.sheetTopPadding)
+    }
+}
+
 /// font, theme accent background + on-accent text (recomputed
 /// from the theme — never hardcoded black-on-white /
 /// white-on-black); more ellipsis title2 semibold 56×56 glass
@@ -590,9 +606,7 @@ struct MusicDetailPrimaryActions<More: View>: View {
             }
             .accessibilityLabel("更多操作")
         }
-        .frame(maxWidth: 328)
-        .padding(.horizontal, 20)
-        .padding(.top, 16)
+        .modifier(MusicPrimaryActionsLayout())
     }
 }
 

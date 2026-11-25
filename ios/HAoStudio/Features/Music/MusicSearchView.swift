@@ -97,7 +97,7 @@ struct MusicSearchView: View {
         }
         .padding(.leading, 16)
         .padding(.trailing, query.isEmpty ? 16 : 4)
-        .frame(minHeight: HaoLayout.searchFieldHeight)
+        .frame(height: HaoLayout.searchFieldHeight)
         // b49fix4 P2-4: the input keeps surfaceStrong (a real
         // editable field reads stronger than a tappable entry,
         // which is surface) — the hairline is the shared entry
@@ -451,7 +451,7 @@ struct MusicSearchView: View {
                 .foregroundStyle(theme.accentText)
                 .buttonStyle(.plain)
         }
-        .padding(.vertical, 8)
+        .padding(.top, 12)
     }
 
     // MARK: - Cards (Coda §5.4)

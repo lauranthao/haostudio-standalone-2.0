@@ -507,7 +507,7 @@ struct MusicFMView: View {
                 Spacer()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.horizontal, 24)
+            .padding(.horizontal, HaoLayout.pageMargin)
         }
         .background(theme.scaffoldBackground)
         .navigationTitle(fmVM.title)

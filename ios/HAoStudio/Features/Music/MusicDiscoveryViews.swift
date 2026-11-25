@@ -143,9 +143,7 @@ struct MusicDailyView: View {
             }
             .accessibilityLabel("更多操作")
         }
-        .frame(maxWidth: 328)
-        .padding(.horizontal, 20)
-        .padding(.top, 16)
+        .modifier(MusicPrimaryActionsLayout())
     }
 }
 

@@ -91,3 +91,97 @@ final class MusicSearchMergeTests: XCTestCase {
         XCTAssertEqual(live, plain)
     }
 }
+
+// MARK: - Card paging offsets (b49fix5 P1-2, b49fix6 P2-5)
+//
+// The offset of every next-page request comes from the live row
+// count (MusicSearchViewModel.nextCardOffset), never from
+// (cardPages + 1) × limit — the page count is recorded under the
+// OLD tab's limit, so a limit change made the next fetch skip a
+// whole range. A source that ignores the offset answers every
+// page with the same rows; two consecutive identical
+// (offset, count) requests close the kind instead of looping
+// (loadMoreStreakDecision).
+
+final class MusicSearchOffsetTests: XCTestCase {
+    func testNextCardOffsetCrossLimit() {
+        // b49fix5 P1-2 repro: the 综合 page (limit 10) paged once,
+        // 20 rows loaded, then the user switched to a single-kind
+        // tab (limit 50) and tapped load more. The offset must be
+        // 20 — the old page-based form asked for offset 100 and
+        // items 20–99 were never requested again.
+        XCTAssertEqual(MusicSearchViewModel.nextCardOffset(loadedCount: 20), 20)
+    }
+
+    func testNextCardOffsetZeroAndNegative() {
+        XCTAssertEqual(MusicSearchViewModel.nextCardOffset(loadedCount: 0), 0)
+        XCTAssertEqual(MusicSearchViewModel.nextCardOffset(loadedCount: -3), 0)
+    }
+
+    func testRetryPlanCrossLimitIsFirstPage() {
+        // A retry after a 综合 first fetch (limit 10) that lands
+        // on a single-kind tab (limit 50) is a fresh first page
+        // at offset 0 — the recorded page is not a page under
+        // limit 50.
+        let plan = MusicSearchViewModel.retryPlan(
+            loadedCount: 20, cardLimits: 10, limit: 50, isEmpty: false)
+        XCTAssertEqual(plan.offset, 0)
+        XCTAssertTrue(plan.isFirstPage)
+    }
+
+    func testRetryPlanSameLimitResumesFromCount() {
+        // Same limit, rows already loaded: re-request the failed
+        // next page from the live row count, not from a page
+        // number (70 loaded, then a retry under the same limit
+        // asked for offset 100 under the old form).
+        let plan = MusicSearchViewModel.retryPlan(
+            loadedCount: 70, cardLimits: 50, limit: 50, isEmpty: false)
+        XCTAssertEqual(plan.offset, 70)
+        XCTAssertFalse(plan.isFirstPage)
+    }
+
+    func testRetryPlanEmptyIsFirstPage() {
+        let plan = MusicSearchViewModel.retryPlan(
+            loadedCount: 0, cardLimits: 50, limit: 50, isEmpty: true)
+        XCTAssertEqual(plan.offset, 0)
+        XCTAssertTrue(plan.isFirstPage)
+    }
+
+    func testStreakFirstRepeatStillFires() {
+        // The first identical request is forgiven (one transient
+        // dup): it fires, streak becomes 1.
+        let decision = MusicSearchViewModel.loadMoreStreakDecision(
+            lastOffset: 20, lastLoadedCount: 20, streak: 0,
+            offset: 20, loadedCount: 20)
+        XCTAssertTrue(decision.fire)
+        XCTAssertEqual(decision.streak, 1)
+    }
+
+    func testStreakSecondRepeatStops() {
+        // The second identical request closes the kind: no fire,
+        // streak 2 — the caller sets cardHasMore = false.
+        let decision = MusicSearchViewModel.loadMoreStreakDecision(
+            lastOffset: 20, lastLoadedCount: 20, streak: 1,
+            offset: 20, loadedCount: 20)
+        XCTAssertFalse(decision.fire)
+        XCTAssertEqual(decision.streak, 2)
+    }
+
+    func testStreakResetsOnGrowth() {
+        // The count grew (or the offset moved): the source is
+        // honouring the offset, streak resets, fire.
+        let decision = MusicSearchViewModel.loadMoreStreakDecision(
+            lastOffset: 20, lastLoadedCount: 20, streak: 1,
+            offset: 30, loadedCount: 30)
+        XCTAssertTrue(decision.fire)
+        XCTAssertEqual(decision.streak, 0)
+    }
+
+    func testStreakNoRecordFires() {
+        let decision = MusicSearchViewModel.loadMoreStreakDecision(
+            lastOffset: nil, lastLoadedCount: nil, streak: 0,
+            offset: 20, loadedCount: 20)
+        XCTAssertTrue(decision.fire)
+        XCTAssertEqual(decision.streak, 0)
+    }
+}

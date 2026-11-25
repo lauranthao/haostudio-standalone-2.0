@@ -199,7 +199,7 @@ struct MiniPlayerBar: View {
                     // (b49fix2 A6) — no prev/next there.
                     Button(action: { musicPlayer.previous() }) {
                         Image(systemName: "backward.fill")
-                            .font(.system(size: 20, weight: .semibold))
+                            .font(.system(size: HaoLayout.iconSize, weight: .semibold))
                             .foregroundStyle(theme.textPrimary)
                             .frame(width: 36, height: 36)
                     }
@@ -208,7 +208,7 @@ struct MiniPlayerBar: View {
                     .accessibilityLabel("上一曲")
                     Button(action: { musicPlayer.togglePlayPauseOrRetry() }) {
                         Image(systemName: musicPlayer.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 20, weight: .semibold))
+                            .font(.system(size: HaoLayout.iconSize, weight: .semibold))
                             .foregroundStyle(theme.textPrimary)
                             .frame(width: 36, height: 36)
                     }
@@ -217,7 +217,7 @@ struct MiniPlayerBar: View {
                     .accessibilityLabel(musicPlayer.isPlaying ? "暂停" : "播放")
                     Button(action: { musicPlayer.next() }) {
                         Image(systemName: "forward.fill")
-                            .font(.system(size: 20, weight: .semibold))
+                            .font(.system(size: HaoLayout.iconSize, weight: .semibold))
                             .foregroundStyle(theme.textPrimary)
                             .frame(width: 36, height: 36)
                     }
@@ -234,7 +234,7 @@ struct MiniPlayerBar: View {
                     // toggles are safe with nothing loaded.
                     Button(action: { toggleVodLivePlayPause(for: item.kind) }) {
                         Image(systemName: isVodLivePlaying(for: item.kind) ? "pause.fill" : "play.fill")
-                            .font(.system(size: 20, weight: .semibold))
+                            .font(.system(size: HaoLayout.iconSize, weight: .semibold))
                             .foregroundStyle(theme.textPrimary)
                             .frame(width: 36, height: 36)
                     }
@@ -404,7 +404,8 @@ struct FullPlayerPlaceholderView: View {
                 }
                 .padding(.top, 12)
             }
-            .padding()
+            .padding(.horizontal, HaoLayout.sheetHorizontalPadding)
+            .padding(.vertical, HaoLayout.sheetTopPadding)
         }
         .overlay(alignment: .topTrailing) {
             Button(action: { dismiss() }) {

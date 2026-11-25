@@ -1477,7 +1477,7 @@ struct MusicPlayerView: View {
                 showMore = true
             }) {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 20, weight: .medium))
+                    .font(.system(size: HaoLayout.iconSize, weight: .medium))
                     .foregroundStyle(.white.opacity(0.85))
                     .frame(width: 44, height: 44)
             }
@@ -1802,7 +1802,7 @@ struct MusicPlayerView: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 20, weight: .medium))
+                .font(.system(size: HaoLayout.iconSize, weight: .medium))
                 .foregroundStyle(isSelected ? .white : .white.opacity(0.65))
                 .frame(width: 44, height: 44)
                 // b49fix5 P2-39(b): the selected-state highlight
@@ -2157,7 +2157,7 @@ struct MusicOutputDeviceButton: View {
             // / headphones / speaker); the name lives in the picker
             // sheet ("当前输出") and in the VoiceOver label.
             Image(systemName: outputIcon)
-                .font(.system(size: 20, weight: .medium))
+                .font(.system(size: HaoLayout.iconSize, weight: .medium))
                 .foregroundStyle(.white.opacity(0.85))
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())

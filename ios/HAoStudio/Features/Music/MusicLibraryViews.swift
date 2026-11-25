@@ -608,7 +608,7 @@ struct MusicDownloadsView: View {
         NavigationLink(destination: MusicDownloadTasksView()) {
             HStack(spacing: 12) {
                 Image(systemName: "arrow.down.circle")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.system(size: HaoLayout.iconSize, weight: .semibold))
                     .foregroundStyle(theme.accentText)
                 Text("下载任务")
                     .font(.haoSubheadStrong)
@@ -649,7 +649,7 @@ struct MusicDownloadsView: View {
         return HStack(spacing: 12) {
             if isSelecting {
                 Image(systemName: selectedKeys.contains(download.key) ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 20))
+                    .font(.system(size: HaoLayout.iconSize))
                     .foregroundStyle(selectedKeys.contains(download.key) ? theme.accentText : theme.textMuted)
                     .frame(width: 24, height: 24)
                     .onTapGesture {
