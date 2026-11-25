@@ -1285,6 +1285,21 @@ extension BackupEngineCore {
 
     // MARK: - Snapshot management (b49fix3 P1-6 / P2-17)
 
+    /// Parses the yyyyMMdd-HHmmss stamp at the start of a
+    /// snapshot folder name (the first 15 characters). Nil
+    /// when the name carries no stamp (e.g. a hand-made
+    /// folder). Shared by listSnapshots (ordering) and
+    /// snapshotInfo (display).
+    static func snapshotDate(fromName name: String) -> Date? {
+        // A stamp is exactly 15 characters ("yyyyMMdd-HHmmss");
+        // anything shorter cannot carry one (and an empty
+        // prefix must not parse — Linux Foundation accepts it).
+        guard name.count >= 15 else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.date(from: String(name.prefix(15)))
+    }
+
     /// Lists the import snapshots under
     /// `Documents/backup_snapshots/`, newest first (by file
     /// creation date — the folder name starts with a
@@ -1298,24 +1313,54 @@ extension BackupEngineCore {
         let docs = documentsURL ?? LocalStore.documentsDirectory()
         let dir = docs.appendingPathComponent(snapshotDirectoryName)
         let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        return names
+        // b49fix8 P2-9: the sort key is computed ONCE per folder
+        // (creation date, then the yyyyMMdd-HHmmss stamp in the
+        // name), so the comparator never silently falls through
+        // to the random UUID suffix in the name:
+        //  * one side dateless (concurrent delete / filesystem
+        //    anomaly) → the dateless folder sorts FIRST, i.e.
+        //    it is treated as NEWEST. Pruning deletes from the
+        //    end of this list, and a snapshot whose date cannot
+        //    be read must never be pruned as "oldest" — that is
+        //    how a just-taken safety net used to die. Keeping an
+        //    undatable folder is the safe side; the user can
+        //    still delete it by hand.
+        //  * both dates equal (e.g. birthtimes rewritten to one
+        //    value by a whole-device migration restore) → the
+        //    name stamp still carries the original take time
+        //    (folder names survive a migration), so it orders
+        //    before the full name. Only when the stamps tie too
+        //    does the full name decide, as a stable last resort.
+        struct DatedFolder {
+            var url: URL
+            var creationDate: Date?
+            var nameStamp: Date?
+        }
+        let folders = names
             .map { dir.appendingPathComponent($0) }
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-            .sorted { lhs, rhs in
-                // b49fix7 P2-8: creation date orders same-second
-                // snapshots (the UUID suffix in the name is
-                // random — the old name sort could put a just
-                // taken safety net below an older snapshot, and
-                // the prune then deleted the undo). The name is
-                // only the tie-break when a creation date is
-                // unreadable (or two folders share one).
-                let lhsDate = (try? lhs.resourceValues(forKeys: [.creationDateKey]))?.creationDate
-                let rhsDate = (try? rhs.resourceValues(forKeys: [.creationDateKey]))?.creationDate
-                if let lhsDate, let rhsDate, lhsDate != rhsDate {
-                    return lhsDate > rhsDate
-                }
-                return lhs.lastPathComponent > rhs.lastPathComponent
+            .map { url in
+                DatedFolder(
+                    url: url,
+                    creationDate: (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate,
+                    nameStamp: Self.snapshotDate(fromName: url.lastPathComponent)
+                )
             }
+        return folders.sorted { lhs, rhs in
+            switch (lhs.creationDate, rhs.creationDate) {
+            case let (l?, r?) where l != r:
+                return l > r
+            case (nil, _?):
+                return true
+            case (_?, nil):
+                return false
+            default:
+                if let l = lhs.nameStamp, let r = rhs.nameStamp, l != r {
+                    return l > r
+                }
+                return lhs.url.lastPathComponent > rhs.url.lastPathComponent
+            }
+        }.map { $0.url }
     }
 
     /// Deletes one snapshot folder. Only removes the safety net
@@ -1360,9 +1405,7 @@ extension BackupEngineCore {
     /// the key/file counts from its manifest.
     static func snapshotInfo(at url: URL) -> SnapshotInfo {
         let name = url.lastPathComponent
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        var date = formatter.date(from: String(name.prefix(15)))
+        var date = Self.snapshotDate(fromName: name)
         if date == nil {
             date = (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate
         }
@@ -1396,10 +1439,16 @@ extension BackupEngineCore {
     /// prune drops the oldest, and the restore then reported a
     /// "corrupt manifest" for a snapshot its own safety net
     /// had just deleted. b49fix7 P1-1/P2-7: the caller prunes
-    /// after EVERY restore (performRestore) and always excludes
-    /// the target — pruning only after success still deleted a
-    /// snapshot on every successful restore, and pruning nothing
-    /// on failure let safety nets pile up to 6, 7, 8 folders.
+    /// after every restore that changed something
+    /// (performRestore) and always excludes the target —
+    /// pruning only after success still deleted a snapshot on
+    /// every successful restore, and pruning nothing on failure
+    /// let safety nets pile up to 6, 7, 8 folders. b49fix8
+    /// P2-8: the one exception is a restore that changed
+    /// nothing (manifest failure, or a success that restored
+    /// nothing) — it skips the prune and this safety net is
+    /// deleted again (it captured a state identical to the live
+    /// one), so the list is left exactly as it was.
     static func createSafetyNetSnapshot(
         for snapshotDir: URL,
         documentsURL: URL,
@@ -1512,21 +1561,40 @@ extension BackupEngineCore {
     /// Keeps only the newest `keeping` snapshots. Called on
     /// every successful import; the settings row also offers
     /// per-snapshot delete. b49fix7 P1-1: `excluding` keeps one
-    /// folder out of the count — a restore must never prune the
-    /// snapshot it just restored (the target is kept, so the
-    /// same snapshot can be restored again), so the restore path
-    /// passes its target here; the safety net is the newest
-    /// folder and always survives. Compared by folder name:
-    /// the excluded URL may be built from a different path
-    /// prefix than the listed one (symlinked tmp dirs).
+    /// folder from being DELETED — a restore must never prune
+    /// the snapshot it just restored (the target is kept, so
+    /// the same snapshot can be restored again), so the restore
+    /// path passes its target here; the safety net is the newest
+    /// folder and always survives. b49fix8 P2-7 (option a): the
+    /// excluded folder still COUNTS toward `keeping` — only the
+    /// act of deleting it is exempted. Round 7 removed the
+    /// target from the list before counting, so a restore left
+    /// 5 others + the target = 6 folders while the settings
+    /// footer still said "只保留最近 5 份". Now the total is
+    /// capped at `keeping` including the target, so the restore
+    /// path and the import path (no excluding) agree on the
+    /// total. Compared by folder name: the excluded URL may be
+    /// built from a different path prefix than the listed one
+    /// (symlinked tmp dirs).
     static func pruneSnapshots(keeping: Int = 5, excluding: URL? = nil, documentsURL: URL? = nil) {
-        var snapshots = listSnapshots(documentsURL: documentsURL)
-        if let excluding {
-            snapshots.removeAll { $0.lastPathComponent == excluding.lastPathComponent }
-        }
-        guard snapshots.count > keeping else { return }
-        for url in snapshots.dropFirst(keeping) {
-            deleteSnapshot(at: url)
+        let snapshots = listSnapshots(documentsURL: documentsURL)
+        let excludedName = excluding?.lastPathComponent
+        let targetPresent = excludedName.map { name in
+            snapshots.contains { $0.lastPathComponent == name }
+        } ?? false
+        // Slots for non-target folders: the target occupies one
+        // of the `keeping` slots when it is in the list.
+        let otherSlots = max(keeping - (targetPresent ? 1 : 0), 0)
+        var keptOthers = 0
+        for url in snapshots {
+            if url.lastPathComponent == excludedName {
+                continue // never deleted; occupies one slot
+            }
+            if keptOthers < otherSlots {
+                keptOthers += 1
+            } else {
+                deleteSnapshot(at: url)
+            }
         }
     }
 
