@@ -248,9 +248,16 @@ final class MusicSearchViewModel: ObservableObject {
     /// identical (offset, count) — i.e. the previous request
     /// produced zero growth because the source ignores the
     /// offset and answers every page with the same rows.
+    /// b49fix9 P2-2: the baseline also records the LIMIT the
+    /// request fired under (综合 10 vs single-kind 50) — a
+    /// (offset, count) recorded under one limit is not
+    /// comparable to requests under the other, so restore()
+    /// only clears a baseline whose limit differs from the
+    /// restored tab's paging limit; a same-limit baseline
+    /// survives a tab flip, so the guard can still close.
     /// Internal (not private) so XCTest can stage the restore
     /// scenario — b49fix8 P2-5 (see `snapshots` above).
-    var lastNextPageRequest: [MusicSearchAPI.MusicSearchCategoryKind: (offset: Int, loadedCount: Int)] = [:]
+    var lastNextPageRequest: [MusicSearchAPI.MusicSearchCategoryKind: (offset: Int, loadedCount: Int, limit: Int)] = [:]
     var zeroGrowthStreak: [MusicSearchAPI.MusicSearchCategoryKind: Int] = [:]
 
     /// Clear one kind's zero-growth guard state (b49fix7 P2-5).
@@ -528,19 +535,28 @@ final class MusicSearchViewModel: ObservableObject {
         // (综合 10 vs single-kind 50), and its rows were deduped
         // under that limit too — the global per-kind (offset,
         // count) baseline from the old tab must not close a
-        // load-more that has never fired under this tab. Clear
-        // the baseline for this tab's kinds (all three on 综合;
-        // the one kind on a single-kind tab). The reset is
-        // scoped: kinds of other tabs keep their baseline, so a
-        // genuine zero-growth loop on another tab still closes.
-        // A failed first page still keeps its streak
+        // load-more that has never fired under this tab.
+        // b49fix9 P2-2: the clear is limit-aware, not
+        // unconditional — a baseline recorded under the SAME
+        // limit as the restored tab's paging survives the flip
+        // (the requests are comparable, so the streak is real),
+        // and only a cross-limit baseline is cleared. Clearing
+        // unconditionally let a tab flip reset the streak every
+        // time, so the guard could never accumulate the two
+        // identical repeats it needs to close. The reset is
+        // still scoped: kinds of other tabs keep their baseline,
+        // so a genuine zero-growth loop on another tab still
+        // closes. A failed first page still keeps its streak
         // (beginCategoryFinish returns before finishCategory):
         // the list did not change, so the old baseline is still
         // valid for it.
+        let tabLimit = tab == .all ? Self.allTabCardLimit : Self.singleTabCardLimit
         let kinds: [MusicSearchAPI.MusicSearchCategoryKind] = tab == .all
             ? MusicSearchAPI.MusicSearchCategoryKind.allCases
             : (tab.categoryKind.map { [$0] } ?? [])
-        for kind in kinds { resetZeroGrowthState(for: kind) }
+        for kind in kinds where lastNextPageRequest[kind]?.limit != tabLimit {
+            resetZeroGrowthState(for: kind)
+        }
         artists = snapshot.artists
         albums = snapshot.albums
         playlists = snapshot.playlists
@@ -871,7 +887,7 @@ final class MusicSearchViewModel: ObservableObject {
             saveSnapshot()
             return
         }
-        lastNextPageRequest[kind] = (offset: offset, loadedCount: loadedCount)
+        lastNextPageRequest[kind] = (offset: offset, loadedCount: loadedCount, limit: limit)
         loadCategory(kind, limit: limit, offset: offset, isFirstPage: false)
     }
 
@@ -922,15 +938,20 @@ final class MusicSearchViewModel: ObservableObject {
     /// page landing on its own. Tapping re-issues a FIRST page
     /// under the current tab's limit, not a next page: the guard
     /// closed because the source kept answering the same
-    /// next-page window, and the first page under the new limit
-    /// is the window that was never fetched (e.g. rows 20–49 on
-    /// the single-kind tab, where the snapshot only holds the
-    /// 20 rows deduped from the 综合 pages). The first-page
-    /// finish clears the guard state and re-opens the kind
+    /// next-page window, and a fresh first page is the recovery
+    /// that re-opens the kind. b49fix9 P2-5: the first page is
+    /// offset 0 with the current tab's limit — rows 0–9 on 综合,
+    /// 0–49 on a single-kind tab — so it OVERLAPS rows already
+    /// held (the merge dedupes them); the old comment's "rows
+    /// 20–49, never fetched" was wrong. The first-page finish
+    /// clears the guard state and re-opens the kind
     /// (finishCategory isFirstPage); if the source really has no
     /// more, the short page ends pagination honestly instead of
     /// re-closing through the guard. Retries are never blocked
     /// by the guard — an explicit retry is the recovery path.
+    /// No XCTest yet: the search side has no stub seam (the
+    /// video side has StubVideoGateway); XCTest waits on search
+    /// stub infrastructure (b49fix9 P2-5).
     func reopenClosedKind(_ kind: MusicSearchAPI.MusicSearchCategoryKind) {
         guard hasSearched, !loadingCards.contains(kind) else { return }
         cardClosedByGuard[kind] = false
@@ -961,8 +982,10 @@ final class MusicSearchViewModel: ObservableObject {
             // A next-page retry is a next-page request too: record
             // it so the zero-growth guard (b49fix6 P2-5) can see
             // whether it grew the list. Retries are never blocked
-            // — an explicit retry is the recovery path.
-            lastNextPageRequest[kind] = (offset: plan.offset, loadedCount: liveCardCount(for: kind))
+            // — an explicit retry is the recovery path. The limit
+            // rides along (b49fix9 P2-2) so restore() can tell a
+            // same-limit baseline from a cross-limit one.
+            lastNextPageRequest[kind] = (offset: plan.offset, loadedCount: liveCardCount(for: kind), limit: limit)
         }
         loadCategory(kind, limit: limit, offset: plan.offset, isFirstPage: plan.isFirstPage)
     }
