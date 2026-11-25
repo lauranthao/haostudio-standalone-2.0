@@ -39,8 +39,10 @@ final class MusicPlayerLayoutTests: XCTestCase {
         XCTAssertEqual(MusicPlayerLayout.coverSize(screenWidth: 393, screenHeight: 852), 340)
         // b47-player: the badge leaves its own row for the time
         // row (budget 418 → 396), so the shortest phone's cover
-        // grows back 249 → 271.
-        XCTAssertEqual(MusicPlayerLayout.coverSize(screenWidth: 375, screenHeight: 667), 271)
+        // grows back 249 → 271. b47-player Coda check: the control
+        // gaps are Coda's 24/36, not 6/0 (budget 396 → 450), so
+        // the shortest phone's cover shrinks back 271 → 217.
+        XCTAssertEqual(MusicPlayerLayout.coverSize(screenWidth: 375, screenHeight: 667), 217)
     }
 
     func testWholePlayerFitsOneScreen() {

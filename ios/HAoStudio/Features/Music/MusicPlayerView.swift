@@ -155,10 +155,12 @@ struct MusicPlayerView: View {
     // b45-g (Coda §8.1 CoverZoomMotion): downward dismiss-drag
     // progress, in points. While a close-candidate drag is in
     // flight the whole surface shrinks toward the mini (min scale
-    // 0.86, reached at the 190pt close threshold) and rounds up
-    // (36pt × min(1, translation/40)); a cancelled drag springs
-    // back on playerSpringBack (0.38/0.86). The 190pt scale ramp
-    // is our choice — Coda gives the min scale, not the ramp.
+    // 0.86) and rounds up (36pt × min(1, translation/40)); a
+    // cancelled drag springs back on playerSpringBack (0.38/0.86).
+    // b47-player Coda check (IOSMainWindow.dragGeometry): the
+    // scale ramps over the FULL screen height, not the 190pt
+    // close threshold — at the 110pt dismiss point Coda is
+    // still 0.98, the old /190 ramp was already 0.92.
     @State private var dismissDragY: CGFloat = 0
     /// Translation at which the dismiss gate opened during this
     /// drag (b47-player; nil = gate not yet open). When the gate
@@ -182,9 +184,15 @@ struct MusicPlayerView: View {
     /// the root ignores the safe area, so geo reports the real
     /// insets; the dismiss top zone is measured from it).
     @State private var safeTopInset: CGFloat = 59
-    /// Drag-linked scale: 1.0 at rest, 0.86 at the close threshold.
+    /// Full-screen height, tracked from the root GeometryReader
+    /// (b47-player Coda check: the drag scale ramps over it).
+    @State private var fullScreenHeight: CGFloat = 800
+    /// Drag-linked scale (b47-player Coda check,
+    /// IOSMainWindow.dragGeometry): 1.0 at rest, ramping to the
+    /// 0.86 floor over the full screen height. The corner radius
+    /// below is unchanged: Coda's 36 saturating at 40pt of drag.
     private var dismissDragScale: CGFloat {
-        max(0.86, 1 - 0.14 * min(1, dismissDragY / 190))
+        max(0.86, 1 - 0.14 * min(1, dismissDragY / max(1, fullScreenHeight)))
     }
     /// Drag-linked corner radius: 0 at rest, 36pt past 40pt of drag.
     private var dismissDragCornerRadius: CGFloat {
@@ -253,6 +261,9 @@ struct MusicPlayerView: View {
             .frame(width: geo.size.width, height: geo.size.height)
             .onChange(of: geo.safeAreaInsets.top, initial: true) { _, newValue in
                 safeTopInset = newValue
+            }
+            .onChange(of: geo.size.height, initial: true) { _, newValue in
+                fullScreenHeight = newValue
             }
         }
         // b47-player (chen build 46: "还不是全屏呀"): the root
@@ -540,13 +551,23 @@ struct MusicPlayerView: View {
                 Spacer(minLength: 0)
             }
             transportRow
-                .padding(.top, 6)
+                // b47-player Coda check (ControlMetrics): the gap
+                // between the progress row and the transport is 24,
+                // not 6 — the old 6pt squeezed the two rows together.
+                .padding(.top, 24)
                 .frame(maxWidth: .infinity)
                 .chromeFade(hidden: chromeHidden)
             if !playerVM.showLyrics {
                 Spacer(minLength: 0)
             }
             toolbarRow
+                // b47-player Coda check (ControlMetrics): the gap
+                // between the transport and the utility row is 36 —
+                // the old layout had NO gap there (the two rows
+                // touched). In cover mode the Spacers absorb the
+                // +54; in lyrics mode the flexible area shrinks
+                // by it. Budget updated below (292 → 346).
+                .padding(.top, 36)
                 .padding(.bottom, 8)
                 .frame(maxWidth: .infinity)
                 .chromeFade(hidden: chromeHidden)
@@ -858,22 +879,10 @@ struct MusicPlayerView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {
-                    // Blank space above the lines: tap -> cover back.
-                    // (The tap target is ONLY the blank spacers, never
-                    // the rows: a tap gesture on the whole list would
-                    // also fire when a lyric row is tapped, seeking
-                    // AND flipping back at once.)
-                    Color.clear
-                        .frame(height: 24)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            noteInteraction()
-                            playerVM.toggleLyrics()
-                        }
                     if !playerVM.lyricsLoaded {
                         ProgressView()
                             .tint(.white)
-                            .frame(height: height - 48)
+                            .frame(height: height)
                     } else if playerVM.lyrics.isEmpty {
                         if playerVM.lyricsLoadFailed {
                             // §3.3 retry: the fetch returned nothing
@@ -903,12 +912,12 @@ struct MusicPlayerView: View {
                                 }
                                 .buttonStyle(.plain)
                             }
-                            .frame(height: height - 48)
+                            .frame(height: height)
                         } else {
                             Text("暂无歌词")
                                 .font(.haoSubhead)
                                 .foregroundStyle(.white.opacity(0.55))
-                                .frame(height: height - 48)
+                                .frame(height: height)
                                 .contentShape(Rectangle())
                                 .onTapGesture {
                                     noteInteraction()
@@ -916,6 +925,28 @@ struct MusicPlayerView: View {
                                 }
                         }
                     } else {
+                        // b47-player Coda check
+                        // (AppleMusicLyricsColumn): the current line
+                        // sits at 36% of the viewport, so the list
+                        // carries a 36% blank above the first line
+                        // and a 64% blank below the last — the first
+                        // and last lines can both reach the anchor.
+                        // The old fixed 24pt blanks pinned the first
+                        // line near the top and the last line near
+                        // the bottom instead. Blank taps flip back
+                        // to the cover (our rule, not Coda's: Coda
+                        // toggles its controls there). The tap
+                        // target is ONLY the blank spacers, never
+                        // the rows: a tap gesture on the whole list
+                        // would also fire when a lyric row is
+                        // tapped, seeking AND flipping back at once.
+                        Color.clear
+                            .frame(height: height * 0.36)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                noteInteraction()
+                                playerVM.toggleLyrics()
+                            }
                         ForEach(Array(playerVM.lyrics.enumerated()), id: \.offset) { index, line in
                             let distance = index - playerVM.activeLyricIndex
                             let isActive = index == playerVM.activeLyricIndex
@@ -998,15 +1029,14 @@ struct MusicPlayerView: View {
                             )
                             .id(index)
                         }
+                        Color.clear
+                            .frame(height: height * 0.64)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                noteInteraction()
+                                playerVM.toggleLyrics()
+                            }
                     }
-                    // Blank space below the lines: tap -> cover back.
-                    Color.clear
-                        .frame(height: 24)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            noteInteraction()
-                            playerVM.toggleLyrics()
-                        }
                 }
                 .frame(minHeight: height)
                 // b47-player: report the content's offset so the
@@ -1073,7 +1103,12 @@ struct MusicPlayerView: View {
                 }
                 let response = min(0.7, max(0.10, remaining * 0.8))
                 withAnimation(.spring(response: response, dampingFraction: 0.85)) {
-                    proxy.scrollTo(index, anchor: .center)
+                    // b47-player Coda check
+                    // (AppleMusicLyricsColumn): the current line is
+                    // anchored at 36% of the viewport, not the
+                    // centre — the old .center put it halfway down
+                    // and left the lower half under-filled.
+                    proxy.scrollTo(index, anchor: UnitPoint(x: 0.5, y: 0.36))
                 }
             }
             // b47-player: track the list offset for the dismiss
@@ -1338,8 +1373,10 @@ struct MusicPlayerView: View {
     }
 
     /// Thin progress bar (fix 2026-11-24, build 35; b45-a Coda
-    /// §2.4/§8.7): a 5pt track (unplayed white 0.25, played solid
-    /// white), the thumb hidden until dragged — 13pt while dragging
+    /// §2.4/§8.7): a 7pt track (b47-player Coda check: the
+    /// portrait scrubber passes trackHeight 7, not 5 — unplayed
+    /// white 0.25, played solid white), the thumb hidden until
+    /// dragged — 13pt while dragging
     /// (spring 0.24/0.72), shadow black 0.3 / radius 2 / y 1. Drag
     /// scrubs locally; seek fires once on release and the VM rolls
     /// back on failure — the same semantics the Slider had (see
@@ -1358,10 +1395,10 @@ struct MusicPlayerView: View {
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(.white.opacity(0.25))
-                    .frame(height: 5)
+                    .frame(height: 7)
                 Capsule()
                     .fill(.white)
-                    .frame(width: max(0, width * ratio), height: 5)
+                    .frame(width: max(0, width * ratio), height: 7)
                 // Scrubber knob: only while dragging (Coda
                 // PlayerSlider), 13pt, eased in on the 0.24/0.72
                 // spring. Clamped inside the track.
@@ -1523,38 +1560,48 @@ struct MusicPlayerView: View {
     /// selected white 1.0 + white 0.16 background r10. Panel
     /// switches run in a Transaction(animation: nil) — only the
     /// layout moves.
+    // b47-player Coda check (portraitUtilityBar): the device
+    // button left, a 12pt-minimum spacer, then the three icons in
+    // an 8pt-spaced group (Coda Spacing.small) — the old layout
+    // had the three icons touching with no gap between them.
+    // The device button stays ICON-ONLY (chen's build-46 verdict
+    // overrules Coda here: Coda shows the device name beside its
+    // icon, we do not).
     private var toolbarRow: some View {
         HStack(spacing: 0) {
             MusicOutputDeviceButton()
-            Spacer()
-            toolbarIcon(
-                systemName: "text.bubble",
-                isSelected: false,
-                label: "评论"
-            ) {
-                noteInteraction()
-                showComments = true
-            }
-            toolbarIcon(
-                systemName: "list.bullet",
-                isSelected: false,
-                label: "播放队列"
-            ) {
-                noteInteraction()
-                showQueue = true
-            }
-            toolbarIcon(
-                systemName: "quote.bubble",
-                isSelected: playerVM.showLyrics,
-                label: "歌词"
-            ) {
-                noteInteraction()
-                var transaction = Transaction()
-                transaction.animation = nil
-                withTransaction(transaction) {
-                    playerVM.toggleLyrics()
+            Spacer(minLength: 12)
+            HStack(spacing: 8) {
+                toolbarIcon(
+                    systemName: "text.bubble",
+                    isSelected: false,
+                    label: "评论"
+                ) {
+                    noteInteraction()
+                    showComments = true
+                }
+                toolbarIcon(
+                    systemName: "list.bullet",
+                    isSelected: false,
+                    label: "播放队列"
+                ) {
+                    noteInteraction()
+                    showQueue = true
+                }
+                toolbarIcon(
+                    systemName: "quote.bubble",
+                    isSelected: playerVM.showLyrics,
+                    label: "歌词"
+                ) {
+                    noteInteraction()
+                    var transaction = Transaction()
+                    transaction.animation = nil
+                    withTransaction(transaction) {
+                        playerVM.toggleLyrics()
+                    }
                 }
             }
+            .fixedSize(horizontal: true, vertical: false)
         }
         .frame(height: 50)
     }
@@ -1939,13 +1986,17 @@ enum MusicPlayerLayout {
     /// row with the badge centred in it), so the honest budget
     /// shrinks 314 → 292 (the badge row's 24 + 6 gap is gone; the
     /// time row grows 16 → 24 because the badge drives it, net
-    /// −22) and the cover's height term 418 → 396.
-    /// MusicPlayerLayoutTests pins coverSize(375, 667) == 271 on
+    /// −22) and the cover's height term 418 → 396. b47-player
+    /// Coda check (ControlMetrics): the control gaps are 24
+    /// (progress → transport) and 36 (transport → utility), not
+    /// 6 and 0 — the budget grows back 292 → 346 (+54) and the
+    /// cover's height term 396 → 450.
+    /// MusicPlayerLayoutTests pins coverSize(375, 667) == 217 on
     /// the new budget. Lyrics mode needs no budget term: its area
     /// is flexible and takes whatever height is left. The
     /// pre-existing ~15pt slack risk on the shortest (667pt)
     /// screens that the old comment carried is unchanged.
-    static let fixedChromeHeight: CGFloat = 292
+    static let fixedChromeHeight: CGFloat = 346
 
     static func contentWidth(screenWidth: CGFloat) -> CGFloat {
         screenWidth - sidePadding * 2
@@ -1956,7 +2007,7 @@ enum MusicPlayerLayout {
     /// screen with no scrolling on any phone height. Tall phones
     /// still get the 340 cap.
     static func coverSize(screenWidth: CGFloat, screenHeight: CGFloat) -> CGFloat {
-        min(screenWidth - sidePadding * 2, 340, max(180, screenHeight - 396))
+        min(screenWidth - sidePadding * 2, 340, max(180, screenHeight - 450))
     }
 
     /// The whole player fits on one screen iff cover + chrome +
