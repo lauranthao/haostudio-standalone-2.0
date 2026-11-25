@@ -97,6 +97,24 @@ struct MainTabView: View {
     /// HAoStudioApp posts `.haoShowDisclaimerGate` after the
     /// splash when the stored disclaimer version is not current.
     @State private var showDisclaimerGate = false
+    /// The five tab roots, kept alive (b49sweep P1): every tab
+    /// mounts once — on first visit — and then stays mounted,
+    /// hidden with opacity 0 when it is not selected. The old
+    /// content swap rebuilt HomeView()/MusicHomeView()/… on
+    /// every selection change, which destroyed the tab's
+    /// NavigationStack path, its scroll position and its
+    /// @StateObject view model (HomeView's path + viewModel
+    /// live inside the destroyed view): push a video detail,
+    /// switch tabs and back, and the detail was gone, Home was
+    /// back at the top, and the live-status throttle state was
+    /// gone so up to 10 room-info requests re-fired. Mounting
+    /// lazily (not all five at launch) keeps launch free of
+    /// the other tabs' onAppear loads; once mounted, a tab's
+    /// onAppear reloads no longer re-fire on return — Home's
+    /// return-to-root refresh is path-driven (onChange of
+    /// path), so it is unaffected. Hidden tabs cannot be
+    /// tapped, are disabled, and leave the accessibility tree.
+    @State private var mountedTabs: Set<HaoTab> = [.home]
 
     private var tabBarItems: [GlassTabBarItem] {
         HaoTab.allCases.map { GlassTabBarItem(tab: $0, title: $0.title, icon: $0.icon) }
@@ -120,9 +138,12 @@ struct MainTabView: View {
     /// leftover b): the gate can only close by accepting — the
     /// 同意 button stores the current version first (a
     /// synchronous UserDefaults write), so its dismiss closes
-    /// the gate; any other dismiss (不同意) means the user
-    /// refused the disclaimer, and the app exits (Coda's
-    /// OnboardingView behaviour).
+    /// the gate. Any other dismiss (不同意, or a swipe) NEVER
+    /// exits the app (b49sweep: exit(0) on decline killed the
+    /// app with no way back) — the gate simply stays presented
+    /// until the user accepts. The decline alert's "退出应用"
+    /// label in DisclaimerView is now stale (Settings/My owner
+    /// to reword); the behaviour here is: decline = stay.
     private var disclaimerGateBinding: Binding<Bool> {
         return Binding(
             get: { showDisclaimerGate },
@@ -132,7 +153,7 @@ struct MainTabView: View {
                 } else if DisclaimerGate.isAccepted(storedVersion: settingsStore.disclaimerAcceptedVersion) {
                     showDisclaimerGate = false
                 } else {
-                    exit(0)
+                    showDisclaimerGate = true
                 }
             }
         )
@@ -192,11 +213,11 @@ struct MainTabView: View {
             backgroundLayer(palette: palette)
             // b36-8: tab switches crossfade (Apple Music: content
             // cross-dissolves, no sideways slide), 200ms ease-out.
-            // The outgoing tab is static during the fade, so its
-            // scroll anchor cannot flip the chrome mid-transition.
+            // The crossfade lives on tabContent itself now
+            // (b49sweep keep-alive ZStack); the outgoing tab is
+            // static during the fade, so its scroll anchor cannot
+            // flip the chrome mid-transition.
             tabContent
-                .transition(.opacity)
-                .animation(.easeOut(duration: 0.2), value: selectedTab)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // Immersive pages (a live room pushed inside a tab)
@@ -253,11 +274,26 @@ struct MainTabView: View {
                       let room = MainTabView.liveRoom(from: item) {
                 LiveRoomView(room: room, playlist: [room])
             } else {
-                FullPlayerPlaceholderView()
+                // b49sweep: the placeholder now offers Retry +
+                // Clear (see FullPlayerPlaceholderView). Retry
+                // dismisses and re-presents after the dismiss
+                // animation, so the branch above re-evaluates
+                // against the coordinator's current item — if it
+                // became playable, the real player opens.
+                FullPlayerPlaceholderView(onRetry: {
+                    showingFullPlayer = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        showingFullPlayer = true
+                    }
+                })
             }
         }
         .fullScreenCover(isPresented: disclaimerGateBinding) {
+            // Non-dismissable until accepted (b49sweep): a swipe
+            // down must not dodge the gate, and the binding
+            // setter above refuses a non-accepted dismiss.
             DisclaimerView(mode: .gate)
+                .interactiveDismissDisabled()
         }
         .confirmationDialog(
             "使用移动数据下载？",
@@ -305,11 +341,17 @@ struct MainTabView: View {
         // b36-1: each tab has its own scroll rest offset — forget
         // the previous tab's so the new tab calibrates from scratch
         // (isAtTop for the reselect scroll-to-top guard).
-        .onChange(of: selectedTab) { _ in bottomChrome.resetRest() }
+        .onChange(of: selectedTab) { _ in
+            mountedTabs.insert(selectedTab)
+            bottomChrome.resetRest()
+        }
         // Wallpaper cache (build 36, item 10): load once on
         // appear and whenever the switch or the picked file
         // changes — never during body evaluation.
-        .onAppear { refreshWallpaperCache() }
+        .onAppear {
+            mountedTabs.insert(selectedTab)
+            refreshWallpaperCache()
+        }
         .onChange(of: settingsStore.wallpaperEnabled) { _ in refreshWallpaperCache() }
         .onChange(of: settingsStore.wallpaperCurrent) { _ in refreshWallpaperCache() }
     }
@@ -356,7 +398,30 @@ struct MainTabView: View {
 
     @ViewBuilder
     private var tabContent: some View {
-        switch selectedTab {
+        // b49sweep: all mounted tabs stay in the hierarchy —
+        // only the selected one is visible / hittable. The
+        // crossfade is the same 200ms ease-out as before.
+        ZStack {
+            ForEach(HaoTab.allCases) { tab in
+                if mountedTabs.contains(tab) {
+                    tabRoot(for: tab)
+                        .opacity(tab == selectedTab ? 1 : 0)
+                        .allowsHitTesting(tab == selectedTab)
+                        .disabled(tab != selectedTab)
+                        .accessibilityHidden(tab != selectedTab)
+                }
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: selectedTab)
+    }
+
+    /// One tab root. The roots keep their own NavigationStack
+    /// path + view model (HomeView's @State path / @StateObject
+    /// viewModel); MainTabView keeps the root VIEW alive, so
+    /// that state survives a tab switch.
+    @ViewBuilder
+    private func tabRoot(for tab: HaoTab) -> some View {
+        switch tab {
         case .home: HomeView()
         case .music: MusicHomeView()
         case .movies: VideoTabView()

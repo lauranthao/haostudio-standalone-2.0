@@ -268,11 +268,23 @@ struct MiniPlayerBar: View {
 /// from the current item (only reachable for a live item whose id
 /// does not parse as a room id — music / VOD / live all open
 /// their real players). Shows the item title and a plain
-/// "cannot play" note, never dev jargon, with a close button.
+/// "cannot play" note, never dev jargon, with a close button —
+/// plus, b49sweep, Retry (dismiss + re-present, so the open
+/// branch re-evaluates against the coordinator's current item)
+/// and Clear-and-close (stops everything and clears the
+/// current item, so the mini strip goes away and the
+/// placeholder cannot re-present). The plain X close keeps
+/// its old meaning: close only, item stays.
 struct FullPlayerPlaceholderView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @Environment(\.haoTheme) private var theme
+
+    /// Re-attempt the open: MainTabView dismisses this cover and
+    /// re-presents it, re-running the player branch. A still
+    /// unparseable live id lands back here — retry re-attempts,
+    /// it cannot repair the id (that is the Live slice's job).
+    var onRetry: () -> Void = {}
 
     var body: some View {
         ZStack {
@@ -289,6 +301,28 @@ struct FullPlayerPlaceholderView: View {
                 Text("当前内容无法播放")
                     .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textMuted)
+                VStack(spacing: 12) {
+                    Button(action: onRetry) {
+                        Text("重试")
+                            .font(.haoBodyStrong)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(theme.accent)
+                    .accessibilityLabel("重试打开播放器")
+                    Button("清除内容并关闭") {
+                        coordinator.stop()
+                        dismiss()
+                    }
+                    .font(.haoBodyStrong)
+                    .foregroundStyle(theme.accentText)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("清除当前内容并关闭播放器")
+                }
+                .padding(.top, 12)
             }
             .padding()
         }
