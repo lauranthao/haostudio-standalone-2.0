@@ -625,13 +625,52 @@ final class MusicPlayerViewModel: ObservableObject {
             return
         }
         if let tracks = tracks {
-            let start = startAt ?? tracks.firstIndex(where: { $0.identityKey == song.identityKey }) ?? 0
-            queue = MusicQueue(tracks: tracks, index: min(max(0, start), max(0, tracks.count - 1)))
-            recordPlayContext(source: source, displayName: sourceDisplayName, tracks: tracks)
+            // b49: dedupe by identityKey at the entry — a merged
+            // search result or a playlist can list the same song
+            // twice, and the twin makes next() target the current
+            // song (switching equals no switching, silently).
+            let deduped = MusicQueue.deduped(tracks)
+            let start: Int
+            if let startAt = startAt, startAt >= 0, startAt < tracks.count {
+                // startAt indexes the caller's list: re-resolve it
+                // by identity in the deduped list.
+                let key = tracks[startAt].identityKey
+                start = deduped.firstIndex(where: { $0.identityKey == key }) ?? 0
+            } else {
+                start = deduped.firstIndex(where: { $0.identityKey == song.identityKey }) ?? 0
+            }
+            queue = MusicQueue(tracks: deduped, index: min(max(0, start), max(0, deduped.count - 1)))
+            recordPlayContext(source: source, displayName: sourceDisplayName, tracks: deduped)
         } else {
-            queue = MusicQueue(tracks: [song], index: 0)
-            currentPlayContext = nil
-            persistPlayContext()
+            // b49: a no-tracks play must NEVER clear the context /
+            // queue. The 0.0.2 collapse: the retry/recover fallback
+            // fell here, set queue = [song], context = nil and
+            // deleted the persisted context from disk — after that
+            // next() could never rebuild, across restarts. Keep
+            // the existing queue and context; find the song in it.
+            if let index = queue.tracks.firstIndex(where: { $0.identityKey == song.identityKey }) {
+                // Replace the queued copy with the incoming one:
+                // it may carry fresher info (playLocal's localPath),
+                // while the identity — and the list — stay the same.
+                // (playLocal's with-tracks branch does the same.)
+                queue.tracks[index] = song
+                queue.index = index
+            } else if rebuildQueueFromContext(),
+                      let index = queue.tracks.firstIndex(where: { $0.identityKey == song.identityKey }) {
+                queue.tracks[index] = song
+                queue.index = index
+            } else {
+                // The song is in no list we know: keep the queue
+                // intact and insert the song after the current one
+                // instead of replacing the queue with one song.
+                // (Empty queue: insert at 0 — the same single song,
+                // with nothing to preserve.)
+                var tracks = queue.tracks
+                let at = min(queue.index + 1, tracks.count)
+                tracks.insert(song, at: at)
+                queue = MusicQueue(tracks: tracks, index: at)
+            }
+            // currentPlayContext is deliberately untouched here.
         }
         expectedItemId = song.identityKey
         // H1: arm the resume seek (if any) BEFORE startPlayback.
@@ -693,7 +732,11 @@ final class MusicPlayerViewModel: ObservableObject {
             if start >= 0 && start < queueTracks.count { queueTracks[start] = song }
             play(song: song, in: queueTracks, startAt: start, source: source, sourceDisplayName: sourceDisplayName)
         } else {
-            play(song: song, in: [song], startAt: 0)
+            // b49: no list was given — route through the no-tracks
+            // play, which preserves the queue/context and inserts
+            // the local copy after the current song. The old
+            // one-song list (source nil) cleared the context.
+            play(song: song)
         }
     }
 
@@ -827,7 +870,13 @@ final class MusicPlayerViewModel: ObservableObject {
             expectedItemId = song.identityKey
             startPlayback()
         } else {
-            play(song: song)
+            // b49: the queue lost the song and the context cannot
+            // rebuild it — the old fallback called the bare
+            // play(song:), which collapsed the queue to one song
+            // AND deleted the persisted context. Never collapse:
+            // the playlist data is gone, so say so instead of
+            // silently re-playing or doing nothing.
+            showToast("歌单数据找不到了")
         }
         hapticTick()
     }
@@ -874,7 +923,10 @@ final class MusicPlayerViewModel: ObservableObject {
             expectedItemId = song.identityKey
             startPlayback()
         } else {
-            play(song: song)
+            // b49: same as togglePlayPauseOrRetry above — never
+            // collapse the queue to one song; the playlist data
+            // is gone, so say so.
+            showToast("歌单数据找不到了")
         }
         hapticTick()
     }
@@ -892,7 +944,10 @@ final class MusicPlayerViewModel: ObservableObject {
         // or an outside item), reload it from the play context
         // first — a collapsed queue still "serves" a restart, so
         // the reload must run before the step, not only on .nothing.
-        if !queueCanServeSwitch || queueLostSongs {
+        // b49: remember whether a rebuild was needed — a failed
+        // rebuild below must show, not silently restart.
+        let needsRebuild = !queueCanServeSwitch || queueLostSongs
+        if needsRebuild {
             rebuildQueueFromContext()
         }
         // b48 (Control Center next, second failure — 0.0.1): the
@@ -915,6 +970,19 @@ final class MusicPlayerViewModel: ObservableObject {
                 step = queue.nextStep(mode: playMode)
             }
         }
+        if (step == .restartCurrent || step == .nothing),
+           needsRebuild,
+           (!queueCanServeSwitch || queueLostSongs) {
+            // b49: the playlist data is gone — a rebuild was
+            // needed but the context cannot reload the list
+            // (snapshot missing, or the song is not in it). Say
+            // so instead of silently restarting the same song
+            // or doing nothing. A genuine end-of-list restart
+            // (needsRebuild false) is unchanged.
+            showToast("歌单数据找不到了")
+            hapticTick()
+            return
+        }
         switch step {
         case .play(let index):
             // b46: manual switch — re-ask every source for the
@@ -933,10 +1001,20 @@ final class MusicPlayerViewModel: ObservableObject {
         // b41: same contract as next() — the live queue drives,
         // the dead end restarts the current song.
         // b45: same context reload as next().
-        if !queueCanServeSwitch || queueLostSongs {
+        // b49: same visible state as next() when the rebuild fails.
+        let needsRebuild = !queueCanServeSwitch || queueLostSongs
+        if needsRebuild {
             rebuildQueueFromContext()
         }
-        switch queue.prevStep(mode: playMode) {
+        let step = queue.prevStep(mode: playMode)
+        if (step == .restartCurrent || step == .nothing),
+           needsRebuild,
+           (!queueCanServeSwitch || queueLostSongs) {
+            showToast("歌单数据找不到了")
+            hapticTick()
+            return
+        }
+        switch step {
         case .play(let index):
             // b46: manual switch — re-ask every source for the
             // target song (see clearResolveFailure).
@@ -1272,12 +1350,29 @@ final class MusicPlayerViewModel: ObservableObject {
                 // copyright / a leading "title - artist" header are
                 // filtered at display time (cached copies predate
                 // the filter, so it runs here, not only on fetch).
-                self.lyrics = MusicLyrics.filterBodyLines(
+                let body = MusicLyrics.filterBodyLines(
                     MusicLyrics.toContractLines(cached),
                     title: song.title, artist: song.artist)
-                self.lyricsLoaded = true
-                self.updateActiveLyric()
-                return
+                // b49: a cached copy whose last body line is far
+                // short of the song is a truncated fetch (an old
+                // request that only returned the first half) — it
+                // must NOT be served, or the later lyrics never
+                // show (chen build 48). Fall through to a fresh
+                // fetch instead. Duration unknown (0) skips the
+                // check; empty lyrics stay "暂无歌词" without a
+                // fetch, as before.
+                let truncated: Bool = {
+                    guard !body.isEmpty, song.dur > 0,
+                          let lastTime = body.map(\.time).max() else { return false }
+                    return lastTime < Double(song.dur) * 0.8
+                }()
+                if !truncated {
+                    self.lyrics = body
+                    self.lyricsLoaded = true
+                    self.updateActiveLyric()
+                    return
+                }
+                // Truncated cache: fall through to fetch below.
             }
             guard fetchIfMissing else {
                 self.lyricsLoaded = true
@@ -1308,13 +1403,26 @@ final class MusicPlayerViewModel: ObservableObject {
                 // before the lines ever reach here — a mismatched
                 // lyric arrives as an empty Lyrics, which shows an
                 // honest "暂无歌词" below.
-                self.lyrics = MusicLyrics.filterBodyLines(
+                let body = MusicLyrics.filterBodyLines(
                     result.lines, title: song.title, artist: song.artist)
+                self.lyrics = body
                 self.lyricsLoaded = true
                 // A11: keep the translation in the cache too — the old
                 // mapping dropped it, so a cached song never showed one.
-                let stored = result.lines.map { StoredLyricLine(t: $0.time, text: $0.text, translation: $0.translation) }
-                MusicLibraryStore.putLyrics(stored, for: song.identityKey)
+                // b49: do NOT cache a truncated fetch (last body line
+                // far short of the song) — it would poison the cache
+                // exactly like the version-1 entries did. The
+                // truncated lines still display; the next play just
+                // re-fetches.
+                let truncated: Bool = {
+                    guard !body.isEmpty, song.dur > 0,
+                          let lastTime = body.map(\.time).max() else { return false }
+                    return lastTime < Double(song.dur) * 0.8
+                }()
+                if !truncated {
+                    let stored = result.lines.map { StoredLyricLine(t: $0.time, text: $0.text, translation: $0.translation) }
+                    MusicLibraryStore.putLyrics(stored, for: song.identityKey)
+                }
                 self.updateActiveLyric()
             }
         }
@@ -1512,9 +1620,13 @@ final class MusicPlayerViewModel: ObservableObject {
     /// its step against the rebuilt queue.
     @discardableResult
     private func rebuildQueueFromContext() -> Bool {
-        guard let songs = reloadSongsFromContext(), !songs.isEmpty,
-              let song = currentSong ?? queue.current,
-              let index = songs.firstIndex(where: { $0.identityKey == song.identityKey })
+        guard var songs = reloadSongsFromContext(), !songs.isEmpty,
+              let song = currentSong ?? queue.current
+        else { return false }
+        // b49: same entry dedupe as play() — a reloaded list can
+        // carry the same song twice (merged results / playlist).
+        songs = MusicQueue.deduped(songs)
+        guard let index = songs.firstIndex(where: { $0.identityKey == song.identityKey })
         else { return false }
         queue = MusicQueue(tracks: songs, index: index)
         return true
