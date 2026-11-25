@@ -19,6 +19,11 @@ final class EmbyCategoryViewModel: ObservableObject {
 
     private let gateway: VideoDataGateway
     private let genre: String
+    /// The library the genre was opened from (b49 sweep #5):
+    /// nil = all libraries. Passed through from the Emby tab's
+    /// selected chip — the page used to hardcode nil and search
+    /// every library regardless of the selection.
+    private let libraryId: String?
     private var page = 0
     private var loadingMore = false
     /// True once the first load was issued (E5): returning from
@@ -32,8 +37,9 @@ final class EmbyCategoryViewModel: ObservableObject {
     /// race, b35 sweep).
     private var generation = 0
 
-    init(genre: String, gateway: VideoDataGateway = VideoServices.makeGateway()) {
+    init(genre: String, libraryId: String? = nil, gateway: VideoDataGateway = VideoServices.makeGateway()) {
         self.genre = genre
+        self.libraryId = libraryId
         self.gateway = gateway
     }
 
@@ -60,7 +66,7 @@ final class EmbyCategoryViewModel: ObservableObject {
         loadingMore = true
         isLoading = true
         let requestGeneration = generation
-        gateway.fetchEmbyItems(libraryId: nil, genre: genre, page: page) { [weak self] result in
+        gateway.fetchEmbyItems(libraryId: libraryId, genre: genre, page: page) { [weak self] result in
             guard let self = self else { return }
             self.loadingMore = false
             self.isLoading = false
@@ -70,6 +76,9 @@ final class EmbyCategoryViewModel: ObservableObject {
             }
             switch result {
             case .success(let page):
+                // b49 sweep #21: a partial page carries the failed
+                // side's line as a note — banner, never page error.
+                self.errorMessage = page.note
                 if page.items.isEmpty {
                     self.hasMore = false
                 } else {
@@ -97,16 +106,18 @@ final class EmbyCategoryViewModel: ObservableObject {
 /// Items in one Emby genre.
 struct EmbyCategoryView: View {
     var genre: String
+    var libraryId: String?
     var onSelect: (VideoItem) -> Void
 
     @StateObject private var viewModel: EmbyCategoryViewModel
 
     @Environment(\.haoTheme) private var theme
 
-    init(genre: String, onSelect: @escaping (VideoItem) -> Void) {
+    init(genre: String, libraryId: String? = nil, onSelect: @escaping (VideoItem) -> Void) {
         self.genre = genre
+        self.libraryId = libraryId
         self.onSelect = onSelect
-        _viewModel = StateObject(wrappedValue: EmbyCategoryViewModel(genre: genre))
+        _viewModel = StateObject(wrappedValue: EmbyCategoryViewModel(genre: genre, libraryId: libraryId))
     }
 
     var body: some View {
@@ -115,7 +126,7 @@ struct EmbyCategoryView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 32)
-            } else if let error = viewModel.errorMessage {
+            } else if let error = viewModel.errorMessage, viewModel.items.isEmpty {
                 VStack(spacing: 12) {
                     MusicEmptyState(
                         icon: "wifi.exclamationmark",
@@ -138,6 +149,23 @@ struct EmbyCategoryView: View {
                 )
                 .padding(.horizontal, 16)
             } else {
+                // b49 sweep #6: a later-page failure keeps the
+                // loaded grid — the error is a banner, not a
+                // full-page card (same rule as VideoBrowseView).
+                if let error = viewModel.errorMessage {
+                    HStack(spacing: 8) {
+                        Image(systemName: "wifi.exclamationmark")
+                        Text(error)
+                            .font(.haoFootnote)
+                        Spacer()
+                        Button("重试") { viewModel.reload() }
+                            .font(.haoFootnote)
+                            .foregroundStyle(theme.accentText)
+                    }
+                    .foregroundStyle(theme.textSecondary)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                }
                 VideoPosterGrid(items: viewModel.items, isEmby: true) { item in
                     onSelect(item)
                 }

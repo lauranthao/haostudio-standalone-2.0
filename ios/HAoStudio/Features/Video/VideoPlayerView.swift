@@ -115,6 +115,22 @@ final class VideoPlayerViewModel: ObservableObject {
     @Published private(set) var duration: Double = 0
     @Published private(set) var isPlaying = false
     @Published private(set) var isDoubleSpeed = false
+    /// Stall warning, mirrored from the driver (b49 sweep #9):
+    /// the watchdog publishes it 4 s into a stall and clears it
+    /// on recovery; the view shows "加载缓慢…" from this. The
+    /// Live player shows the same text.
+    @Published private(set) var isStalled = false
+    /// Resume-seek failure, mirrored from the driver (b49 sweep
+    /// #19): the target the failed resume seek was aiming at, or
+    /// nil when the last resume seek landed. The view shows
+    /// "续播定位失败，从头播放" from `resumeSeekFailed` (a
+    /// transient notice, edge-triggered below), and the periodic
+    /// save below refuses to overwrite the stored resume until
+    /// playback passes this target.
+    @Published private(set) var failedResumeTarget: Double?
+    /// Transient notice for a failed resume seek (same pattern as
+    /// seekFailed: the view auto-clears it after a few seconds).
+    @Published private(set) var resumeSeekFailed = false
     @Published private(set) var seekFailed = false
     /// Loading / failure state, mirrored from the driver (the
     /// driver owns the truth; the page only mirrors it). The page
@@ -163,7 +179,6 @@ final class VideoPlayerViewModel: ObservableObject {
     private weak var subscribedDriver: VideoDriver?
     /// Coalescing flag for the deferred per-tick side effects.
     private var tickWorkPending = false
-    private var didAutoAdvance = false
     private var lastSavedPosition = 0.0
 
     /// Skip-intro state (S7 wiring). The pill label is published
@@ -388,7 +403,6 @@ final class VideoPlayerViewModel: ObservableObject {
         self.detail = detail
         self.lineIndex = lineIndex
         self.episodeIndex = episodeIndex
-        didAutoAdvance = false
         lastSavedPosition = 0
         guard let episode = currentEpisode else { return }
         let resume = VideoLibraryStore.resumeInfo(title: detail.item.title, year: detail.item.year)
@@ -488,7 +502,6 @@ final class VideoPlayerViewModel: ObservableObject {
         // (+15 s), so a kill in that window lost the new resume.
         lastSavedPosition = 0
         episodeIndex = index
-        didAutoAdvance = false
         position = 0
         // Same stale-duration reset as open(): the driver only
         // publishes the new duration when the new stream opens, so
@@ -534,7 +547,6 @@ final class VideoPlayerViewModel: ObservableObject {
         let resumePosition = targetEpisode == previousEpisode ? position : 0
         lineIndex = index
         episodeIndex = targetEpisode
-        didAutoAdvance = false
         if targetEpisode != previousEpisode {
             position = 0
             // Same stale-duration reset as selectEpisode: a
@@ -620,6 +632,13 @@ final class VideoPlayerViewModel: ObservableObject {
 
     func clearSeekFailed() {
         seekFailed = false
+    }
+
+    /// Clear the transient "续播定位失败" notice (b49 sweep #19).
+    /// The floor (`failedResumeTarget`) is untouched — it clears
+    /// when playback passes the old target, or on the next open.
+    func clearResumeSeekFailed() {
+        resumeSeekFailed = false
     }
 
     /// Retry the current episode after a failed open: re-open it
@@ -766,6 +785,20 @@ final class VideoPlayerViewModel: ObservableObject {
             guard let self = self else { return }
             if value != self.isLoading { self.isLoading = value }
         }.store(in: &cancellables)
+        driver.$stallWarning.dropFirst().sink { [weak self] value in
+            guard let self = self else { return }
+            if value != self.isStalled { self.isStalled = value }
+        }.store(in: &cancellables)
+        driver.$failedResumeTarget.dropFirst().sink { [weak self] value in
+            guard let self = self else { return }
+            // Edge-trigger the transient notice: nil -> target
+            // means a resume seek just failed. The floor itself
+            // stays until playback passes it (or the next open).
+            if value != nil && self.failedResumeTarget == nil {
+                self.resumeSeekFailed = true
+            }
+            if value != self.failedResumeTarget { self.failedResumeTarget = value }
+        }.store(in: &cancellables)
         driver.$lastOpenFailed.dropFirst().sink { [weak self] value in
             guard let self = self else { return }
             if value != self.loadFailed { self.loadFailed = value }
@@ -837,14 +870,12 @@ final class VideoPlayerViewModel: ObservableObject {
                 || position - lastSavedPosition >= 15) {
             saveCurrentPosition()
         }
-        // Auto-advance at the end (once per episode).
-        if isPlaying && duration > 0 && position >= duration - 1.0 && !didAutoAdvance {
-            didAutoAdvance = true
-            let autoNext = UserDefaults.standard.object(forKey: "hao_video_auto_next") as? Bool ?? true
-            if autoNext && hasNextEpisode {
-                playNextEpisode()
-            }
-        }
+        // Auto-advance lives in the driver now (b49 sweep #20):
+        // this VM used to advance at duration - 1.0 on its own
+        // tick while the driver advanced on .finished — two
+        // unsynchronised paths reading hao_video_auto_next
+        // independently. The VM only mirrors; the driver owns
+        // both trigger paths.
         // Skip-intro / skip-credits check (S7 wiring, every tick).
         checkSkipPoints()
     }
@@ -948,6 +979,12 @@ final class VideoPlayerViewModel: ObservableObject {
 
     private func saveCurrentPosition() {
         guard let detail = detail, let episode = currentEpisode else { return }
+        // b49 sweep #19: a failed resume seek must not let the
+        // from-0 playback overwrite the stored resume — skip the
+        // save (and keep lastSavedPosition, so the save resumes
+        // once playback passes the old target). The driver's own
+        // saveBreakpoint has the same guard for the stop path.
+        if let floor = failedResumeTarget, position < floor { return }
         lastSavedPosition = position
         VideoLibraryStore.savePosition(
             item: detail.item, episodeName: episode.name, episodeIndex: episodeIndex,
@@ -1193,6 +1230,48 @@ struct VideoPlayerView: View {
                                 videoPlayer.clearSeekFailed()
                             }
                         }
+                }
+            }
+            // b49 sweep #19: the resume seek failed — playback
+            // restarted from 0 and the stored resume is kept until
+            // playback passes the old target. Same toast language
+            // as the seek-failed pill above.
+            if videoPlayer.resumeSeekFailed {
+                VStack {
+                    Spacer()
+                    Text("续播定位失败，从头播放")
+                        .font(.haoFootnoteMedium)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .haoDarkGlassCapsule(darkness: 0.7)
+                        .padding(.bottom, 120)
+                        .onAppear {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                                videoPlayer.clearResumeSeekFailed()
+                            }
+                        }
+                }
+            }
+            // b49 sweep #9: stall warning, mirrored from the
+            // driver — the watchdog publishes it 4 s into a stall
+            // and clears it on recovery. Same text as the Live
+            // player ("加载缓慢…"), so both players read alike.
+            if videoPlayer.isStalled, !videoPlayer.loadFailed {
+                VStack {
+                    Spacer()
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .tint(.white)
+                            .scaleEffect(0.8)
+                        Text("加载缓慢…")
+                            .font(.haoFootnoteMedium)
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .haoDarkGlassCapsule(darkness: 0.7)
+                    .padding(.bottom, 120)
                 }
             }
             // Loading / failure state (B3): a spinner while the

@@ -32,9 +32,23 @@ final class VideoDetailViewModel: ObservableObject {
     /// on every load, so returning from the player un-blurs the
     /// cover without reopening the page.
     @Published private(set) var isWatched = false
-    @Published var selectedLineIndex = 0
-    @Published var selectedEpisodeIndex = 0
+    @Published var selectedLineIndex = 0 {
+        didSet { refreshDownloadAvailability() }
+    }
+    @Published var selectedEpisodeIndex = 0 {
+        didSet { refreshDownloadAvailability() }
+    }
     @Published private(set) var downloadNote: String?
+    /// Whether the selected episode can be downloaded (b49 sweep
+    /// #8). nil = the resolve is still in flight (button disabled,
+    /// not hidden — it pops in, never vanishes mid-tap); false =
+    /// HLS / no URL / Emby (button hidden, page says HLS
+    /// download is deferred instead of letting the tap fail).
+    @Published private(set) var downloadAvailable: Bool?
+    /// Key of the episode the last downloadability check ran for:
+    /// selection churn during load() must not re-resolve the same
+    /// episode twice.
+    private var downloadCheckKey: String?
 
     let item: VideoItem
     private let gateway: VideoDataGateway
@@ -109,6 +123,8 @@ final class VideoDetailViewModel: ObservableObject {
     func load() {
         isLoading = true
         detail = nil
+        downloadCheckKey = nil
+        downloadAvailable = nil
         let completion: (VideoDetail?) -> Void = { [weak self] loaded in
             guard let self = self else { return }
             self.isLoading = false
@@ -132,6 +148,10 @@ final class VideoDetailViewModel: ObservableObject {
                     }
                 }
             }
+            // b49 sweep #8: resolve downloadability for the
+            // selected episode (no-op when the selection didSet
+            // already checked this exact episode — the key guard).
+            self.refreshDownloadAvailability()
         }
         switch source {
         case .cms:
@@ -166,6 +186,27 @@ final class VideoDetailViewModel: ObservableObject {
         if source == .emby, !item.id.isEmpty,
            let config = EmbyConfigStore.load(), config.isConfigured {
             EmbyClient(config: config).setFavorite(itemId: item.id, favorite: isFavourite) { _ in }
+        }
+    }
+
+    /// Resolve whether the selected episode is downloadable and
+    /// publish it (b49 sweep #8). Called when the detail lands
+    /// and whenever the selection changes (didSet above). Emby
+    /// never downloads (see downloadSelected) — no resolve is
+    /// issued for it.
+    func refreshDownloadAvailability() {
+        guard source != .emby, let detail = detail,
+              let line = selectedLine, let episode = selectedEpisode else {
+            downloadAvailable = false
+            return
+        }
+        let key = "\(detail.item.title)|\(line.name)|\(episode.name)"
+        guard key != downloadCheckKey else { return }
+        downloadCheckKey = key
+        downloadAvailable = nil
+        gateway.checkDownloadable(detail: detail, episode: episode, line: line) { [weak self] ok in
+            guard let self = self, self.downloadCheckKey == key else { return }
+            self.downloadAvailable = ok
         }
     }
 
@@ -382,30 +423,15 @@ struct VideoDetailContentView: View {
 
     private var coverHeader: some View {
         ZStack(alignment: .bottomLeading) {
+            // b49 sweep #36: the 2:3 poster used to be hard-cropped
+            // into the 264pt strip, cutting faces and title text.
+            // The strip is now a blur of the whole poster, with the
+            // sharp poster on top at full height (fit, never
+            // cropped) — VidHub's backdrop treatment, since CMS
+            // supplies no landscape art.
             Group {
-                // Emby covers need the server token in the request
-                // header (EmbyPosterImage); plain AsyncImage sends
-                // none, so every Emby cover 401'd into the
-                // placeholder tile.
-                if viewModel.source == .emby {
-                    EmbyPosterImage(urlString: viewModel.item.coverURL?.absoluteString ?? "", cornerRadius: 0)
-                } else if let url = viewModel.item.coverURL {
-                    // Shared loader (build 36 item 10 leg 6):
-                    // full-width x 264pt header, downsampled to
-                    // screen width — the old AsyncImage decoded
-                    // the full original.
-                    HaoCachedImage(
-                        urlString: url.absoluteString,
-                        targetWidth: UIScreen.main.bounds.width,
-                        targetHeight: 264
-                    ) { image in
-                        image.resizable().scaledToFill()
-                    } placeholder: {
-                        coverPlaceholder
-                    }
-                } else {
-                    coverPlaceholder
-                }
+                coverBackdrop
+                coverPoster
             }
             .frame(maxWidth: .infinity)
             .frame(height: 264)
@@ -442,6 +468,73 @@ struct VideoDetailContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+    }
+
+    /// Blurred full-poster backdrop for the cover strip (b49
+    /// sweep #36): the whole poster, fill + heavy blur, so the
+    /// strip reads as the title's own art instead of a cropped
+    /// band of it.
+    private var coverBackdrop: some View {
+        Group {
+            // Emby covers need the server token in the request
+            // header (EmbyPosterImage); plain AsyncImage sends
+            // none, so every Emby cover 401'd into the
+            // placeholder tile.
+            if viewModel.source == .emby {
+                EmbyPosterImage(urlString: viewModel.item.coverURL?.absoluteString ?? "", cornerRadius: 0)
+            } else if let url = viewModel.item.coverURL {
+                // Shared loader (build 36 item 10 leg 6):
+                // full-width x 264pt header, downsampled to
+                // screen width — the old AsyncImage decoded
+                // the full original.
+                HaoCachedImage(
+                    urlString: url.absoluteString,
+                    targetWidth: UIScreen.main.bounds.width,
+                    targetHeight: 264
+                ) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    coverPlaceholder
+                }
+            } else {
+                coverPlaceholder
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 264)
+        .blur(radius: 24)
+        .clipped()
+    }
+
+    /// Sharp poster on top of the blurred backdrop (b49 sweep
+    /// #36): full height, aspect-fit, so no face or title text is
+    /// ever cropped.
+    private var coverPoster: some View {
+        Group {
+            if viewModel.source == .emby {
+                // Emby posters are 2:3 — a 2:3 frame shows the
+                // whole poster with no crop (EmbyPosterImage only
+                // renders fill).
+                EmbyPosterImage(urlString: viewModel.item.coverURL?.absoluteString ?? "", cornerRadius: 0)
+                    .frame(width: 264 * 2 / 3, height: 264)
+            } else if let url = viewModel.item.coverURL {
+                HaoCachedImage(
+                    urlString: url.absoluteString,
+                    targetWidth: 264 * 2 / 3,
+                    targetHeight: 264
+                ) { image in
+                    image.resizable().scaledToFit()
+                } placeholder: {
+                    coverPlaceholder
+                }
+                .frame(height: 264)
+            } else {
+                coverPlaceholder
+                    .frame(height: 264)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .frame(height: 264)
     }
 
     private var coverPlaceholder: some View {
@@ -522,32 +615,49 @@ struct VideoDetailContentView: View {
     }
 
     private var actionRow: some View {
-        HStack(spacing: 12) {
-            Button(action: { viewModel.toggleFavourite() }) {
-                Label(
-                    viewModel.isFavourite ? "已收藏" : "收藏",
-                    systemImage: viewModel.isFavourite ? "heart.fill" : "heart"
-                )
-                .font(.haoDenseBody)
-                .foregroundStyle(theme.accentText)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(theme.accentSoft, in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .haoSensoryFeedback(.selection, trigger: viewModel.isFavourite)
-            Button(action: { viewModel.downloadSelected() }) {
-                Label("下载", systemImage: "arrow.down.circle")
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                Button(action: { viewModel.toggleFavourite() }) {
+                    Label(
+                        viewModel.isFavourite ? "已收藏" : "收藏",
+                        systemImage: viewModel.isFavourite ? "heart.fill" : "heart"
+                    )
                     .font(.haoDenseBody)
                     .foregroundStyle(theme.accentText)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .background(theme.accentSoft, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .haoSensoryFeedback(.selection, trigger: viewModel.isFavourite)
+            // b49 sweep #8: hidden when the selected episode
+            // cannot download (HLS — the resolve said m3u8 — or
+            // Emby); disabled while the resolve is still in
+            // flight, so the button never vanishes mid-tap.
+            if viewModel.downloadAvailable != false {
+                Button(action: { viewModel.downloadSelected() }) {
+                    Label("下载", systemImage: "arrow.down.circle")
+                        .font(.haoDenseBody)
+                        .foregroundStyle(theme.accentText)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(theme.accentSoft, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!viewModel.canPlay || viewModel.downloadAvailable == nil)
+                .opacity(viewModel.canPlay && viewModel.downloadAvailable != nil ? 1 : 0.5)
             }
-            .buttonStyle(.plain)
-            .disabled(!viewModel.canPlay)
-            .opacity(viewModel.canPlay ? 1 : 0.5)
             Spacer()
+        }
+        // b49 sweep #8: HLS download is deferred (segment
+        // download not built) — say so where the button was,
+        // instead of leaving a dead tap or a silent absence.
+        if viewModel.downloadAvailable == false, viewModel.source != .emby, viewModel.canPlay {
+            Text("该集为 HLS 流，暂不支持下载")
+                .font(.haoFootnote)
+                .foregroundStyle(theme.textMuted)
+                .padding(.top, 8)
+        }
         }
     }
 

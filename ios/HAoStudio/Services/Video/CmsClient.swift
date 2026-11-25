@@ -203,7 +203,8 @@ func videoNormTitle(_ s: String?) -> String {
         let innerText = String(n[inner]).trimmingCharacters(in: .whitespaces)
         let innerRange = NSRange(innerText.startIndex..., in: innerText)
         guard suffixRe.firstMatch(in: innerText, options: [], range: innerRange) != nil else { break }
-        let head = String(n[..<Range(m.range, in: n)!.lowerBound])
+        guard let matchRange = Range(m.range, in: n) else { break }
+        let head = String(n[..<matchRange.lowerBound])
         guard let trimRe = videoRegex("[\\s\\-–—:：·]+$") else { break }
         let headRange = NSRange(head.startIndex..., in: head)
         n = trimRe.stringByReplacingMatches(in: head, options: [], range: headRange, withTemplate: "")
@@ -918,9 +919,15 @@ final class CmsClient: VideoPlayURLResolver {
                 return
             }
             if page == 1 && !rows.isEmpty {
-                // Early exit: 40 deduped items is a full page.
+                // Early exit only when a rank-0 exact-title match
+                // is already in hand (b49 sweep #4): stopping at
+                // 40 deduped items regardless of match quality
+                // meant an exact title on a later source was never
+                // searched. Without an exact match, keep scanning
+                // to the 15 s budget.
                 let ranked = CmsClient.dedupeAndRankSearch(rows, query: query)
-                if ranked.count >= 40 {
+                let qn = videoQueryParts(query).qn
+                if ranked.contains(where: { videoNormTitle($0.title) == qn }) {
                     finish()
                     return
                 }
@@ -1686,6 +1693,11 @@ final class CmsClient: VideoPlayURLResolver {
         if candidates.isEmpty, let url = episode.url {
             candidates.append(url)
         }
+        // 1080p ceiling (b49 sweep #25): when the lines offer the
+        // same episode at several resolutions, try the ≤1080p
+        // variants first; an over-ceiling URL is still tried when
+        // nothing else exists.
+        candidates = videoPreferCappedResolutionURLs(candidates)
         resolveNextCandidate(candidates: candidates, index: 0, excluded: excluded, completion: completion)
     }
 
@@ -1747,13 +1759,17 @@ final class CmsClient: VideoPlayURLResolver {
     /// or .mp4 (absolute, root-relative, or page-relative — resolved
     /// against the page URL). Pure (no I/O) — unit-tested. Nil when
     /// the page embeds no stream (e.g. a 403 page, an error page).
+    /// 1080p ceiling (b49 sweep #25): when the page embeds several
+    /// quality variants, a ≤1080p one wins; the first over-ceiling
+    /// URL is the fallback when nothing else is offered.
     static func extractEmbeddedStreamURL(html: String, pageURL: URL) -> URL? {
         let pattern = #"["']([^"'\s<>]+\.(?:m3u8|mp4)(?:\?[^"'\s<>]*)?)["']"#
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
-              let range = Range(match.range(at: 1), in: html)
-        else { return nil }
-        let captured = String(html[range])
-        return URL(string: captured, relativeTo: pageURL)?.absoluteURL
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
+        let urls = matches.compactMap { match -> URL? in
+            guard let range = Range(match.range(at: 1), in: html) else { return nil }
+            return URL(string: String(html[range]), relativeTo: pageURL)?.absoluteURL
+        }
+        return videoPreferCappedResolutionURLs(urls).first
     }
 }

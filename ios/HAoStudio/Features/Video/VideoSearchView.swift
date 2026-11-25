@@ -20,6 +20,16 @@ final class VideoSearchViewModel: ObservableObject {
     @Published private(set) var isSearching = false
     @Published private(set) var searched = false
     @Published private(set) var history: [String] = VideoLibraryStore.searchHistory()
+    /// CMS search failure (b49 sweep #3): a dead source is an
+    /// error state with a retry, never a fake "没有找到相关影片".
+    /// Set only on failure — an empty result stays an empty state.
+    @Published private(set) var cmsErrorMessage: String?
+    /// Load-more paging (b49 sweep #22): CMS pages are 40 items
+    /// (dedupeAndRankSearch cap); a full page means there may be
+    /// more on the next source-page.
+    @Published private(set) var cmsHasMore = false
+    /// Same for the Emby section (50 per server page).
+    @Published private(set) var embyHasMore = false
 
     private let gateway: VideoDataGateway
     /// Generation bumped on every submitted query: a completion
@@ -36,6 +46,13 @@ final class VideoSearchViewModel: ObservableObject {
     /// the CMS-only path is unchanged.
     private var cmsDone = true
     private var embyDone = true
+    /// Last submitted query (retry + load-more) and the CMS page
+    /// cursor. Load-more flags guard against double taps.
+    private var lastQuery = ""
+    private var cmsPage = 1
+    private var cmsLoadingMore = false
+    private var embyStartIndex = 0
+    private var embyLoadingMore = false
 
     init(gateway: VideoDataGateway = VideoServices.makeGateway()) {
         self.gateway = gateway
@@ -50,25 +67,101 @@ final class VideoSearchViewModel: ObservableObject {
         searched = true
         results = []
         embyResults = []
+        cmsErrorMessage = nil
+        cmsHasMore = false
+        embyHasMore = false
+        lastQuery = query
+        cmsPage = 1
+        embyStartIndex = 0
         cmsDone = false
         embyDone = !gateway.embyConfigured
         searchGeneration += 1
         let generation = searchGeneration
-        gateway.search(keyword: query) { [weak self] items in
+        gateway.search(keyword: query, page: 1) { [weak self] result in
             guard let self = self, self.searchGeneration == generation else { return }
-            self.results = items
+            switch result {
+            case .success(let items):
+                self.results = items
+                self.cmsHasMore = items.count >= 40
+            case .failure(let error):
+                self.results = []
+                self.cmsHasMore = false
+                self.cmsErrorMessage = error.message
+            }
             self.cmsDone = true
             if self.embyDone { self.isSearching = false }
         }
         if gateway.embyConfigured {
-            gateway.searchEmby(keyword: query) { [weak self] result in
+            gateway.searchEmby(keyword: query, startIndex: 0) { [weak self] result in
                 guard let self = self, self.searchGeneration == generation else { return }
-                if case .success(let items) = result { self.embyResults = items }
+                switch result {
+                case .success(let items):
+                    self.embyResults = items
+                    self.embyHasMore = items.count >= 50
+                case .failure:
+                    self.embyResults = []
+                    self.embyHasMore = false
+                }
                 // Failure keeps the Emby section hidden (CMS results
                 // still show); the dedicated Emby search page is
                 // where the error is surfaced.
                 self.embyDone = true
                 if self.cmsDone { self.isSearching = false }
+            }
+        }
+    }
+
+    /// Retry the last query after a CMS failure (error-card button).
+    func retrySearch() {
+        guard !lastQuery.isEmpty else { return }
+        search(lastQuery)
+    }
+
+    /// Next CMS source-page, appended (b49 sweep #22). A failure
+    /// keeps the loaded results and surfaces as a banner over
+    /// them; paging ends either way for this query.
+    func loadMoreCMS() {
+        guard !cmsLoadingMore, cmsHasMore, !lastQuery.isEmpty else { return }
+        cmsLoadingMore = true
+        let generation = searchGeneration
+        let nextPage = cmsPage + 1
+        gateway.search(keyword: lastQuery, page: nextPage) { [weak self] result in
+            guard let self = self, self.searchGeneration == generation else { return }
+            self.cmsLoadingMore = false
+            switch result {
+            case .success(let items):
+                self.cmsPage = nextPage
+                var seen = Set(self.results.map { "\($0.sourceId ?? -1)|\($0.id)" })
+                for item in items where seen.insert("\(item.sourceId ?? -1)|\(item.id)").inserted {
+                    self.results.append(item)
+                }
+                self.cmsHasMore = items.count >= 40
+            case .failure(let error):
+                self.cmsHasMore = false
+                self.cmsErrorMessage = error.message
+            }
+        }
+    }
+
+    /// Next Emby server page, appended (b49 sweep #22).
+    func loadMoreEmby() {
+        guard !embyLoadingMore, embyHasMore, !lastQuery.isEmpty else { return }
+        embyLoadingMore = true
+        let generation = searchGeneration
+        let nextStart = embyStartIndex + 50
+        gateway.searchEmby(keyword: lastQuery, startIndex: nextStart) { [weak self] result in
+            guard let self = self, self.searchGeneration == generation else { return }
+            self.embyLoadingMore = false
+            switch result {
+            case .success(let items):
+                self.embyStartIndex = nextStart
+                var seen = Set(self.embyResults.map { "\($0.sourceId ?? -1)|\($0.id)" })
+                for item in items where seen.insert("\(item.sourceId ?? -1)|\(item.id)").inserted {
+                    self.embyResults.append(item)
+                }
+                self.embyHasMore = items.count >= 50
+            case .failure:
+                self.embyHasMore = false
             }
         }
     }
@@ -104,7 +197,30 @@ struct VideoSearchView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 32)
                     } else if viewModel.searched {
-                        if viewModel.results.isEmpty && viewModel.embyResults.isEmpty {
+                        // b49 sweep #3: a dead CMS source is an
+                        // error card + retry, never a fake "没有
+                        // 找到相关影片" — but only when the CMS
+                        // section is empty; Emby results below
+                        // still show, and a load-more failure
+                        // degrades to a banner over the grid.
+                        if let error = viewModel.cmsErrorMessage, viewModel.results.isEmpty {
+                            VStack(spacing: 12) {
+                                MusicEmptyState(
+                                    icon: "wifi.exclamationmark",
+                                    title: "搜不了影视源",
+                                    note: error
+                                )
+                                Button("重试") { viewModel.retrySearch() }
+                                    .font(.haoSubheadStrong)
+                                    .foregroundStyle(theme.onAccent)
+                                    .padding(.horizontal, 24)
+                                    .padding(.vertical, 12)
+                                    .background(theme.accent, in: Capsule())
+                            }
+                            .padding(.horizontal, 16)
+                        }
+                        if viewModel.results.isEmpty && viewModel.embyResults.isEmpty
+                            && viewModel.cmsErrorMessage == nil {
                             MusicEmptyState(
                                 icon: "magnifyingglass",
                                 title: "没有找到相关影片",
@@ -112,11 +228,30 @@ struct VideoSearchView: View {
                             )
                             .padding(.horizontal, 16)
                         } else {
+                            if let error = viewModel.cmsErrorMessage, !viewModel.results.isEmpty {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "wifi.exclamationmark")
+                                    Text(error)
+                                        .font(.haoFootnote)
+                                    Spacer()
+                                    Button("重试") { viewModel.retrySearch() }
+                                        .font(.haoFootnote)
+                                        .foregroundStyle(theme.accentText)
+                                }
+                                .foregroundStyle(theme.textSecondary)
+                                .padding(.horizontal, 16)
+                            }
                             if !viewModel.results.isEmpty {
-                                resultSection(title: "影视源", items: viewModel.results)
+                                resultSection(
+                                    title: "影视源", items: viewModel.results,
+                                    hasMore: viewModel.cmsHasMore,
+                                    onLoadMore: { viewModel.loadMoreCMS() })
                             }
                             if !viewModel.embyResults.isEmpty {
-                                resultSection(title: "Emby", items: viewModel.embyResults, isEmby: true)
+                                resultSection(
+                                    title: "Emby", items: viewModel.embyResults, isEmby: true,
+                                    hasMore: viewModel.embyHasMore,
+                                    onLoadMore: { viewModel.loadMoreEmby() })
                                     .padding(.top, 16)
                             }
                         }
@@ -200,16 +335,18 @@ struct VideoSearchView: View {
         }
     }
 
-    private func resultSection(title: String, items: [VideoItem], isEmby: Bool = false) -> some View {
+    private func resultSection(title: String, items: [VideoItem], isEmby: Bool = false, hasMore: Bool = false, onLoadMore: (() -> Void)? = nil) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title)
                     .font(.haoSectionTitle)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
-                // VidHub-style count ("共 3 部"): the number comes
-                // from the results themselves, never invented.
-                Text("共 \(items.count) 部")
+                // VidHub-style count: the number comes from the
+                // loaded results, never invented — "共 N 部" only
+                // once everything is loaded; while more pages
+                // remain it is "已加载 N 部".
+                Text(hasMore ? "已加载 \(items.count) 部" : "共 \(items.count) 部")
                     .font(.haoFootnote)
                     .foregroundStyle(theme.textMuted)
             }
@@ -222,6 +359,16 @@ struct VideoSearchView: View {
                 onSelect(item)
             }
             .padding(.horizontal, 16)
+            // b49 sweep #22: explicit load-more — CMS pages are
+            // 40 items, Emby pages 50; the 41st / 51st result used
+            // to be unreachable.
+            if hasMore {
+                Button("加载更多") { onLoadMore?() }
+                    .font(.haoSubheadStrong)
+                    .foregroundStyle(theme.accentText)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
         }
     }
 }

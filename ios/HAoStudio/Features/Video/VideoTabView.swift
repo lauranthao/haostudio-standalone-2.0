@@ -22,7 +22,11 @@ enum VideoDestination: Hashable {
     case favourites
     case detail(VideoItem)
     case embyDetail(VideoItem)
-    case embyGenre(String)
+    /// Genre page with the library it was opened from (b49 sweep
+    /// #5): nil = all libraries, as the browse page does — the
+    /// genre page used to drop the selection and always search
+    /// every library.
+    case embyGenre(libraryId: String?, genre: String)
     /// Browse page (build 36 item 18). nil = no type pre-selected
     /// (first visible category); non-nil = pre-selected type.
     /// The "每日推荐" row passes nil: daily picks have no single
@@ -37,6 +41,12 @@ final class VideoTabViewModel: ObservableObject {
     @Published private(set) var continueWatching: [VideoHistoryEntry] = []
     @Published private(set) var isLoading = false
     @Published private(set) var loadFailed = false
+    /// True when the last refresh failed but cached rows are
+    /// showing (b49 sweep #18): the rows stay, with a stale-age
+    /// banner + retry instead of silent staleness.
+    @Published private(set) var homeRefreshFailed = false
+    /// Human age of the rows on screen, for the stale banner.
+    @Published private(set) var homeCacheAgeText = ""
 
     private let gateway: VideoDataGateway
 
@@ -61,6 +71,7 @@ final class VideoTabViewModel: ObservableObject {
 
     func reload() {
         rows = VideoLibraryStore.cachedHome()
+        homeCacheAgeText = VideoLibraryStore.homeCacheAgeText()
         continueWatching = VideoLibraryStore.history()
         reloadIfNeeded()
     }
@@ -86,13 +97,23 @@ final class VideoTabViewModel: ObservableObject {
         gateway.fetchHome { [weak self] fresh in
             guard let self = self else { return }
             self.isLoading = false
-            if fresh.isEmpty && self.rows.isEmpty {
-                self.loadFailed = true
-            } else {
-                if !fresh.isEmpty {
-                    self.rows = fresh
-                    VideoLibraryStore.saveHomeCache(fresh)
+            if fresh.isEmpty {
+                if self.rows.isEmpty {
+                    self.loadFailed = true
+                } else {
+                    // b49 sweep #18: a failed refresh with cached
+                    // rows keeps the stale rows but says so, with
+                    // their age — and does NOT count as a fresh
+                    // fetch, so the next tab entry retries instead
+                    // of throttling for 5 minutes on dead data.
+                    self.homeRefreshFailed = true
+                    self.homeCacheAgeText = VideoLibraryStore.homeCacheAgeText()
                 }
+            } else {
+                self.rows = fresh
+                VideoLibraryStore.saveHomeCache(fresh)
+                self.homeRefreshFailed = false
+                self.homeCacheAgeText = VideoLibraryStore.homeCacheAgeText()
                 self.lastFreshFetch = Date()
             }
         }
@@ -114,8 +135,15 @@ struct VideoTabView: View {
     /// match the banner).
     @State private var heroIndex = 0
     @State private var heroTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+    /// Whether the hero carousel is on screen (b49 sweep #23):
+    /// the timer publisher fires forever, so the advance is gated
+    /// on this + scene phase + an empty nav path — the hero must
+    /// not advance under the fullscreen player, in Emby mode, on
+    /// another tab, or while backgrounded.
+    @State private var heroTimerActive = false
 
     @Environment(\.haoTheme) private var theme
+    @Environment(\.scenePhase) private var scenePhase
 
     /// Hero pages: the daily row first (VidHub's featured
     /// banner), else the first row; max 5.
@@ -151,7 +179,7 @@ struct VideoTabView: View {
             if mode == "emby" {
                 EmbyTabView(
                     onSelect: { path.append(.embyDetail($0)) },
-                    onSelectGenre: { path.append(.embyGenre($0)) },
+                    onSelectGenre: { libraryId, genre in path.append(.embyGenre(libraryId: libraryId, genre: genre)) },
                     onSearch: { path.append(.embySearch) }
                 )
             } else {
@@ -192,8 +220,8 @@ struct VideoTabView: View {
                     VideoDetailView(item: item)
                 case .embyDetail(let item):
                     EmbyDetailView(item: item)
-                case .embyGenre(let genre):
-                    EmbyCategoryView(genre: genre, onSelect: { path.append(.embyDetail($0)) })
+                case .embyGenre(let libraryId, let genre):
+                    EmbyCategoryView(genre: genre, libraryId: libraryId, onSelect: { path.append(.embyDetail($0)) })
                 case .browse(let type):
                     VideoBrowseView(
                         initialType: type,
@@ -279,6 +307,23 @@ struct VideoTabView: View {
                         )
                         .padding(.horizontal, 24)
                     } else {
+                        // b49 sweep #18: a failed refresh kept
+                        // stale rows — show their age + retry
+                        // instead of presenting them as fresh.
+                        if viewModel.homeRefreshFailed {
+                            HStack(spacing: 8) {
+                                Image(systemName: "wifi.exclamationmark")
+                                Text("影视源没有响应，显示 \(viewModel.homeCacheAgeText) 的缓存")
+                                    .font(.haoFootnote)
+                                Spacer()
+                                Button("重试") { viewModel.loadFresh() }
+                                    .font(.haoFootnote)
+                                    .foregroundStyle(theme.accentText)
+                            }
+                            .foregroundStyle(theme.textSecondary)
+                            .padding(.horizontal, 16)
+                            .padding(.top, 12)
+                        }
                         ForEach(viewModel.rows) { row in
                             homeRowSection(row)
                                 .padding(.top, 16)
@@ -302,9 +347,9 @@ struct VideoTabView: View {
     /// auto-advancing every 5 s. Sized from the real screen
     /// width (heroHeight, 16:10) — the banner is edge-to-edge,
     /// never a fixed height. Tapping a page opens its detail.
-    /// The poster is 2:3 art cropped to 16:10 (scaledToFill) —
-    /// the CMS gives no landscape backdrop, so the middle band
-    /// of the poster is the banner, under a dark gradient.
+    /// The poster is 2:3 art shown as a full blur under the dark
+    /// gradient (b49 sweep #36) — the CMS gives no landscape
+    /// backdrop, and a hard crop cut faces and title text.
     private var heroCarousel: some View {
         TabView(selection: $heroIndex) {
             ForEach(Array(heroItems.enumerated()), id: \.element.id) { index, item in
@@ -364,16 +409,27 @@ struct VideoTabView: View {
             .padding(.bottom, 10)
         }
         .onReceive(heroTimer) { _ in
-            guard heroItems.count > 1 else { return }
+            // b49 sweep #23: the publisher fires forever — advance
+            // only while the hero is actually visible, the app is
+            // foreground, and no page is pushed on top.
+            guard heroTimerActive, scenePhase == .active, path.isEmpty,
+                  heroItems.count > 1 else { return }
             withAnimation(.easeInOut(duration: 0.4)) {
                 heroIndex = (heroIndex + 1) % heroItems.count
             }
         }
+        .onAppear { heroTimerActive = true }
+        .onDisappear { heroTimerActive = false }
         .onChange(of: heroItems.count) { _, _ in
             if heroIndex >= heroItems.count { heroIndex = 0 }
         }
     }
 
+    /// Hero art (b49 sweep #36): the 2:3 poster used to be
+    /// hard-cropped to 16:10 (scaledToFill), cutting faces and
+    /// title text. It is now the blurred full poster under the
+    /// dark gradient — VidHub's backdrop treatment, since CMS
+    /// supplies no landscape art.
     private func heroArt(item: VideoItem) -> some View {
         Group {
             if item.detailSource == .emby {
@@ -394,6 +450,7 @@ struct VideoTabView: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: heroHeight)
+        .blur(radius: 24)
         .clipped()
     }
 

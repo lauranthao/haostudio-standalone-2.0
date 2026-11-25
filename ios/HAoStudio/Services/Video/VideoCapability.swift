@@ -322,8 +322,11 @@ func videoEngineCanPlay(_ engine: VideoEngine, format: VideoStreamFormat) -> Boo
 ///     with the subtitles silently missing) (G-B).
 /// HEVC in MP4/MOV stays allowed on AVPlayer (hardware-decoded
 /// since iOS 11), as does HDR10/HLG in MP4 — the gate is about the
-/// container/codec combination, never the resolution: there is no
-/// resolution cap anywhere in the kernel.
+/// container/codec combination, never the resolution. The 1080p
+/// ceiling for CMS lives one layer up: resolve time prefers a
+/// ≤1080p variant (`videoPreferCappedResolutionURLs`, b49 sweep
+/// #25) instead of excluding a stream here — a 4K-only stream
+/// still plays.
 func videoEngineCanPlayFacts(
     _ engine: VideoEngine,
     facts: VideoStreamFacts,
@@ -442,6 +445,30 @@ func videoCandidatesFor(
         if b == first && a != first { return false }
         return a.priority > b.priority
     }
+}
+
+/// 1080p ceiling for CMS (b49 sweep #25): a stream URL that
+/// names a higher resolution (2160 / 3840 / 4K / UHD as a
+/// quality token, e.g. `…_2160p.m3u8` or `…/4k/…`) exceeds the
+/// ceiling. The match is token-bounded (a separator or string
+/// edge on both sides), so a hash that merely contains `4k`
+/// does not trip it. No signal = within the ceiling.
+func videoURLExceeds1080p(_ url: URL) -> Bool {
+    let s = url.absoluteString.lowercased()
+    guard let re = try? NSRegularExpression(
+        pattern: "(?:^|[^a-z0-9])(2160p?|3840|4k|uhd)(?:[^a-z0-9]|$)",
+        options: []) else { return false }
+    return re.firstMatch(in: s, options: [], range: NSRange(s.startIndex..., in: s)) != nil
+}
+
+/// Prefer ≤1080p variants, stable: candidates that do not exceed
+/// the ceiling keep their relative order first, then the
+/// over-ceiling ones in their original order (used when no
+/// ≤1080p variant exists at all — the stream still plays).
+func videoPreferCappedResolutionURLs(_ urls: [URL]) -> [URL] {
+    let capped = urls.filter { !videoURLExceeds1080p($0) }
+    let over = urls.filter { videoURLExceeds1080p($0) }
+    return capped + over
 }
 
 // MARK: - Software-decode fallback trigger

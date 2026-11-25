@@ -122,6 +122,10 @@ final class EmbyTabViewModel: ObservableObject {
             }
             switch result {
             case .success(let page):
+                // b49 sweep #21: a partial page carries the failed
+                // side's line as a note — it shows as a banner
+                // over the grid, never as a page error.
+                self.errorMessage = page.note
                 if page.items.isEmpty {
                     self.hasMore = false
                 } else {
@@ -148,7 +152,10 @@ final class EmbyTabViewModel: ObservableObject {
 
 struct EmbyTabView: View {
     var onSelect: (VideoItem) -> Void
-    var onSelectGenre: (String) -> Void
+    /// Genre tap hands over the selected library too (b49 sweep
+    /// #5): the genre page filters within it instead of silently
+    /// searching every library.
+    var onSelectGenre: (String?, String) -> Void
     /// Opens the dedicated Emby search page (build 36, item 17).
     /// Handed in like onSelect: the tab owns the NavigationStack
     /// path and never pushes on its own.
@@ -199,7 +206,7 @@ struct EmbyTabView: View {
                                 ProgressView()
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 32)
-                        } else if let error = viewModel.errorMessage {
+                        } else if let error = viewModel.errorMessage, viewModel.items.isEmpty {
                             VStack(spacing: 12) {
                                 MusicEmptyState(
                                     icon: "wifi.exclamationmark",
@@ -241,6 +248,24 @@ struct EmbyTabView: View {
                                 )
                                 .padding(.horizontal, 16)
                             } else {
+                                // b49 sweep #6: a later-page failure
+                                // keeps the loaded grid — the error
+                                // is a banner, not a full-page card
+                                // (same rule as VideoBrowseView).
+                                if let error = viewModel.errorMessage {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "wifi.exclamationmark")
+                                        Text(error)
+                                            .font(.haoFootnote)
+                                        Spacer()
+                                        Button("重试") { viewModel.reload() }
+                                            .font(.haoFootnote)
+                                            .foregroundStyle(theme.accentText)
+                                    }
+                                    .foregroundStyle(theme.textSecondary)
+                                    .padding(.horizontal, 16)
+                                    .padding(.top, 12)
+                                }
                                 VideoPosterGrid(items: viewModel.items, isEmby: true) { item in
                                     onSelect(item)
                                 }
@@ -395,7 +420,7 @@ struct EmbyTabView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(viewModel.genres, id: \.self) { genre in
-                        Button(action: { onSelectGenre(genre) }) {
+                        Button(action: { onSelectGenre(viewModel.selectedLibraryId, genre) }) {
                             Text(genre)
                                 .font(.haoDenseBody)
                                 .foregroundStyle(theme.textPrimary)
