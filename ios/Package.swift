@@ -105,12 +105,6 @@ let package = Package(
                 "Features/My/BackupUpdateLogic.swift",
                 "Services/Backup",
                 "Services/Update",
-                // b45-fix: DownloadEngine.checkRemainingSpaceLocked
-                // uses AutomaticCacheLimit, which is defined in this
-                // file. It is Foundation-only (LocalStore + its own
-                // types), so it joins AppCore as a single file like
-                // SettingsLogic / BackupUpdateLogic above.
-                "Features/My/CacheManager.swift",
                 "Storage",
             ],
             linkerSettings: [

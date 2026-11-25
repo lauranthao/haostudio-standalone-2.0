@@ -1390,3 +1390,69 @@ private final class DownloadSessionDelegate: NSObject, URLSessionDataDelegate {
         engine?.httpDidComplete(task, error: error)
     }
 }
+
+// MARK: - Automatic cache limit (moved here, b45-fix #25)
+//
+// Moved verbatim from CacheManager.swift: that file cannot join
+// AppCore (its clearAll calls the UIKit image loaders), while
+// this file is an AppCore member and needs the limit for
+// checkRemainingSpaceLocked. Foundation-only (LocalStore + math).
+
+// MARK: - b45-F: automatic cache limit (plan §9.3)
+//
+// Automatic mode = free space / 10, clamped to 2–30 GB, always
+// keeping the last 1 GB free. Bytes already occupied by the cache
+// count back into the free space (a full cache does not shrink
+// its own allowance). The computed result is cached for
+// 10 minutes.
+
+enum AutomaticCacheLimit {
+    static let minBytes: Int64 = 2 * 1024 * 1024 * 1024
+    static let maxBytes: Int64 = 30 * 1024 * 1024 * 1024
+    /// Always keep this much free, even if the clamp says more.
+    static let reserveBytes: Int64 = 1 * 1024 * 1024 * 1024
+    static let cacheTTL: TimeInterval = 10 * 60
+
+    private static var cachedValue: Int64?
+    private static var cachedAt: Date?
+    private static let lock = NSLock()
+
+    static func freeBytes(documentsURL: URL? = nil) -> Int64 {
+        let dir = documentsURL ?? LocalStore.documentsDirectory()
+        guard let values = try? dir.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+              let free = values.volumeAvailableCapacityForImportantUsage
+        else { return 0 }
+        return Int64(free)
+    }
+
+    /// Pure computation (harness-testable): free space / 10,
+    /// clamped 2–30 GB, never eating the last 1 GB. `cachedBytes`
+    /// is the audio cache's own size — it counts back into the
+    /// available space.
+    static func limitBytes(freeBytes: Int64, cachedBytes: Int64) -> Int64 {
+        let tenth = (freeBytes + cachedBytes) / 10
+        let clamped = min(max(tenth, minBytes), maxBytes)
+        return min(clamped, max(freeBytes - reserveBytes, 0))
+    }
+
+    /// Cached automatic limit (10-minute memo). `freeBytes` is
+    /// read live on a miss.
+    static func automaticLimitBytes(cachedBytes: Int64, freeBytes: Int64? = nil) -> Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        if let value = cachedValue, let at = cachedAt,
+           Date().timeIntervalSince(at) < cacheTTL {
+            return value
+        }
+        let free = freeBytes ?? AutomaticCacheLimit.freeBytes()
+        let value = limitBytes(freeBytes: free, cachedBytes: cachedBytes)
+        cachedValue = value
+        cachedAt = Date()
+        return value
+    }
+
+    static func invalidateMemo() {
+        lock.lock(); cachedValue = nil; cachedAt = nil; lock.unlock()
+    }
+}
+
