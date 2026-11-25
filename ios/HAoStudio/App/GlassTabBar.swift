@@ -68,21 +68,24 @@ struct GlassTabBar: View {
             colorScheme: colorScheme,
             tabAccent: tabAccent
         )
-        // b43 CORRECTS b42: the frame is 56pt, but the frame is
-        // NOT the rendered glass — the system bar's Liquid Glass
-        // renders ~13pt ABOVE its frame's top edge (chen
-        // 2026-11-25 build 42: mini glass bottom ~2459, bar glass
-        // top ~2420 on a 1260x2736 shot; the b42 frame change
-        // 64 -> 56 moved the mini DOWN 23px and the overlap grew
-        // from ~4pt to ~13pt). The overlap is fixed by the 13pt
-        // VStack spacing (HaoLayout.floatingStackSpacing), not by
-        // this frame — the spacing is what makes the GLASS edges
-        // touch. No SwiftUI .padding(.vertical) around it: the
-        // padding left a transparent band above the bar and read
-        // as a seam (chen 2026-11-25 build 39). Horizontal
-        // padding was never here: the visible bar spans exactly
-        // the mini player's width (screen minus the shared 12pt
-        // side margins in MainTabView).
+        // b46-chrome (Coda §6.2 whole set): the frame is 64pt
+        // (56 content + 4pt inset top/bottom). The frame is NOT
+        // the rendered glass — the system bar's Liquid Glass
+        // renders a few points ABOVE its frame's top edge (b43
+        // measured ~13pt above a 56pt frame, ~4pt above a 64pt
+        // frame on chen's build-41/42 screenshots: the glass top
+        // sits at roughly the same screen position either way,
+        // so the glass is ~68pt tall in total, bottom-anchored).
+        // With the 8pt Coda spacing the mini's glass bottom and
+        // the bar's glass top read as two separate pills with a
+        // ~12pt visual gap — as in Coda's screenshot — not one
+        // touching block. No SwiftUI .padding(.vertical) around
+        // it: the padding left a transparent band above the bar
+        // and read as a seam (chen 2026-11-25 build 39).
+        // Horizontal padding was never here: the visible bar spans
+        // exactly the mini player's width (screen minus the shared
+        // 16pt side margins in MainTabView). Rollback if the device
+        // check fails: the whole b43 set (56 frame / 13 spacing).
         .frame(height: HaoLayout.tabBarTotalHeight)
     }
 }

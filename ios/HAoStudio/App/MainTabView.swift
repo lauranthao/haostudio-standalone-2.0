@@ -144,15 +144,19 @@ struct MainTabView: View {
     /// The b38 SwiftUI UnionTabView bar is gone: its chromeBottomOffset
     /// drop pushed the whole unit 26pt below the safe-area edge on
     /// Face ID iPhones, so taps fell through to the page below.
-    /// The mini (40pt) sits directly above the bar, VStack spacing
-    /// 13 (b43: the bar's glass renders ~13pt above its frame, so
-    /// the 13pt frame gap is what makes the GLASS edges touch) —
-    /// one connected unit, same width, same margins. The bar
-    /// sits 2pt above the safe-area bottom edge (tabBarBottomMargin),
-    /// fully inside the hit-testable safe area. The b35
-    /// scroll-minimize stays reverted (build 37, chen: "菜单恢复原样"
-    /// — the menu is always the original full glass tab bar, no
-    /// narrowed capsule form).
+    /// b46-chrome (Coda §6.2 whole set, chen 2026-11-25 14:36):
+    /// tab bar 64, mini 52, spacing 8, side margins 16, bottom
+    /// margin 6 — the 13pt b43 glass compensation is deleted with
+    /// the set (it patched the 56pt frame's glass overhang; the
+    /// Coda set is self-consistent without it). The mini sits
+    /// directly above the bar, VStack spacing 8 — two separate
+    /// pills, same width, same margins. The bar sits 6pt above
+    /// the safe-area bottom edge (tabBarBottomMargin), fully
+    /// inside the hit-testable safe area. The b35 scroll-minimize
+    /// stays reverted (build 37, chen: "菜单恢复原样" — the menu is
+    /// always the original full glass tab bar, no narrowed
+    /// capsule form). Rollback if the device check fails: the
+    /// whole b43 set (56/13/40, side 12, bottom 2).
     private var bottomChromeContent: some View {
         VStack(spacing: HaoLayout.floatingStackSpacing) {
             MiniPlayerBar(onTapFullPlayer: {
@@ -219,6 +223,14 @@ struct MainTabView: View {
                     .opacity(showingFullPlayer ? 0 : 1)
                     .offset(y: showingFullPlayer ? 24 : 0)
                     .animation(HaoLayout.settleSpring, value: showingFullPlayer)
+                    // b46-chrome (P7): the expand / collapse has a
+                    // gated selection tick — the mini's own buttons
+                    // already tick through the player VM, but the
+                    // strip tap / swipe-up / chevron had no tactile
+                    // answer at all, so a tap that opened the player
+                    // felt unanswered. Gated by the 触感反馈 switch
+                    // (haoSensoryFeedback), fires on both directions.
+                    .haoSensoryFeedback(.selection, trigger: showingFullPlayer)
             }
         }
         .fullScreenCover(isPresented: $showingFullPlayer) {

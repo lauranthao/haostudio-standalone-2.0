@@ -104,7 +104,12 @@ struct MiniPlayerBar: View {
     /// moves the frame only): it snaps at the end of the transition.
     @ViewBuilder
     private func morphCover(urlString: String, size: CGFloat, cornerRadius: CGFloat) -> some View {
+        // b46-chrome (Coda §2.10): the mini cover carries its own
+        // shadow (black 0.15 / radius 4 / y 1). The shadow is the
+        // mini's, not the shared cover's, so it lives here — no
+        // song row gains one.
         let cover = MusicCoverView(urlString: urlString, size: size, cornerRadius: cornerRadius)
+            .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
         if let namespace = morphNamespace {
             cover.matchedGeometryEffect(id: HaoLayout.playerCoverMorphID, in: namespace)
         } else {
@@ -113,6 +118,18 @@ struct MiniPlayerBar: View {
     }
 
     /// Expanded form: the wide strip above the full tab bar.
+    /// b46-chrome (Coda §2.10/§6.2): the 52pt mini — cover 40 r6,
+    /// title 15 semibold / artist 12, 1pt between them, 10pt
+    /// between groups, transport 36x36 with 20pt icons, and now
+    /// prev/play/next (the prev button was missing — the mini only
+    /// had play + next). The chevron is on a full 44x44 hit target
+    /// with its own contentShape (was 24x32 with none — below
+    /// Apple's 44pt minimum, the likeliest reason a tap on the ^
+    /// did nothing on device). The row tap and the swipe-up already
+    /// opened the player; the chevron is the same action, now
+    /// actually tappable. The thin progress line stays (our Apple
+    /// Music feature, not Coda geometry — Coda's iPhone mini has
+    /// none, but the task did not order it removed).
     private func expandedBody(item: PlaybackItem) -> some View {
             // b36-1: the strip tap is a gesture, not a Button. The
             // old strip Button's label held a Spacer, so under
@@ -125,28 +142,25 @@ struct MiniPlayerBar: View {
             // and always win their own frames. The chevron stays a
             // Button: it does the same action as the strip, so a
             // tap there opening the player is correct either way.
-            HStack(spacing: 12) {
-                HStack(spacing: 12) {
+            HStack(spacing: 10) {
+                HStack(spacing: 10) {
                     // Real artwork when the item carries a cover
                     // URL; MusicCoverView falls back to the note
-                    // placeholder when there is none.
-                    // Kumone MiniPlayerView: cover 32, radius 6
-                    // (b38 — down from Beans' 36 so the 40pt strip
-                    // reads visibly slimmer).
+                    // placeholder when there is none. Coda §2.10:
+                    // cover 40, radius 6 (the shadow is on the
+                    // morphCover call, not the shared cover).
                     morphCover(
                         urlString: item.coverURL?.absoluteString ?? "",
                         size: HaoLayout.miniCoverSize, cornerRadius: 6)
-                    VStack(alignment: .leading, spacing: 2) {
-                        // Kumone mini: title 13 semibold / artist
-                        // 10 in the 40pt strip (ours: 13 semibold /
-                        // 11 — the type scale's closest roles;
-                        // 10pt is badge-only in this app).
+                    VStack(alignment: .leading, spacing: 1) {
+                        // Coda §2.10: title subheadline 15 semibold
+                        // primary, artist caption 12 secondary.
                         Text(item.title)
-                            .font(.haoFootnoteStrong)
+                            .font(.haoSubheadStrong)
                             .foregroundStyle(theme.textPrimary)
                             .lineLimit(1)
                         Text(item.subtitle)
-                            .font(.haoCaption2)
+                            .font(.haoCaption)
                             .foregroundStyle(theme.textSecondary)
                             .lineLimit(1)
                     }
@@ -156,23 +170,34 @@ struct MiniPlayerBar: View {
                 .onTapGesture(perform: onTapFullPlayer)
                 .accessibilityAddTraits(.isButton)
                 if item.kind == .music {
+                    // Coda §2.10: prev / play / next, 36x36 hit
+                    // targets, 20pt semibold icons, primary tint.
+                    // VOD / live show no transport here (their
+                    // players are other slices' — a button with no
+                    // engine behind it would be fake).
+                    Button(action: { musicPlayer.previous() }) {
+                        Image(systemName: "backward.fill")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(theme.textPrimary)
+                            .frame(width: 36, height: 36)
+                    }
+                    .buttonStyle(MusicPressScaleStyle())
+                    .contentShape(Rectangle())
+                    .accessibilityLabel("上一曲")
                     Button(action: { musicPlayer.togglePlayPauseOrRetry() }) {
                         Image(systemName: musicPlayer.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.haoCalloutStrong)
+                            .font(.system(size: 20, weight: .semibold))
                             .foregroundStyle(theme.textPrimary)
-                            .frame(width: 40, height: 40)
+                            .frame(width: 36, height: 36)
                     }
                     .buttonStyle(MusicPressScaleStyle())
                     .contentShape(Rectangle())
                     .accessibilityLabel(musicPlayer.isPlaying ? "暂停" : "播放")
-                    // Apple Music's mini has a next button next to
-                    // play/pause; ours wires the same next() as the
-                    // full player (MusicPlayerViewModel.next()).
                     Button(action: { musicPlayer.next() }) {
                         Image(systemName: "forward.fill")
-                            .font(.haoCalloutStrong)
+                            .font(.system(size: 20, weight: .semibold))
                             .foregroundStyle(theme.textPrimary)
-                            .frame(width: 40, height: 40)
+                            .frame(width: 36, height: 36)
                     }
                     .buttonStyle(MusicPressScaleStyle())
                     .contentShape(Rectangle())
@@ -182,13 +207,15 @@ struct MiniPlayerBar: View {
                     Image(systemName: "chevron.up")
                         .font(.haoDenseTitle)
                         .foregroundStyle(theme.textSecondary)
-                        .frame(width: 24, height: 32)
+                        .frame(width: 44, height: 44)
                 }
                 .buttonStyle(MusicPressScaleStyle())
+                .contentShape(Rectangle())
+                .accessibilityLabel("展开全屏播放器")
             }
             // Symmetric content padding (was leading 10 / trailing
-            // 6 — the strip read lopsided). Same 12pt step as the
-            // tab bar's side margins (HaoLayout).
+            // 6 — the strip read lopsided). 12pt, Coda §6.2 mini
+            // side padding (HaoLayout.miniPlayerContentPadding).
             .padding(.horizontal, HaoLayout.miniPlayerContentPadding)
             .frame(height: HaoLayout.miniPlayerHeight)
             // Rounded rectangle at the shared floating-chrome radius,
