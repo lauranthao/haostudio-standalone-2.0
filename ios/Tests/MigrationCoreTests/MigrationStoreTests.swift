@@ -841,4 +841,174 @@ final class MigrationStoreTests: XCTestCase {
         XCTAssertEqual(day?.first?["songId"] as? String, "live-1")
         XCTAssertEqual(day?.last?["songId"] as? String, "backup-1")
     }
+
+    // MARK: - b49fix20: in-section verify, stale writers, rollback deletion/change, daily cap, unknown sweep
+
+    func testFix20HistoryDateMicrosecondsAndPureDate() {
+        // D22-11: microseconds divide by 1e6 (the old single
+        // threshold divided them by 1000, landing in the year
+        // 55,000), and a pure date parses instead of falling
+        // back to now.
+        XCTAssertEqual(MigrationStore.historyDateSeconds(from: 1_700_000_000_000_000), 1_700_000_000)
+        XCTAssertEqual(MigrationStore.historyDateSeconds(from: 1_700_000_000_000), 1_700_000_000)
+        XCTAssertEqual(MigrationStore.historyDateSeconds(from: 1_700_000_000), 1_700_000_000)
+        let pure = MigrationStore.historyDateSeconds(from: "2026-11-25")
+        XCTAssertNotNil(pure)
+        XCTAssertEqual(pure ?? 0, 1_795_564_800, accuracy: 1)
+        XCTAssertNotNil(MigrationStore.historyDateSeconds(from: "2026-11-25T10:00:00Z"))
+        XCTAssertNil(MigrationStore.historyDateSeconds(from: "not-a-date"))
+    }
+
+    func testFix20MergedDailyDayCapsAtTwentyLiveFirst() {
+        // D22-7: a merged day caps at live's 20 (live first,
+        // so the excess is always incoming) and the excess is
+        // counted, never silently dropped.
+        MigrationStore.resetDailyCapDroppedRecord()
+        let live = (0..<5).map { recentSong("live-\($0)") }
+        let incoming = (0..<25).map { recentSong("in-\($0)") }
+        let merged = MigrationStore.mergedDailyDay(live: live, incoming: incoming)
+        XCTAssertEqual(merged.count, 20)
+        XCTAssertEqual(merged.first?["songId"] as? String, "live-0")
+        XCTAssertEqual(merged.last?["songId"] as? String, "in-14")
+        XCTAssertEqual(MigrationStore.dailyCapDroppedDuringImport(), 10)
+        MigrationStore.resetDailyCapDroppedRecord()
+    }
+
+    func testFix20DailyCapWarnsOnImport() {
+        // D22-7 at the import level: 5 live + 25 incoming
+        // songs on one day merge to 20, and the 10 dropped
+        // incoming songs appear in the report warnings.
+        writeJSONFile("hao_daily", ["2026-11-22": (0..<5).map { recentSong("live-\($0)") }])
+        writeSnapshot(["hao_daily_2026-11-22": jsonString((0..<25).map { recentSong("in-\($0)") })])
+
+        let report = runMigration()
+
+        XCTAssertEqual(report.outcome, .migrated)
+        let daily = readJSONFile("hao_daily") as? [String: Any]
+        let day = daily?["2026-11-22"] as? [[String: Any]]
+        XCTAssertEqual(day?.count, 20)
+        XCTAssertTrue(report.warnings.contains { $0.contains("超出每日 20 首上限") },
+                      "warnings were \(report.warnings)")
+    }
+
+    func testFix20DailyDaysContainAll() {
+        // D22-7: the per-day value check passes while the day
+        // still holds its songs, and fails when a live
+        // overwrite replaced the whole day — the old key-only
+        // check passed that silently.
+        let day: [String: Any] = ["2026-11-25": [recentSong("a"), recentSong("b")]]
+        XCTAssertTrue(MigrationStore.dailyDaysContainAll(actual: day, expected: day))
+        let replaced: [String: Any] = ["2026-11-25": [recentSong("x"), recentSong("y")]]
+        XCTAssertFalse(MigrationStore.dailyDaysContainAll(actual: replaced, expected: day))
+    }
+
+    func testFix20ListKeysContainAllSecondaryKey() {
+        // D22-6: a live rewrite that adds a songId changes the
+        // primary key; the secondary title+artist key still
+        // matches the same song.
+        let expected: [[String: Any]] = [
+            ["key": "wy|", "song": ["platform": "wy", "songId": "", "title": "T", "artist": "A"]],
+        ]
+        let actual: [[String: Any]] = [
+            ["key": "wy|s1", "song": ["platform": "wy", "songId": "s1", "title": "T", "artist": "A"]],
+        ]
+        XCTAssertTrue(MigrationStore.listKeysContainAll(actual: actual, expected: expected, file: "hao_fav"))
+        let other: [[String: Any]] = [
+            ["key": "wy|", "song": ["platform": "wy", "songId": "", "title": "Other", "artist": "A"]],
+        ]
+        XCTAssertFalse(MigrationStore.listKeysContainAll(actual: actual, expected: other, file: "hao_fav"))
+    }
+
+    func testFix20RestoredPreservingLiveKeepsLiveDeletionAndChange() {
+        // D22-4: a rollback must not resurrect a live deletion
+        // or revert a live value change.
+        func data(_ value: Any) -> Data {
+            try! JSONSerialization.data(withJSONObject: value, options: [])
+        }
+        // List: live-deleted "b" stays deleted.
+        let deleted = MigrationStore.restoredPreservingLive(
+            prior: data([["id": "a"], ["id": "b"]]),
+            written: data([["id": "a"], ["id": "b"]]),
+            current: data([["id": "a"]]),
+            file: "hao_lists", kind: .mergeList)
+        guard case .data(let deletedBytes) = deleted else {
+            XCTFail("expected .data, got \(deleted)")
+            return
+        }
+        let deletedList = try! JSONSerialization.jsonObject(with: deletedBytes, options: []) as? [[String: Any]]
+        XCTAssertEqual(deletedList?.compactMap { $0["id"] as? String }, ["a"])
+        // List: a live-changed value takes the live value.
+        let changed = MigrationStore.restoredPreservingLive(
+            prior: data([["id": "a", "v": 1]]),
+            written: data([["id": "a", "v": 2]]),
+            current: data([["id": "a", "v": 3]]),
+            file: "hao_lists", kind: .mergeList)
+        guard case .data(let changedBytes) = changed else {
+            XCTFail("expected .data, got \(changed)")
+            return
+        }
+        let changedList = try! JSONSerialization.jsonObject(with: changedBytes, options: []) as? [[String: Any]]
+        XCTAssertEqual(changedList?.first?["v"] as? Int, 3)
+        // Dict: live-deleted "b" stays deleted, untouched "a" rolls back.
+        let dict = MigrationStore.restoredPreservingLive(
+            prior: data(["a": 1, "b": 1]),
+            written: data(["a": 2, "b": 1]),
+            current: data(["a": 2]),
+            file: "hao_cover_cache", kind: .mergeDict)
+        guard case .data(let dictBytes) = dict else {
+            XCTFail("expected .data, got \(dict)")
+            return
+        }
+        XCTAssertEqual(try! JSONSerialization.jsonObject(with: dictBytes, options: []) as? [String: Int], ["a": 1])
+        // String list: live-deleted "b" stays deleted.
+        let strings = MigrationStore.restoredPreservingLive(
+            prior: data(["a", "b"]),
+            written: data(["a", "b"]),
+            current: data(["a"]),
+            file: "hao_music_search_hist", kind: .mergeStringList)
+        guard case .data(let stringBytes) = strings else {
+            XCTFail("expected .data, got \(strings)")
+            return
+        }
+        XCTAssertEqual(try! JSONSerialization.jsonObject(with: stringBytes, options: []) as? [String], ["a"])
+    }
+
+    func testFix20TrimmedCoverCacheKeepsIncomingFirst() {
+        // D22-9: a merged cover cache trims to 500, incoming
+        // keys first.
+        var merged: [String: Any] = [:]
+        for i in 0..<400 { merged["live-\(i)"] = "u" }
+        for i in 0..<200 { merged["in-\(i)"] = "u" }
+        let trimmed = MigrationStore.trimmedCoverCache(
+            merged: merged, incomingKeys: Set((0..<200).map { "in-\($0)" }))
+        XCTAssertEqual(trimmed.count, 500)
+        XCTAssertTrue((0..<200).allSatisfy { trimmed["in-\($0)"] != nil })
+    }
+
+    func testFix20UnknownKeysSweptAfterImport() {
+        // D22-8: keys that gained a mapping row leave the old
+        // unknown-keys file after a successful import;
+        // unmapped keys stay.
+        writeJSONFile("migration_unknown_keys", ["downloadTasks": [["id": "x"]], "weird_key": ["v"]])
+        writeSnapshot(["downloadTasks": jsonString([["id": "y"]])])
+
+        let report = runMigration()
+
+        XCTAssertEqual(report.outcome, .migrated)
+        let unknown = readJSONFile("migration_unknown_keys") as? [String: Any]
+        XCTAssertNil(unknown?["downloadTasks"])
+        XCTAssertNotNil(unknown?["weird_key"])
+    }
+
+    func testFix20FailReportCarriesWarnings() {
+        // D22-12: plan-time warnings (e.g. dropped history
+        // entries) survive into the failure report instead of
+        // only appearing on success.
+        let report = MigrationStore.failReport(
+            total: 5, migrated: 1, skipped: [], unknown: [],
+            detail: "write failed",
+            warnings: ["影视历史有 1 条记录格式不符，已跳过"])
+        XCTAssertEqual(report.outcome, .failed)
+        XCTAssertEqual(report.warnings, ["影视历史有 1 条记录格式不符，已跳过"])
+    }
 }

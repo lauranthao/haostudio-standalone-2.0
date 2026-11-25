@@ -180,6 +180,17 @@ final class MusicEqualizerViewModel: ObservableObject {
     private func readCustomPresets() -> [MusicEqualizerCustomPreset] {
         let url = LocalStore.collectionURL(named: "hao_eq_custom_presets")
         guard let data = try? Data(contentsOf: url) else { return [] }
+        // b49fix20 D22-16: a corrupt file used to decode to []
+        // with no quarantine, and the next writeCustomPresets
+        // overwrote the corrupt bytes unpreserved — the only
+        // remaining bare MusicDict.objectArray consumer outside
+        // its definition. Quarantine on decode failure, like
+        // the other live read paths (MusicLibraryStore.readArray
+        // / readObject / readStringArray).
+        guard (try? JSONSerialization.jsonObject(with: data, options: [])) as? [[String: Any]] != nil else {
+            LocalStore.quarantineFile(at: url, name: "hao_eq_custom_presets", reason: "decode failed")
+            return []
+        }
         return MusicDict.objectArray(from: data).map(MusicEqualizerCustomPreset.init(json:))
     }
 

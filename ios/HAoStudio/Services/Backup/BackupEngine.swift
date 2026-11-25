@@ -1008,11 +1008,16 @@ extension BackupEngineCore {
         case writeFailed
         /// The write landed but the immediate re-read inside
         /// the write's critical section did not match it
-        /// (b49fix19 P1-4): a live writer replaced the file
-        /// between the write and its verify. The caller fails
-        /// the import with a verification failure, not a write
-        /// failure — the write itself succeeded.
-        case verifyFailed
+        /// (b49fix19 P1-4, b49fix20 D22-1): a live writer
+        /// replaced the file between the write and its verify.
+        /// The caller fails the import with a verification
+        /// failure, not a write failure — the write itself
+        /// succeeded. Carries the written bytes so the caller
+        /// can record them in expectedCollectionBytes before
+        /// failing: the rollback must treat this file as
+        /// written, or it would skip it and leave suspect
+        /// content in place.
+        case verifyFailed(Data)
     }
 
     /// Collections a concurrent writer can change while an
@@ -1356,7 +1361,7 @@ extension BackupEngineCore {
         // end-of-apply verify.
         guard let expected = try? JSONSerialization.jsonObject(with: collection.bytes, options: []),
               MigrationStore.fileContentEquals(name: collection.name, expected: expected, documentsURL: documentsURL)
-        else { return .verifyFailed }
+        else { return .verifyFailed(collection.bytes) }
         return .written(collection.bytes)
     }
 
@@ -1382,6 +1387,13 @@ extension BackupEngineCore {
                 try bytes.write(to: documentsURL.appendingPathComponent("hao_recent.json"), options: [.atomic])
             } catch {
                 return .writeFailed
+            }
+            // b49fix20 D22-1: verify INSIDE the critical
+            // section (tolerant check — a song switch at the
+            // 100 cap may squeeze the oldest merged entry out).
+            let reread = MigrationStore.readJSONList(name: "hao_recent", documentsURL: documentsURL)
+            guard MigrationStore.recentContainsAll(actual: reread, expected: merged) else {
+                return .verifyFailed(bytes)
             }
             return .written(bytes)
         }
@@ -1410,6 +1422,12 @@ extension BackupEngineCore {
             } catch {
                 return .writeFailed
             }
+            // b49fix20 D22-1: verify INSIDE the critical
+            // section (see mergeListEntries above).
+            let reread = MigrationStore.readJSONDictionary(name: "musicResume", documentsURL: documentsURL)
+            guard MigrationStore.resumeEntriesPresent(existing, actual: reread, toleratingDeleted: MigrationStore.resumeDeletionRecord()) else {
+                return .verifyFailed(bytes)
+            }
             return .written(bytes)
         }
     }
@@ -1424,7 +1442,7 @@ extension BackupEngineCore {
     /// The backup queue lands only when live is empty or
     /// unreadable (fresh install / first restore). Runs whole
     /// under MigrationStore.musicQueueWriteQueue, the same
-    /// queue saveQueue uses, and re-reads the file right after
+    /// queue saveQueueAsync uses, and re-reads the file right after
     /// writing — that apply-time exact check is what justifies
     /// the shape-only verify (a switch landing after the write
     /// legitimately replaces the whole queue, so byte or subset
@@ -1480,6 +1498,16 @@ extension BackupEngineCore {
             } catch {
                 return .writeFailed
             }
+            // b49fix20 D22-1: verify INSIDE the critical
+            // section — the re-read runs in the same queue.sync
+            // as the write, so no queued writer can land
+            // between them (the old outer collectionVerifies
+            // ran after the return, with the whole remaining
+            // apply in between).
+            let reread = MigrationStore.readJSONList(name: name, documentsURL: documentsURL)
+            guard MigrationStore.listKeysContainAll(actual: reread, expected: merged, file: name) else {
+                return .verifyFailed(bytes)
+            }
             return .written(bytes)
         }
     }
@@ -1507,6 +1535,12 @@ extension BackupEngineCore {
                 try bytes.write(to: documentsURL.appendingPathComponent("\(name).json"), options: [.atomic])
             } catch {
                 return .writeFailed
+            }
+            // b49fix20 D22-1: verify INSIDE the critical
+            // section (see mergeListEntries above).
+            let reread = MigrationStore.readJSONStringList(name: name, documentsURL: documentsURL)
+            guard MigrationStore.stringListContainsAll(actual: reread, expected: merged) else {
+                return .verifyFailed(bytes)
             }
             return .written(bytes)
         }
@@ -1548,6 +1582,12 @@ extension BackupEngineCore {
                 try merged.write(to: documentsURL.appendingPathComponent("hao_listen.json"), options: [.atomic])
             } catch {
                 return .writeFailed
+            }
+            // b49fix20 D22-1: verify INSIDE the critical
+            // section (see mergeListEntries above).
+            let reread = MigrationStore.readJSONList(name: "hao_listen", documentsURL: documentsURL)
+            guard MigrationStore.listKeysContainAll(actual: reread, expected: existing, file: "hao_listen") else {
+                return .verifyFailed(merged)
             }
             return .written(merged)
         }
@@ -1602,6 +1642,14 @@ extension BackupEngineCore {
                     defaults: defaults
                 )
             }
+            if name == "hao_cover_cache" {
+                // b49fix20 D22-9: trim the merged cache to
+                // the live 500 cap (see
+                // MigrationStore.trimmedCoverCache) — the merge
+                // used to grow the file past the cap the live
+                // writer enforces.
+                existing = MigrationStore.trimmedCoverCache(merged: existing, incomingKeys: Set(incoming.keys))
+            }
             guard let merged = try? JSONSerialization.data(withJSONObject: existing, options: []) else {
                 return .serializationFailed
             }
@@ -1609,6 +1657,19 @@ extension BackupEngineCore {
                 try merged.write(to: documentsURL.appendingPathComponent("\(name).json"), options: [.atomic])
             } catch {
                 return .writeFailed
+            }
+            // b49fix20 D22-1/D22-7: verify INSIDE the critical
+            // section — hao_daily uses the per-day value check,
+            // the other dict files the key-only dict check.
+            let reread = MigrationStore.readJSONDictionary(name: name, documentsURL: documentsURL)
+            if name == "hao_daily" {
+                guard MigrationStore.dailyDaysContainAll(actual: reread, expected: existing) else {
+                    return .verifyFailed(merged)
+                }
+            } else {
+                guard dictContainsAll(reread, existing, keyOnly: true, toleratingDeleted: MigrationStore.cacheEvictionRecord(for: name)) else {
+                    return .verifyFailed(merged)
+                }
             }
             return .written(merged)
         }
@@ -1679,6 +1740,15 @@ extension BackupEngineCore {
             }
             return MigrationStore.listKeysContainAll(actual: actualList, expected: expectedList, file: base)
         }
+        if let expectedStrings = expected as? [String],
+           let actualStrings = actual as? [String] {
+            // b49fix20 D22-3: string-list collections verify
+            // by subset, not canonical byte equality — a live
+            // writer appending a search term between the write
+            // and the verify used to fail the whole import
+            // (Route B already verified these by subset).
+            return MigrationStore.stringListContainsAll(actual: actualStrings, expected: expectedStrings)
+        }
         if let expectedDict = expected as? [String: Any],
            let actualDict = actual as? [String: Any] {
             // b49fix19 P1-2: merged dicts verify by key only.
@@ -1698,6 +1768,12 @@ extension BackupEngineCore {
             // advancing). b49fix19 P1-7: the same excuse covers
             // keys a live cache eviction removed during this
             // import (hao_lyrics / hao_cover_cache).
+            // b49fix20 D22-7: hao_daily verifies per day by
+            // value, not key-only (see
+            // MigrationStore.dailyDaysContainAll).
+            if base == "hao_daily" {
+                return MigrationStore.dailyDaysContainAll(actual: actualDict, expected: expectedDict)
+            }
             if base == "musicResume" {
                 return dictContainsAll(actualDict, expectedDict, keyOnly: true, toleratingDeleted: MigrationStore.resumeDeletionRecord())
             }
@@ -1830,6 +1906,12 @@ extension BackupEngineCore {
         var appliedCollections = 0
         var appliedFiles = 0
         var expectedCollectionBytes: [String: Data] = [:]
+        // b49fix20 D22-5/D22-14: payload paths extracted this
+        // round — expectedCollectionBytes only holds
+        // collections, so payload files are tracked separately
+        // for the rollback (a payload file extracted this round
+        // counts as written; one never reached does not).
+        var writtenPayloadPaths: Set<String> = []
         // b49fix17 P1-1/P1-3: files deliberately not written at
         // apply time (live file healthy + backup bytes corrupt,
         // or the live queue wins) — reported as skipped, not
@@ -1856,6 +1938,10 @@ extension BackupEngineCore {
         // verify excuses exactly the keys a live eviction
         // removes during THIS import.
         MigrationStore.resetCacheEvictionRecord()
+        // b49fix20 D22-7: clear the daily-cap record — the
+        // report counts exactly the incoming songs the cap
+        // dropped during THIS import.
+        MigrationStore.resetDailyCapDroppedRecord()
         // b49fix19 P2-4: the live-history cap the merge uses —
         // 0 in the setting means unlimited (nil), absent means
         // the 50 default.
@@ -1901,16 +1987,14 @@ extension BackupEngineCore {
                 case .written(let bytes):
                     expectedCollectionBytes[relativePath] = bytes
                     appliedCollections += 1
-                    // b49fix19 P1-4: verify this collection now,
-                    // not at the end of the apply — the gap used
-                    // to be "apply remaining time" (seconds on a
-                    // big backup), in which a live write could
-                    // land and fail the verify, rolling back an
-                    // import whose content was fine.
-                    if !collectionVerifies(relativePath: relativePath, expectedBytes: bytes, documentsURL: documentsURL) {
-                        failureReason = "校验失败：\(relativePath)"
-                        break
-                    }
+                    // b49fix20 D22-1: no outer verify any more —
+                    // each merge helper verified inside its own
+                    // critical section (see mergeListEntries and
+                    // friends); whole-file files verified inside
+                    // writeWholeCollectionBytes. The old
+                    // collectionVerifies call ran after the
+                    // return, with the whole remaining apply in
+                    // between.
                     // b49fix18 D-5c: a passing recent verify that
                     // still excused missing entries warns — the
                     // displacement is observable instead of silent.
@@ -1931,7 +2015,13 @@ extension BackupEngineCore {
                     failureReason = "序列化失败：\(relativePath)"
                 case .writeFailed:
                     failureReason = "写入失败：\(relativePath)"
-                case .verifyFailed:
+                case .verifyFailed(let bytes):
+                    // b49fix20 D22-1: record what was written
+                    // before failing, so the rollback treats
+                    // this file as written (otherwise it would
+                    // skip it and leave suspect content in
+                    // place).
+                    expectedCollectionBytes[relativePath] = bytes
                     failureReason = "校验失败：\(relativePath)"
                 }
                 if failureReason != nil { break }
@@ -1977,12 +2067,10 @@ extension BackupEngineCore {
                 case .written(let bytes):
                     expectedCollectionBytes[relativePath] = bytes
                     appliedCollections += 1
-                    // b49fix19 P1-4: verify this file now (same
-                    // reason as the collections loop above).
-                    if !collectionVerifies(relativePath: relativePath, expectedBytes: bytes, documentsURL: documentsURL) {
-                        failureReason = "校验失败：\(relativePath)"
-                        break
-                    }
+                    // b49fix20 D22-1: no outer verify any more —
+                    // each merge helper verified inside its own
+                    // critical section (same reason as the
+                    // collections loop above).
                 case .skipped:
                     // Unreachable: neither merge helper returns
                     // .skipped — recorded defensively so the
@@ -1992,7 +2080,13 @@ extension BackupEngineCore {
                     failureReason = "序列化失败：\(relativePath)"
                 case .writeFailed:
                     failureReason = "写入失败：\(relativePath)"
-                case .verifyFailed:
+                case .verifyFailed(let bytes):
+                    // b49fix20 D22-1: record what was written
+                    // before failing, so the rollback treats
+                    // this file as written (otherwise it would
+                    // skip it and leave suspect content in
+                    // place).
+                    expectedCollectionBytes[relativePath] = bytes
                     failureReason = "校验失败：\(relativePath)"
                 }
                 if failureReason != nil { break }
@@ -2057,19 +2151,39 @@ extension BackupEngineCore {
                     failureReason = "校验失败：\(file.relativePath)"
                     break
                 }
+                // b49fix20 D22-5/D22-14: this payload file was
+                // extracted this round — it counts as written
+                // for the rollback (see writtenPayloadPaths).
+                writtenPayloadPaths.insert(file.relativePath)
                 appliedFiles += 1
             }
         }
 
-        // b49fix19 P1-4: there is no end-of-apply verify any
-        // more — every default, collection, merged file,
-        // unknown-keys file and payload file was verified the
-        // moment its write landed (see the loops above). The
-        // old unified verify left a gap of "apply remaining
-        // time" in which a live write could land and fail the
-        // verify, rolling back an import whose content was
-        // fine — and the rollback then wiped the live writes
-        // made during the import too.
+        // b49fix20 D22-2(a): the final sweep — every collection
+        // was verified inside its own critical section at
+        // write time (D22-1), but a stale-state writer
+        // (ResolverCooldown.save, DownloadEngine.persistLocked,
+        // saveDailyTracks' day overwrite) can still wipe
+        // imported content AFTER its file verified, because
+        // those writers re-read nothing — and the payload phase
+        // above (seconds to tens of seconds on a big backup)
+        // stretches that window longest. Re-verify every
+        // applied collection file now, after the payload phase
+        // and before the success report — a failure here is
+        // loud (fail + preserving rollback), never silent.
+        // musicQueue verifies by shape only (a song switch
+        // after the write legitimately replaced it). Payload
+        // files are not re-verified here: they were
+        // size-verified at extraction and no live writer
+        // touches them.
+        if failureReason == nil {
+            for relativePath in expectedCollectionBytes.keys.sorted() {
+                guard collectionVerifies(relativePath: relativePath, expectedBytes: expectedCollectionBytes[relativePath]!, documentsURL: documentsURL) else {
+                    failureReason = "最终校验失败：\(relativePath)"
+                    break
+                }
+            }
+        }
 
         // b49fix17 P1-1/P1-3: plan-time skips plus apply-time
         // skips, reported together.
@@ -2083,7 +2197,8 @@ extension BackupEngineCore {
             let (rollbackFailures, keptLive) = rollback(
                 journal: journal, snapshotDir: snapshotDir,
                 documentsURL: documentsURL, defaults: defaults,
-                writtenBytes: expectedCollectionBytes
+                writtenBytes: expectedCollectionBytes,
+                writtenPayloadPaths: writtenPayloadPaths
             )
             // b49fix4 P2-36: "已全量回滚" is only true when the
             // rollback itself restored everything. When it did
@@ -2091,11 +2206,11 @@ extension BackupEngineCore {
             let detail: String
             if rollbackFailures.isEmpty {
                 detail = reason + "，已全量回滚"
-                    + (keptLive.isEmpty ? "" : "（导入期间被 live 改写的文件已保留 live 版本：" + keptLive.joined(separator: "、") + "）")
+                    + (keptLive.isEmpty ? "" : "（导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：" + keptLive.joined(separator: "、") + "）")
             } else {
                 detail = reason + "，回滚未完成，未恢复："
                     + rollbackFailures.joined(separator: "、")
-                    + (keptLive.isEmpty ? "" : "；导入期间被 live 改写的文件已保留 live 版本：" + keptLive.joined(separator: "、"))
+                    + (keptLive.isEmpty ? "" : "；导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：" + keptLive.joined(separator: "、"))
             }
             return BackupImportDetail(
                 outcome: .failed, appliedKeys: 0, appliedCollections: 0,
@@ -2111,7 +2226,18 @@ extension BackupEngineCore {
         // The snapshot folder is kept (same rule as S1's
         // migration_backup): the pre-import state stays on disk
         // until the user clears it.
+        // b49fix20 D22-8: sweep both unknown-keys files
+        // against the current mapping table (see
+        // MigrationStore.sweepUnknownKeysFiles) — after the
+        // final sweep above, and only on success.
+        MigrationStore.sweepUnknownKeysFiles(documentsURL: documentsURL)
         var warnings = planned.warnings + verifyWarnings
+        // b49fix20 D22-7: days that exceeded the 20-song cap
+        // dropped incoming songs — counted, never silent.
+        let dailyDropped = MigrationStore.dailyCapDroppedDuringImport()
+        if dailyDropped > 0 {
+            warnings.append("每日推薦有 \(dailyDropped) 首匯入歌曲超出每日 20 首上限，已跳過")
+        }
         if planned.hasEmbyConfig, !embyCredentialPresent() {
             warnings.append(embyCredentialWarning)
         }
@@ -2217,7 +2343,27 @@ extension BackupEngineCore {
                         at: target.deletingLastPathComponent(),
                         withIntermediateDirectories: true
                     )
-                    try FileManager.default.copyItem(at: source, to: target)
+                    // b49fix20 D22-17: the copy takes the file's
+                    // queue when it has one — same as
+                    // MigrationBackup.create (b49fix19 P2-9b): a
+                    // live write landing between the copy and
+                    // the import's write used to give a mixed
+                    // snapshot. Payload paths have no queue and
+                    // copy bare. The snapshot is taken before
+                    // any import write, so taking the queue here
+                    // cannot deadlock.
+                    // b49fix20 O-2: the queue serialises THIS
+                    // file's copy against THIS file's writes —
+                    // there is no global point across files (see
+                    // MigrationBackup.create).
+                    let copyOne = {
+                        try FileManager.default.copyItem(at: source, to: target)
+                    }
+                    if let queue = restoreQueue(for: relativePath) {
+                        try queue.sync(execute: copyOne)
+                    } else {
+                        try copyOne()
+                    }
                     filesPresent.append(relativePath)
                 } else {
                     filesAbsent.append(relativePath)
@@ -2380,6 +2526,11 @@ extension BackupEngineCore {
         var restoredFiles: Int = 0
         var failedKeys: [String] = []
         var failedFiles: [String] = []
+        /// History files the restore normalised (b49fix20
+        /// D22-10): file -> entries dropped because their shape
+        /// could not be read by the live typed reader (raw ISO
+        /// dates from a pre-fix19 snapshot).
+        var historyNormalizedDropped: [String: Int] = [:]
         var succeeded: Bool {
             manifestError == nil && failedKeys.isEmpty && failedFiles.isEmpty
         }
@@ -2566,6 +2717,7 @@ extension BackupEngineCore {
         result.failedFiles = fileRestore.failures
         result.restoredFiles = filesPresent.filter { !result.failedFiles.contains($0) }.count
             + fileRestore.deletedAbsent
+        result.historyNormalizedDropped = fileRestore.normalizedHistory
         if result.restoredKeys + result.restoredFiles > 0 {
             NotificationCenter.default.post(name: .haoBackupImported, object: nil)
         }
@@ -2624,14 +2776,50 @@ extension BackupEngineCore {
         snapshotDir: URL,
         documentsURL: URL,
         defaults: UserDefaults,
-        writtenBytes: [String: Data]? = nil
+        writtenBytes: [String: Data]? = nil,
+        writtenPayloadPaths: Set<String> = []
     ) -> (failures: [String], keptLive: [String]) {
         journal.restore(defaults: defaults)
         let restored = restoreFilesFromSnapshot(
             snapshotDir: snapshotDir, documentsURL: documentsURL,
-            writtenBytes: writtenBytes
+            writtenBytes: writtenBytes,
+            writtenPayloadPaths: writtenPayloadPaths
         )
         return (restored.failures, restored.keptLive)
+    }
+
+    /// Normalises a restored history file (b49fix20 D22-10):
+    /// a snapshot taken after a fix18 import can hold raw ISO
+    /// dates the live typed reader cannot decode — restoring
+    /// exact bytes would reinstall the hole P1-1 closed.
+    /// Returns the number of entries dropped (0 when the file
+    /// needed no change). Takes the file's queue when it has
+    /// one, so the re-read -> write serialises against the live
+    /// writer the same way the restore did; called after the
+    /// restore lands, holding no queue. Only the two history
+    /// files can carry the hole — other files pass through
+    /// untouched.
+    static func normalizeRestoredHistory(relativePath: String, documentsURL: URL) -> Int {
+        let base = String(relativePath.dropLast(".json".count))
+        guard base == "hao_video_hist" || base == "hao_live_hist" else { return 0 }
+        let normalizeOne = { () -> Int in
+            let url = documentsURL.appendingPathComponent(relativePath)
+            guard let data = try? Data(contentsOf: url),
+                  let parsed = try? JSONSerialization.jsonObject(with: data, options: []),
+                  let list = parsed as? [[String: Any]]
+            else { return 0 }
+            let normalized = MigrationStore.normalizedHistoryEntries(list, file: base)
+            guard let keptData = try? JSONSerialization.data(withJSONObject: normalized.kept, options: [.sortedKeys]),
+                  let listData = try? JSONSerialization.data(withJSONObject: list, options: [.sortedKeys]),
+                  normalized.dropped > 0 || keptData != listData
+            else { return 0 }
+            try? keptData.write(to: url, options: [.atomic])
+            return normalized.dropped
+        }
+        if let queue = restoreQueue(for: relativePath) {
+            return queue.sync(execute: normalizeOne)
+        }
+        return normalizeOne()
     }
 
     /// Restores the files captured in a snapshot folder, from
@@ -2661,8 +2849,9 @@ extension BackupEngineCore {
     static func restoreFilesFromSnapshot(
         snapshotDir: URL,
         documentsURL: URL,
-        writtenBytes: [String: Data]? = nil
-    ) -> (failures: [String], deletedAbsent: Int, keptLive: [String]) {
+        writtenBytes: [String: Data]? = nil,
+        writtenPayloadPaths: Set<String> = []
+    ) -> (failures: [String], deletedAbsent: Int, keptLive: [String], normalizedHistory: [String: Int]) {
         guard let manifestData = try? Data(contentsOf: snapshotDir.appendingPathComponent("snapshot-manifest.json")),
               let parsed = try? JSONSerialization.jsonObject(with: manifestData, options: []),
               let manifest = parsed as? [String: Any]
@@ -2670,6 +2859,7 @@ extension BackupEngineCore {
         var failures: [String] = []
         var deletedAbsent = 0
         var keptLive: [String] = []
+        var normalizedHistory: [String: Int] = [:]
         for relativePath in (manifest["filesPresent"] as? [String] ?? []) {
             // b49fix17 P2-3: the restore takes the file's queue
             // when it has one — a queued writer landing between
@@ -2682,6 +2872,18 @@ extension BackupEngineCore {
             // queue and restore bare.
             let restoreOne = { () -> (restored: Bool, kept: Bool) in
                 if let writtenBytes = writtenBytes {
+                    // b49fix20 D22-5/D22-14: only files this
+                    // round actually wrote are restored — a
+                    // file the snapshot captured but the import
+                    // never reached (failed on an earlier file)
+                    // keeps its live content instead of being
+                    // prior-restored, and a payload file
+                    // extracted this round counts as written
+                    // (tracked separately — expectedCollectionBytes
+                    // only holds collections).
+                    guard writtenBytes[relativePath] != nil || writtenPayloadPaths.contains(relativePath) else {
+                        return (true, false)
+                    }
                     // Preserving restore (in-import rollback):
                     // prior + live-added entries, or keep the
                     // live file when it replaced the import's
@@ -2727,6 +2929,13 @@ extension BackupEngineCore {
                 failures.append(relativePath)
             } else if outcome.kept {
                 keptLive.append(relativePath)
+            } else {
+                // b49fix20 D22-10: a restored history file is
+                // normalised (see normalizeRestoredHistory) —
+                // the snapshot may hold raw ISO dates the live
+                // typed reader cannot decode.
+                let dropped = normalizeRestoredHistory(relativePath: relativePath, documentsURL: documentsURL)
+                if dropped > 0 { normalizedHistory[relativePath] = dropped }
             }
         }
         for relativePath in (manifest["filesAbsent"] as? [String] ?? []) {
@@ -2737,6 +2946,17 @@ extension BackupEngineCore {
             // a failed removal is a failure, not a restore.
             if FileManager.default.fileExists(atPath: target.path) {
                 if let writtenBytes = writtenBytes {
+                    // b49fix20 D22-14(b): a file the snapshot
+                    // says was absent, that the import never
+                    // wrote, but live created during the import
+                    // (a first-ever video favourite) is NOT
+                    // deleted by the rollback — it keeps its
+                    // live content. Only files this round wrote
+                    // (or payload files extracted this round) go
+                    // through the preserving restore below.
+                    guard writtenBytes[relativePath] != nil || writtenPayloadPaths.contains(relativePath) else {
+                        continue
+                    }
                     // Preserving restore (in-import rollback):
                     // the file did not exist before the import —
                     // keep only the live entries added after the
@@ -2809,7 +3029,7 @@ extension BackupEngineCore {
                 }
             }
         }
-        return (failures, deletedAbsent, keptLive)
+        return (failures, deletedAbsent, keptLive, normalizedHistory)
     }
 
     /// The restore kind of one relative path (b49fix19 P1-4):

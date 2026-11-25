@@ -132,8 +132,23 @@ enum VideoLibraryStore {
         // deadlock. The in-memory cache + notification stay
         // outside the queue: they are not file state.
         MigrationStore.collectionWriteQueue.sync {
-            LocalStore.saveCollection(named: historyCollection, value: entries)
+            saveHistoryLocked(entries)
         }
+        noteHistorySaved(entries)
+    }
+
+    /// The file write of saveHistory, assuming
+    /// collectionWriteQueue is held. Split out so
+    /// savePosition / removeHistory can re-read inside the same
+    /// queue without re-entering it (DispatchQueue.sync on a
+    /// serial queue from inside deadlocks).
+    private static func saveHistoryLocked(_ entries: [VideoHistoryEntry]) {
+        LocalStore.saveCollection(named: historyCollection, value: entries)
+    }
+
+    /// The cache + notification epilogue of a history write
+    /// (not file state, so it stays outside the queue).
+    private static func noteHistorySaved(_ entries: [VideoHistoryEntry]) {
         // Keep the in-memory watched set in step (build 36,
         // item 10): saveHistory is the single funnel for
         // video-history writes, so the cache never lags a
@@ -167,7 +182,17 @@ enum VideoLibraryStore {
             item: item, episodeName: episodeName, episodeIndex: episodeIndex,
             lineName: lineName, positionSeconds: positionSeconds,
             durationSeconds: durationSeconds, updatedAt: Date())
-        saveHistory(mergedHistory(history(), with: entry))
+        // b49fix20 D22-2: the re-read → merge → write runs
+        // whole under collectionWriteQueue — a history() read
+        // outside the queue used to race the import's merge
+        // and overwrite imported rows with a stale pre-import
+        // list.
+        var merged: [VideoHistoryEntry] = []
+        MigrationStore.collectionWriteQueue.sync {
+            merged = mergedHistory(history(), with: entry)
+            saveHistoryLocked(merged)
+        }
+        noteHistorySaved(merged)
     }
 
     /// The resume bookmark for a film, or nil when there is nothing
@@ -191,7 +216,14 @@ enum VideoLibraryStore {
 
     static func removeHistory(title: String, year: String?) {
         let key = VideoResumeKey.key(title: title, year: year)
-        saveHistory(history().filter { $0.id != key })
+        // b49fix20 D22-2: same re-read-inside-the-queue rule as
+        // savePosition above.
+        var remaining: [VideoHistoryEntry] = []
+        MigrationStore.collectionWriteQueue.sync {
+            remaining = history().filter { $0.id != key }
+            saveHistoryLocked(remaining)
+        }
+        noteHistorySaved(remaining)
     }
 
     /// Resume keys of everything with watch history (title +
@@ -258,20 +290,28 @@ enum VideoLibraryStore {
     /// in "我的收藏" until the user left and came back.
     @discardableResult
     static func toggleFavourite(item: VideoItem) -> Bool {
-        var items = favourites()
         let key = VideoResumeKey.key(title: item.title, year: item.year)
-        if let index = items.firstIndex(where: {
-            VideoResumeKey.key(title: $0.title, year: $0.year) == key
-        }) {
-            items.remove(at: index)
+        // b49fix20 D22-2: read-modify-write under
+        // collectionWriteQueue — the bare favourites() read
+        // used to race the import's merge and overwrite
+        // imported favourites with a stale pre-import list.
+        // The notification stays outside the queue: it is not
+        // file state.
+        let added = MigrationStore.collectionWriteQueue.sync { () -> Bool in
+            var items = favourites()
+            if let index = items.firstIndex(where: {
+                VideoResumeKey.key(title: $0.title, year: $0.year) == key
+            }) {
+                items.remove(at: index)
+                saveFavourites(items)
+                return false
+            }
+            items.insert(item, at: 0)
             saveFavourites(items)
-            NotificationCenter.default.post(name: .haoVideoFavChanged, object: nil)
-            return false
+            return true
         }
-        items.insert(item, at: 0)
-        saveFavourites(items)
         NotificationCenter.default.post(name: .haoVideoFavChanged, object: nil)
-        return true
+        return added
     }
 
     // MARK: - Search history
@@ -283,20 +323,34 @@ enum VideoLibraryStore {
     static func saveSearchQuery(_ query: String) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        var history = searchHistory().filter { $0 != trimmed }
-        history.insert(trimmed, at: 0)
-        LocalStore.saveCollection(named: searchHistoryCollection, value: Array(history.prefix(maxSearchHistory)))
+        // b49fix20 D22-2: read-modify-write under
+        // collectionWriteQueue (same reason as toggleFavourite
+        // above).
+        MigrationStore.collectionWriteQueue.sync {
+            var history = searchHistory().filter { $0 != trimmed }
+            history.insert(trimmed, at: 0)
+            LocalStore.saveCollection(named: searchHistoryCollection, value: Array(history.prefix(maxSearchHistory)))
+        }
     }
 
     static func clearSearchHistory() {
-        LocalStore.saveCollection(named: searchHistoryCollection, value: [String]())
+        // b49fix20 D22-2: the write takes collectionWriteQueue
+        // (same reason as saveSearchQuery above).
+        MigrationStore.collectionWriteQueue.sync {
+            LocalStore.saveCollection(named: searchHistoryCollection, value: [String]())
+        }
     }
 
     /// Delete one search term (video search history chips,
     /// build 36 item 19). Same write path as clearSearchHistory.
     static func removeSearchHistory(term: String) {
-        let history = searchHistory().filter { $0 != term }
-        LocalStore.saveCollection(named: searchHistoryCollection, value: history)
+        // b49fix20 D22-2: read-modify-write under
+        // collectionWriteQueue (same reason as saveSearchQuery
+        // above).
+        MigrationStore.collectionWriteQueue.sync {
+            let history = searchHistory().filter { $0 != term }
+            LocalStore.saveCollection(named: searchHistoryCollection, value: history)
+        }
     }
 
     // MARK: - Home cache

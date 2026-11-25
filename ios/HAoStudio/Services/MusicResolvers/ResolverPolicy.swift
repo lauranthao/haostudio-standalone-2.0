@@ -212,7 +212,18 @@ final class ResolverCooldown {
     /// The speed write itself, assuming the caller's queue is
     /// held (b49fix18 D-7): save() takes
     /// collectionWriteQueue, so the body must not sync on it
-    /// again.
+    /// again. b49fix20 D22-2: the disk file is merged in first
+    /// — the in-memory map only knows keys this process
+    /// recorded, so a bare write wiped speeds a backup import
+    /// had just installed (hao_resolver_speed is whole-file,
+    /// and no .haoBackupImported observer reloads this
+    /// singleton). Disk wins for keys memory never recorded
+    /// (imported speeds); memory wins for keys it knows (live
+    /// recordings are fresher than the backup's). No observer
+    /// is added: this object is driven from the resolver's
+    /// serial work queue, and a NotificationCenter observer
+    /// would touch its state from an arbitrary thread; the
+    /// in-memory ranking staleness self-heals at the next save.
     private func saveLocked() {
         guard let dir = documentsDirectory ?? LocalStore.documentsDirectoryOrNil() else { return }
         lastSaveAt = now()
@@ -222,6 +233,12 @@ final class ResolverCooldown {
                 avg: averages[key],
                 fails: fails[key],
                 cooledUntilMs: cooledUntil[key].map { Int($0.timeIntervalSince1970 * 1000) })
+        }
+        if let diskData = try? Data(contentsOf: dir.appendingPathComponent("\(Self.speedKey).json")),
+           let disk = try? JSONDecoder().decode([String: ResolverSpeedRecord].self, from: diskData) {
+            for (key, record) in disk where map[key] == nil {
+                map[key] = record
+            }
         }
         guard let data = try? JSONEncoder().encode(map) else { return }
         try? data.write(
