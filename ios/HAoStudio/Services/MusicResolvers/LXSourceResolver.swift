@@ -758,6 +758,18 @@ extension LXSourceResolver {
             let aMs = cooldown.averageMs(a.key)
             let bMs = cooldown.averageMs(b.key)
             if aMs != bMs { return aMs < bMs }
+            // b47-playlogic (Coda §7.1: native platform URL first,
+            // unblock only after it fails — same order as music-lib
+            // QQ `requestQualityURLs` and QQMusicApi
+            // `vkey.GetVkeyServer` before any mirror): on a speed
+            // tie — the cold start, where every job reads unknown
+            // 500 ms — the built-in (direct HTTP endpoint) is asked
+            // before the LX script jobs. A script that measured
+            // faster still wins on speed above; a hanging built-in
+            // still cools down (2 min) and sorts last next time.
+            let aScript = a.key.hasPrefix("lx:")
+            let bScript = b.key.hasPrefix("lx:")
+            if aScript != bScript { return !aScript }
             return a.order < b.order
         }
         return jobs
