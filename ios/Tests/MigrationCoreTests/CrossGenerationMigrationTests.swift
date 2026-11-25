@@ -343,12 +343,17 @@ final class CrossGenerationMigrationTests: XCTestCase {
 
         XCTAssertEqual(report.outcome, .migrated)
         XCTAssertEqual(report.totalKeys, 150)
-        // 140, not 145: family keys merge into one file per family
+        // 139, not 145: family keys merge into one file per family
         // (9 keys -> haoVodProg, hao_daily, hao_listen), and the 3
         // unknown keys land in one unknown-keys file: 91 defaults +
-        // 44 collection files + 1 emby config + 3 family files +
-        // 1 unknown-keys file = 140.
-        XCTAssertEqual(report.migratedKeys, 140)
+        // 43 collection files + 1 emby config + 3 family files +
+        // 1 unknown-keys file = 139. The collection count is 43,
+        // not 44: the bare hao_listen key merges via the listen
+        // family instead of a whole-file write (b49fix16 P2-1),
+        // so it is counted once, not once per write path — the
+        // accounting is now exact (139 + 2 skipped + 3 unknown
+        // = 144 = 150 total - 6 family-key reduction).
+        XCTAssertEqual(report.migratedKeys, 139)
         XCTAssertEqual(report.skippedKeys, 2)
         XCTAssertEqual(report.unknownKeys, 3)
         XCTAssertEqual(report.failedKeys, 0)

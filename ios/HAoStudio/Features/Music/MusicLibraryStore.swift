@@ -924,7 +924,26 @@ enum MusicLibraryStore {
         return raw.map(MusicSong.init(json:))
     }
 
+    /// Saves the daily list (b49fix5 P2-4): one atomic
+    /// replace of the whole day key — a CAS guard above decides
+    /// whether the save is safe; this function only writes.
+    /// b49fix16 P2-2: the whole body runs under
+    /// MigrationStore.dailyWriteQueue, the same queue the backup
+    /// import's dict merges take — a replace landing between
+    /// the import's re-read and write is serialised after it
+    /// instead of overwriting the import (or vice versa).
     static func saveDailyTracks(_ tracks: [MusicSong], for dayKey: String) {
+        MigrationStore.dailyWriteQueue.sync {
+            writeDailyTracksLocked(tracks, for: dayKey)
+        }
+    }
+
+    /// The saveDailyTracks body, assuming dailyWriteQueue is
+    /// held. Split out so saveDailyTracksIfUnchanged can
+    /// compare and save atomically under the same queue without
+    /// re-entering it (DispatchQueue.sync on a serial queue from
+    /// inside deadlocks).
+    private static func writeDailyTracksLocked(_ tracks: [MusicSong], for dayKey: String) {
         var dict = readObject(named: dailyCollection)
         dict[dayKey] = tracks.map { $0.toJSON() }
         // b49sweep: prune day keys older than ~7 days on save —
@@ -961,22 +980,27 @@ enum MusicLibraryStore {
     /// Compare-and-swap daily save (b49fix5 P2-4): writes
     /// `tracks` only when the on-disk list for `dayKey` is still
     /// the one the caller read (`expectedKeys`, identityKey
-    /// order). Returns true when the write happened. Callers
-    /// save on the main thread, so the read-compare-write is
-    /// atomic against replaceDailySong's save (also main) — but
-    /// NOT against a backup import writing hao_daily from a
-    /// background queue (b49-sweep17 deepread P2-1): the CAS
-    /// still detects that interleaving and refuses, so callers
-    /// MUST honor the return value and publish the disk table
-    /// on refusal (Discovery reloadDaily, b49fix15 P2-2; Home
-    /// since b49fix6/7). A discarded `false` would leave the
-    /// screen showing a list the disk does not have.
+    /// order). Returns true when the write happened. The whole
+    /// read-compare-write runs under
+    /// MigrationStore.dailyWriteQueue (b49fix16 P2-2) — the
+    /// same queue saveDailyTracks and the backup import's dict
+    /// merges take — so it is atomic against replaceDailySong's
+    /// save AND against a backup import writing hao_daily from
+    /// a background queue. (Before fix16 the CAS only held
+    /// against main-thread callers; the import interleaving was
+    /// detected and refused, so callers MUST still honor the
+    /// return value and publish the disk table on refusal —
+    /// Discovery reloadDaily, b49fix15 P2-2; Home since
+    /// b49fix6/7. A discarded `false` would leave the screen
+    /// showing a list the disk does not have.)
     @discardableResult
     static func saveDailyTracksIfUnchanged(_ tracks: [MusicSong], for dayKey: String, expectedKeys: [String], force: Bool = false) -> Bool {
-        let current = dailyTracks(for: dayKey)?.map { $0.identityKey } ?? []
-        guard shouldSaveDailyTracks(currentDiskKeys: current, expectedKeys: expectedKeys, force: force) else { return false }
-        saveDailyTracks(tracks, for: dayKey)
-        return true
+        MigrationStore.dailyWriteQueue.sync { () -> Bool in
+            let current = dailyTracks(for: dayKey)?.map { $0.identityKey } ?? []
+            guard shouldSaveDailyTracks(currentDiskKeys: current, expectedKeys: expectedKeys, force: force) else { return false }
+            writeDailyTracksLocked(tracks, for: dayKey)
+            return true
+        }
     }
 
     /// Pinned ranking pool for the day (b49fix7 P2-3): the

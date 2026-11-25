@@ -127,6 +127,23 @@ enum MigrationStore {
     /// pool's read-modify-write the same way.
     static let listenLogWriteQueue = DispatchQueue(label: "com.haostudio.listenLog")
 
+    /// Serial queue for daily-cache writes (b49fix16 P2-2):
+    /// the same shape as listenLogWriteQueue above, and as
+    /// MusicLibraryStore's dailyPoolQueue (b49fix8 P2-4).
+    /// saveDailyTracks is a read-modify-write of the whole
+    /// hao_daily dict, called from the main thread
+    /// (replaceDailySong, reloadDaily CAS) and from the backup
+    /// import's background queues (Route A dict merge, Route B
+    /// mergedFiles loop) — without one queue a replace landing
+    /// between the import's re-read and write overwrites the
+    /// import (or vice versa). The queue lives here, not in
+    /// MusicLibraryStore: that file is not in the Package.swift
+    /// AppCore sources, and BackupEngine (AppCore) must take
+    /// the same queue. Held only across file I/O; never taken
+    /// re-entrantly and never held across a dispatch or await,
+    /// so it cannot deadlock.
+    static let dailyWriteQueue = DispatchQueue(label: "com.haostudio.dailyTracks")
+
     static let snapshotFileName = "migration_snapshot.json"
     static let backupDirectoryName = "migration_backup"
     static let doneKey = "hao_migration_done_v1"
@@ -492,7 +509,22 @@ enum MigrationStore {
                 case .userDefaults:
                     defaultWrites.append((key: key, value: coerced))
                 case .collectionFile(let name):
-                    fileWrites[name] = coerced
+                    if name == "hao_listen" {
+                        // b49fix16 P2-1: the bare key takes the same
+                        // merge road as the hao_listen_* shards — a
+                        // whole-file write here would overwrite a
+                        // completion recorded while this import runs
+                        // (Route B's verify is shape-only, so the
+                        // loss would be silent). A non-list value is
+                        // corrupt: skip the key, do not write it.
+                        if let list = coerced as? [[String: Any]] {
+                            listenEntries.append(contentsOf: list)
+                        } else {
+                            skipped.append(key)
+                        }
+                    } else {
+                        fileWrites[name] = coerced
+                    }
                 case .emby:
                     if let config = coerced as? [String: Any] {
                         embyConfig = config
@@ -602,15 +634,34 @@ enum MigrationStore {
         for name in mergedFiles.keys.sorted() {
             guard let entries = mergedFiles[name] else { continue }
             journal.recordFile(name: name, documentsURL: documentsURL)
-            let existing = readJSONDictionary(name: name, documentsURL: documentsURL)
-            var merged = existing
-            for entry in entries {
-                merged[entry.key] = entry.value
+            // b49fix16 P2-2: the re-read → merge → cap → write
+            // runs under dailyWriteQueue, the same queue
+            // MusicLibraryStore.saveDailyTracks /
+            // saveDailyTracksIfUnchanged use — a replace landing
+            // between this re-read and write is serialised after
+            // it instead of overwriting the import (or vice
+            // versa). This loop only ever sees hao_daily and
+            // haoVodProg — the only two non-listen prefix
+            // families — and one queue for both dict merges keeps
+            // the two import routes from drifting apart. The
+            // write result is captured out of the closure because
+            // the failure path returns from this function.
+            let wroteMerged = dailyWriteQueue.sync { () -> Bool in
+                let existing = readJSONDictionary(name: name, documentsURL: documentsURL)
+                var merged = existing
+                for entry in entries {
+                    merged[entry.key] = entry.value
+                }
+                // b49fix16 P2-6: deterministic cap, not an
+                // arbitrary hash-ordered 200 (see
+                // cappedVodProgEntries — "newest" is not
+                // recoverable from the data).
+                if name == "haoVodProg" {
+                    merged = cappedVodProgEntries(merged)
+                }
+                return writeJSONFile(name: name, value: merged, documentsURL: documentsURL)
             }
-            if name == "haoVodProg" && merged.count > 200 {
-                merged = Dictionary(uniqueKeysWithValues: Array(merged.prefix(200)))
-            }
-            if !writeJSONFile(name: name, value: merged, documentsURL: documentsURL) {
+            if !wroteMerged {
                 rollback(journal: journal, priorEmbyApiKey: priorEmbyApiKey,
                          wroteEmbyKeychain: wroteEmbyKeychain,
                          documentsURL: documentsURL, defaults: defaults)
@@ -879,6 +930,30 @@ enum MigrationStore {
             if seen.insert(listenDedupeKey(for: entry)).inserted {
                 out.append(entry)
             }
+        }
+        return out
+    }
+
+    /// Caps a haoVodProg dict to 200 entries (b49fix16 P2-6).
+    /// The old code took the first 200 entries of the
+    /// Dictionary's iteration order — which is hash-random, so
+    /// it kept an arbitrary 200 resume positions, not the
+    /// newest. Honest limit:
+    /// "newest" is not recoverable from the data — the entries
+    /// carry no timestamp (the value is resume seconds, the key
+    /// is a platform-scoped video id) — so this makes the cap
+    /// deterministic instead: keys sort, the last 200 survive,
+    /// so the same input always keeps the same 200 and repeated
+    /// imports converge instead of randomly dropping different
+    /// entries. Shared by Route A (BackupEngine) and Route B
+    /// (this file's mergedFiles loop) so the two import routes
+    /// cannot drift apart again.
+    static func cappedVodProgEntries(_ dict: [String: Any]) -> [String: Any] {
+        guard dict.count > 200 else { return dict }
+        var out: [String: Any] = [:]
+        out.reserveCapacity(200)
+        for key in dict.keys.sorted().suffix(200) {
+            out[key] = dict[key]
         }
         return out
     }

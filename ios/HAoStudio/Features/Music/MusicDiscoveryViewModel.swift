@@ -351,6 +351,13 @@ final class MusicDiscoveryViewModel: ObservableObject {
                 }
             }
         }
+        // b49fix16 P2-3: backfill from the spares, same as Home
+        // — the CAS-refusal fallback's dislike filter can short
+        // the picks below 20, and without this the page shows 19
+        // until the next reload. On the normal path the picks are
+        // 20 by construction, so this is a no-op.
+        (picksToPublish, sparesToPublish) = HomeViewModel.backfilledDailyPicks(
+            picks: picksToPublish, spares: sparesToPublish)
         dailyTracks = picksToPublish
         dailySpares = sparesToPublish
     }
