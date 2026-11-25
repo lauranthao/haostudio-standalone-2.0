@@ -40,6 +40,16 @@ final class LiveTabViewModel: ObservableObject {
     @Published private(set) var loadingMore = false
     @Published private(set) var loadMoreFailed = false
     @Published private(set) var hasMore = false
+    /// (b49fix2 P2-3) The category strip failed to load: the
+    /// strip shows a retry in its place instead of vanishing
+    /// silently. Kept separate from `categories.isEmpty` so a
+    /// platform that genuinely has no categories (empty success)
+    /// does not show a retry for nothing.
+    @Published private(set) var categoriesFailed = false
+    /// (b49fix2 P2-2) The current load-more page failed twice
+    /// in a row: terminal — no more auto-loads, no more retry
+    /// button, just a note to pull down and refresh.
+    @Published private(set) var loadMoreDead = false
 
     @Published var platform: LivePlatform = .bilibili
     @Published var selectedArea: String?
@@ -52,6 +62,11 @@ final class LiveTabViewModel: ObservableObject {
     /// The gateway, readable so the search page can share it.
     let gateway: LiveDataGateway?
     private var page = 0
+    /// (b49fix2 P2-2) Consecutive load-more failures for one
+    /// page: the first shows the retry row, the second marks
+    /// the page dead. Reset by any fresh load / success.
+    private var loadMoreFailureCount = 0
+    private var loadMoreFailedPage: Int?
     /// Load generation (build 35 sweep S4): bumped by every
     /// `reload()` / category change, so a slow answer for the old
     /// platform / area can never overwrite the new one — fast
@@ -69,14 +84,24 @@ final class LiveTabViewModel: ObservableObject {
     /// No gateway wired (merge provides the adapter).
     var hasGateway: Bool { gateway != nil }
 
-    func reload() {
-        refreshEnabledPlatforms()
-        follows = LiveLibraryStore.follows()
-        history = LiveLibraryStore.history()
+    /// Fresh-list state: page 0, no rooms, no load-more state.
+    /// Callers bump `loadGeneration` themselves (each site owns
+    /// its generation bump for the in-flight callbacks).
+    private func resetListState() {
         page = 0
         rooms = []
         hasMore = false
         loadMoreFailed = false
+        loadMoreDead = false
+        loadMoreFailureCount = 0
+        loadMoreFailedPage = nil
+    }
+
+    func reload() {
+        refreshEnabledPlatforms()
+        follows = LiveLibraryStore.follows()
+        history = LiveLibraryStore.history()
+        resetListState()
         loadGeneration += 1
         loadFresh()
         loadCategories()
@@ -101,7 +126,21 @@ final class LiveTabViewModel: ObservableObject {
     /// re-run `reload()` and wipe the grid + scroll position.
     func loadIfNeeded() {
         refreshLibrary()
-        refreshEnabledPlatforms()
+        if refreshEnabledPlatforms() {
+            // (b49fix2 P1-25) The platform moved under the grid:
+            // drop the old platform's rooms and categories and
+            // reload, like `reload()` does — the old code only
+            // flipped the tab and left the old grid underneath
+            // it until `rooms` happened to be empty.
+            resetListState()
+            categories = []
+            categoriesFailed = false
+            loadFailed = false
+            loadGeneration += 1
+            loadFresh()
+            loadCategories()
+            return
+        }
         if rooms.isEmpty && !isLoading {
             loadFresh()
         }
@@ -114,13 +153,20 @@ final class LiveTabViewModel: ObservableObject {
     /// (b49 sweep #2) and move off a platform that was just
     /// switched off: the selected platform must always be one of
     /// the enabled tabs, or the tab would fetch a platform the
-    /// user turned off.
-    private func refreshEnabledPlatforms() {
+    /// user turned off. Returns whether the platform moved, so
+    /// the caller can drop the old platform's grid (b49fix2
+    /// P1-25). All platforms off leaves the selection alone —
+    /// there is nothing to move to, and the adapter answers
+    /// `.empty` for a disabled platform instead of trapping
+    /// on `enabledPlatforms[0]`.
+    @discardableResult
+    private func refreshEnabledPlatforms() -> Bool {
         enabledPlatforms = LivePlatform.enabledCases
-        if !enabledPlatforms.contains(platform) {
-            platform = enabledPlatforms[0]
-            selectedArea = nil
-        }
+        guard !enabledPlatforms.contains(platform) else { return false }
+        guard let first = enabledPlatforms.first else { return false }
+        platform = first
+        selectedArea = nil
+        return true
     }
 
     func selectPlatform(_ next: LivePlatform) {
@@ -133,10 +179,7 @@ final class LiveTabViewModel: ObservableObject {
     func selectCategory(_ area: String?) {
         guard area != selectedArea else { return }
         selectedArea = area
-        page = 0
-        rooms = []
-        hasMore = false
-        loadMoreFailed = false
+        resetListState()
         loadGeneration += 1
         loadFresh()
     }
@@ -151,6 +194,11 @@ final class LiveTabViewModel: ObservableObject {
         guard let gateway = gateway else { return }
         isLoading = true
         loadFailed = false
+        // A fresh load supersedes any dead load-more page.
+        loadMoreFailed = false
+        loadMoreDead = false
+        loadMoreFailureCount = 0
+        loadMoreFailedPage = nil
         let platformId = platform.rawValue
         let area = selectedArea
         let generation = loadGeneration
@@ -163,14 +211,19 @@ final class LiveTabViewModel: ObservableObject {
                   platformId == self.platform.rawValue,
                   area == self.selectedArea else { return }
             self.isLoading = false
-            if result.rooms.isEmpty {
-                // (b49 sweep #34) An empty answer is a failed
-                // load whether the grid was empty or not: with a
-                // non-empty grid the rooms stay (they may still be
-                // good) but loadFailed surfaces the stale refresh
-                // — the grid below shows a retry row while it is
-                // set, instead of keeping stale rooms silently.
+            if result.failed {
+                // (b49fix2 P2-1) The load failed: the rooms stay
+                // (they may still be good) and loadFailed shows
+                // the retry row under them. An empty success is
+                // NOT this branch — see below.
                 self.loadFailed = true
+            } else if result.rooms.isEmpty {
+                // (b49fix2 P2-1) Genuine empty: the platform has
+                // no rooms right now. Not a failure — the empty
+                // state says "暂无直播间", not "加载失败".
+                self.rooms = []
+                self.hasMore = false
+                self.page = 0
             } else {
                 // Dedupe by platform + room id before the grid
                 // sees the list: a recommend page can repeat a
@@ -201,8 +254,19 @@ final class LiveTabViewModel: ObservableObject {
             guard generation == self.loadGeneration,
                   platformId == self.platform.rawValue,
                   area == self.selectedArea else { return }
+            if result.failed {
+                // (b49fix2 P2-2) A page that deterministically
+                // fails must not be retried forever: the first
+                // failure shows the retry row, the second
+                // consecutive failure for the same page marks it
+                // dead and stops paging.
+                self.noteLoadMoreFailure(page: nextPage)
+                return
+            }
             if result.rooms.isEmpty {
-                self.loadMoreFailed = true
+                // (b49fix2 P2-1) Genuine end of list, not a
+                // failure: stop paging, no retry row.
+                self.hasMore = false
                 return
             }
             // A platform that repeats a page (or a page that only
@@ -214,27 +278,59 @@ final class LiveTabViewModel: ObservableObject {
             let fresh = deduplicatedLiveRooms(result.rooms)
                 .filter { !known.contains($0.platform.rawValue + "|" + $0.roomId) }
             if fresh.isEmpty {
-                self.loadMoreFailed = true
+                // Same page, same answer on retry: count it
+                // toward the dead page, or the retry row would
+                // loop forever on a page that can never append.
+                self.noteLoadMoreFailure(page: nextPage)
                 return
             }
+            self.loadMoreFailureCount = 0
+            self.loadMoreFailedPage = nil
             self.rooms.append(contentsOf: fresh)
             self.hasMore = result.hasMore
             self.page = nextPage
         }
     }
 
-    private func loadCategories() {
+    /// (b49fix2 P2-2) Record one load-more failure for a page:
+    /// first consecutive failure → retry row; second → the page
+    /// is dead (terminal note, paging stops).
+    private func noteLoadMoreFailure(page: Int) {
+        if loadMoreFailedPage == page {
+            loadMoreFailureCount += 1
+        } else {
+            loadMoreFailedPage = page
+            loadMoreFailureCount = 1
+        }
+        loadMoreFailed = true
+        if loadMoreFailureCount >= 2 {
+            loadMoreDead = true
+            hasMore = false
+        }
+    }
+
+    /// (b49fix2 P2-3) Internal (not private) — the category
+    /// strip's retry button calls it from the view.
+    func loadCategories() {
         guard let gateway = gateway else {
             categories = []
             return
         }
         let platformId = platform.rawValue
         let generation = loadGeneration
-        gateway.fetchCategories(platform: platformId) { [weak self] names in
+        gateway.fetchCategories(platform: platformId) { [weak self] result in
             guard let self = self,
                   generation == self.loadGeneration,
                   platformId == self.platform.rawValue else { return }
-            self.categories = names
+            switch result {
+            case .success(let names):
+                self.categoriesFailed = false
+                self.categories = names
+            case .failure:
+                // Keep any previously loaded strip; the strip
+                // shows its own retry while this is set.
+                self.categoriesFailed = true
+            }
         }
     }
 }
@@ -278,6 +374,18 @@ struct LiveTabView: View {
                         if !viewModel.categories.isEmpty {
                             categoryStrip
                                 .padding(.top, 12)
+                        } else if viewModel.categoriesFailed {
+                            // (b49fix2 P2-3) The strip failed to
+                            // load: a retry in its place, same
+                            // slot as the strip, instead of
+                            // silently hiding the categories.
+                            Button("分类加载失败，点击重试") { viewModel.loadCategories() }
+                                .font(.haoFootnoteMedium)
+                                .foregroundStyle(theme.accentText)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 24)
+                                .padding(.top, 12)
+                                .buttonStyle(.plain)
                         }
                         searchEntry
                             .padding(.horizontal, 24)
@@ -588,6 +696,15 @@ struct LiveTabView: View {
                         .buttonStyle(.plain)
                 } else if viewModel.loadingMore {
                     ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                } else if viewModel.loadMoreDead {
+                    // (b49fix2 P2-2) Terminal: this page failed
+                    // twice — no retry button, no more auto-loads.
+                    // Pull-to-refresh (reload) is the way out.
+                    Text("这一页暂时加载不出来，下拉刷新试试。")
+                        .font(.haoFootnoteMedium)
+                        .foregroundStyle(theme.textSecondary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
                 } else if viewModel.loadMoreFailed {

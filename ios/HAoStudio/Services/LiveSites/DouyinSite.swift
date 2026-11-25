@@ -590,7 +590,7 @@ final class DouyinLiveSite: LiveSiteResolver {
     /// callers onto the one fetch in flight.
     private var recommendFeedCache: [LiveRoom]?
     private var recommendFeedFetchedAt: Date?
-    private var recommendFeedInFlight: [([LiveRoom]) -> Void] = []
+    private var recommendFeedInFlight: [(Result<[LiveRoom], Error>) -> Void] = []
     /// The feed snapshot is fresh for one paging session; a
     /// deliberate refresh after this re-reads the feed.
     private static let recommendFeedTTLSeconds: TimeInterval = 300
@@ -1153,18 +1153,23 @@ extension DouyinLiveSite {
     /// feed is fetched once per session and every page slices the
     /// same snapshot (b49fix2 P2-22) — re-fetching per page let
     /// the order shift between pages (duplicates/gaps).
-    func recommendRooms(page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func recommendRooms(page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let size = max(1, pageSize)
         let currentPage = max(1, page)
         if let cached = locked({ recommendFeedCache }),
            let fetchedAt = locked({ recommendFeedFetchedAt }),
            Date().timeIntervalSince(fetchedAt) < DouyinLiveSite.recommendFeedTTLSeconds {
-            completion(DouyinLiveSite.slice(cached, page: currentPage, pageSize: size))
+            completion(.success(DouyinLiveSite.slice(cached, page: currentPage, pageSize: size)))
             return
         }
         let alreadyInFlight = locked {
-            recommendFeedInFlight.append { rooms in
-                completion(DouyinLiveSite.slice(rooms, page: currentPage, pageSize: size))
+            recommendFeedInFlight.append { result in
+                switch result {
+                case .success(let rooms):
+                    completion(.success(DouyinLiveSite.slice(rooms, page: currentPage, pageSize: size)))
+                case .failure(let error):
+                    completion(.failure(error))
+                }
             }
             return recommendFeedInFlight.count > 1
         }
@@ -1179,11 +1184,15 @@ extension DouyinLiveSite {
                 ("enter_source", "web_homepage_hot_web_live_card"),
                 ("source_key", "web_homepage_hot_web_live_card")
             ]) else {
-                self.finishRecommendFeedFetch([])
+                self.finishRecommendFeedFetch(.failure(LiveError.emptyResponse))
                 return
             }
             LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
-                self.finishRecommendFeedFetch(DouyinLiveSite.parseRecommendRooms(json) ?? [])
+                if let rooms = DouyinLiveSite.parseRecommendRooms(json) {
+                    self.finishRecommendFeedFetch(.success(rooms))
+                } else {
+                    self.finishRecommendFeedFetch(.failure(LiveError.emptyResponse))
+                }
             }
         }
     }
@@ -1191,28 +1200,35 @@ extension DouyinLiveSite {
     /// Records the fetched feed snapshot and answers every caller
     /// that joined the fetch in flight (b49fix2 P2-22). The lock
     /// is only held for the state touch, never across a completion.
-    private func finishRecommendFeedFetch(_ rooms: [LiveRoom]) {
+    /// A failure (b49fix2 P2-1) is NOT cached: caching [] would
+    /// make the retry answer "no rooms" for the whole TTL instead
+    /// of re-fetching.
+    private func finishRecommendFeedFetch(_ result: Result<[LiveRoom], Error>) {
         let completions = locked {
-            recommendFeedCache = rooms
-            recommendFeedFetchedAt = Date()
+            if case .success(let rooms) = result {
+                recommendFeedCache = rooms
+                recommendFeedFetchedAt = Date()
+            }
             let completions = recommendFeedInFlight
             recommendFeedInFlight = []
             return completions
         }
         for item in completions {
-            item(rooms)
+            item(result)
         }
     }
 
     /// Categories (Dart `getCategories`): the homepage
     /// `categoryData` blob. Homepage blocked (bot check) or the
     /// SSR blob moved: never leave the tab without categories —
-    /// the fallback ids are the repo's on-record partition ids.
-    func listCategories(completion: @escaping ([(id: String, name: String)]) -> Void) {
+    /// the fallback ids are the live-verified partition ids. The
+    /// fallback is the error handling here, so this method
+    /// answers `.success` in both cases (b49fix2 P2-3).
+    func listCategories(completion: @escaping (Result<[(id: String, name: String)], Error>) -> Void) {
         requestHeaders { [weak self] headers in
             guard let self = self else { return }
             guard let url = URL(string: "https://live.douyin.com/?from_nav=1") else {
-                completion(DouyinLiveSite.fallbackCategories)
+                completion(.success(DouyinLiveSite.fallbackCategories))
                 return
             }
             var request = URLRequest(url: url, timeoutInterval: LiveHTTP.defaultTimeoutSeconds)
@@ -1221,11 +1237,11 @@ extension DouyinLiveSite {
             }
             LiveHTTP.fetchText(request: request, fetcher: self.fetcher) { _, html in
                 guard let html = html else {
-                    completion(DouyinLiveSite.fallbackCategories)
+                    completion(.success(DouyinLiveSite.fallbackCategories))
                     return
                 }
                 let areas = DouyinLiveSite.parseCategories(html)
-                completion(areas.isEmpty ? DouyinLiveSite.fallbackCategories : areas)
+                completion(.success(areas.isEmpty ? DouyinLiveSite.fallbackCategories : areas))
             }
         }
     }
@@ -1251,12 +1267,12 @@ extension DouyinLiveSite {
     /// Rooms of one partition (Dart `getCategoryRooms`):
     /// areaId is "id,type" — the exact shape listCategories
     /// produces. Count is 15 per page, offset by page.
-    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let parts = areaId.components(separatedBy: ",")
         let partitionId = parts.first ?? ""
         let partitionType = parts.count > 1 ? parts[1] : ""
         guard !partitionId.isEmpty else {
-            completion([])
+            completion(.success([]))
             return
         }
         let currentPage = max(1, page)
@@ -1284,9 +1300,18 @@ extension DouyinLiveSite {
             // ends empty — it just costs one extra request.
             let hosts = [DouyinLiveSite.partitionRoomsURL, DouyinLiveSite.partitionRoomsFallbackURL]
             var hostIndex = 0
+            // (b49fix2 P2-1) Whether any host answered with a
+            // parseable payload: both hosts failing is a load
+            // failure, while a host answering an empty list is a
+            // genuinely empty category.
+            var sawSuccessfulParse = false
             func attempt() {
                 if hostIndex >= hosts.count {
-                    completion([])
+                    if sawSuccessfulParse {
+                        completion(.success([]))
+                    } else {
+                        completion(.failure(LiveError.emptyResponse))
+                    }
                     return
                 }
                 let target = self.requestUrlSigner(hosts[hostIndex], params)
@@ -1296,9 +1321,12 @@ extension DouyinLiveSite {
                     return
                 }
                 LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
-                    if let rooms = DouyinLiveSite.parseCategoryRooms(json), !rooms.isEmpty {
-                        completion(rooms)
-                        return
+                    if let rooms = DouyinLiveSite.parseCategoryRooms(json) {
+                        sawSuccessfulParse = true
+                        if !rooms.isEmpty {
+                            completion(.success(rooms))
+                            return
+                        }
                     }
                     attempt()
                 }
@@ -1309,26 +1337,52 @@ extension DouyinLiveSite {
 
     /// Room search (Dart `DouyinSearch.search`): three stages,
     /// first non-empty wins — live API, general API, partition
-    /// search. Every stage failing returns [].
-    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    /// search. Every stage failing answers `.failure` (b49fix2
+    /// P1-9); any stage answering — even with zero rooms — is a
+    /// genuine "no results" (`.success([])`), because the search
+    /// itself worked.
+    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            completion([])
+            completion(.success([]))
             return
         }
         let currentPage = max(1, page)
         let size = min(50, max(1, pageSize))
-        searchByLiveAPI(keyword: trimmed, page: currentPage, pageSize: size) { [weak self] rooms in
+        searchByLiveAPI(keyword: trimmed, page: currentPage, pageSize: size) { [weak self] first in
             guard let self = self else { return }
-            if !rooms.isEmpty {
-                completion(rooms)
-                return
-            }
-            self.searchByGeneralAPI(keyword: trimmed, page: currentPage, pageSize: size) { [weak self] rooms in
-                guard let self = self else { return }
+            switch first {
+            case .success(let rooms):
                 if !rooms.isEmpty {
-                    completion(rooms)
+                    completion(.success(rooms))
                     return
+                }
+            case .failure:
+                break
+            }
+            self.searchByGeneralAPI(keyword: trimmed, page: currentPage, pageSize: size) { [weak self] second in
+                guard let self = self else { return }
+                switch second {
+                case .success(let rooms):
+                    if !rooms.isEmpty {
+                        completion(.success(rooms))
+                        return
+                    }
+                    // Both API stages answered (possibly empty):
+                    // the search worked, the query just has no
+                    // rooms here — the partition stage is only a
+                    // third chance at results, not a failure probe.
+                    self.searchByPartition(keyword: trimmed, page: currentPage, pageSize: size) { third in
+                        switch third {
+                        case .success(let rooms):
+                            completion(.success(rooms))
+                        case .failure:
+                            completion(.success([]))
+                        }
+                    }
+                    return
+                case .failure:
+                    break
                 }
                 self.searchByPartition(keyword: trimmed, page: currentPage, pageSize: size, completion: completion)
             }
@@ -1358,7 +1412,7 @@ extension DouyinLiveSite {
         }
     }
 
-    private func searchByLiveAPI(keyword: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    private func searchByLiveAPI(keyword: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let count = min(50, max(1, pageSize))
         let offset = count * (page - 1)
         searchHeaders(keyword: keyword) { [weak self] headers in
@@ -1370,20 +1424,20 @@ extension DouyinLiveSite {
                 ("list_type", "single"), ("keyword", keyword),
                 ("offset", "\(offset)"), ("count", "\(count)"), ("os_version", "10")
             ]) else {
-                completion([])
+                completion(.failure(LiveError.emptyResponse))
                 return
             }
             LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
                 guard let json = json, LiveJSON.asInt(json["status_code"]) == 0 else {
-                    completion([])
+                    completion(.failure(LiveError.emptyResponse))
                     return
                 }
-                completion(DouyinLiveSite.parseSearchVideos(json["data"]))
+                completion(.success(DouyinLiveSite.parseSearchVideos(json["data"])))
             }
         }
     }
 
-    private func searchByGeneralAPI(keyword: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    private func searchByGeneralAPI(keyword: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let count = min(50, max(1, pageSize))
         let offset = count * (page - 1)
         searchHeaders(keyword: keyword) { [weak self] headers in
@@ -1393,38 +1447,46 @@ extension DouyinLiveSite {
                 ("search_channel", "aweme_live"), ("keyword", keyword),
                 ("offset", "\(offset)"), ("count", "\(count)"), ("os_version", "10")
             ]) else {
-                completion([])
+                completion(.failure(LiveError.emptyResponse))
                 return
             }
             LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
                 guard let json = json, LiveJSON.asInt(json["status_code"]) == 0 else {
-                    completion([])
+                    completion(.failure(LiveError.emptyResponse))
                     return
                 }
-                completion(DouyinLiveSite.parseSearchVideos(json["data"]))
+                completion(.success(DouyinLiveSite.parseSearchVideos(json["data"])))
             }
         }
     }
 
-    private func searchByPartition(keyword: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    private func searchByPartition(keyword: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         searchHeaders(keyword: keyword) { [weak self] headers in
             guard let self = self else { return }
             guard let url = LiveListURL.url(base: DouyinLiveSite.partitionSearchURL, params: [
                 ("keyword", keyword), ("aid", "6383")
             ]) else {
-                completion([])
+                completion(.failure(LiveError.emptyResponse))
                 return
             }
             LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { [weak self] json in
                 guard let self = self else { return }
-                guard let json = json,
-                      let data = LiveJSON.asMap(json["data"]),
-                      let partitions = data["SearchResult"] as? [Any],
-                      !partitions.isEmpty else {
-                    completion([])
+                guard let json = json else {
+                    completion(.failure(LiveError.emptyResponse))
                     return
                 }
-                self.searchPartitionRooms(partitions: partitions, page: page, pageSize: pageSize, headers: headers, completion: completion)
+                guard let data = LiveJSON.asMap(json["data"]),
+                      let partitions = data["SearchResult"] as? [Any],
+                      !partitions.isEmpty else {
+                    // The API answered: the keyword matches no
+                    // partition — a genuine "no results", not a
+                    // failure (b49fix2 P1-9).
+                    completion(.success([]))
+                    return
+                }
+                self.searchPartitionRooms(partitions: partitions, page: page, pageSize: pageSize, headers: headers) { rooms in
+                    completion(.success(rooms))
+                }
             }
         }
     }

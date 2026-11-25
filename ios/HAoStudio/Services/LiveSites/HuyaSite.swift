@@ -1297,17 +1297,17 @@ extension HuyaLiveSite {
 
     /// Home hot list via cache.php LiveList, no gameId
     /// (Dart `getRecommendRooms`). Page is 1-based here.
-    func recommendRooms(page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func recommendRooms(page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         fetchCacheList(gameId: nil, page: page, completion: completion)
     }
 
     /// Rooms of one game (Dart `getCategoryRooms`): the same
     /// cache.php list with `gameId`.
-    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         fetchCacheList(gameId: areaId, page: page, completion: completion)
     }
 
-    private func fetchCacheList(gameId: String?, page: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    private func fetchCacheList(gameId: String?, page: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         var params: [(String, String)] = [
             ("m", "LiveList"), ("do", "getLiveListByPage"), ("tagAll", "0"),
             ("page", "\(max(1, page))")
@@ -1316,20 +1316,24 @@ extension HuyaLiveSite {
             params.append(("gameId", gameId))
         }
         guard let url = LiveListURL.url(base: HuyaLiveSite.cacheListURL, params: params) else {
-            completion([])
+            completion(.failure(LiveError.emptyResponse))
             return
         }
         LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: listHeaders, fetcher: fetcher) { json in
-            completion(HuyaLiveSite.parseCacheList(json) ?? [])
+            if let rooms = HuyaLiveSite.parseCacheList(json) {
+                completion(.success(rooms))
+            } else {
+                completion(.failure(LiveError.emptyResponse))
+            }
         }
     }
 
     /// Room search (Dart `searchRooms`): search.cdn.huya.com,
     /// `response["3"]["docs"]`.
-    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            completion([])
+            completion(.success([]))
             return
         }
         let rows = min(50, max(1, pageSize))
@@ -1338,11 +1342,15 @@ extension HuyaLiveSite {
             ("uid", "0"), ("v", "4"), ("typ", "-5"), ("livestate", "0"),
             ("rows", "\(rows)"), ("start", "\((max(1, page) - 1) * rows)")
         ]) else {
-            completion([])
+            completion(.failure(LiveError.emptyResponse))
             return
         }
         LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: searchHeaders, fetcher: fetcher) { json in
-            completion(HuyaLiveSite.parseSearchRooms(json) ?? [])
+            if let rooms = HuyaLiveSite.parseSearchRooms(json) {
+                completion(.success(rooms))
+            } else {
+                completion(.failure(LiveError.emptyResponse))
+            }
         }
     }
 
@@ -1353,8 +1361,10 @@ extension HuyaLiveSite {
     /// in parallel and one dead type never kills the other three.
     /// When every fetch fails, the verified-popular fallback below
     /// is returned so the tab never shows a blank category row —
-    /// the gids are real and `categoryRooms` accepts them.
-    func listCategories(completion: @escaping ([(id: String, name: String)]) -> Void) {
+    /// the gids are real and `categoryRooms` accepts them. The
+    /// fallback is the error handling here, so this method
+    /// answers `.success` in both cases (b49fix2 P2-3).
+    func listCategories(completion: @escaping (Result<[(id: String, name: String)], Error>) -> Void) {
         let types = ["1", "2", "8", "3"]
         var collected: [[(id: String, name: String)]] = Array(repeating: [], count: types.count)
         let group = DispatchGroup()
@@ -1371,9 +1381,9 @@ extension HuyaLiveSite {
         group.notify(queue: DispatchQueue.global(qos: .utility)) {
             let areas = collected.flatMap { $0 }
             if areas.isEmpty {
-                completion(HuyaLiveSite.fallbackCategories)
+                completion(.success(HuyaLiveSite.fallbackCategories))
             } else {
-                completion(areas)
+                completion(.success(areas))
             }
         }
     }

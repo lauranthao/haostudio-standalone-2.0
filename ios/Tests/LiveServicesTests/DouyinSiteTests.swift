@@ -282,7 +282,12 @@ final class DouyinSiteTests: XCTestCase {
         ])
         let site = DouyinLiveSite(fetcher: fetcher.fetcher)
         let expectation = self.expectation(description: "category rooms fallback")
-        site.categoryRooms(areaId: "1,1", page: 1, pageSize: 15) { rooms in
+        site.categoryRooms(areaId: "1,1", page: 1, pageSize: 15) { result in
+            guard case .success(let rooms) = result else {
+                XCTFail("expected success, got \(result)")
+                expectation.fulfill()
+                return
+            }
             XCTAssertEqual(rooms.count, 1)
             XCTAssertEqual(rooms.first?.roomId, "123456")
             XCTAssertEqual(rooms.first?.title, "测试直播")
@@ -293,7 +298,8 @@ final class DouyinSiteTests: XCTestCase {
         XCTAssertEqual(fetcher.count(containing: "webcast.amemv.com"), 1)
     }
 
-    /// Both hosts refuse: the category is empty, and both hosts
+    /// Both hosts refuse: the category FAILS (b49fix2 P2-1 —
+    /// a failed load is not an empty list), and both hosts
     /// were actually tried (the fallback is not a dead branch).
     func testCategoryRoomsEmptyWhenBothHostsRefuse() {
         let fetcher = CountingRoutingFetcher([
@@ -302,8 +308,12 @@ final class DouyinSiteTests: XCTestCase {
         ])
         let site = DouyinLiveSite(fetcher: fetcher.fetcher)
         let expectation = self.expectation(description: "category rooms empty")
-        site.categoryRooms(areaId: "1,1", page: 1, pageSize: 15) { rooms in
-            XCTAssertTrue(rooms.isEmpty)
+        site.categoryRooms(areaId: "1,1", page: 1, pageSize: 15) { result in
+            guard case .failure = result else {
+                XCTFail("expected failure, got \(result)")
+                expectation.fulfill()
+                return
+            }
             expectation.fulfill()
         }
         waitForExpectations(timeout: 10)

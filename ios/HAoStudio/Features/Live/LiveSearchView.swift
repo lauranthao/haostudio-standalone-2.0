@@ -14,6 +14,10 @@ final class LiveSearchViewModel: ObservableObject {
     @Published private(set) var results: [LiveRoom] = []
     @Published private(set) var isSearching = false
     @Published private(set) var hasSearched = false
+    /// (b49fix2 P1-9) The last search failed at the network /
+    /// parse level: the empty state must say so and offer a
+    /// retry, instead of reading as "没有找到相关直播间".
+    @Published private(set) var searchFailed = false
     @Published var platform: LivePlatform = .bilibili
     /// Platforms the settings switches leave enabled (b49 sweep
     /// #2): the search tabs only ever show these.
@@ -37,13 +41,20 @@ final class LiveSearchViewModel: ObservableObject {
     /// switch mid-flight showed the old platform's rooms under
     /// the new one).
     private var searchGeneration = 0
+    /// The last submitted query, for the error state's retry
+    /// button (b49fix2 P1-9).
+    private var lastQuery = ""
 
     init(gateway: LiveDataGateway? = nil) {
         self.gateway = gateway
         self.searchHistory = LiveLibraryStore.searchHistory()
         // (b49 sweep #2) Never start on a switched-off platform.
-        if !enabledPlatforms.contains(platform) {
-            platform = enabledPlatforms[0]
+        // All platforms off leaves the default in place — the
+        // adapter answers `.empty` for a disabled platform, and
+        // `enabledPlatforms[0]` would trap (same guard as the
+        // tab's refreshEnabledPlatforms, b49fix2 P1-25).
+        if !enabledPlatforms.contains(platform), let first = enabledPlatforms.first {
+            platform = first
         }
     }
 
@@ -60,6 +71,7 @@ final class LiveSearchViewModel: ObservableObject {
         guard !trimmed.isEmpty else { return }
         LiveLibraryStore.saveSearchQuery(trimmed)
         refreshSearchHistory()
+        lastQuery = trimmed
         searchGeneration += 1
         let generation = searchGeneration
         guard let gateway = gateway else {
@@ -69,15 +81,33 @@ final class LiveSearchViewModel: ObservableObject {
         }
         isSearching = true
         hasSearched = true
+        searchFailed = false
         let platformId = platform.rawValue
-        gateway.searchRooms(query: trimmed, platform: platformId) { [weak self] rooms in
+        gateway.searchRooms(query: trimmed, platform: platformId) { [weak self] result in
             guard let self = self, self.searchGeneration == generation else { return }
             self.isSearching = false
-            // Same dedupe as the tab grid: a repeated room in
-            // one page must never reach the ForEach (fix
-            // 2026-11-24).
-            self.results = deduplicatedLiveRooms(rooms)
+            switch result {
+            case .success(let rooms):
+                // Same dedupe as the tab grid: a repeated room in
+                // one page must never reach the ForEach (fix
+                // 2026-11-24).
+                self.searchFailed = false
+                self.results = deduplicatedLiveRooms(rooms)
+            case .failure:
+                // (b49fix2 P1-9) A failed search is not "no
+                // results": clear the stale list so the old
+                // platform's rooms never show under the new
+                // query, and surface the error state + retry.
+                self.searchFailed = true
+                self.results = []
+            }
         }
+    }
+
+    /// Re-run the last query (error state's retry button).
+    func retrySearch() {
+        guard !lastQuery.isEmpty else { return }
+        search(query: lastQuery)
     }
 
     func clearSearchHistory() {
@@ -244,14 +274,33 @@ struct LiveSearchView: View {
                     .padding(.vertical, 32)
             } else if viewModel.hasSearched {
                 if viewModel.results.isEmpty {
-                    MusicEmptyState(
-                        icon: "magnifyingglass",
-                        title: viewModel.hasGateway ? "没有找到相关直播间" : "直播源尚未接入",
-                        note: viewModel.hasGateway
-                            ? "换个关键词或平台再试试。"
-                            : "搜索由直播源提供，接入后在这里显示。"
-                    )
-                    .padding(.horizontal, 24)
+                    if viewModel.searchFailed {
+                        // (b49fix2 P1-9) Real error state + retry,
+                        // not "没有找到相关直播间".
+                        MusicEmptyState(
+                            icon: "magnifyingglass",
+                            title: "搜索失败",
+                            note: "直播源没有返回数据，换个网络或稍后再试。"
+                        )
+                        .padding(.horizontal, 24)
+                        Button("重试") { viewModel.retrySearch() }
+                            .font(.haoDenseTitle)
+                            .foregroundStyle(theme.onAccent)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 10)
+                            .background(theme.accent, in: Capsule())
+                            .buttonStyle(.plain)
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        MusicEmptyState(
+                            icon: "magnifyingglass",
+                            title: viewModel.hasGateway ? "没有找到相关直播间" : "直播源尚未接入",
+                            note: viewModel.hasGateway
+                                ? "换个关键词或平台再试试。"
+                                : "搜索由直播源提供，接入后在这里显示。"
+                        )
+                        .padding(.horizontal, 24)
+                    }
                 } else {
                     LazyVGrid(
                         columns: LiveGridLayout.gridColumns,

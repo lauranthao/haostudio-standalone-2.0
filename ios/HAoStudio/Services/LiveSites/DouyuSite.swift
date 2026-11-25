@@ -730,48 +730,61 @@ extension DouyuLiveSite {
 
     /// Category names + ids (Dart `getCategories`): flat cate2
     /// list — this project's area model has no category tree.
-    func listCategories(completion: @escaping ([(id: String, name: String)]) -> Void) {
+    func listCategories(completion: @escaping (Result<[(id: String, name: String)], Error>) -> Void) {
         guard let url = URL(string: DouyuLiveSite.categoryListURL) else {
-            completion([])
+            completion(.failure(LiveError.emptyResponse))
             return
         }
         LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: DouyuUtils.requestHeaders(deviceId: deviceId), fetcher: fetcher) { json in
-            completion(DouyuLiveSite.parseCategories(json) ?? [])
+            if let areas = DouyuLiveSite.parseCategories(json) {
+                completion(.success(areas))
+            } else {
+                completion(.failure(LiveError.emptyResponse))
+            }
         }
     }
 
     /// Recommended rooms (Dart `getRecommendRooms`): the "全部"
     /// all-page feed, page 1-based here.
-    func recommendRooms(page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func recommendRooms(page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let currentPage = max(1, page)
         guard let url = URL(string: "https://www.douyu.com/japi/weblist/apinc/allpage/6/\(currentPage)") else {
-            completion([])
+            completion(.failure(LiveError.emptyResponse))
             return
         }
         LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: DouyuUtils.requestHeaders(deviceId: deviceId), fetcher: fetcher) { json in
-            completion(DouyuLiveSite.parseRoomList(json) ?? [])
+            if let rooms = DouyuLiveSite.parseRoomList(json) {
+                completion(.success(rooms))
+            } else {
+                completion(.failure(LiveError.emptyResponse))
+            }
         }
     }
 
     /// Rooms of one category (Dart `getCategoryRooms`): the
     /// mixList feed for `2_<cate2Id>`, same parser as recommend.
-    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let currentPage = max(1, page)
         guard let url = URL(string: "https://www.douyu.com/gapi/rkc/directory/mixList/2_\(areaId)/\(currentPage)") else {
-            completion([])
+            completion(.failure(LiveError.emptyResponse))
             return
         }
         LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: DouyuUtils.requestHeaders(deviceId: deviceId), fetcher: fetcher) { json in
-            completion(DouyuLiveSite.parseRoomList(json) ?? [])
+            if let rooms = DouyuLiveSite.parseRoomList(json) {
+                completion(.success(rooms))
+            } else {
+                completion(.failure(LiveError.emptyResponse))
+            }
         }
     }
 
     /// Room search (Dart `searchRooms`): `relateShow` entries.
-    /// A non-zero `error` is a failure, returned as [].
-    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    /// A non-zero `error` is a failure, answered as `.failure`
+    /// (b49fix2 P2-1) instead of an empty list.
+    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            completion([])
+            completion(.success([]))
             return
         }
         var headers = DouyuUtils.requestHeaders(deviceId: deviceId)
@@ -779,11 +792,15 @@ extension DouyuLiveSite {
         guard let url = LiveListURL.url(base: DouyuLiveSite.searchShowURL, params: [
             ("kw", trimmed), ("page", "\(max(1, page))"), ("pageSize", "\(min(50, max(1, pageSize)))")
         ]) else {
-            completion([])
+            completion(.failure(LiveError.emptyResponse))
             return
         }
         LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: fetcher) { json in
-            completion(DouyuLiveSite.parseSearchRooms(json) ?? [])
+            if let rooms = DouyuLiveSite.parseSearchRooms(json) {
+                completion(.success(rooms))
+            } else {
+                completion(.failure(LiveError.emptyResponse))
+            }
         }
     }
 

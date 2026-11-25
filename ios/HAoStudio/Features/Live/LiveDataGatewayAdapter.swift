@@ -71,11 +71,18 @@ enum LiveListURL {
 /// (`roomInfo` / `resolve`) for the gateway to list rooms.
 /// Pages are 1-based; `pageSize` is advisory where the endpoint
 /// fixes its own page size.
+///
+/// List methods answer `Result` (b49fix2 P2-1/P2-3/P1-9): a fetch
+/// or parse failure is `.failure` — never an empty list — so the
+/// UI can tell "no rooms" apart from "the load failed". A parse
+/// that succeeds with zero rooms is `.success([])`; invalid input
+/// (blank query, empty area id, unbuildable URL) is `.success([])`
+/// too, because nothing was fetched.
 protocol LiveListSite {
-    func recommendRooms(page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void)
-    func listCategories(completion: @escaping ([(id: String, name: String)]) -> Void)
-    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void)
-    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void)
+    func recommendRooms(page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void)
+    func listCategories(completion: @escaping (Result<[(id: String, name: String)], Error>) -> Void)
+    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void)
+    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void)
     func roomInfo(roomId: String, completion: @escaping (Result<LiveRoom, Error>) -> Void)
 }
 
@@ -151,46 +158,65 @@ final class LiveDataGatewayAdapter: LiveDataGateway {
         case .douyin, .kuaishou:
             fetchClientPagedRecommend(site: site, platform: platformValue, page: sitePage, completion: completion)
         default:
-            site.recommendRooms(page: sitePage, pageSize: 30) { rooms in
-                let hasMore = LiveDataGatewayAdapter.pageHasMore(platform: platformValue, count: rooms.count)
-                DispatchQueue.main.async {
-                    completion(LiveRoomPage(rooms: LiveDataGatewayAdapter.deduplicated(rooms), hasMore: hasMore))
+            site.recommendRooms(page: sitePage, pageSize: 30) { result in
+                switch result {
+                case .success(let rooms):
+                    let hasMore = LiveDataGatewayAdapter.pageHasMore(platform: platformValue, count: rooms.count)
+                    DispatchQueue.main.async {
+                        completion(LiveRoomPage(rooms: LiveDataGatewayAdapter.deduplicated(rooms), hasMore: hasMore))
+                    }
+                case .failure:
+                    DispatchQueue.main.async {
+                        completion(.failed)
+                    }
                 }
             }
         }
     }
 
-    func fetchCategories(platform: String, completion: @escaping ([String]) -> Void) {
+    func fetchCategories(platform: String, completion: @escaping (Result<[String], Error>) -> Void) {
         guard let platformValue = LivePlatform(rawValue: platform) else {
-            DispatchQueue.main.async { completion([]) }
+            DispatchQueue.main.async { completion(.success([])) }
             return
         }
         // (b49 sweep #2) Same guard as fetchRecommended.
         guard LivePlatform.enabledCases.contains(platformValue) else {
-            DispatchQueue.main.async { completion([]) }
+            DispatchQueue.main.async { completion(.success([])) }
             return
         }
-        site(for: platformValue).listCategories { [weak self] areas in
+        site(for: platformValue).listCategories { [weak self] result in
             DispatchQueue.main.async {
-                self?.rememberCategories(platform: platformValue, areas: areas)
-                completion(areas.map { $0.name })
+                switch result {
+                case .success(let areas):
+                    self?.rememberCategories(platform: platformValue, areas: areas)
+                    completion(.success(areas.map { $0.name }))
+                case .failure(let error):
+                    completion(.failure(error))
+                }
             }
         }
     }
 
-    func searchRooms(query: String, platform: String, completion: @escaping ([LiveRoom]) -> Void) {
+    func searchRooms(query: String, platform: String, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let platformValue = LivePlatform(rawValue: platform) else {
-            DispatchQueue.main.async { completion([]) }
+            DispatchQueue.main.async { completion(.success([])) }
             return
         }
         // (b49 sweep #2) Same guard as fetchRecommended.
         guard LivePlatform.enabledCases.contains(platformValue) else {
-            DispatchQueue.main.async { completion([]) }
+            DispatchQueue.main.async { completion(.success([])) }
             return
         }
-        site(for: platformValue).searchRooms(query: trimmed, page: 1, pageSize: 30) { rooms in
-            DispatchQueue.main.async { completion(LiveDataGatewayAdapter.deduplicated(rooms)) }
+        site(for: platformValue).searchRooms(query: trimmed, page: 1, pageSize: 30) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let rooms):
+                    completion(.success(LiveDataGatewayAdapter.deduplicated(rooms)))
+                case .failure(let error):
+                    completion(.failure(error))
+                }
+            }
         }
     }
 
@@ -227,10 +253,14 @@ final class LiveDataGatewayAdapter: LiveDataGateway {
             requestCategoryRooms(site: site, platform: platform, areaId: areaId, page: page, allowStaleIdRetry: true, areaName: areaName, completion: completion)
             return
         }
-        site.listCategories { [weak self] areas in
+        site.listCategories { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self else {
                     completion(.empty)
+                    return
+                }
+                guard case .success(let areas) = result else {
+                    completion(.failed)
                     return
                 }
                 self.rememberCategories(platform: platform, areas: areas)
@@ -244,7 +274,13 @@ final class LiveDataGatewayAdapter: LiveDataGateway {
     }
 
     private func requestCategoryRooms(site: LiveListSite, platform: LivePlatform, areaId: String, page: Int, allowStaleIdRetry: Bool, areaName: String, completion: @escaping (LiveRoomPage) -> Void) {
-        site.categoryRooms(areaId: areaId, page: page, pageSize: 30) { [weak self] rooms in
+        site.categoryRooms(areaId: areaId, page: page, pageSize: 30) { [weak self] result in
+            guard case .success(let rooms) = result else {
+                DispatchQueue.main.async {
+                    completion(.failed)
+                }
+                return
+            }
             // (b49 sweep #35) An empty answer for a cached id may
             // mean the id went stale (renamed category): drop it,
             // re-list once, and retry with the fresh id. One retry
@@ -255,10 +291,14 @@ final class LiveDataGatewayAdapter: LiveDataGateway {
             // round trip and could resurrect a stale page.
             if rooms.isEmpty, allowStaleIdRetry, page == 1, let self = self {
                 self.areaIds[platform.rawValue]?.removeValue(forKey: areaName)
-                site.listCategories { [weak self] areas in
+                site.listCategories { [weak self] result in
                     DispatchQueue.main.async {
                         guard let self = self else {
                             completion(.empty)
+                            return
+                        }
+                        guard case .success(let areas) = result else {
+                            completion(.failed)
                             return
                         }
                         self.rememberCategories(platform: platform, areas: areas)
@@ -288,10 +328,14 @@ final class LiveDataGatewayAdapter: LiveDataGateway {
             DispatchQueue.main.async { completion(result) }
             return
         }
-        site.recommendRooms(page: 1, pageSize: 100) { [weak self] rooms in
+        site.recommendRooms(page: 1, pageSize: 100) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self else {
                     completion(.empty)
+                    return
+                }
+                guard case .success(let rooms) = result else {
+                    completion(.failed)
                     return
                 }
                 // Dedup before caching: every slice of this feed

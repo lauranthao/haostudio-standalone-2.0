@@ -767,7 +767,7 @@ extension BilibiliLiveSite {
     /// the ranked endpoint first (sort=online), the
     /// recommendation feed only as a bounded fallback. Page is
     /// 1-based here; the adapter converts the tab's 0-based page.
-    func recommendRooms(page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func recommendRooms(page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let size = min(30, max(1, pageSize))
         let currentPage = max(1, page)
         headers { [weak self] headers in
@@ -775,7 +775,7 @@ extension BilibiliLiveSite {
             self.requestRankedRecommend(page: currentPage, pageSize: size, headers: headers, attempt: 0) { [weak self] rooms in
                 guard let self = self else { return }
                 if let rooms = rooms {
-                    completion(rooms)
+                    completion(.success(rooms))
                     return
                 }
                 self.requestRecommendFallback(page: currentPage, headers: headers, completion: completion)
@@ -808,40 +808,44 @@ extension BilibiliLiveSite {
         }
     }
 
-    private func requestRecommendFallback(page: Int, headers: [String: String], completion: @escaping ([LiveRoom]) -> Void) {
+    private func requestRecommendFallback(page: Int, headers: [String: String], completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         guard let url = LiveListURL.url(base: BilibiliLiveSite.fallbackRecommendURL, params: [
             ("platform", "web"), ("page", "\(page)")
         ]) else {
-            completion([])
+            completion(.failure(LiveError.emptyResponse))
             return
         }
         LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: fetcher) { json in
-            completion(BilibiliLiveSite.parseRecommendRooms(json) ?? [])
+            if let rooms = BilibiliLiveSite.parseRecommendRooms(json) {
+                completion(.success(rooms))
+            } else {
+                completion(.failure(LiveError.emptyResponse))
+            }
         }
     }
 
     /// Category names + ids (Dart `getCategories`): the parent ->
     /// sub-area tree flattened to sub-areas. The parent id of each
     /// sub-area is recorded for `categoryRooms`.
-    func listCategories(completion: @escaping ([(id: String, name: String)]) -> Void) {
+    func listCategories(completion: @escaping (Result<[(id: String, name: String)], Error>) -> Void) {
         headers { [weak self] headers in
             guard let self = self else { return }
             guard let url = LiveListURL.url(base: BilibiliLiveSite.areaListURL, params: [
                 ("need_entrance", "1"), ("parent_id", "0")
             ]) else {
-                completion([])
+                completion(.failure(LiveError.emptyResponse))
                 return
             }
             LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { [weak self] json in
                 guard let self = self else { return }
                 guard let triples = BilibiliLiveSite.parseCategories(json) else {
-                    completion([])
+                    completion(.failure(LiveError.emptyResponse))
                     return
                 }
                 for triple in triples {
                     self.locked { self.categoryParentIds[triple.id] = triple.parentId }
                 }
-                completion(triples.map { (id: $0.id, name: $0.name) })
+                completion(.success(triples.map { (id: $0.id, name: $0.name) }))
             }
         }
     }
@@ -851,7 +855,7 @@ extension BilibiliLiveSite {
     /// parent map is empty the categories are fetched first; an
     /// unknown parent yields an empty list rather than a request
     /// the server rejects (-400).
-    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         if locked({ categoryParentIds.isEmpty }) {
             listCategories { [weak self] _ in
                 guard let self = self else { return }
@@ -862,9 +866,9 @@ extension BilibiliLiveSite {
         requestCategoryRooms(areaId: areaId, page: page, completion: completion)
     }
 
-    private func requestCategoryRooms(areaId: String, page: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    private func requestCategoryRooms(areaId: String, page: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         guard let parentId = locked({ categoryParentIds[areaId] }) else {
-            completion([])
+            completion(.success([]))
             return
         }
         let currentPage = max(1, page)
@@ -874,7 +878,7 @@ extension BilibiliLiveSite {
             self.signedJSON(raw: raw, forceRefresh: false) { [weak self] json in
                 guard let self = self else { return }
                 if let rooms = BilibiliLiveSite.parseCategoryRooms(json) {
-                    completion(rooms)
+                    completion(.success(rooms))
                     return
                 }
                 LiveHTTP.after(milliseconds: 180) { [weak self] in
@@ -891,7 +895,11 @@ extension BilibiliLiveSite {
                         retryRaw = raw
                     }
                     self.signedJSON(raw: retryRaw, forceRefresh: true) { json in
-                        completion(BilibiliLiveSite.parseCategoryRooms(json) ?? [])
+                        if let rooms = BilibiliLiveSite.parseCategoryRooms(json) {
+                            completion(.success(rooms))
+                        } else {
+                            completion(.failure(LiveError.emptyResponse))
+                        }
                     }
                 }
             }
@@ -900,10 +908,10 @@ extension BilibiliLiveSite {
 
     /// Room search (Dart `searchRooms`, search_type 'live').
     /// Matches title AND anchor nick on the server side.
-    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            completion([])
+            completion(.success([]))
             return
         }
         let size = min(50, max(1, pageSize))
@@ -915,11 +923,15 @@ extension BilibiliLiveSite {
                 ("__refresh__", ""), ("_extra", ""), ("highlight", "0"),
                 ("single_column", "0"), ("page", "\(max(1, page))"), ("page_size", "\(size)")
             ]) else {
-                completion([])
+                completion(.failure(LiveError.emptyResponse))
                 return
             }
             LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
-                completion(BilibiliLiveSite.parseSearchRooms(json) ?? [])
+                if let rooms = BilibiliLiveSite.parseSearchRooms(json) {
+                    completion(.success(rooms))
+                } else {
+                    completion(.failure(LiveError.emptyResponse))
+                }
             }
         }
     }

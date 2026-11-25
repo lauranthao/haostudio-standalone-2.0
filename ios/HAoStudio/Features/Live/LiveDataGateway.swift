@@ -41,11 +41,24 @@ import Foundation
 /// One page of rooms from a list endpoint. `hasMore` is false
 /// when the last page returned fewer rooms than the page size, or
 /// when the service says there is nothing after this page.
+/// `failed` (b49fix2 P2-1) is true only when the fetch itself
+/// failed — an empty page that arrived fine has failed == false,
+/// so the UI can tell "no rooms right now" apart from "the load
+/// failed, retry". Defaults to false so existing constructions
+/// (incl. the B35 sweep tests) keep compiling.
 struct LiveRoomPage: Equatable {
     let rooms: [LiveRoom]
     let hasMore: Bool
+    let failed: Bool
+
+    init(rooms: [LiveRoom], hasMore: Bool, failed: Bool = false) {
+        self.rooms = rooms
+        self.hasMore = hasMore
+        self.failed = failed
+    }
 
     static let empty = LiveRoomPage(rooms: [], hasMore: false)
+    static let failed = LiveRoomPage(rooms: [], hasMore: false, failed: true)
 }
 
 /// What the live UI needs from the services. Every method takes
@@ -53,7 +66,8 @@ struct LiveRoomPage: Equatable {
 protocol LiveDataGateway {
     /// Recommended rooms for one platform, optionally inside one
     /// category (`area` nil = all categories). Page 0-based; an
-    /// empty page means the end of the list.
+    /// empty page means the end of the list — unless `failed` is
+    /// set, which means the fetch itself failed (b49fix2 P2-1).
     func fetchRecommended(
         platform: String,
         area: String?,
@@ -62,18 +76,24 @@ protocol LiveDataGateway {
     )
 
     /// Category (area) names for the platform's category strip.
-    /// Empty when the platform exposes no categories.
+    /// Empty when the platform exposes no categories. A failure
+    /// answers `.failure` (b49fix2 P2-3) instead of an empty list,
+    /// so the strip can offer a retry instead of silently
+    /// disappearing.
     func fetchCategories(
         platform: String,
-        completion: @escaping ([String]) -> Void
+        completion: @escaping (Result<[String], Error>) -> Void
     )
 
     /// Room search on one platform, fastest first. Empty query
     /// answers empty — the UI never searches a blank string.
+    /// A failed search answers `.failure` (b49fix2 P1-9) instead
+    /// of an empty list, so the page can offer a retry instead of
+    /// reading as "no results".
     func searchRooms(
         query: String,
         platform: String,
-        completion: @escaping ([LiveRoom]) -> Void
+        completion: @escaping (Result<[LiveRoom], Error>) -> Void
     )
 
     /// Full room detail (title / anchor / watching / cover /
