@@ -220,6 +220,44 @@ final class EmbyContinueWatchingTests: XCTestCase {
         XCTAssertEqual(viewModel.playButtonLabel, "影片已删")
     }
 
+    /// A non-notFound failure (a season query failed mid-detail,
+    /// b49fix7 P2-11) is a retryable load failure, not a deletion
+    /// (b49fix8 P2-10): loadFailed is set, detailNotFound stays
+    /// false, and the play button keeps the generic copy — the
+    /// view still offers its retry for this state.
+    func testEmbyPartialSeasonFailureIsRetryableNotDeleted() {
+        let gateway = StubVideoGateway()
+        gateway.embyDetailResults = [.failure(.other("部分季加载失败"))]
+        let viewModel = VideoDetailViewModel(item: embyMovieItem(), gateway: gateway)
+        viewModel.load()
+        XCTAssertTrue(viewModel.loadFailed)
+        XCTAssertFalse(viewModel.detailNotFound)
+        XCTAssertFalse(viewModel.canPlay)
+        XCTAssertEqual(viewModel.playButtonLabel, "暂无可播内容")
+    }
+
+    /// A retry after a notFound publish clears the deleted state
+    /// (b49fix8 P2-10): the flag is reset in load() alongside
+    /// loadFailed, so a title that comes back (or a stale 404)
+    /// can play again instead of staying "影片已删" forever.
+    func testEmbyDeletedFlagResetsOnSuccessfulRetry() {
+        let item = embyMovieItem()
+        let gateway = StubVideoGateway()
+        gateway.embyDetailResults = [
+            .failure(.notFound("这部影片在 Emby 里找不到了")),
+            .success(embyMovieDetail(item: item)),
+        ]
+        let viewModel = VideoDetailViewModel(item: item, gateway: gateway)
+        viewModel.load()
+        XCTAssertTrue(viewModel.detailNotFound)
+        XCTAssertTrue(viewModel.loadFailed)
+        viewModel.load()
+        XCTAssertFalse(viewModel.detailNotFound)
+        XCTAssertFalse(viewModel.loadFailed)
+        XCTAssertTrue(viewModel.canPlay)
+        XCTAssertEqual(viewModel.playButtonLabel, "播放")
+    }
+
     /// A detail whose only episode has no stream URL never
     /// lights the play button (b49fix7 P2-12): the episode
     /// exists, but there is nothing to play.

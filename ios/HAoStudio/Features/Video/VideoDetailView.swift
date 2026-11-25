@@ -44,18 +44,21 @@ final class VideoDetailViewModel: ObservableObject {
     /// alongside loadFailed.
     @Published private(set) var detailNotFound = false
     /// Whether any load on this page visit has landed empty or
-    /// failed (b49fix7 P2-14): once set it is never cleared for
-    /// the life of this view model — NOT in load(). The
-    /// empty→has-lines transition happens mid-visit (the CMS
-    /// gateway publishes twice; switchToAltSource reloads while
-    /// the user sits at the bottom of the empty state), and
-    /// clearing the latch in load() would re-open the 54pt jump
-    /// on the very next publish. The view holds the (hidden)
-    /// retry inset while the latch is set, so the bottom
-    /// geometry is identical in every state of the visit; the
-    /// cost is a stable 54pt of empty space at the very bottom
-    /// of the has-lines page (same background, above the mini /
-    /// tab bar) — no jump, no misinformation.
+    /// failed (b49fix7 P2-14): once set it is never cleared in
+    /// load() — and never by the view model itself on any other
+    /// path. The empty→has-lines transition happens mid-visit
+    /// (the CMS gateway publishes twice; switchToAltSource
+    /// reloads while the user sits at the bottom of the empty
+    /// state), and clearing the latch in load() would re-open
+    /// the 54pt jump on the very next publish. The view holds
+    /// the (hidden) retry inset while the latch is set, so the
+    /// bottom geometry is identical in every state of the
+    /// visit; the cost is a stable 54pt of empty space at the
+    /// very bottom of the has-lines page (same background,
+    /// above the mini / tab bar) — no jump, no misinformation.
+    /// The one way out is releaseEmptyLoadLatch() (b49fix8
+    /// P2-12), which the view only calls when the page is back
+    /// at the top, where the bottom edge is not in view.
     @Published private(set) var hasSeenEmptyOrFailedLoad = false
     @Published private(set) var isFavourite = false
     @Published private(set) var resume: ResumeInfo?
@@ -190,6 +193,16 @@ final class VideoDetailViewModel: ObservableObject {
     /// the old existence test lit the play button for it, and
     /// the tap only failed later inside the player.
     var canPlay: Bool { selectedEpisode?.url != nil }
+
+    /// Release the empty/failed latch (b49fix8 P2-12). Only
+    /// called by the view when the page is back at the top —
+    /// see maybeReleaseEmptyLoadLatch in the content view.
+    /// Never cleared in load(): the empty→has-lines transition
+    /// happens mid-visit and clearing there would re-open the
+    /// 54pt jump on the very next publish.
+    func releaseEmptyLoadLatch() {
+        hasSeenEmptyOrFailedLoad = false
+    }
 
     /// Re-resolve the detail from the source, every time. The
     /// previous detail is dropped first, so a retry visibly
@@ -476,6 +489,16 @@ struct VideoDetailView: View {
 
     private func play(lineIndex: Int, episodeIndex: Int) {
         guard let detail = viewModel.detail else { return }
+        // b49fix8 P2-11: belt-and-braces — the grid disables
+        // nil-URL cells, but never open the player for an
+        // episode with no URL even if a call slips through:
+        // the old tap only failed later inside the player
+        // (.noPlayableURL), after moving the selection onto
+        // the dead cell. The guard sits before the selection
+        // move, so a slipped-through tap changes nothing.
+        guard detail.lines.indices.contains(lineIndex),
+              detail.lines[lineIndex].episodes.indices.contains(episodeIndex),
+              detail.lines[lineIndex].episodes[episodeIndex].isPlayable else { return }
         // Keep the grid highlight on the episode actually played:
         // a grid tap used to open the episode without updating the
         // selection, so the highlight stayed on the old cell.
@@ -499,6 +522,12 @@ struct VideoDetailContentView: View {
     /// persisted — the next visit hides again (Flutter parity).
     @State private var spoilerSynopsisRevealed = false
     @State private var spoilerCoverRevealed = false
+    /// Whether the scroll content is at the top (b49fix8
+    /// P2-12): the latch release only runs at the top, so the
+    /// 54pt inset coming off cannot move anything in view.
+    /// Updated only when the value flips, so scrolling does
+    /// not re-render the page every frame.
+    @State private var isAtScrollTop = true
     /// Width of the episode grid's container, measured on layout
     /// (sweep-4 B13): 4 columns on phones, 6 once the content is
     /// 600pt or wider, so iPad episode buttons stay tappable
@@ -636,7 +665,30 @@ struct VideoDetailContentView: View {
                 // / has-lines-after-empty.
                 .modifier(DetailBottomChromePadding(showRetry: showRetryButton || showRetryPlaceholder))
             }
+            // b49fix8 P2-12: track whether the content is at
+            // the top, so the latch can be released there (see
+            // maybeReleaseEmptyLoadLatch). Same background-
+            // GeometryReader shape as the grid-width reader
+            // below — the frame is read in the scroll view's
+            // own coordinate space, so minY is 0 at the top
+            // and negative once scrolled down.
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onChange(of: geo.frame(in: .named("detailScroll")).minY) { _, minY in
+                            let atTop = minY >= -1
+                            if atTop != isAtScrollTop { isAtScrollTop = atTop }
+                            if atTop { maybeReleaseEmptyLoadLatch() }
+                        }
+                }
+            )
         }
+        .coordinateSpace(name: "detailScroll")
+        // b49fix8 P2-12: the lines landing while the page is
+        // still at the top releases the latch right away — the
+        // blank band never appears, and the content is anchored
+        // at the top so nothing moves.
+        .onChange(of: viewModel.lines.count) { _, _ in maybeReleaseEmptyLoadLatch() }
         .safeAreaInset(edge: .bottom) {
             // Pinned retry for the failed-load state: always above
             // the floating mini / tab bar, so it never needs a
@@ -675,6 +727,22 @@ struct VideoDetailContentView: View {
             withAnimation(HaoLayout.settleSpring) { coverRevealed = true }
         }
     }
+    /// Release the empty/failed latch once the page is back at
+    /// the top (b49fix8 P2-12): the latch holds the 54pt retry
+    /// inset so the bottom edge cannot jump mid-visit, and the
+    /// only reason to keep holding it is that the bottom edge
+    /// might be in view. At the top it is not — the content is
+    /// anchored at the top, so only the trailing blank shrinks
+    /// and no row moves. Called when the scroll offset crosses
+    /// back to the top and when the lines land while the page
+    /// is still at the top; never from load(), which would
+    /// re-open the jump on the next publish.
+    private func maybeReleaseEmptyLoadLatch() {
+        if isAtScrollTop, viewModel.hasSeenEmptyOrFailedLoad, !viewModel.lines.isEmpty {
+            viewModel.releaseEmptyLoadLatch()
+        }
+    }
+
     /// Whether the pinned retry button is showing (sweep-5
     /// P1-26, b49fix4 P2-40): the failed-load state only —
     /// hidden while loading, once lines arrive, and when the
@@ -707,7 +775,11 @@ struct VideoDetailContentView: View {
     /// latch holds the placeholder for the rest of the visit
     /// instead, so the bottom geometry can never jump
     /// mid-visit; the cost is a stable 54pt of empty space at
-    /// the very bottom of the has-lines page.
+    /// the very bottom of the has-lines page. The one way out
+    /// is the b49fix8 P2-12 release: once the user scrolls back
+    /// to the top (or the lines land while the page is still at
+    /// the top) the view releases the latch — the bottom edge is
+    /// not in view there, so the inset coming off moves no row.
     private var showRetryPlaceholder: Bool {
         (viewModel.isLoading && viewModel.detail == nil)
             || (viewModel.detail?.lines.isEmpty == true && !viewModel.loadFailed)
@@ -1082,17 +1154,28 @@ struct VideoDetailContentView: View {
                 spacing: 10
             ) {
                 ForEach(Array((viewModel.selectedLine?.episodes ?? []).enumerated()), id: \.element.id) { index, episode in
+                    // b49fix8 P2-11: a nil-URL episode is not
+                    // playable (Emby strm target broken) — the
+                    // cell stays in place (filtering would
+                    // renumber displayName's "第N集", which falls
+                    // back on index) but is dimmed and disabled,
+                    // so the tap can no longer sail past the big
+                    // play button's canPlay guard into the player.
+                    // A dead cell never takes the accent
+                    // selection background either: accent means
+                    // "this is playing", and nothing here plays.
                     Button(action: { onPlay(viewModel.selectedLineIndex, index) }) {
                         Text(episode.displayName)
                             .font(.haoFootnoteMedium)
                             .foregroundStyle(
-                                index == viewModel.selectedEpisodeIndex
+                                !episode.isPlayable ? theme.textMuted
+                                    : index == viewModel.selectedEpisodeIndex
                                     ? theme.onAccent : theme.textPrimary)
                             .lineLimit(1)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                             .background(
-                                index == viewModel.selectedEpisodeIndex
+                                index == viewModel.selectedEpisodeIndex && episode.isPlayable
                                     ? theme.accent : theme.surface,
                                 in: RoundedRectangle(cornerRadius: HaoLayout.selectionCellCornerRadius, style: .continuous))
                             .overlay {
@@ -1101,6 +1184,9 @@ struct VideoDetailContentView: View {
                             }
                     }
                     .buttonStyle(.plain)
+                    .disabled(!episode.isPlayable)
+                    .opacity(episode.isPlayable ? 1 : 0.55)
+                    .accessibilityLabel(episode.isPlayable ? episode.displayName : "\(episode.displayName)，暂无可播地址")
                 }
             }
             .background(
@@ -1124,6 +1210,14 @@ extension PlayEpisode {
         if !name.isEmpty { return name }
         return "第\(index + 1)集"
     }
+
+    /// Whether this episode can actually be tapped to play
+    /// (b49fix8 P2-11): a nil URL (Emby strm target broken,
+    /// base URL gone stale) means there is nothing to play —
+    /// the cell stays in the grid (filtering would renumber
+    /// displayName's "第N集", which falls back on index) but
+    /// renders dimmed and disabled.
+    var isPlayable: Bool { url != nil }
 }
 
 /// Bottom-chrome clearance for the detail page (sweep-5 P1-26,

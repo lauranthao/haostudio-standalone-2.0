@@ -38,13 +38,17 @@ final class VodDanmakuLayerState: ObservableObject {
     @Published var isEnabled: Bool = true
     /// Text opacity 0.3-1.0 (bound to the settings sheet).
     @Published var opacity: Double = 1.0
-    /// Font size in points (b49fix7 P2-23). Follows the user's live
-    /// danmaku font-size setting (`LiveDanmakuSettings.fontSize`,
-    /// default 14, range 12-20) — the live settings page owns the
-    /// control, so this is a read, not a second writer. Read at
-    /// construction, fresh every time the player opens (the VOD
-    /// sheet has no font-size control, so there is no in-player
-    /// refresh path to miss). Was a fixed 16 medium.
+    /// Font size in points (b49fix7 P2-23, b49fix8 P2-13).
+    /// Follows the user's live danmaku font-size setting
+    /// (`LiveDanmakuSettings.fontSize`, default 14, range
+    /// 12-20) — the live settings page owns the control, so
+    /// this is a read, not a second writer. The construction
+    /// read below is only the initial value: this state lives
+    /// as long as the app-level player view model, so it is
+    /// NOT fresh on every open — the player VM re-reads the
+    /// setting in applySettings() (on engine attach and on
+    /// every settings change), which is the refresh path.
+    /// Was a fixed 16 medium.
     @Published var fontSize: Double = LiveDanmakuSettings.load().fontSize
     /// A fetch is in flight for the current episode. The player
     /// page reads this (with `didLoad`) to decide whether the
