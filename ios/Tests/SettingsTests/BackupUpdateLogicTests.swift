@@ -11,32 +11,12 @@ import XCTest
 
 final class BackupUpdateLogicTests: XCTestCase {
     // MARK: - Version comparison
-
-    func testHigherVersionIsNewer() {
-        XCTAssertTrue(UpdateCheckLogic.isNewer(version: "1.1.7", build: 1, than: "1.1.6", currentBuild: 99))
-    }
-
-    func testSameVersionHigherBuildIsNewer() {
-        XCTAssertTrue(UpdateCheckLogic.isNewer(version: "1.1.6", build: 32, than: "1.1.6", currentBuild: 31))
-    }
-
-    func testSameVersionSameBuildIsNotNewer() {
-        XCTAssertFalse(UpdateCheckLogic.isNewer(version: "1.1.6", build: 31, than: "1.1.6", currentBuild: 31))
-    }
-
-    func testLowerVersionIsNotNewer() {
-        XCTAssertFalse(UpdateCheckLogic.isNewer(version: "1.1.5", build: 99, than: "1.1.6", currentBuild: 1))
-    }
-
-    func testNumericNotLexicographic() {
-        XCTAssertTrue(UpdateCheckLogic.isNewer(version: "1.1.10", build: 1, than: "1.1.9", currentBuild: 99))
-        XCTAssertFalse(UpdateCheckLogic.isNewer(version: "1.1.9", build: 99, than: "1.1.10", currentBuild: 1))
-    }
-
-    func testShorterVersionPadsWithZero() {
-        XCTAssertFalse(UpdateCheckLogic.isNewer(version: "1.2", build: 1, than: "1.2.0", currentBuild: 1))
-        XCTAssertTrue(UpdateCheckLogic.isNewer(version: "1.2.1", build: 1, than: "1.2", currentBuild: 1))
-    }
+    //
+    // b49fix2 P2-61: UpdateCheckLogic.isNewer is deleted — it had
+    // zero production callers (production compares through
+    // VersionCompare in DefaultUpdateChecker), so its six tests
+    // went with it. The live comparator's behaviour is covered in
+    // VersionCompareTests, including the non-numeric-part quirk.
 
     func testVersionIdentity() {
         XCTAssertEqual(UpdateCheckLogic.versionIdentity(version: "1.1.7", build: 12), "1.1.7 (build 12)")

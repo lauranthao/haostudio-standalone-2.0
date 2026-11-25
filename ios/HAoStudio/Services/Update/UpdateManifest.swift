@@ -55,6 +55,12 @@ struct UpdateManifest {
     let minOs: String?
     let downloadURL: URL
     let size: Int?
+    /// SHA-256 hex of the IPA (b49fix2 P2-69 / P1-40): the release
+    /// pipeline writes it into version.json; the downloader
+    /// verifies the downloaded bytes against it when present.
+    /// Nil = the manifest carries no hash (older releases) — the
+    /// size + zip-magic checks still apply.
+    let sha256: String?
     let changelog: UpdateChangelog?
 
     /// Identity of this release for the skip check: version + build.
@@ -69,6 +75,17 @@ struct UpdateManifest {
 /// when the version or the download URL is missing or empty; every
 /// other field is optional and defaults when absent.
 enum UpdateManifestParser {
+    /// Hosts a manifest may point the IPA download at (b49fix2
+    /// P2-69): the shop server and GitHub raw — the only two
+    /// places version.json is ever served from. Anything else is
+    /// refused: a manifest is fetched from our two hosts, so an
+    /// ipaUrl elsewhere is a tampered or misconfigured manifest,
+    /// never a legitimate release.
+    static let allowedDownloadHosts: Set<String> = [
+        "chen-hao-shop-production.up.railway.app",
+        "raw.githubusercontent.com",
+    ]
+
     static func parse(_ object: Any) -> UpdateManifest? {
         guard let root = object as? [String: Any] else {
             return nil
@@ -76,11 +93,15 @@ enum UpdateManifestParser {
         guard let version = root["version"] as? String, !version.isEmpty else {
             return nil
         }
+        // b49fix2 P2-69: https only, and only our two hosts.
+        // Plain http used to pass, so a manifest (or a tampered
+        // copy of one) could point the download at any server.
         guard let urlString = root["ipaUrl"] as? String,
               !urlString.isEmpty,
               let downloadURL = URL(string: urlString),
-              let scheme = downloadURL.scheme?.lowercased(),
-              scheme == "http" || scheme == "https"
+              downloadURL.scheme?.lowercased() == "https",
+              let host = downloadURL.host?.lowercased(),
+              allowedDownloadHosts.contains(host)
         else {
             return nil
         }
@@ -98,11 +119,25 @@ enum UpdateManifestParser {
         }
         let minOs = asString(root["minOs"])
         let size = asInt(root["size"])
+        let sha256 = asSHA256(root["sha256"])
         let changelog = parseChangelog(root["changelog"])
         return UpdateManifest(
             version: version, build: build, minOs: minOs,
-            downloadURL: downloadURL, size: size, changelog: changelog
+            downloadURL: downloadURL, size: size, sha256: sha256,
+            changelog: changelog
         )
+    }
+
+    /// A SHA-256 hex digest (64 hex chars), lowercased. Anything
+    /// else — wrong length, non-hex, absent — is no hash at all:
+    /// a malformed hash must not fail every download, it just
+    /// means the hash check does not apply to this manifest.
+    static func asSHA256(_ value: Any?) -> String? {
+        guard let text = asString(value)?.lowercased(),
+              text.count == 64,
+              text.allSatisfy({ $0.isHexDigit })
+        else { return nil }
+        return text
     }
 
     static func parseChangelog(_ value: Any?) -> UpdateChangelog? {

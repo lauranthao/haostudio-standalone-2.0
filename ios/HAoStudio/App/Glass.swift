@@ -47,12 +47,12 @@ enum HaoLayout {
     /// through). The gap to the screen edge is the home-indicator
     /// zone itself.
     static let tabBarBottomMargin: CGFloat = 6
-    /// Horizontal margin of the floating chrome (b46-chrome:
-    /// chen's Coda screenshot reads ~16pt side margins; the Coda
-    /// copy plan §6.2 reads 12 from Coda's source — 16 is the
-    /// brief's value, one constant to revert if the device check
-    /// says the chrome reads too narrow next to Coda).
-    static let tabBarHorizontalMargin: CGFloat = 16
+    /// Horizontal margin of the floating chrome (b49fix2 A28:
+    /// Coda §6.2 reads 12 from Coda's source — the b46 brief
+    /// value was 16 from the screenshot, one constant to revert
+    /// if the device check says the chrome reads too narrow
+    /// next to Coda).
+    static let tabBarHorizontalMargin: CGFloat = 12
     /// Mini player strip height: 52 (b46-chrome, Coda §6.2/§2.10:
     /// cover 40 + 2 x 6pt vertical padding; the transport buttons'
     /// 36pt hit targets sit inside it). The b43 40pt strip (chen
@@ -356,6 +356,23 @@ extension Notification.Name {
     /// MainTabView listens and presents the first-launch
     /// disclaimer gate; nothing else listens.
     static let haoShowDisclaimerGate = Notification.Name("haoShowDisclaimerGate")
+    /// Posted by Home empty-state CTA buttons (b49fix2 B1).
+    /// `object` is the HaoTab to switch to. MainTabView listens
+    /// and selects the tab; nothing else listens.
+    static let haoSwitchTab = Notification.Name("haoSwitchTab")
+    /// Posted by LocalStore when a corrupt collection file is
+    /// quarantined (b49fix2 P0-1). `object` is the collection
+    /// name. MainTabView listens and shows a one-time notice.
+    static let haoStoreQuarantined = Notification.Name("haoStoreQuarantined")
+    /// Posted by LocalStore when a collection save fails
+    /// (b49fix2 P1-13 — most often a full disk). `object` is
+    /// the collection name. At most once per collection per
+    /// launch. MainTabView listens and shows a one-time notice.
+    static let haoStoreSaveFailed = Notification.Name("haoStoreSaveFailed")
+    /// Posted by DownloadEngine when a download reaches
+    /// `.completed` (b49fix2 B5). `object` is the task key.
+    /// MainTabView listens for the first-run backup nudge.
+    static let haoDownloadCompleted = Notification.Name("haoDownloadCompleted")
 }
 
 /// Scroll-to-top anchor id for a tab root's vertical scroll content.
@@ -761,16 +778,20 @@ private struct HaoBackdropLayer: ViewModifier {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
                     .ignoresSafeArea()
-                // Legibility veil (b42): scaffold colour (near-white
-                // light mode, black dark mode) as a top-to-bottom
-                // gradient — the titles at the top get the strongest
-                // veil, the cards below get a lighter one. The photo
-                // still shows through everywhere; the text and the
-                // semi-transparent cards just stop fighting it.
+                // Legibility veil (b42, strengthened b49fix2 #34):
+                // scaffold colour (near-white light mode, black
+                // dark mode) as a top-to-bottom gradient — the
+                // titles at the top get the strongest veil, the
+                // cards below get a lighter one. The b42 values
+                // (0.55 / 0.42) still washed song rows out on busy
+                // photos (chen build 42: grey subtitle text unreadable);
+                // the stronger veil keeps rows legible while the
+                // photo still shows through everywhere. The text
+                // and the semi-transparent cards just stop fighting it.
                 LinearGradient(
                     colors: [
-                        theme.scaffoldBackground.opacity(0.55),
-                        theme.scaffoldBackground.opacity(0.42),
+                        theme.scaffoldBackground.opacity(0.72),
+                        theme.scaffoldBackground.opacity(0.58),
                     ],
                     startPoint: .top, endPoint: .bottom
                 )

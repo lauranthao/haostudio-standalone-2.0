@@ -15,8 +15,8 @@
 //   （chen 2026-11-24: 个人资料/会员已删，`hao_profile_nickname` 不再是
 //   新键——见 init 里的旧值清理。）
 // - Theme-owned state lives ONLY in ThemeStore (see its header):
-//   `glassIntensity`, `tabAccentHex` and `accentOverrideHex` are
-//   computed forwards to the ThemeStore this store is built with.
+//   `glassIntensity` and `tabAccentHex` are computed forwards
+//   to the ThemeStore this store is built with.
 //   HAoStudioApp creates the ThemeStore first, then
 //   `SettingsStore(themeStore:)` with it.
 // - Defaults are the Flutter `settings_tab_page.dart` /
@@ -48,7 +48,6 @@ final class SettingsStore: ObservableObject {
     static let musicQualityKey = "musicQuality"
     static let mixWithOthersKey = "audioMixWithOthers"
     static let autoResumeKey = "autoResumeLastPlayback"
-    static let autoUpdateCheckKey = "autoUpdateCheck"
     /// The Swift engine-preference key (PlayerKernel).
     static let enginePreferenceKey = "hao_video_player_key"
     /// The Flutter/migrated engine-preference key. Read once, see
@@ -139,8 +138,13 @@ final class SettingsStore: ObservableObject {
 
     /// Automatic update check on launch (Flutter default true).
     /// Only the switch lives here — the check itself is S6's.
+    /// b49fix2 P2-70: the key is DefaultUpdateChecker
+    /// .autoUpdateCheckKey — one shared constant. It used to be
+    /// declared here too, and if the two strings ever drifted,
+    /// the Settings switch and the checker would silently
+    /// disagree.
     @Published var autoUpdateCheck: Bool {
-        didSet { defaults.set(autoUpdateCheck, forKey: Self.autoUpdateCheckKey) }
+        didSet { defaults.set(autoUpdateCheck, forKey: DefaultUpdateChecker.autoUpdateCheckKey) }
     }
 
     /// Music loudness normalisation on/off.
@@ -368,19 +372,6 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Custom accent override (opaque form of `tabAccentHex`), or
-    /// nil for the per-theme accent. Forwarded to ThemeStore. See
-    /// ThemeStore's header: Flutter has no separate accent key —
-    /// this shares `hao_tabbar_accent`, no `hao_accent_override`
-    /// key is introduced.
-    var accentOverrideHex: Int? {
-        get { themeStore.accentOverrideHex }
-        set {
-            objectWillChange.send()
-            themeStore.accentOverrideHex = newValue
-        }
-    }
-
     /// The stored custom accent as a Color, or nil for the default.
     /// The tab-bar palette reads this and writes through it (the
     /// setter stores the opaque ARGB form under the shared
@@ -396,20 +387,6 @@ final class SettingsStore: ObservableObject {
             } else {
                 themeStore.tabAccentHex = nil
             }
-        }
-    }
-
-    /// Custom accent override as a Color (the ColorPicker binding),
-    /// or nil for the per-theme accent. Same single stored key as
-    /// `tabAccentHex` — the opaque ARGB form — so the picker and
-    /// the tab-bar palette never disagree. Coordinator addition
-    /// (S5 merge): the B-leg UI binds `accentOverride: Color?`;
-    /// the A-leg file only had the `accentOverrideHex: Int?` view.
-    var accentOverride: Color? {
-        get { accentOverrideHex.map { Color(argb: UInt32(truncatingIfNeeded: $0)) } }
-        set {
-            objectWillChange.send()
-            accentOverrideHex = newValue.map { Int($0.opaqueARGB) }
         }
     }
 
@@ -438,7 +415,7 @@ final class SettingsStore: ObservableObject {
         self.hapticsEnabled = MusicLibraryStore.hapticsEnabled(defaults: defaults)
         self.mixWithOthers = SettingsStore.boolValue(defaults, key: Self.mixWithOthersKey, default: false)
         self.autoResume = SettingsStore.boolValue(defaults, key: Self.autoResumeKey, default: false)
-        self.autoUpdateCheck = SettingsStore.boolValue(defaults, key: Self.autoUpdateCheckKey, default: true)
+        self.autoUpdateCheck = SettingsStore.boolValue(defaults, key: DefaultUpdateChecker.autoUpdateCheckKey, default: true)
         self.normalizationEnabled = SettingsStore.boolValue(defaults, key: Self.normalizationEnabledKey, default: false)
         self.normalizationStrength = SettingsStore.intValue(defaults, key: Self.normalizationStrengthKey, default: 1, range: 0...2)
 
@@ -524,17 +501,25 @@ final class SettingsStore: ObservableObject {
         hapticsEnabled = MusicLibraryStore.hapticsEnabled(defaults: defaults)
         mixWithOthers = SettingsStore.boolValue(defaults, key: Self.mixWithOthersKey, default: false)
         autoResume = SettingsStore.boolValue(defaults, key: Self.autoResumeKey, default: false)
-        autoUpdateCheck = SettingsStore.boolValue(defaults, key: Self.autoUpdateCheckKey, default: true)
+        autoUpdateCheck = SettingsStore.boolValue(defaults, key: DefaultUpdateChecker.autoUpdateCheckKey, default: true)
         normalizationEnabled = SettingsStore.boolValue(defaults, key: Self.normalizationEnabledKey, default: false)
         normalizationStrength = SettingsStore.intValue(defaults, key: Self.normalizationStrengthKey, default: 1, range: 0...2)
 
         // Engine preference, with the one-time `videoPlayerKey` bridge.
+        // b49fix2 P1-27: only assign when a key exists. The old
+        // else-branch called VideoEngine.from(raw: nil), which
+        // returns .mpv — and the didSet then WROTE
+        // hao_video_player_key, fabricating an MPV preference for
+        // a user who never touched the picker (a backup import
+        // of a pre-2.0 backup silently pinned the engine to MPV).
+        // No key anywhere = leave the current preference alone
+        // (unset = capability-based default, not MPV).
         if defaults.object(forKey: Self.enginePreferenceKey) == nil,
            let migrated = defaults.string(forKey: Self.legacyEngineKey) {
             let engine = VideoEngine.from(raw: migrated)
             enginePreference = engine
             defaults.set(engine.rawValue, forKey: Self.enginePreferenceKey)
-        } else {
+        } else if defaults.object(forKey: Self.enginePreferenceKey) != nil {
             enginePreference = VideoEngine.from(raw: defaults.string(forKey: Self.enginePreferenceKey))
         }
         autoNextEpisode = SettingsStore.boolValue(defaults, key: Self.autoNextEpisodeKey, default: true)

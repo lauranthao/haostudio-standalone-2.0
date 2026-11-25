@@ -39,6 +39,14 @@ enum LocalStore {
     /// Load a Codable collection, returning `defaultValue` when the file
     /// does not exist or cannot be decoded (a corrupt index must never
     /// crash launch; the player/settings slices surface it if needed).
+    ///
+    /// A file that EXISTS but does not decode is quarantined, never
+    /// silently read as empty: reading it as empty and then saving
+    /// would permanently overwrite the user's data with the default
+    /// (b49fix2 P0-1). The corrupt file moves aside to
+    /// `<name>.corrupt-<date>.json` and is recorded in
+    /// `hao_store_quarantine.json`, so the data survives for manual
+    /// recovery; `.haoStoreQuarantined` posts once per file.
     static func loadCollection<T: Decodable>(
         named name: String,
         default defaultValue: T
@@ -46,16 +54,68 @@ enum LocalStore {
         let url = collectionURL(named: name)
         guard let data = try? Data(contentsOf: url) else { return defaultValue }
         guard let decoded = try? JSONDecoder().decode(T.self, from: data) else {
+            quarantineFile(at: url, name: name, reason: "decode failed")
             return defaultValue
         }
         return decoded
     }
+
+    /// Move a corrupt file aside and record it, so a later save can
+    /// never overwrite the user's data with a default. The record
+    /// file carries a `version` field (schema version 1) so a future
+    /// reader can tell the record's shape apart. `documentsURL` is
+    /// the test seam (nil = the real container); MigrationStore
+    /// passes its own documents URL so tests quarantine into the
+    /// temp container, never the real one.
+    static func quarantineFile(
+        at url: URL,
+        name: String,
+        reason: String,
+        documentsURL: URL? = nil
+    ) {
+        let docs = documentsURL ?? documentsDirectory()
+        let stamp: String = {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyyMMdd-HHmmss"
+            return formatter.string(from: Date())
+        }()
+        let quarantinedURL = docs
+            .appendingPathComponent("\(name).corrupt-\(stamp).json")
+        guard (try? FileManager.default.moveItem(at: url, to: quarantinedURL)) != nil else {
+            return
+        }
+        let recordURL = docs
+            .appendingPathComponent("\(quarantineRecordFile).json")
+        var record = (try? Data(contentsOf: recordURL))
+            .flatMap { try? JSONDecoder().decode(StoreQuarantineRecord.self, from: $0) }
+            ?? StoreQuarantineRecord(version: 1, files: [])
+        record.files.append(QuarantinedStoreFile(
+            name: name, quarantinedAt: Date(), reason: reason))
+        if let data = try? JSONEncoder().encode(record) {
+            try? data.write(to: recordURL, options: [.atomic])
+        }
+        NotificationCenter.default.post(name: .haoStoreQuarantined, object: name)
+    }
+
+    /// Quarantine record file name (without extension).
+    static let quarantineRecordFile = "hao_store_quarantine"
+
+    /// Save-failure notices are posted at most once per collection
+    /// per launch (b49fix2 P1-13): 27 call sites ignore the Bool,
+    /// and a full disk would otherwise spam the toast on every
+    /// write. Guarded by a lock: saves run on background queues
+    /// (download engine, backup engine) as well as main.
+    private static var reportedSaveFailures = Set<String>()
+    private static let saveFailureLock = NSLock()
 
     /// Save a Codable collection atomically.
     /// Returns false when the encode or the write failed (callers
     /// that keep a second copy — e.g. EmbyConfigStore, whose
     /// credential lives in the Keychain — must know the JSON did
     /// not land). @discardableResult: most callers ignore it.
+    /// A failed write posts `.haoStoreSaveFailed` once per
+    /// collection per launch, so the shell can warn about a full
+    /// disk instead of losing data silently.
     @discardableResult
     static func saveCollection<T: Encodable>(named name: String, value: T) -> Bool {
         let url = collectionURL(named: name)
@@ -64,9 +124,30 @@ enum LocalStore {
             try data.write(to: url, options: [.atomic])
             return true
         } catch {
+            saveFailureLock.lock()
+            let firstReport = reportedSaveFailures.insert(name).inserted
+            saveFailureLock.unlock()
+            if firstReport {
+                NotificationCenter.default.post(name: .haoStoreSaveFailed, object: name)
+            }
             return false
         }
     }
+}
+
+/// One file moved aside by quarantine (b49fix2 P0-1).
+struct QuarantinedStoreFile: Codable {
+    let name: String
+    let quarantinedAt: Date
+    let reason: String
+}
+
+/// The quarantine record (`hao_store_quarantine.json`). `version`
+/// is the record schema version (1); a future reader can tell
+/// the record's shape apart from the file list itself.
+struct StoreQuarantineRecord: Codable {
+    let version: Int
+    var files: [QuarantinedStoreFile]
 }
 
 enum LocalFileIndex {

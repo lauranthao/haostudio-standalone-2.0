@@ -46,4 +46,21 @@ final class VersionCompareTests: XCTestCase {
     func testWhitespaceIsTrimmed() {
         XCTAssertEqual(VersionCompare.compare(" 1.1.6 ", "1.1.6"), 0)
     }
+
+    /// b49fix2 P2-61: the documented quirk of the LIVE comparator
+    /// (the deleted UpdateCheckLogic.isNewer mapped non-numeric
+    /// parts to 0 and disagreed here — the two comparators were
+    /// never the same function). A non-numeric part falls back to
+    /// plain string comparison, exactly like Flutter's
+    /// compareSemver: "2.0.0-dev.1" sorts AFTER "2.0.0", and
+    /// "alpha" sorts before "beta". No manifest the app ships
+    /// carries a dev tag, so this pins the behaviour rather than
+    /// changing it.
+    func testNonNumericPartsFallBackToStringComparison() {
+        XCTAssertGreaterThan(VersionCompare.compare("2.0.0-dev.1", "2.0.0"), 0)
+        XCTAssertLessThan(VersionCompare.compare("2.0.0", "2.0.0-dev.1"), 0)
+        XCTAssertLessThan(VersionCompare.compare("2.0.0-alpha", "2.0.0-beta"), 0)
+        XCTAssertGreaterThan(VersionCompare.compare("2.0.0-beta", "2.0.0-alpha"), 0)
+        XCTAssertTrue(VersionCompare.isNewerVersion("2.0.0-dev.1", than: "2.0.0"))
+    }
 }

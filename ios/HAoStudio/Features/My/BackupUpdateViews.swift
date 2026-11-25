@@ -17,6 +17,7 @@
 
 import SwiftUI
 import UIKit
+import CryptoKit
 
 /// One alert for the whole backup/update flow. SettingsGroupsView
 /// presents it with the modern `.alert(title:isPresented:
@@ -56,6 +57,19 @@ final class BackupUpdateFlow: ObservableObject {
     @Published var alert: BackupUpdateAlert?
     @Published var isCheckingUpdate = false
     @Published var updatePrompt: UpdateCheckResult?
+    /// Whether the update prompt sheet is shown (b49fix2 P2-24):
+    /// the sheet used to be driven by `updatePrompt` itself, so
+    /// dismissing it mid-download cleared the prompt and the
+    /// download was silently dropped. The sheet is now driven by
+    /// this flag; `updatePrompt` survives dismissal while a
+    /// download runs or is done, and checkForUpdate re-shows it.
+    @Published var showingUpdatePrompt = false
+    /// An auto-check result that arrived before the disclaimer
+    /// was accepted (b49fix2 P2-25): held here instead of shown,
+    /// so the update prompt never overlaps the disclaimer gate.
+    /// MainTabView flushes it (sets updatePrompt + shows the
+    /// sheet) when the gate closes with acceptance.
+    @Published var pendingAutoUpdateResult: UpdateCheckResult?
     @Published var lastCheckDate: Date?
     @Published var skippedVersionLabel: String?
 
@@ -105,6 +119,9 @@ final class BackupUpdateFlow: ObservableObject {
                 switch result {
                 case .success(let url):
                     self.exportedURL = url
+                    // b49fix2 B5: the user has now exported once —
+                    // the one-time backup nudge never shows again.
+                    UserDefaults.standard.set(true, forKey: "hao_backup_exported_once")
                     // b36 item 8, F1: the engine records the
                     // warnings in the envelope (notably the Emby
                     // credential warning); surface them so the
@@ -127,15 +144,23 @@ final class BackupUpdateFlow: ObservableObject {
         showingImporter = true
     }
 
-    /// Called with the .zip the user picked in the file importer.
-    /// The engine reads it inside its call; the security-scoped
-    /// access is held until its completion returns.
+    /// Called with the file the user picked in the file importer
+    /// (.zip or .json — the importer offers both). A .json file is
+    /// a Flutter 1.x backup: it goes to MigrationStore's Route B
+    /// importer (b49fix2 P1-15 — it had zero callers before, so
+    /// the route was dead). A .zip goes to the engine as before.
+    /// The security-scoped access is held until the read/import
+    /// completes.
     func importPicked(url: URL) {
         guard let engine = engine else {
             alert = BackupUpdateAlert(title: "导入备份不可用", message: "备份引擎不可用，请稍后再试。")
             return
         }
         guard !isImporting else {
+            return
+        }
+        if url.pathExtension.lowercased() == "json" {
+            importFlutterJSON(url: url)
             return
         }
         isImporting = true
@@ -170,6 +195,40 @@ final class BackupUpdateFlow: ObservableObject {
         }
     }
 
+    /// Route B: a Flutter 1.x backup JSON. Runs on a background
+    /// queue (the file can be large); the import itself is
+    /// synchronous and writes through MigrationStore, which backs
+    /// up + verifies + rolls back on failure. On success the
+    /// app is told to reload, exactly like a .zip import.
+    private func importFlutterJSON(url: URL) {
+        isImporting = true
+        let needsStop = url.startAccessingSecurityScopedResource()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            defer {
+                if needsStop {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+            let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            let report = MigrationStore.importBackupJSON(text)
+            DispatchQueue.main.async {
+                guard let self = self else {
+                    return
+                }
+                self.isImporting = false
+                let succeeded = report.outcome == .migrated || report.outcome == .alreadyDone
+                self.alert = BackupUpdateAlert(
+                    title: succeeded ? "导入完成" : "导入失败",
+                    message: succeeded
+                        ? "已从旧版备份导入 \(report.migratedKeys) 项设置（跳过 \(report.skippedKeys) 项，未识别 \(report.unknownKeys) 项）。"
+                        : "无法导入该备份文件：\(report.detail)")
+                if succeeded {
+                    NotificationCenter.default.post(name: .haoBackupImported, object: nil)
+                }
+            }
+        }
+    }
+
     // MARK: - Update check
 
     /// Manual check (Settings → About → 检查更新). Drives the
@@ -179,6 +238,14 @@ final class BackupUpdateFlow: ObservableObject {
     func checkForUpdate() {
         guard let checker = checker else {
             alert = BackupUpdateAlert(title: "检查更新不可用", message: "更新检查器不可用，请稍后再试。")
+            return
+        }
+        // b49fix2 P2-24: a prompt whose download is running or
+        // done survives dismissal — re-show the same sheet
+        // instead of starting a fresh check that would overwrite
+        // the in-flight download's prompt.
+        if updatePrompt != nil, updatePhase == .downloading || updatePhase == .downloaded {
+            showingUpdatePrompt = true
             return
         }
         guard !isCheckingUpdate else {
@@ -213,6 +280,7 @@ final class BackupUpdateFlow: ObservableObject {
                 }
                 self.updatePhase = .updateAvailable
                 self.updatePrompt = result
+                self.showingUpdatePrompt = true
             }
         }
     }
@@ -235,7 +303,13 @@ final class BackupUpdateFlow: ObservableObject {
         updatePhase = .downloading
         downloadProgress = 0
         let fileName = "HAoStudio-\(result.latestVersion ?? "latest").ipa"
-        UpdateIPADownloader.download(url: url, fileName: fileName, progress: { [weak self] progress in
+        // b49fix2 P1-40: the manifest's expected size + hash ride
+        // along — the downloader verifies the bytes instead of
+        // trusting any HTTP 200 body.
+        UpdateIPADownloader.download(
+            url: url, fileName: fileName,
+            expectedSize: result.size, expectedSHA256: result.sha256,
+            progress: { [weak self] progress in
             let work = DispatchWorkItem {
                 self?.downloadProgress = progress
             }
@@ -250,6 +324,13 @@ final class BackupUpdateFlow: ObservableObject {
                 case .success(let fileURL):
                     self.downloadedIPAURL = fileURL
                     self.updatePhase = .downloaded
+                    // b49fix2 P2-24: the sheet may have been
+                    // dismissed mid-download — surface the
+                    // finished download instead of leaving the
+                    // IPA sitting in Documents unnoticed.
+                    if self.updatePrompt != nil {
+                        self.showingUpdatePrompt = true
+                    }
                 case .failure(let error):
                     self.updatePhase = .failed(error.localizedDescription)
                 }
@@ -277,10 +358,21 @@ final class BackupUpdateFlow: ObservableObject {
         }
         checker?.skip(version: version, build: build)
         updatePrompt = nil
+        showingUpdatePrompt = false
         refreshUpdateState()
     }
 
+    /// Dismiss the prompt sheet. b49fix2 P2-24: dismissing is not
+    /// cancelling — while a download runs (or has finished), the
+    /// prompt + phase stay so the download keeps going and the
+    /// sheet reopens on the same prompt (checkForUpdate re-shows
+    /// it). Only a plain "later" on an undownloaded prompt
+    /// clears it.
     func dismissPrompt() {
+        showingUpdatePrompt = false
+        guard updatePhase != .downloading && updatePhase != .downloaded else {
+            return
+        }
         updatePrompt = nil
         updatePhase = .checking
     }
@@ -311,6 +403,18 @@ enum UpdateSheetPhase: Equatable {
 enum UpdateDownloadError: Error {
     case badStatus
     case writeFailed
+    /// The received byte count does not match the manifest (or the
+    /// server's Content-Length when the manifest carries no size).
+    /// A short file is a truncated download, not an IPA.
+    case sizeMismatch(expected: Int64, received: Int64)
+    /// The body is not a zip: an HTML error page from the shop
+    /// used to be saved as .ipa and handed to the signing tool,
+    /// which then failed on a corrupt file (documented shop
+    /// failure mode).
+    case notAnIPA
+    /// The SHA-256 of the downloaded bytes does not match the
+    /// manifest's hash.
+    case hashMismatch
 
     var localizedDescription: String {
         switch self {
@@ -318,6 +422,12 @@ enum UpdateDownloadError: Error {
             return "下载失败：服务器返回了错误，请稍后再试"
         case .writeFailed:
             return "下载失败：无法写入文件，请检查存储空间后重试"
+        case .sizeMismatch(let expected, let received):
+            return "下载失败：文件不完整（应为 \(expected) 字节，实际 \(received) 字节），请重新下载"
+        case .notAnIPA:
+            return "下载失败：服务器返回的不是安装包，请稍后再试"
+        case .hashMismatch:
+            return "下载失败：安装包校验不通过，请重新下载"
         }
     }
 }
@@ -330,9 +440,26 @@ enum UpdateDownloadError: Error {
 /// stays alive for the whole download. A failed download
 /// deletes its partial file; a non-2xx status fails before a
 /// single byte is written.
+///
+/// b49fix2 P1-40: the download is VERIFIED, not trusted. The
+/// manifest's expected size + SHA-256 (when the manifest
+/// carries them) are checked against the received bytes, the
+/// body must start with the zip magic `PK\x03\x04`, and a
+/// text/* content-type is refused outright — a shop error page
+/// used to be saved as .ipa and handed to the signing tool,
+/// which then failed on a corrupt file. Any mismatch fails
+/// the download and deletes the partial file.
 final class UpdateIPADownloader: NSObject, URLSessionDataDelegate {
     private let url: URL
     private let fileName: String
+    /// Expected IPA size in bytes from the manifest. Nil when the
+    /// manifest carries no size — the server's Content-Length is
+    /// used instead when it is known.
+    private let expectedSize: Int?
+    /// Expected SHA-256 hex of the IPA from the manifest. Nil
+    /// when the manifest carries no hash — the size + magic
+    /// checks still apply.
+    private let expectedSHA256: String?
     private let progress: (Double) -> Void
     private let completion: (Result<URL, Error>) -> Void
     private var receivedCount: Int64 = 0
@@ -340,6 +467,13 @@ final class UpdateIPADownloader: NSObject, URLSessionDataDelegate {
     private var fileHandle: FileHandle?
     private var session: URLSession?
     private var finished = false
+    /// First four bytes received (b49fix2 P1-40): must be the zip
+    /// magic `PK\x03\x04`. Accumulated across chunks — the first
+    /// chunk may be shorter than four bytes.
+    private var magicPrefix = Data()
+    /// Incremental SHA-256 over the received bytes (b49fix2
+    /// P1-40): finalised when the transfer completes.
+    private var hasher = SHA256()
 
     /// The destination file, created on the first 2xx response.
     private var fileURL: URL {
@@ -349,22 +483,30 @@ final class UpdateIPADownloader: NSObject, URLSessionDataDelegate {
     static func download(
         url: URL,
         fileName: String,
+        expectedSize: Int? = nil,
+        expectedSHA256: String? = nil,
         progress: @escaping (Double) -> Void,
         completion: @escaping (Result<URL, Error>) -> Void
     ) {
         let downloader = UpdateIPADownloader(
-            url: url, fileName: fileName, progress: progress, completion: completion)
+            url: url, fileName: fileName,
+            expectedSize: expectedSize, expectedSHA256: expectedSHA256,
+            progress: progress, completion: completion)
         downloader.start()
     }
 
     private init(
         url: URL,
         fileName: String,
+        expectedSize: Int?,
+        expectedSHA256: String?,
         progress: @escaping (Double) -> Void,
         completion: @escaping (Result<URL, Error>) -> Void
     ) {
         self.url = url
         self.fileName = fileName
+        self.expectedSize = expectedSize
+        self.expectedSHA256 = expectedSHA256
         self.progress = progress
         self.completion = completion
         super.init()
@@ -391,6 +533,16 @@ final class UpdateIPADownloader: NSObject, URLSessionDataDelegate {
             finish(.failure(UpdateDownloadError.badStatus))
             return
         }
+        // b49fix2 P1-40: an HTML error page behind a 200 (the
+        // shop's failure mode) is not an IPA — refuse it before
+        // a single byte is written. Only text/* is refused: a
+        // missing or octet-stream content-type is fine.
+        if let contentType = http.value(forHTTPHeaderField: "Content-Type")?.lowercased(),
+           contentType.hasPrefix("text/") {
+            completionHandler(.cancel)
+            finish(.failure(UpdateDownloadError.notAnIPA))
+            return
+        }
         // Stream to disk: create (or truncate) the destination
         // and hold a write handle for the incoming chunks.
         let destination = fileURL
@@ -413,6 +565,10 @@ final class UpdateIPADownloader: NSObject, URLSessionDataDelegate {
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         fileHandle?.write(data)
         receivedCount += Int64(data.count)
+        hasher.update(data: data)
+        if magicPrefix.count < 4 {
+            magicPrefix.append(contentsOf: data.prefix(4 - magicPrefix.count))
+        }
         if expectedLength > 0 {
             progress(Double(receivedCount) / Double(expectedLength))
         }
@@ -430,6 +586,26 @@ final class UpdateIPADownloader: NSObject, URLSessionDataDelegate {
         guard !finished else { return }
         guard fileHandle != nil else {
             finish(.failure(UpdateDownloadError.writeFailed))
+            return
+        }
+        // b49fix2 P1-40: verify before reporting success. Any
+        // mismatch fails the download and deletes the file, so a
+        // corrupt IPA never reaches the share sheet.
+        if let expected = expectedSize.map(Int64.init) ?? (expectedLength > 0 ? expectedLength : nil),
+           receivedCount != expected {
+            removePartialFile()
+            finish(.failure(UpdateDownloadError.sizeMismatch(expected: expected, received: receivedCount)))
+            return
+        }
+        if magicPrefix != Data([0x50, 0x4B, 0x03, 0x04]) {
+            removePartialFile()
+            finish(.failure(UpdateDownloadError.notAnIPA))
+            return
+        }
+        if let expectedHash = expectedSHA256,
+           hasher.finalize().map({ String(format: "%02x", $0) }).joined() != expectedHash {
+            removePartialFile()
+            finish(.failure(UpdateDownloadError.hashMismatch))
             return
         }
         finish(.success(fileURL))
@@ -634,6 +810,9 @@ struct UpdatePromptSheet: View {
             }
             notesSection
             blockedSection
+            if flow.updatePhase == .downloaded {
+                installStepsSection
+            }
             buttonsSection
         }
         .padding(24)
@@ -725,8 +904,38 @@ struct UpdatePromptSheet: View {
         case .failed(let detail):
             return detail
         default:
+            // b49fix2 P1-40: show the expected download size so
+            // the user knows what is coming (16 MB on cellular
+            // is a real decision).
+            if let size = result.size {
+                return "当前 \(currentIdentity) → 新版 \(content.versionLabel)（约 \(sizeLabel(size))）"
+            }
             return "当前 \(currentIdentity) → 新版 \(content.versionLabel)"
         }
+    }
+
+    private func sizeLabel(_ bytes: Int) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: Int64(bytes))
+    }
+
+    /// b49fix2 B2: the downloaded phase used to show only a
+    /// "导入到签名工具" ShareLink, assuming the user knows what
+    /// a signing tool is and what to do with an IPA. Plain
+    /// steps, in order, for someone who has never sideloaded.
+    private var installStepsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("安装步骤")
+                .font(.haoCallout)
+                .foregroundStyle(theme.textPrimary)
+            Text("1. 点下面的按钮，在分享表单里选择你的签名工具（如 LCSign）。")
+            Text("2. 在签名工具里导入这个 IPA，按它的提示完成签名。")
+            Text("3. 回到桌面，打开新装的 HAo Studio。")
+        }
+        .font(.haoSubhead)
+        .foregroundStyle(theme.textSecondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var progressRing: some View {

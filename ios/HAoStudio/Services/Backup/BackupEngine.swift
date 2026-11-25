@@ -162,6 +162,10 @@ enum BackupEngineCore {
         "fonts",
         "live_recordings",
         "logs",
+        // b49fix2 P2-10: the playlist snapshots subdir
+        // (PlaylistSnapshotStore.subdir) was in neither export
+        // list, so a restore lost every play context's snapshot.
+        "hao_playlist_snapshots",
     ]
 
     /// Collection files that are never exported: the Flutter
@@ -249,6 +253,35 @@ enum BackupEngineCore {
         // (isolating it would still leave the token on disk in
         // plain text).
         out["hao_vod_danmaku_api_url"] = .string
+        // b49fix2 P1-4: the catalogue was frozen at S1+S5 and
+        // dropped every 2.0-native UserDefaults key the app
+        // actually writes. Enumerated from the stores (see the
+        // census in the fix report): audio-cache switch + cap,
+        // disclaimer version, last update-check date, live
+        // preferred-quality map, video-home cache stamp, VOD
+        // per-playback settings, the persisted play context
+        // (Data — base64 through the envelope, see
+        // MigrationKeyKind.data), and the lyrics-cache order +
+        // version. Deliberately NOT here: MPV option names, the
+        // Emby apiKey, hao_migration_* state keys,
+        // hao_profile_nickname (deleted feature), hao_song_cache_*
+        // (legacy, migrated away), hao_vod_danmaku_api_token
+        // (credential), hao_resolver_speed (a collection file,
+        // exported as one already).
+        out["hao_audio_cache_enabled"] = .bool
+        out["hao_audio_cache_limit_mb"] = .int
+        out["hao_disclaimer_accepted_version"] = .int
+        out["hao_last_update_check_date"] = .double
+        out["hao_live_preferred_quality"] = .json
+        out["hao_video_home_saved_at"] = .double
+        out["hao_vod_audio_track"] = .int
+        out["hao_vod_danmaku"] = .bool
+        out["hao_vod_danmaku_opacity"] = .double
+        out["hao_vod_speed"] = .double
+        out["hao_vod_subtitle_track"] = .int
+        out["hao.currentPlayContext"] = .data
+        out["hao.lyricsCacheOrder"] = .json
+        out["hao.lyricsCacheVersion"] = .int
         return out
     }
 
@@ -660,6 +693,12 @@ extension BackupEngineCore {
         var skipped: [String] = []
         var warnings: [String] = []
         var hasEmbyConfig = false
+        /// True when the backup restores non-empty custom LX
+        /// scripts (b49fix2 P2-13): their keys live in the
+        /// Keychain and are never in a backup, so the import
+        /// must warn that the keys need re-entering — the export
+        /// side already warns, the import side never did.
+        var hasCustomLXScripts = false
     }
 
     private enum ImportPlan {
@@ -748,6 +787,15 @@ extension BackupEngineCore {
                     planned.hasEmbyConfig = true
                 } else {
                     planned.collections.append(PlannedCollection(name: base, bytes: bytes))
+                    // b49fix2 P2-13: a backup that restores custom
+                    // LX scripts restores the scripts but never
+                    // their Keychain keys — flag it so the commit
+                    // warns the user to re-enter them.
+                    if base == "hao_lx_custom",
+                       let parsed = try? JSONSerialization.jsonObject(with: bytes, options: []),
+                       ((parsed as? [Any])?.isEmpty == false || (parsed as? [String: Any])?.isEmpty == false) {
+                        planned.hasCustomLXScripts = true
+                    }
                 }
             } else if entry.name.hasPrefix(filesPrefix) {
                 let relativePath = String(entry.name.dropFirst(filesPrefix.count))
@@ -790,6 +838,9 @@ extension BackupEngineCore {
                 planned.skipped.append(key)
                 return
             }
+            // b49fix2 P2-11: same dedupe as MigrationStore's own
+            // import — a re-import must not double the history.
+            existing = MigrationStore.dedupedListenEntries(existing)
             if existing.count > 3000 {
                 existing = Array(existing.suffix(3000))
             }
@@ -1046,6 +1097,13 @@ extension BackupEngineCore {
         if planned.hasEmbyConfig, !embyCredentialPresent() {
             warnings.append(embyCredentialWarning)
         }
+        // b49fix2 P2-13: the scripts are back, their keys are
+        // not — they live in the Keychain and never enter a
+        // backup file. Say so instead of letting the scripts
+        // fail silently on their first use.
+        if planned.hasCustomLXScripts {
+            warnings.append(lxKeysWarning)
+        }
         NotificationCenter.default.post(name: .haoBackupImported, object: nil)
         let detail = "已恢复 \(appliedKeys) 个设置、\(appliedCollections) 个集合、\(appliedFiles) 个文件"
             + (planned.skipped.isEmpty ? "" : "，跳过 \(planned.skipped.count) 个坏键")
@@ -1085,7 +1143,20 @@ extension BackupEngineCore {
             var absentDefaults: [String] = []
             for key in defaultKeys {
                 if let value = defaults.object(forKey: key) {
-                    presentDefaults[key] = value
+                    // b49fix2 P1-4: Data / Date values are not
+                    // JSON-safe, and isValidJSONObject below would
+                    // fail the whole snapshot — refusing an import
+                    // over a key the user never touched. The
+                    // manifest's defaults are diagnostic only
+                    // (rollback reads the in-memory journal for
+                    // defaults), so store them in a JSON-safe form.
+                    if let data = value as? Data {
+                        presentDefaults[key] = data.base64EncodedString()
+                    } else if let date = value as? Date {
+                        presentDefaults[key] = date.timeIntervalSince1970
+                    } else {
+                        presentDefaults[key] = value
+                    }
                 } else {
                     absentDefaults.append(key)
                 }

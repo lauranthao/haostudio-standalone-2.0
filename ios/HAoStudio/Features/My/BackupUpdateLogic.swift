@@ -77,6 +77,14 @@ struct UpdateCheckResult: Identifiable {
     var minOs: String?
     var downloadURL: URL?
     var releaseNotes: String?
+    /// Expected IPA size in bytes from the manifest (b49fix2
+    /// P1-40): the downloader requires the received byte count
+    /// to equal this when it is known. Nil = the manifest
+    /// carries no size.
+    var size: Int? = nil
+    /// Expected SHA-256 hex of the IPA from the manifest
+    /// (b49fix2 P1-40): verified when present. Nil = no hash.
+    var sha256: String? = nil
     /// True when the latest build needs a newer iOS than this device.
     var requiresNewerOS: Bool
     /// True when this version+build was skipped by the user.
@@ -110,27 +118,6 @@ enum UpdateCheckLogic {
     /// "1.1.7 (build 12)" — the identity skip records use.
     static func versionIdentity(version: String, build: Int) -> String {
         "\(version) (build \(build))"
-    }
-
-    /// True when (version, build) is newer than the current pair.
-    /// Version components compare numerically ("1.1.10" beats
-    /// "1.1.9"); build breaks a version tie.
-    static func isNewer(version: String, build: Int, than currentVersion: String, currentBuild: Int) -> Bool {
-        let next = versionComponents(version)
-        let current = versionComponents(currentVersion)
-        let count = max(next.count, current.count)
-        for index in 0..<count {
-            let a = index < next.count ? next[index] : 0
-            let b = index < current.count ? current[index] : 0
-            if a != b {
-                return a > b
-            }
-        }
-        return build > currentBuild
-    }
-
-    static func versionComponents(_ version: String) -> [Int] {
-        version.split(separator: ".").map { Int($0) ?? 0 }
     }
 
     /// Parse "17.0" / "17.0.1" / "17". Nil for anything else —

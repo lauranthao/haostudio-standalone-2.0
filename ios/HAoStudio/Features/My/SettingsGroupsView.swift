@@ -105,8 +105,15 @@ struct SettingsGroupsView: View {
     @ObservedObject private var engineReporter = VideoEngineReporter.shared
 
     /// Danmaku settings edited by the reused S4 sheet; persisted
-    /// when the sheet page disappears.
+    /// when the sheet page disappears — but only when they
+    /// changed (b49fix2 A4). The sheet holds its own copy; an
+    /// unconditional persist would write a stale copy over a
+    /// room-side change made while the sheet was open.
     @State private var danmakuSettings = LiveDanmakuSettings.load()
+    /// Snapshot of the settings as loaded on appear, for the
+    /// changed-only persist above (compared by dictionary — the
+    /// type is not Equatable and lives outside this lane).
+    @State private var danmakuSettingsSnapshot: [String: Any]? = nil
 
     /// VOD danmaku API address + token (b36 item 11), for the
     /// "影视弹幕 API" entry subtitle. Read once per appear of
@@ -124,15 +131,10 @@ struct SettingsGroupsView: View {
     /// Background-colour hex draft. Only a valid `#RRGGBB`
     /// draft is written to the store; an invalid one reverts.
     @State private var bgHexDraft = ""
-
-    /// EQ on/off (hao_eq_enabled, written by
-    /// MusicEqualizerViewModel / NativeMusicPlayer). 音量归一化
-    /// can only measure loudness while EQ is on (the player
-    /// returns gain 1.0 otherwise), so the toggle is disabled
-    /// with an inline hint until EQ is on (b49 sweep P1).
-    /// @AppStorage observes the shared defaults, so flipping EQ
-    /// in the 均衡器 page re-enables the toggle here live.
-    @AppStorage("hao_eq_enabled") private var eqEnabled = false
+    /// Inline error for the hex field (b49fix2 A21): an invalid
+    /// value used to revert silently, with no hint what was
+    /// wrong. Set on commit, cleared while typing.
+    @State private var bgHexError: String? = nil
 
     /// Cached size (bytes) shown in the 数据 group. Refreshed
     /// on appear and after clearing.
@@ -168,7 +170,10 @@ struct SettingsGroupsView: View {
         }
         .fileImporter(
             isPresented: $backupFlow.showingImporter,
-            allowedContentTypes: [UTType.zip],
+            // b49fix2 P1-15: .json is a Flutter 1.x backup — the
+            // importer used to offer only .zip, so Route B was
+            // unreachable from the UI.
+            allowedContentTypes: [UTType.zip, UTType.json],
             allowsMultipleSelection: false
         ) { result in
             switch result {
@@ -268,7 +273,6 @@ struct SettingsGroupsView: View {
                 appearanceRow
                 wallpaperRow
                 wallpaperManageRow
-                accentRow
                 tabAccentRow
                 glassIntensityRow
                 backgroundColorRow
@@ -311,35 +315,12 @@ struct SettingsGroupsView: View {
         }
     }
 
-    /// Custom accent colour (Flutter "自定义强调色"). The
-    /// ColorPicker writes SettingsStore.accentOverride; ThemeStore
-    /// applies it (A leg). Nil = theme default.
-    private var accentRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ColorPicker(
-                "自定义强调色",
-                selection: accentBinding,
-                supportsOpacity: false
-            )
-            if settings.accentOverride != nil {
-                Button("恢复默认") {
-                    settings.accentOverride = nil
-                }
-                .font(.haoBody)
-                .foregroundStyle(theme.accentText)
-            }
-        }
-    }
-
-    private var accentBinding: Binding<Color> {
-        Binding<Color>(
-            get: { settings.accentOverride ?? theme.accent },
-            set: { newValue in settings.accentOverride = newValue }
-        )
-    }
-
     /// Tab-bar selected colour palette. "默认" + five swatches;
     /// no purple, no red (chen rule). Nil = theme default.
+    /// b49fix2 A1: this palette is the ONE accent control. The
+    /// "自定义强调色" ColorPicker above it wrote the same key
+    /// (hao_tabbar_accent) and is deleted — a stored custom
+    /// colour still applies, and tapping a swatch replaces it.
     private var tabAccentRow: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("底栏选中颜色")
@@ -350,12 +331,6 @@ struct SettingsGroupsView: View {
                     tabAccentSwatch(choice)
                 }
             }
-            // b36 item 8, F8: this palette and 自定义强调色 above
-            // write the SAME key (hao_tabbar_accent — Flutter
-            // parity, one key, two views). Say so, or picking
-            // "蓝" here and watching every button turn blue looks
-            // like a bug.
-            footnote("与自定义强调色共用同一颜色，改一边另一边跟着变。")
         }
     }
 
@@ -465,25 +440,61 @@ struct SettingsGroupsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle("背景色", isOn: $settings.bgColorEnabled)
             if settings.bgColorEnabled {
-                TextField("#RRGGBB", text: $bgHexDraft)
-                    .textInputAutocapitalization(.characters)
-                    .autocorrectionDisabled()
-                    .onAppear {
-                        bgHexDraft = settings.bgColorHex
-                    }
-                    .onSubmit {
-                        commitBackgroundHex()
-                    }
-                    .onDisappear {
-                        // b35-sweep-settings: 原来只在按 Return 时
-                        // 保存；点别处 / 收起分组 / 返回上一页都会
-                        // 把未提交的草稿静默丢掉。离开行时也提交
-                        // 一次（无效值照旧不保存，见 commit）。
-                        commitBackgroundHex()
-                    }
-                footnote("输入 #RRGGBB，无效值不会保存。")
+                HStack(spacing: 10) {
+                    // b49fix2 A21: live swatch — the draft colour
+                    // while it parses, else the stored colour, so
+                    // the user sees what they are about to apply.
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(hexSwatchColor)
+                        .frame(width: 28, height: 28)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(theme.textMuted.opacity(0.4), lineWidth: 1)
+                        )
+                    TextField("#RRGGBB", text: $bgHexDraft)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .onAppear {
+                            bgHexDraft = settings.bgColorHex
+                            bgHexError = nil
+                        }
+                        .onChange(of: bgHexDraft) { _, _ in
+                            bgHexError = nil
+                        }
+                        .onSubmit {
+                            commitBackgroundHex()
+                        }
+                        .onDisappear {
+                            // b35-sweep-settings: 原来只在按 Return 时
+                            // 保存；点别处 / 收起分组 / 返回上一页都会
+                            // 把未提交的草稿静默丢掉。离开行时也提交
+                            // 一次（无效值照旧不保存，见 commit）。
+                            commitBackgroundHex()
+                        }
+                }
+                if let error = bgHexError {
+                    Text(error)
+                        .font(.haoFootnote)
+                        .foregroundStyle(Color.orange)
+                } else {
+                    footnote("输入 #RRGGBB，无效值不会保存。")
+                }
             }
         }
+    }
+
+    /// The swatch colour: the draft while it parses as
+    /// `#RRGGBB`, otherwise the stored background colour.
+    private var hexSwatchColor: Color {
+        let draft = bgHexDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let rgb = HexRGB.parse(draft) ?? HexRGB.parse(settings.bgColorHex) {
+            return Color(
+                red: Double(rgb.red) / 255,
+                green: Double(rgb.green) / 255,
+                blue: Double(rgb.blue) / 255
+            )
+        }
+        return Color.clear
     }
 
     private func commitBackgroundHex() {
@@ -491,8 +502,19 @@ struct SettingsGroupsView: View {
         if HexRGB.isValid(draft) {
             settings.bgColorHex = draft.uppercased()
             bgHexDraft = draft.uppercased()
-        } else {
+            bgHexError = nil
+        } else if draft.isEmpty {
+            // Clearing the field restores the stored value
+            // without an error — empty is "no change", not a
+            // bad value.
             bgHexDraft = settings.bgColorHex
+            bgHexError = nil
+        } else {
+            // b49fix2 A21: the revert is no longer silent — say
+            // what was wrong instead of just putting the old
+            // value back.
+            bgHexDraft = settings.bgColorHex
+            bgHexError = "格式不对，请输入 #RRGGBB，例如 #1A2B3C。"
         }
     }
 
@@ -525,43 +547,12 @@ struct SettingsGroupsView: View {
                     coordinator.targetQuality = newValue
                 }
                 Toggle("触感反馈", isOn: $settings.hapticsEnabled)
+                // b49fix2 A3: 音量归一化 lives in the 均衡器 page
+                // only — this section used to duplicate its toggle
+                // + strength stepper, and the two copies could
+                // disagree. The 均衡器 entry above is the way in.
                 NavigationLink("均衡器") {
                     MusicEqualizerView()
-                }
-                Toggle("音量归一化", isOn: $settings.normalizationEnabled)
-                    // b49 sweep P1: the toggle is a silent no-op
-                    // unless EQ is on (no measured loudness, gain
-                    // stays 1.0) — grey it out with an inline
-                    // hint until EQ is on, instead of letting it
-                    // look live. The 均衡器 entry sits directly
-                    // above this row.
-                    .disabled(!eqEnabled)
-                    .onChange(of: settings.normalizationEnabled) { _, newValue in
-                        // b35-sweep-settings: NativeMusicPlayer 只在
-                        // init 读一次归一化开关/强度进内存变量，
-                        // setter 全 app 零调用，设置页拨开关要重启
-                        // 才生效。推给 player（下一首起作用，不改
-                        // 正播的歌，与 player 的注释一致）。
-                        NativeMusicPlayer.shared.setNormalizationEnabled(newValue)
-                    }
-                footnote(eqEnabled ? "需开启均衡器才能测量响度" : "先开启均衡器，才能测量响度")
-                Stepper(
-                    value: $settings.normalizationStrength,
-                    in: 0...2,
-                    step: 1
-                ) {
-                    HStack {
-                        Text("归一化强度")
-                        Spacer()
-                        Text(NormalizationStrengthLabel.label(for: Double(settings.normalizationStrength)))
-                            .foregroundStyle(theme.textSecondary)
-                    }
-                }
-                .tint(theme.accent)
-                .onChange(of: settings.normalizationStrength) { _, newValue in
-                    // b35-sweep-settings: 同上，强度也只在 init
-                    // 读一次，不推就一直是旧强度。
-                    NativeMusicPlayer.shared.setNormalizationStrength(newValue)
                 }
             }
         }
@@ -582,8 +573,20 @@ struct SettingsGroupsView: View {
                             // persist），旧副本会在本页 onDisappear
                             // 时把房间里的新值整份盖回去。进页时重读。
                             danmakuSettings = LiveDanmakuSettings.load()
+                            // b49fix2 A4: snapshot for the
+                            // changed-only persist on disappear.
+                            danmakuSettingsSnapshot = danmakuSettings.dictionary()
                         }
                         .onDisappear {
+                            // b49fix2 A4: persist only when the
+                            // user actually changed something —
+                            // an unchanged open must not overwrite
+                            // a room-side change made meanwhile.
+                            let current = danmakuSettings.dictionary()
+                            if let snapshot = danmakuSettingsSnapshot,
+                               (snapshot as NSDictionary).isEqual(current as NSDictionary) {
+                                return
+                            }
                             danmakuSettings.persist()
                         }
                 }
@@ -839,41 +842,6 @@ struct SettingsGroupsView: View {
         Section {
             SettingsSectionFoldRow(section: .data)
             if isExpanded(.data) {
-                HStack {
-                    Text("缓存管理")
-                        .font(.haoBody)
-                        .foregroundStyle(theme.textPrimary)
-                    Spacer()
-                    Text(ByteCountFormatter.string(
-                        fromByteCount: Int64(cacheSizeBytes),
-                        countStyle: .file
-                    ))
-                    .font(.haoBody)
-                    .foregroundStyle(theme.textSecondary)
-                    Button("清理") {
-                        showingClearCacheAlert = true
-                    }
-                    .font(.haoBody)
-                    .foregroundStyle(theme.accentText)
-                }
-                .alert("清理缓存", isPresented: $showingClearCacheAlert) {
-                    Button("取消", role: .cancel) {
-                    }
-                    Button("清理", role: .destructive) {
-                        // Coordinator fix (S5 merge): CacheManager is
-                        // async (background queue, completion on
-                        // main) — refresh only after the clear
-                        // actually finished.
-                        CacheManager.clearAll {
-                            refreshCacheSize()
-                        }
-                    }
-                } message: {
-                    Text("将清理已缓存的临时数据，已下载内容不受影响。")
-                }
-                .onAppear {
-                    refreshCacheSize()
-                }
                 backupExportRow
                 backupImportRow
             }
@@ -943,7 +911,7 @@ struct SettingsGroupsView: View {
                     .foregroundStyle(theme.accentText)
                 }
             }
-            footnote("从 .zip 备份文件导入；导入失败会自动回滚，现有数据不受影响。")
+            footnote("从 .zip 或旧版 .json 备份文件导入；导入失败会自动回滚，现有数据不受影响。")
         }
     }
 
@@ -988,6 +956,45 @@ struct SettingsGroupsView: View {
                     size: storageTempBytes,
                     onClear: clearTempFiles
                 )
+                // b49fix2 A12: the one cleanup entry — the old
+                // "缓存管理" row in the 数据 group is gone (it
+                // cleared the same things and neither UI was
+                // complete). clearAll covers the audio cache,
+                // images and the rest listed in the footnote;
+                // downloads are never touched.
+                HStack {
+                    Text("清理全部缓存")
+                        .font(.haoBody)
+                        .foregroundStyle(theme.textPrimary)
+                    Spacer()
+                    Text(ByteCountFormatter.string(
+                        fromByteCount: Int64(cacheSizeBytes),
+                        countStyle: .file
+                    ))
+                    .font(.haoBody)
+                    .foregroundStyle(theme.textSecondary)
+                    Button("清理") {
+                        showingClearCacheAlert = true
+                    }
+                    .font(.haoBody)
+                    .foregroundStyle(theme.accentText)
+                }
+                .alert("清理缓存", isPresented: $showingClearCacheAlert) {
+                    Button("取消", role: .cancel) {
+                    }
+                    Button("清理", role: .destructive) {
+                        // Coordinator fix (S5 merge): CacheManager is
+                        // async (background queue, completion on
+                        // main) — refresh only after the clear
+                        // actually finished.
+                        CacheManager.clearAll {
+                            refreshCacheSize()
+                            refreshStorage()
+                        }
+                    }
+                } message: {
+                    Text("将清理已缓存的临时数据，已下载内容不受影响。")
+                }
                 Toggle("歌曲缓存", isOn: $settings.songCacheEnabled)
                 Picker(
                     "缓存上限",
@@ -998,11 +1005,12 @@ struct SettingsGroupsView: View {
                     }
                 }
                 .disabled(!settings.songCacheEnabled)
-                footnote("歌曲缓存、图片、分析、模型、诊断与离线索引暂无单独清理入口，可在“数据”分组用“清理缓存”一并清理；上限的执行由音频缓存引擎负责。")
+                footnote("「清理全部缓存」会一并清理歌曲缓存、图片、分析、模型、诊断与离线索引；已下载内容不受影响；上限的执行由音频缓存引擎负责。")
             }
         }
         .onAppear {
             refreshStorage()
+            refreshCacheSize()
         }
     }
 
@@ -1254,6 +1262,7 @@ struct SettingsGroupsView: View {
                 aboutIssuesRow
                 aboutReleasesRow
                 aboutLicensesRow
+                aboutDataSourcesRow
                 aboutDisclaimerRow
             }
         }
@@ -1262,7 +1271,8 @@ struct SettingsGroupsView: View {
     /// Hero (§4.2): VStack spacing 10, centred, vertical
     /// padding 8; our logo 72×72, iOS bundle-icon corner 16
     /// continuous, no shadow / border; name .title2.bold()
-    /// (22pt); slogan .subheadline secondary.
+    /// (22pt). b49fix2 A26: the slogan is deleted (clean rule —
+    /// the name + logo say what the app is).
     private var aboutHero: some View {
         VStack(spacing: 10) {
             Image("Logo")
@@ -1272,10 +1282,6 @@ struct SettingsGroupsView: View {
             Text("HAo Studio")
                 .font(.title2.bold())
                 .foregroundStyle(theme.textPrimary)
-                .multilineTextAlignment(.center)
-            Text("音乐、视频与直播，一处尽享")
-                .font(.subheadline)
-                .foregroundStyle(theme.textSecondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
@@ -1304,7 +1310,8 @@ struct SettingsGroupsView: View {
     }
 
     private var aboutDeveloperRow: some View {
-        aboutIdentityRow(icon: "person", title: "开发者", value: "lauranthao")
+        // b49fix2 A24: the studio name, not the GitHub handle.
+        aboutIdentityRow(icon: "person", title: "开发者", value: "HAo Studio")
     }
 
     private func aboutIdentityRow(icon: String, title: String, value: String) -> some View {
@@ -1422,6 +1429,17 @@ struct SettingsGroupsView: View {
         .tint(theme.accent)
     }
 
+    /// b49fix2 B6/B7: the data-and-sources page — what leaves
+    /// the device, and the management pages for each source
+    /// family. Linked from About (and the footer below points
+    /// at it in words).
+    private var aboutDataSourcesRow: some View {
+        NavigationLink(destination: DataSourcesView()) {
+            Label("数据与来源", systemImage: "list.bullet.rectangle")
+        }
+        .tint(theme.accent)
+    }
+
     private var aboutDisclaimerRow: some View {
         Button(action: {
             showingDisclaimer = true
@@ -1438,13 +1456,66 @@ struct SettingsGroupsView: View {
 
     /// About Section footer (VStack leading, spacing 4 = tight),
     /// rewritten for this app — never Coda's identity copy.
+    /// b49fix2 B6: the old second line ("不上传任何数据") was
+    /// false in plain reading — every search / play / lyric /
+    /// live / danmaku request leaves the device to the chosen
+    /// source's server. The honest line is the direct-request
+    /// one; the 数据与来源 page (above) names the destinations.
     private var aboutFooter: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("HAo Studio 是一款免费的独立站应用，音乐、视频与直播内容均来自公开的第三方来源，版权归原权利人所有。")
-            Text("本应用不设账号、不上传任何数据，所有内容均保存在本机。")
+            Text("不设账号；搜索与播放会直接向所选来源的服务器发请求（不经过我们）。详情见「数据与来源」。")
         }
         .font(.haoFootnote)
         .foregroundStyle(theme.textMuted)
+    }
+}
+
+// MARK: - 数据与来源 (b49fix2 B6/B7)
+//
+// What leaves the device, in plain words, plus the management
+// pages for each source family. The old About footer claimed
+// "不上传任何数据" — false in plain reading: a search sends the
+// query + IP to the source (NetEase / QQ / Kuwo / Kugou /
+// aggregators / Douban / CMS sources / the five live platforms /
+// the update server), and each install also sends a random
+// device id to the update endpoint. Nothing goes through us —
+// there is no HAo server in the middle — but the requests do
+// leave the device, and this page says so.
+struct DataSourcesView: View {
+    @Environment(\.haoTheme) private var theme
+
+    var body: some View {
+        List {
+            Section("会发到哪里") {
+                Text("本应用不设账号，不经过我们的服务器。但搜索、播放、歌词、直播与弹幕都要向所选来源的服务器发请求，你的 IP 与查询内容会到达对方：音乐（网易云、QQ、酷我、酷狗等歌源与聚合接口，包括 yy.zddyr.top）、影视（豆瓣与你添加的 CMS 源）、直播（哔哩哔哩、斗鱼、虎牙、抖音、快手）。检查更新时只向更新服务器请求一份版本文件，不带任何设备标识。")
+                    .font(.haoFootnote)
+                    .foregroundStyle(theme.textSecondary)
+                Text("你自己配置的 Emby 服务器除外：开启上报后，播放进度会同步到你的 Emby。")
+                    .font(.haoFootnote)
+                    .foregroundStyle(theme.textSecondary)
+            }
+            Section("保存在本机") {
+                Text("歌单、收藏、播放记录、下载与各项设置只保存在本机。卸载应用或清除数据后无法恢复——导出一份备份可以带走它们。")
+                    .font(.haoFootnote)
+                    .foregroundStyle(theme.textSecondary)
+            }
+            Section("管理来源") {
+                NavigationLink("音乐来源") {
+                    LXSourceManagementView()
+                }
+                NavigationLink("影视来源") {
+                    CmsSourceManagementView()
+                }
+                NavigationLink("直播来源") {
+                    LiveSourceManagementView()
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(theme.scaffoldBackground)
+        .navigationTitle("数据与来源")
     }
 }
 
@@ -1486,11 +1557,11 @@ struct AboutLinkRow: View {
 
 // MARK: - 开源许可与致谢 (b45-coda 包 C, §4.3)
 
-/// Licences sub-page: our MIT licence + thanks. There is no
-/// local third-party-notices document in this repo, so the
-/// fallback "致谢" group + "在 GitHub 查看第三方声明" link is
-/// what ships (per §4.3 fallback). Structure copied, content
-/// rewritten — Coda's AGPL/GPL rows are never copied.
+/// Licences sub-page: our MIT licence + thanks. b49fix2 L3:
+/// the "在 GitHub 查看第三方声明" link used to land on the
+/// repo root, where no third-party-notices document existed.
+/// The document now exists at the repo root
+/// (THIRD-PARTY-NOTICES.md) and the link lands on it.
 struct OpenSourceLicensesView: View {
     @Environment(\.haoTheme) private var theme
     @State private var showingMIT = false
@@ -1520,7 +1591,7 @@ struct OpenSourceLicensesView: View {
                 AboutLinkRow(
                     title: "在 GitHub 查看第三方声明",
                     icon: "chevron.left.forwardslash.chevron.right",
-                    url: URL(string: "https://github.com/lauranthao/haostudio-standalone-2.0")!,
+                    url: URL(string: "https://github.com/lauranthao/haostudio-standalone-2.0/blob/main/THIRD-PARTY-NOTICES.md")!,
                     detail: nil
                 )
             }
@@ -1572,7 +1643,7 @@ struct DocumentSheetView: View {
 
 // MARK: - 免责声明 (b45-coda 包 C, §4.3)
 
-/// Disclaimer page, version 3 (DisclaimerGate). Read-only mode
+/// Disclaimer page, version 4 (DisclaimerGate). Read-only mode
 /// = bordered "关闭"; first-launch gate mode = prominent
 /// "同意并继续" (accent tint) + plain "不同意". The gate is
 /// presented by MainTabView (fullScreenCover, themed palette)
@@ -1603,18 +1674,9 @@ struct DisclaimerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // b45-h, 包 C leftover (b): first-launch step
-            // capsules (Coda OnboardingView form — current step
-            // 18pt, the rest 6pt). The onboarding is a single
-            // step (disclaimer only, no login step), so there is
-            // exactly one capsule, in the accent colour.
-            if mode == .gate {
-                Capsule()
-                    .fill(theme.accentText)
-                    .frame(width: 18, height: 6)
-                    .padding(.top, 16)
-                    .accessibilityLabel("第 1 步，共 1 步：免责声明")
-            }
+            // b49fix2 A20: no step capsule — the onboarding is a
+            // single step (disclaimer only, no login step), so a
+            // "第 1 步，共 1 步" progress indicator says nothing.
             ScrollView {
                 VStack(spacing: 18) {
                     VStack(spacing: 8) {
@@ -1761,6 +1823,11 @@ struct WallpaperManagementView: View {
     private func wallpaperRow(_ name: String) -> some View {
         Button(action: {
             settings.wallpaperCurrent = name
+            // b49fix2 A10: tap = select AND enable. Importing a
+            // photo already enables it; tapping a row only
+            // selected it, so a user who picked a wallpaper with
+            // the switch off saw a checkmark and nothing change.
+            settings.wallpaperEnabled = true
         }) {
             HStack {
                 Text(displayName(for: name))

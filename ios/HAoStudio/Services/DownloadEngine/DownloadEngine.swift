@@ -292,6 +292,31 @@ final class DownloadEngine: NSObject {
     /// / `denyMetered(key:)`.
     var onMeteredConfirmationNeeded: ((DownloadTaskInfo) -> Void)?
 
+    /// Fired (main queue) when download activity starts or stops
+    /// (b49fix2 P2-59): the app root holds a background task
+    /// while any download is active, so iOS does not suspend the
+    /// app mid-download. A background URLSessionConfiguration is
+    /// NOT used — this engine streams through data tasks with
+    /// Range resume, and background sessions support only
+    /// upload/download tasks.
+    var onActivityChanged: ((Bool) -> Void)?
+    /// Whether any download is active right now, as last
+    /// reported to onActivityChanged.
+    private var lastReportedActivity = false
+
+    /// Recompute activity from the records and fire
+    /// onActivityChanged when it flips (b49fix2 P2-59). Called
+    /// from persistLocked, which runs at every state mutation —
+    /// no call site can forget it. Deduped: the app root only
+    /// starts/ends one background task per flip, never per chunk.
+    private func refreshActivityLocked() {
+        let active = records.values.contains { $0.info.state.isActive }
+        guard active != lastReportedActivity else { return }
+        lastReportedActivity = active
+        let callback = onActivityChanged
+        DispatchQueue.main.async { callback?(active) }
+    }
+
     override init() {
         super.init()
         restorePersistedTasks()
@@ -1243,6 +1268,12 @@ final class DownloadEngine: NSObject {
         if let completion = completion {
             DispatchQueue.main.async { completion(info) }
         }
+        // b49fix2 B5: the shell's one-time backup nudge listens
+        // for a completed download (a user with something worth
+        // keeping is the user who needs a backup).
+        if state == .completed {
+            NotificationCenter.default.post(name: .haoDownloadCompleted, object: nil)
+        }
     }
 
     private func persistLocked() {
@@ -1253,6 +1284,9 @@ final class DownloadEngine: NSObject {
         catalogRevision += 1
         DownloadCatalogStore.save(DownloadCatalogFile(revision: catalogRevision, tasks: infos))
         LocalStore.saveCollection(named: DownloadEngine.tasksCollection, value: infos)
+        // b49fix2 P2-59: every state mutation re-derives activity
+        // (start/stop of the app-root background task).
+        refreshActivityLocked()
     }
 
     /// Restore the persisted index. In-flight tasks come back as

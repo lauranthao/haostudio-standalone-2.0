@@ -16,8 +16,8 @@
 // NOT go back to hiding the system background.
 //
 // Layout contract (unchanged from the UITabBar version, Coda
-// §6.2 — 64/52/8/16/6): the bar sits in the same VStack as the
-// mini player in MainTabView's bottom safe-area inset, 16pt side
+// §6.2 — 64/52/8/12/6): the bar sits in the same VStack as the
+// mini player in MainTabView's bottom safe-area inset, 12pt side
 // margins, 6pt bottom margin, 8pt gap to the mini — the mini and
 // the bar are TWO SEPARATE equal-width pills. The 5 tabs come
 // from HaoTab.allCases in MainTabView's order:
@@ -81,11 +81,15 @@ struct GlassTabBar: View {
                     }
                 } label: {
                     VStack(spacing: 2) {
+                        // b49fix2 A28: Coda §6.2 values — 23pt
+                        // semibold icons (was 22pt regular).
                         Image(systemName: item.icon)
-                            .font(.system(size: 22, weight: .regular))
+                            .font(.system(size: 23, weight: .semibold))
                             .accessibilityHidden(true)
+                        // b49fix2 A28: labels semibold for ALL
+                        // tabs (was semibold only when selected).
                         Text(item.title)
-                            .font(.system(size: 10, weight: isSelected ? .semibold : .regular))
+                            .font(.system(size: 10, weight: .semibold))
                     }
                     .foregroundStyle(
                         isSelected
@@ -110,5 +114,16 @@ struct GlassTabBar: View {
         }
         .frame(height: HaoLayout.tabBarTotalHeight)
         .haoGlassRoundedRect()
+        // b49fix2 P2-56: the system UITabBar gave the bar
+        // container semantics for free; this HStack of buttons
+        // only carried per-item labels. Group the items under
+        // one tab-bar container so VoiceOver presents them as a
+        // bar, not five loose buttons.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("标签栏")
+        // b49fix2 B11: fixed chrome — cap Dynamic Type at
+        // .accessibility1 so a huge text size cannot blow the
+        // 64pt bar apart (icons + labels would overflow it).
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
     }
 }

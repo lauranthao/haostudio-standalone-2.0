@@ -9,9 +9,10 @@
 //   queue hides the strip, so the mini and the full player never
 //   disagree about "what is playing".
 // - For MUSIC items it shows a real play/pause button bound to
-//   NativeMusicPlayer (via the shared MusicPlayerViewModel); for VOD /
-//   live items it shows no transport button (their players are other
-//   slices' — a button with no engine behind it would be fake).
+//   NativeMusicPlayer (via the shared MusicPlayerViewModel); for
+//   VOD / live items it shows a single play/pause button bound
+//   to the shared video / live view model (b49fix2 A6 — the
+//   mini used to be display-only for those kinds).
 // - Tapping the strip opens the full player (music: the real player).
 // - S7-C: the cover slot shows the item's real artwork
 //   (MusicCoverView); its placeholder is the same note icon as
@@ -23,6 +24,11 @@ import SwiftUI
 struct MiniPlayerBar: View {
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var musicPlayer: MusicPlayerViewModel
+    /// b49fix2 A6: the shared VOD / live view models (app-root
+    /// environment, same as the music VM) — the mini's
+    /// play/pause for non-music items.
+    @EnvironmentObject private var videoPlayer: VideoPlayerViewModel
+    @EnvironmentObject private var livePlayer: LivePlayerViewModel
     @Environment(\.haoTheme) private var theme
 
     /// Opens the full player for the current item.
@@ -172,9 +178,8 @@ struct MiniPlayerBar: View {
                 if item.kind == .music {
                     // Coda §2.10: prev / play / next, 36x36 hit
                     // targets, 20pt semibold icons, primary tint.
-                    // VOD / live show no transport here (their
-                    // players are other slices' — a button with no
-                    // engine behind it would be fake).
+                    // VOD / live get a single play/pause below
+                    // (b49fix2 A6) — no prev/next there.
                     Button(action: { musicPlayer.previous() }) {
                         Image(systemName: "backward.fill")
                             .font(.system(size: 20, weight: .semibold))
@@ -202,6 +207,23 @@ struct MiniPlayerBar: View {
                     .buttonStyle(MusicPressScaleStyle())
                     .contentShape(Rectangle())
                     .accessibilityLabel("下一曲")
+                }
+                if item.kind == .vod || item.kind == .live {
+                    // b49fix2 A6: the mini was display-only for
+                    // VOD/live — play/pause must work for
+                    // whatever is playing. One button (no
+                    // prev/next: a video has no previous episode
+                    // here, a live room has no next room). The
+                    // toggles are safe with nothing loaded.
+                    Button(action: { toggleVodLivePlayPause(for: item.kind) }) {
+                        Image(systemName: isVodLivePlaying(for: item.kind) ? "pause.fill" : "play.fill")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(theme.textPrimary)
+                            .frame(width: 36, height: 36)
+                    }
+                    .buttonStyle(MusicPressScaleStyle())
+                    .contentShape(Rectangle())
+                    .accessibilityLabel(isVodLivePlaying(for: item.kind) ? "暂停" : "播放")
                 }
                 Button(action: onTapFullPlayer) {
                     Image(systemName: "chevron.up")
@@ -261,7 +283,31 @@ struct MiniPlayerBar: View {
                     }
             )
             .accessibilityLabel("迷你播放器：\(item.title)，点按打开全屏播放器")
+            // b49fix2 B11: fixed chrome — cap Dynamic Type at
+            // .accessibility1 so a huge text size cannot blow the
+            // 52pt strip apart.
+            .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         }
+
+    /// Whether the VOD / live item is playing right now (b49fix2
+    /// A6). Reads the shared view model for the kind.
+    private func isVodLivePlaying(for kind: PlaybackKind) -> Bool {
+        switch kind {
+        case .vod: return videoPlayer.isPlaying
+        case .live: return livePlayer.isPlaying
+        case .music: return musicPlayer.isPlaying
+        }
+    }
+
+    /// Play/pause for a VOD / live item (b49fix2 A6). Safe with
+    /// nothing loaded — both view models no-op then.
+    private func toggleVodLivePlayPause(for kind: PlaybackKind) {
+        switch kind {
+        case .vod: videoPlayer.togglePlayPause()
+        case .live: livePlayer.togglePlayPause()
+        case .music: musicPlayer.togglePlayPauseOrRetry()
+        }
+    }
 }
 
 /// Fallback when the mini player cannot rebuild a real player

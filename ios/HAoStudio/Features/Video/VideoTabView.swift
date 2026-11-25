@@ -298,13 +298,23 @@ struct VideoTabView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 32)
                     } else if viewModel.rows.isEmpty {
-                        MusicEmptyState(
-                            icon: "film",
-                            title: viewModel.loadFailed ? "片源暂不可用" : "还没有内容",
-                            note: viewModel.loadFailed
-                                ? "影视源没有返回数据，下拉重试或检查源设置。"
-                                : "影视源返回了空列表。"
-                        )
+                        // b49fix2 B3: the empty state named an
+                        // action ("下拉重试") with no visible path
+                        // — a retry button, same as the #18 retry
+                        // below for stale rows.
+                        VStack(spacing: 0) {
+                            MusicEmptyState(
+                                icon: "film",
+                                title: viewModel.loadFailed ? "片源暂不可用" : "还没有内容",
+                                note: viewModel.loadFailed
+                                    ? "影视源没有返回数据，下拉重试或检查源设置。"
+                                    : "影视源返回了空列表。"
+                            )
+                            MusicCapsuleButton(icon: "arrow.clockwise", label: "重试") {
+                                viewModel.loadFresh()
+                            }
+                            .padding(.top, 6)
+                        }
                         .padding(.horizontal, 24)
                     } else {
                         // b49 sweep #18: a failed refresh kept

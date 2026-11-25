@@ -169,11 +169,11 @@ final class HomeViewModel: ObservableObject {
     /// song in place exactly like the discovery daily page.
     /// Empty = no replacement left (the button hides).
     @Published private(set) var dailySpares: [MusicSong] = []
-    @Published private(set) var recentPlays: [MusicSong] = []
-    /// The full recent list (up to MusicLibraryStore.maxRecent),
-    /// for the "全部" page. `recentPlays` stays capped at the
-    /// section limit for the home section itself — the two used to
-    /// be the same array, so "全部" showed the same 10 rows.
+    /// The full recent list (up to MusicLibraryStore.maxRecent).
+    /// Feeds the 继续听 resume queue (the resume song first,
+    /// then the rest of recent plays). b49fix2 A7: the home
+    /// 最近播放 shelf is gone, so the capped `recentPlays`
+    /// section array went with it — nothing reads it any more.
     @Published private(set) var allRecentPlays: [MusicSong] = []
 
     /// Per-section cap for every home section.
@@ -352,7 +352,6 @@ final class HomeViewModel: ObservableObject {
         // right after it is recognised as the same event.
         lastReloadAt = now()
         continueWatching = Self.continueWatchingEntries(from: videoHistory)
-        recentPlays = Array(recent.prefix(Self.sectionLimit))
         allRecentPlays = recent
         if let song = Self.resumeSong(recent: recent, listenLog: listenLog, resumeMap: resumeMap) {
             continueListening = [song]
