@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 官网
+    url: https://lauranthao.github.io/haostudio-standalone-2.0/
+    about: 下载、安装说明和功能介绍
+  - name: 仓库
+    url: https://github.com/lauranthao/haostudio-standalone-2.0
+    about: 源码、发行版和更新记录

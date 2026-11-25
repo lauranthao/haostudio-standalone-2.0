@@ -1,0 +1,76 @@
+/* HAo Studio 官网：干净、克制，像 Linear / 苹果备忘录。纯静态，无依赖。 */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  color: #1d1d1f;
+  background: #fbfbfd;
+  line-height: 1.6;
+}
+h1, h2, h3 { line-height: 1.3; margin: 0 0 12px; }
+h2 { font-size: 28px; letter-spacing: -0.5px; }
+h3 { font-size: 18px; }
+p { margin: 0 0 12px; }
+a { color: #0066cc; text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { background: #f5f5f7; padding: 2px 6px; border-radius: 6px; font-size: 14px; }
+
+.hero { text-align: center; padding: 72px 20px 40px; }
+.app-icon { width: 128px; height: 128px; border-radius: 28px; box-shadow: 0 8px 30px rgba(0,0,0,0.15); }
+.hero h1 { font-size: 44px; margin: 20px 0 8px; letter-spacing: -1px; }
+.tagline { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
+.sub { color: #6e6e73; font-size: 17px; }
+.badges { margin: 18px 0; }
+.badges span {
+  display: inline-block; margin: 0 4px; padding: 4px 12px;
+  border: 1px solid #d2d2d7; border-radius: 999px;
+  font-size: 13px; color: #6e6e73; background: #fff;
+}
+.cta { margin: 24px 0 8px; }
+.btn-primary, .btn-secondary {
+  display: inline-block; margin: 0 6px; padding: 12px 28px;
+  border-radius: 999px; font-size: 16px; font-weight: 600;
+}
+.btn-primary { background: #0071e3; color: #fff; }
+.btn-primary:hover { background: #0077ed; text-decoration: none; }
+.btn-secondary { background: #fff; color: #0071e3; border: 1px solid #d2d2d7; }
+.btn-secondary:hover { text-decoration: none; border-color: #0071e3; }
+.version-note { color: #86868b; font-size: 14px; }
+
+section { max-width: 960px; margin: 0 auto; padding: 40px 20px; }
+.shots { text-align: center; }
+.shots img {
+  width: calc(25% - 12px); margin: 0 5px; border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.12); vertical-align: top;
+}
+.shot-note { color: #86868b; font-size: 13px; margin-top: 12px; }
+
+.platforms h2 { text-align: center; }
+.platform-groups { display: flex; gap: 24px; justify-content: center; flex-wrap: wrap; }
+.platform-groups > div {
+  background: #fff; border: 1px solid #e8e8ed; border-radius: 16px;
+  padding: 20px 28px; min-width: 200px;
+}
+.platform-groups ul { margin: 0; padding-left: 20px; }
+.fine { color: #86868b; font-size: 14px; }
+
+.ticks { padding-left: 20px; }
+.ticks li { margin-bottom: 8px; }
+.feature { border-top: 1px solid #e8e8ed; }
+
+.download { border-top: 1px solid #e8e8ed; }
+.download ol li { margin-bottom: 8px; }
+
+footer {
+  max-width: 960px; margin: 0 auto; padding: 32px 20px 48px;
+  border-top: 1px solid #e8e8ed; color: #6e6e73; font-size: 14px;
+}
+
+@media (max-width: 640px) {
+  .hero h1 { font-size: 34px; }
+  .tagline { font-size: 19px; }
+  h2 { font-size: 23px; }
+  .shots img { width: calc(50% - 10px); margin: 0 4px 12px; }
+  .platform-groups { flex-direction: column; }
+  .btn-primary, .btn-secondary { display: block; margin: 8px auto; max-width: 280px; }
+}

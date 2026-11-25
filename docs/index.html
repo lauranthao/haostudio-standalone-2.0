@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HAo Studio · 音乐、影视、直播，三合一的原生 iOS 播放器</title>
+<meta name="description" content="HAo Studio 独立版：音乐、影视、直播三合一的原生 iOS 播放器。不登录，无内购，全部免费，开源 MIT。">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<header class="hero">
+  <img class="app-icon" src="assets/icon.png" alt="HAo Studio 图标" width="128" height="128">
+  <h1>HAo Studio</h1>
+  <p class="tagline">音乐、影视、直播，一个入口。</p>
+  <p class="sub">原生 SwiftUI 音乐、影视、直播客户端。iPhone 与 iPad 适用。</p>
+  <p class="badges"><span>iOS 17.0+</span><span>开源免费</span><span>MIT 许可证</span><span>不登录</span></p>
+  <p class="cta">
+    <a class="btn-primary" href="https://github.com/lauranthao/haostudio-standalone-2.0/releases">下载最新版</a>
+    <a class="btn-secondary" href="https://github.com/lauranthao/haostudio-standalone-2.0">GitHub 仓库</a>
+  </p>
+  <p class="version-note">当前版本 2.1.8（build 45）。下载页始终指向最新发行版。</p>
+</header>
+
+<section class="shots">
+  <img src="screenshots/home.png" alt="首页">
+  <img src="screenshots/music-player.png" alt="音乐播放器">
+  <img src="screenshots/video.png" alt="影视">
+  <img src="screenshots/live.png" alt="直播">
+  <p class="shot-note">界面渲染图，非实机截图。</p>
+</section>
+
+<section class="platforms">
+  <h2>已接入</h2>
+  <div class="platform-groups">
+    <div>
+      <h3>音乐</h3>
+      <ul><li>网易云音乐</li><li>QQ 音乐</li><li>酷狗音乐</li><li>酷我音乐</li></ul>
+    </div>
+    <div>
+      <h3>影视</h3>
+      <ul><li>CMS 聚合源</li><li>Emby 服务器直连</li></ul>
+    </div>
+    <div>
+      <h3>直播</h3>
+      <ul><li>Bilibili</li><li>斗鱼</li><li>虎牙</li><li>抖音</li><li>快手</li></ul>
+    </div>
+  </div>
+  <p class="fine">只做这五个直播平台，不加别的。各平台可用功能不同，以应用内为准。</p>
+</section>
+
+<section class="feature">
+  <h2>音乐：所有曲库，一个入口。</h2>
+  <p>网易、QQ、酷狗、酷我，在同一个界面里搜索、收藏和播放。搜歌合并出结果，网易和 QQ 优先；无限滚动。点歌即播第一个可播放的源，不用等全部源问完。</p>
+  <ul class="ticks">
+    <li>AVPlayer 原生播放，自动续播断点（每 10 秒 + 进后台保存），跨曲淡入淡出</li>
+    <li>音质五档：Master / Hi-Res / 无损 FLAC / 高音质 320k / 标准 128k，只认真实高码率</li>
+    <li>歌词在封面后：点封面看歌词，点歌词行跳转；当前行逐字动效，可显示翻译</li>
+    <li>歌单、收藏、私人漫游、心动模式，全部本地，无需登录</li>
+    <li>均衡器；迷你播放器与底栏联动，可展开收起</li>
+  </ul>
+</section>
+
+<section class="feature">
+  <h2>影视：点开就是片。</h2>
+  <p>VidHub 风格的浏览与详情页。详情页顶部是封面大图，播放靠下面的选集按钮；点播直接横屏全屏。</p>
+  <ul class="ticks">
+    <li>CMS 聚合源 + Emby 服务器直连（在设置里填你自己的 Emby 地址和密钥）</li>
+    <li>分类、地区、年份、排序筛选，无限滚动</li>
+    <li>Emby 直连支持 4K HEVC / Dolby Vision / HDR / MKV，TrueHD / DTS-HD 解码为 PCM 输出</li>
+    <li>断点续播；Emby 继续观看、搜索、收藏同步</li>
+    <li>点播没有画质档位（一集只有一个播放地址，不造假按钮）；画质选择只在直播</li>
+  </ul>
+</section>
+
+<section class="feature">
+  <h2>直播：五个平台，一个直播间列表。</h2>
+  <p>Pure Live 风格的直播间、关注、历史、搜索。弹幕只看不发（没有平台登录）。</p>
+  <ul class="ticks">
+    <li>直播间可切画质档位和线路</li>
+    <li>长按 2 倍速只在点播，直播是实时流，永远不加速</li>
+    <li>进直播间默认竖屏，点全屏按钮才横屏</li>
+  </ul>
+</section>
+
+<section class="feature">
+  <h2>我的与设置：东西都在你手里。</h2>
+  <ul class="ticks">
+    <li>设置、歌源管理、Emby 配置、文件备份（导出 / 导入全部本地数据），不用账号</li>
+    <li>四种主题，可切换；在线更新检查</li>
+    <li>没有登录界面，没有内购，没有社区，没有后台统计。打开就能用，全部免费。</li>
+  </ul>
+</section>
+
+<section class="download" id="download">
+  <h2>下载安装</h2>
+  <h3>iPhone 与 iPad</h3>
+  <p>iOS / iPadOS 17.0 或更高版本</p>
+  <ol>
+    <li>从 <a href="https://github.com/lauranthao/haostudio-standalone-2.0/releases">GitHub 发行版</a>下载最新 <code>.ipa</code>。</li>
+    <li>用你自己的 Apple ID 签名安装：LCSign、TrollStore 或 AltStore 均可（安装包未签名，需要自签）。</li>
+    <li>打开即用，不用注册，不用登录。</li>
+  </ol>
+  <p class="fine">有问题或建议，到 <a href="https://github.com/lauranthao/haostudio-standalone-2.0/issues">GitHub Issues</a> 反馈（仓库里有反馈模版）。</p>
+</section>
+
+<footer>
+  <p><a href="https://github.com/lauranthao/haostudio-standalone-2.0">GitHub 仓库</a> · MIT 许可证 · 界面设计参考 Kumone。</p>
+  <p class="fine">HAo Studio 独立版是一个非官方的开源播放器，与任何音乐、视频、直播平台均无隶属关系。本项目仅供学习交流，请支持正版内容。</p>
+</footer>
+</body>
+</html>
