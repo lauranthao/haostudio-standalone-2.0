@@ -114,6 +114,10 @@ struct LiveDanmakuSettingsSheet: View {
             }
         } header: {
             Text("弹幕字号")
+        } footer: {
+            // b49fix8 P2-13: this size also drives VOD danmaku
+            // (VodDanmakuLayer reads LiveDanmakuSettings.fontSize).
+            Text("同时适用于点播弹幕。")
         }
     }
 
