@@ -70,6 +70,21 @@ struct ListenReport: Equatable {
 }
 
 @MainActor
+/// What this instance refreshes when the calendar day changes
+/// (b49fix13 P2-3): round 12 gave every Discovery VM a midnight
+/// trigger, but only the Daily page shows the daily list — the
+/// other three instances each ran a full reload() (daily recompute
+/// + CAS write + report) at midnight for content they never
+/// display. Split by need: Daily runs the full reload, Report
+/// only recomputes its week/month window (the boundary moves at
+/// midnight), Explore/Plaza need nothing (their content is a
+/// 15-minute snapshot with its own TTL).
+enum DiscoveryMidnightRefresh {
+    case daily
+    case report
+    case none
+}
+
 final class MusicDiscoveryViewModel: ObservableObject {
     @Published private(set) var dailyTracks: [MusicSong] = []
     @Published private(set) var dailyDayKey = ""
@@ -138,17 +153,23 @@ final class MusicDiscoveryViewModel: ObservableObject {
     /// yesterday's list while Home's observers refreshed Home
     /// (b49-sweep14 deepread P2-2). Same shape as Home's
     /// (b49fix11 P2-1): at most one of each, removed in deinit.
-    /// Every pushed instance registers its own pair (a new
-    /// @StateObject per push); a duplicate recompute across two
-    /// live instances is harmless — reloadDaily runs on the main
-    /// thread and its save is compare-and-swap guarded, so both
-    /// compute the same list.
+    /// A duplicate recompute across two live instances is
+    /// harmless — reloadDaily runs on the main thread and its
+    /// save is compare-and-swap guarded, so both compute the
+    /// same list. b49fix13 P2-3: only instances that refresh
+    /// something at midnight register (see midnightRefresh) —
+    /// Explore/Plaza instances register nothing at all.
     private var dayChangedObserver: NSObjectProtocol?
     private var didBecomeActiveObserver: NSObjectProtocol?
 
-    init() {
+    /// What this instance refreshes at midnight (b49fix13 P2-3).
+    private let midnightRefresh: DiscoveryMidnightRefresh
+
+    init(midnightRefresh: DiscoveryMidnightRefresh = .daily) {
+        self.midnightRefresh = midnightRefresh
         plazaPlatform = MusicLibraryStore.plazaPlatform()
         dailyDayKey = musicDayKey(of: Date())
+        guard midnightRefresh != .none else { return }
         // b49fix12 P2-2: two triggers, both gated by
         // shouldReloadForDayChange so a same-day foreground costs
         // nothing: the calendar-day notification fires at midnight
@@ -182,15 +203,60 @@ final class MusicDiscoveryViewModel: ObservableObject {
     /// also refreshes the listen log (a stale log would rank
     /// today's list on yesterday's listening) and the report;
     /// all three are local reads, no network.
+    /// b49fix13 P2-3: split by midnightRefresh — only the Daily
+    /// instance runs the full reload; the Report instance only
+    /// recomputes its week/month window (the boundary moves at
+    /// midnight, and the day-key gate makes a same-day
+    /// foreground a no-op there too); .none instances never
+    /// register observers, so this is unreachable for them.
+    /// The decision is the pure midnightAction below, and the
+    /// handler samples Date() once for the whole check (b49fix3
+    /// P2-15) — the gate and the report branch's dailyDayKey
+    /// update share this todayKey.
     private func reloadDailyIfDayChanged() {
-        if HomeViewModel.shouldReloadForDayChange(todayKey: musicDayKey(of: Date()), cachedDayKey: dailyDayKey) {
+        let todayKey = musicDayKey(of: Date())
+        guard let action = Self.midnightAction(mode: midnightRefresh, todayKey: todayKey, cachedDayKey: dailyDayKey) else { return }
+        switch action {
+        case .report:
+            // Week/month boundaries move at midnight; recompute
+            // the window from the stored log and record the new
+            // day so the next notification is a no-op.
+            recomputeReport()
+            dailyDayKey = todayKey
+        case .daily:
             reload()
+        case .none:
+            return
         }
     }
 
-    func reload() {
+    /// Pure midnight-action decision (b49fix13 P2-3): which work,
+    /// if any, this instance does when the day changes — the mode
+    /// itself when work is due, nil otherwise. `.none` never
+    /// works; `.report` / `.daily` work only when the day key
+    /// changed (the same predicate gates both). Pure so XCTest
+    /// can pin it.
+    nonisolated static func midnightAction(
+        mode: DiscoveryMidnightRefresh, todayKey: String, cachedDayKey: String
+    ) -> DiscoveryMidnightRefresh? {
+        guard mode != .none,
+              HomeViewModel.shouldReloadForDayChange(todayKey: todayKey, cachedDayKey: cachedDayKey) else { return nil }
+        return mode
+    }
+
+    /// Full refresh: re-read the listen log, then regenerate
+    /// the daily list and recompute the report. `forceDaily`
+    /// regenerates today's picks bypassing the day-key cache
+    /// (the pull-to-refresh / "刷新今日推荐" path) — the log
+    /// must be fresh first: calling reloadDaily(force:) directly
+    /// recomputed from the log captured at page entry, so an
+    /// afternoon of listening never counted, and the stale
+    /// ranking was re-pinned as today's pool (b49fix13 P2-2).
+    /// The report is computed from the same log, so it is
+    /// recomputed from the fresh log too.
+    func reload(forceDaily: Bool = false) {
         listenLog = MusicLibraryStore.getListenLog()
-        reloadDaily()
+        reloadDaily(force: forceDaily)
         recomputeReport()
     }
 
@@ -198,8 +264,9 @@ final class MusicDiscoveryViewModel: ObservableObject {
 
     /// Daily picks, cached per day key (Coda §3.1: 86400s, day-keyed).
     /// A plain call serves the cache; `force` regenerates today
-    /// (pull-to-refresh and the "刷新今日推荐" menu — the menu was
-    /// a no-op while the cache lived, b45-g). The cache is trusted
+    /// (via reload(forceDaily:) — pull-to-refresh and the
+    /// "刷新今日推荐" menu; the menu was a no-op while the cache
+    /// lived, b45-g). The cache is trusted
     /// only when it validates (HomeViewModel.validatedDailyTracks:
     /// today's key, non-empty, every track with a real song id) —
     /// a stale / empty / identity-less entry is recomputed instead
@@ -285,13 +352,19 @@ final class MusicDiscoveryViewModel: ObservableObject {
         // rollover, do NOT save — reload() recomputes today's
         // list (and refreshes the listen log + report); the
         // in-memory swap above stays visible until it lands.
-        guard HomeViewModel.shouldSaveReplacedDaily(cachedDayKey: dailyDayKey, todayKey: musicDayKey(of: Date())) else {
+        // b49fix13 P2-1: sample the day key ONCE (b49fix3 P2-15:
+        // one operation takes one Date()) — the guard and the
+        // save share this todayKey. Sampling twice left a
+        // nanosecond window: midnight falling between the two
+        // samples passed the guard and then saved yesterday's
+        // list under the new key.
+        let todayKey = musicDayKey(of: Date())
+        guard HomeViewModel.shouldSaveReplacedDaily(cachedDayKey: dailyDayKey, todayKey: todayKey) else {
             reload()
             return
         }
-        let key = musicDayKey(of: Date())
-        dailyDayKey = key
-        MusicLibraryStore.saveDailyTracks(dailyTracks + dailySpares, for: key)
+        dailyDayKey = todayKey
+        MusicLibraryStore.saveDailyTracks(dailyTracks + dailySpares, for: todayKey)
     }
 
     // MARK: - Explore (b45-b, Coda §3.9)

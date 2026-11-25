@@ -33,7 +33,9 @@ import SwiftUI
 /// No big date header, no big cover hero.
 struct MusicDailyView: View {
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
-    @StateObject private var discoveryVM = MusicDiscoveryViewModel()
+    // b49fix13 P2-3: the only instance that refreshes the daily
+    // list at midnight (full reload).
+    @StateObject private var discoveryVM = MusicDiscoveryViewModel(midnightRefresh: .daily)
 
     @Environment(\.haoTheme) private var theme
 
@@ -93,7 +95,7 @@ struct MusicDailyView: View {
                 .scrollContentBackground(.hidden)
                 // b45-g (Coda §8.2): pull-to-refresh regenerates
                 // today's picks, bypassing the day-key cache.
-                .refreshable { discoveryVM.reloadDaily(force: true) }
+                .refreshable { discoveryVM.reload(forceDaily: true) }
             }
         }
         .background(theme.scaffoldBackground)
@@ -133,7 +135,7 @@ struct MusicDailyView: View {
             .buttonStyle(MusicPressScaleStyle())
             .accessibilityLabel("播放全部")
             Menu {
-                Button("刷新今日推荐") { discoveryVM.reloadDaily(force: true) }
+                Button("刷新今日推荐") { discoveryVM.reload(forceDaily: true) }
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 22, weight: .semibold))
@@ -175,7 +177,9 @@ private struct ExploreShelfFrameKey: PreferenceKey {
 /// opens the category's full page. There is no ExploreView
 /// struct — this view is the explore page.
 struct MusicExploreView: View {
-    @StateObject private var discoveryVM = MusicDiscoveryViewModel()
+    // b49fix13 P2-3: explore shows 15-minute snapshots with
+    // their own TTL — nothing to refresh at midnight.
+    @StateObject private var discoveryVM = MusicDiscoveryViewModel(midnightRefresh: .none)
     @State private var selectedCategory = "全部"
     @State private var showCategoryFull = false
     /// Height of the explore scroll viewport (P2-33), measured by
@@ -536,7 +540,9 @@ func plazaPlayCountText(_ count: Int) -> String {
 }
 
 struct MusicPlazaView: View {
-    @StateObject private var discoveryVM = MusicDiscoveryViewModel()
+    // b49fix13 P2-3: plaza shows 15-minute snapshots with their
+    // own TTL — nothing to refresh at midnight.
+    @StateObject private var discoveryVM = MusicDiscoveryViewModel(midnightRefresh: .none)
 
     @Environment(\.haoTheme) private var theme
 
@@ -771,7 +777,9 @@ struct MusicPlazaDetailView: View {
 
 struct MusicListenReportView: View {
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
-    @StateObject private var discoveryVM = MusicDiscoveryViewModel()
+    // b49fix13 P2-3: the report only needs its week/month window
+    // recomputed at midnight — no daily recompute.
+    @StateObject private var discoveryVM = MusicDiscoveryViewModel(midnightRefresh: .report)
 
     @Environment(\.haoTheme) private var theme
 

@@ -1273,13 +1273,19 @@ final class HomeViewModel: ObservableObject {
         // rollover, do NOT save — trigger a recompute instead;
         // the in-memory swap above stays visible until the
         // recompute publishes today's list.
-        guard Self.shouldSaveReplacedDaily(cachedDayKey: dailyDayKey, todayKey: musicDayKey(of: Date())) else {
+        // b49fix13 P2-1: sample the day key ONCE (b49fix3 P2-15:
+        // one operation takes one Date()) — the guard and the
+        // save share this todayKey. Sampling twice left a
+        // nanosecond window: midnight falling between the two
+        // samples passed the guard and then saved yesterday's
+        // list under the new key.
+        let todayKey = musicDayKey(of: Date())
+        guard Self.shouldSaveReplacedDaily(cachedDayKey: dailyDayKey, todayKey: todayKey) else {
             reload()
             return
         }
-        let key = musicDayKey(of: Date())
-        dailyDayKey = key
-        MusicLibraryStore.saveDailyTracks(allDailyPicks + dailySpares, for: key)
+        dailyDayKey = todayKey
+        MusicLibraryStore.saveDailyTracks(allDailyPicks + dailySpares, for: todayKey)
     }
 
     // MARK: - Live status
