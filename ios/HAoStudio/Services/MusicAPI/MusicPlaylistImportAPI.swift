@@ -368,21 +368,9 @@ final class MusicPlaylistImportAPI {
                 self.client.getJson(url, headers: ["User-Agent": MusicUA.value]) { json in done(json) }
             }, cancelToken: cancelToken) { json in
                 if let json = json {
-                    let songs = MusicAPIJSON.asList(json["songs"])
-                    for s in songs {
-                        let artists = MusicAPIJSON.asList(s["ar"])
-                        let album = MusicAPIJSON.asMap(s["al"])
-                        let durMs = MusicAPIJSON.asInt(s["duration"] != nil ? s["duration"] : s["dt"])
-                        out.append(MusicTrack(
-                            id: MusicAPIJSON.asString(s["id"]),
-                            title: MusicAPIJSON.asString(s["name"]),
-                            artist: artists.map { MusicAPIJSON.asString($0["name"]) }.joined(separator: " / "),
-                            album: MusicAPIJSON.asString(album?["name"]),
-                            coverURL: URL(string: MusicText.coverHi(MusicAPIJSON.asString(album?["picUrl"]), platform: "wy")),
-                            duration: (Double(durMs) / 1000.0).rounded(),
-                            sourceID: "wy"))
-                    }
-                    missing += chunk.count - songs.count
+                    let rawCount = MusicAPIJSON.asList(json["songs"]).count
+                    out.append(contentsOf: Self.parseWySongDetail(json))
+                    missing += chunk.count - rawCount
                 } else {
                     missing += chunk.count
                 }
@@ -391,6 +379,32 @@ final class MusicPlaylistImportAPI {
             }
         }
         nextChunk()
+    }
+
+    /// `/api/song/detail/` payload -> [MusicTrack]. Pure function.
+    /// b40 (chen 2026-11-25: 广场/排行榜歌单打开后歌曲读不出信息):
+    /// NetEase dropped the old `ar` / `al` keys from this endpoint —
+    /// live payload (2026-11-25, 热歌榜 100 首) has `artists` on
+    /// 100/100 and `ar` on 0/100, `album` on 100/100 and `al` on
+    /// 0/100. The old-only read left every track with an empty
+    /// artist ("未知艺人" in the row) and no album / cover. New keys
+    /// first, old keys as fallback — the same shape MusicArtistAPI
+    /// already parses (its lines 248-250).
+    static func parseWySongDetail(_ json: [String: Any]) -> [MusicTrack] {
+        MusicAPIJSON.asList(json["songs"]).map { s in
+            var artists = MusicAPIJSON.asList(s["artists"])
+            if artists.isEmpty { artists = MusicAPIJSON.asList(s["ar"]) }
+            let album = MusicAPIJSON.asMap(s["album"]) ?? MusicAPIJSON.asMap(s["al"]) ?? [:]
+            let durMs = MusicAPIJSON.asInt(s["duration"] != nil ? s["duration"] : s["dt"])
+            return MusicTrack(
+                id: MusicAPIJSON.asString(s["id"]),
+                title: MusicAPIJSON.asString(s["name"]),
+                artist: artists.map { MusicAPIJSON.asString($0["name"]) }.joined(separator: " / "),
+                album: MusicAPIJSON.asString(album["name"]),
+                coverURL: URL(string: MusicText.coverHi(MusicAPIJSON.asString(album["picUrl"]), platform: "wy")),
+                duration: (Double(durMs) / 1000.0).rounded(),
+                sourceID: "wy")
+        }
     }
 
     // MARK: - Import: QQ
