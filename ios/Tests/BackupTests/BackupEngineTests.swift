@@ -878,4 +878,17 @@ final class BackupEngineTests: XCTestCase {
         })
         waitForExpectations(timeout: 10, handler: nil)
     }
+
+    // MARK: - b49fix22 D24-2: rollback surfaces dropped history
+
+    func testHistoryDroppedLines() {
+        // Same wording as the manual restore's restoreMessage
+        // and the import warnings — one line per history file,
+        // sorted by path, zero counts omitted.
+        XCTAssertEqual(
+            BackupEngineCore.historyDroppedLines(for: ["hao_video_hist.json": 2, "hao_live_hist.json": 1]),
+            ["直播历史有 1 条记录格式不符，已跳过。", "影视历史有 2 条记录格式不符，已跳过。"])
+        XCTAssertTrue(BackupEngineCore.historyDroppedLines(for: [:]).isEmpty)
+        XCTAssertTrue(BackupEngineCore.historyDroppedLines(for: ["hao_video_hist.json": 0]).isEmpty)
+    }
 }

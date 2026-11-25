@@ -373,4 +373,55 @@ final class DownloadEngineTests: XCTestCase {
         XCTAssertEqual(restored.taskInfo(for: key)?.state, .paused)
         XCTAssertEqual(restored.taskInfo(for: key)?.downloadedBytes, partSize)
     }
+
+    // MARK: - b49fix22 D24-4: imported tasks reconcile without a restart
+
+    func testImportedMirrorTaskAppearsAfterBackupImportedNotification() {
+        let key = "t-import-\(UUID().uuidString)"
+        let fileName = "imported-\(UUID().uuidString).mp3"
+        let info = DownloadTaskInfo(
+            request: DownloadRequest(key: key, title: "imported", sourceURL: URL(string: "https://example.com/x.mp3")!, fileName: fileName, kind: .music, qualityCode: "320k"),
+            state: .paused, downloadedBytes: 0, totalBytes: 0,
+            errorMessage: nil, localRelativePath: nil)
+        // Simulate the import: the mirror holds the task, the
+        // engine has no live record for it. Append to the
+        // existing mirror — never overwrite it whole, other
+        // tests' entries live there too.
+        var mirror: [DownloadTaskInfo] = LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: [])
+        mirror.append(info)
+        LocalStore.saveCollection(named: DownloadEngine.tasksCollection, value: mirror)
+        XCTAssertNil(engine.taskInfo(for: key))
+        NotificationCenter.default.post(name: .haoBackupImported, object: nil)
+        // taskInfo serialises on syncQueue behind the reconcile.
+        XCTAssertEqual(engine.taskInfo(for: key)?.state, .paused)
+        XCTAssertTrue(engine.allTasks().contains { $0.request.key == key })
+        // Paused, never auto-started: still paused a second later.
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(engine.taskInfo(for: key)?.state, .paused)
+        keys.append(key)
+    }
+
+    // MARK: - b49fix22 D24-5: delete is atomic and reports catalog failure
+
+    func testDeleteRemovesTaskFromMirrorAndCatalog() {
+        let key = "t-del-\(UUID().uuidString)"
+        let source = makeSourceFile(size: 64 * 1024)
+        let fileName = "delete-\(UUID().uuidString).bin"
+        let done = expectation(description: "download completes")
+        engine.enqueue(request: request(key: key, source: source, fileName: fileName)) { _ in done.fulfill() }
+        wait(for: [done], timeout: 10)
+        XCTAssertEqual(engine.taskInfo(for: key)?.state, .completed)
+        // The completed task is in the catalog and the mirror.
+        XCTAssertTrue((DownloadCatalogStore.load()?.tasks ?? []).contains { $0.request.key == key })
+        XCTAssertTrue((LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: []) as [DownloadTaskInfo]).contains { $0.request.key == key })
+        XCTAssertTrue(engine.delete(key: key))
+        XCTAssertNil(engine.taskInfo(for: key))
+        XCTAssertFalse((LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: []) as [DownloadTaskInfo]).contains { $0.request.key == key })
+        XCTAssertFalse((DownloadCatalogStore.load()?.tasks ?? []).contains { $0.request.key == key })
+        // No resurrection on the next launch either.
+        let restored = DownloadEngine()
+        XCTAssertNil(restored.taskInfo(for: key))
+        // Deleting again is a no-op success, not a failure.
+        XCTAssertTrue(engine.delete(key: key))
+    }
 }

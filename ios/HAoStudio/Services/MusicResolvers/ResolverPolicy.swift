@@ -55,17 +55,30 @@ struct ResolverSpeedRecord: Codable {
     var avg: Int?
     var fails: Int?
     var cooledUntilMs: Int?
+    /// b49fix22 D24-1: wall-clock ms of the last write to this
+    /// record — the merge is newest-wins (see saveLocked), so an
+    /// imported speed newer than the live recording survives a
+    /// save instead of being silently overwritten by it. Absent
+    /// on records written before this round (and on backups made
+    /// by those builds): treated as epoch, i.e. older than any
+    /// stamped record, so old files keep the old memory-wins
+    /// behaviour and still decode. A device clock far in the
+    /// future stamps its records newer; the merge follows the
+    /// stamps, as any timestamp merge must.
+    var updatedAtMs: Int?
 
     enum CodingKeys: String, CodingKey {
         case avg
         case fails
         case cooled
+        case updated
     }
 
-    init(avg: Int? = nil, fails: Int? = nil, cooledUntilMs: Int? = nil) {
+    init(avg: Int? = nil, fails: Int? = nil, cooledUntilMs: Int? = nil, updatedAtMs: Int? = nil) {
         self.avg = avg
         self.fails = fails
         self.cooledUntilMs = cooledUntilMs
+        self.updatedAtMs = updatedAtMs
     }
 
     init(from decoder: Decoder) throws {
@@ -73,6 +86,7 @@ struct ResolverSpeedRecord: Codable {
         avg = try container.decodeIfPresent(Int.self, forKey: .avg)
         fails = try container.decodeIfPresent(Int.self, forKey: .fails)
         cooledUntilMs = try container.decodeIfPresent(Int.self, forKey: .cooled)
+        updatedAtMs = try container.decodeIfPresent(Int.self, forKey: .updated)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -80,6 +94,7 @@ struct ResolverSpeedRecord: Codable {
         try container.encodeIfPresent(avg, forKey: .avg)
         try container.encodeIfPresent(fails, forKey: .fails)
         try container.encodeIfPresent(cooledUntilMs, forKey: .cooled)
+        try container.encodeIfPresent(updatedAtMs, forKey: .updated)
     }
 }
 
@@ -96,6 +111,13 @@ final class ResolverCooldown {
     private(set) var averages: [String: Int] = [:]
     private(set) var fails: [String: Int] = [:]
     private(set) var cooledUntil: [String: Date] = [:]
+    /// b49fix22 D24-1: last-write time per key, parallel to the
+    /// three dicts above — the newest-wins merge in saveLocked
+    /// compares these stamps. Stamped by record() on every
+    /// mutation and by clear() (a clear is a newer mutation
+    /// than the disk record it removes); loaded from the
+    /// record's `updated` field, nil for pre-fix22 records.
+    private(set) var updatedAt: [String: Date] = [:]
 
     private let documentsDirectory: URL?
     private var attemptsSinceSave = 0
@@ -140,6 +162,11 @@ final class ResolverCooldown {
             let prev = averages[key]
             averages[key] = prev == nil ? milliseconds : (prev! * 7 + milliseconds * 3) / 10
         }
+        // b49fix22 D24-1: every mutation above stamps the key —
+        // the stamp is what the newest-wins merge compares. The
+        // .empty path returns before this point, so a fast "no"
+        // never claims to be newer than a real recording.
+        updatedAt[key] = now()
         attemptsSinceSave += 1
         if attemptsSinceSave >= 10 || now().timeIntervalSince(lastSaveAt) >= 5 {
             attemptsSinceSave = 0
@@ -173,6 +200,11 @@ final class ResolverCooldown {
         for key in keys {
             cooledUntil.removeValue(forKey: key)
             fails.removeValue(forKey: key)
+            // b49fix22 D24-1: a clear is a newer mutation than
+            // the disk record it removes — stamp it, so a later
+            // merge does not resurrect the cleared fails /
+            // cooldown from disk as "newer".
+            updatedAt[key] = now()
         }
         saveNow()
     }
@@ -190,6 +222,9 @@ final class ResolverCooldown {
             if let fails = record.fails { self.fails[key] = fails }
             if let ms = record.cooledUntilMs {
                 cooledUntil[key] = Date(timeIntervalSince1970: TimeInterval(ms) / 1000.0)
+            }
+            if let ms = record.updatedAtMs {
+                updatedAt[key] = Date(timeIntervalSince1970: TimeInterval(ms) / 1000.0)
             }
         }
     }
@@ -217,26 +252,33 @@ final class ResolverCooldown {
     /// recorded, so a bare write wiped speeds a backup import
     /// had just installed (hao_resolver_speed is whole-file,
     /// and no .haoBackupImported observer reloads this
-    /// singleton). Disk wins for keys memory never recorded
-    /// (imported speeds); memory wins for keys it knows (live
-    /// recordings are fresher than the backup's). No observer
-    /// is added: this object is driven from the resolver's
-    /// serial work queue, and a NotificationCenter observer
-    /// would touch its state from an arbitrary thread. b49fix21
-    /// D23-3: the merge also BACKFILLS the in-memory dicts —
-    /// before this, the disk merge lived only in the local
-    /// `map`, so imported speeds were safe on disk but
-    /// invisible to averageMs()/ranking until the next launch
-    /// (the old comment's "in-memory ranking staleness
-    /// self-heals at the next save" was wrong — the save never
-    /// touched memory). The backfill runs inside saveLocked,
-    /// i.e. on collectionWriteQueue via save() — the same
-    /// serialisation the disk merge already rides, so no new
-    /// queue is introduced (record() calls save()
-    /// synchronously at its threshold, so a record on the
-    /// resolver queue cannot interleave with this backfill;
-    /// the pre-existing cross-queue reads of these dicts in
-    /// saveLocked are unchanged).
+    /// singleton). b49fix22 D24-1: the merge is NEWEST-WINS on
+    /// `ResolverSpeedRecord.updatedAtMs`, not "memory always
+    /// wins" — the old rule silently overwrote an imported
+    /// speed with a stale live recording for every memory-known
+    /// key, and the key-only final sweep passed because the key
+    /// was still there, so the import reported success while
+    /// the speeds were gone. A disk record newer than the
+    /// memory stamp replaces it (and backfills memory, so
+    /// averageMs() sees it at once); a memory record newer
+    /// than disk, or a tie (including both sides unstamped —
+    /// pre-fix22 records carry no `updated`, treated as epoch),
+    /// keeps memory. b49fix21 D23-3: the merge also BACKFILLS the in-memory dicts —
+    /// before this, the disk merge lived only in the local `map`, so imported
+    /// speeds were safe on disk but invisible to averageMs()/ranking until the
+    /// next launch (the old comment's "in-memory ranking staleness
+    /// self-heals at the next save" was wrong — the save never touched memory).
+    /// The backfill runs inside saveLocked, i.e. on collectionWriteQueue via
+    /// save() — the same serialisation the disk merge already rides, so no new
+    /// queue is introduced. All dict access is serialised through the resolver's
+    /// serial work queue (b49fix22 D24-3): record() runs there, clear() is
+    /// dispatched there by LXSourceResolver.clearFailureMemory, and saveLocked
+    /// runs inside collectionWriteQueue.sync invoked synchronously from the work
+    /// queue, so no other work-queue task can interleave with the backfill — the
+    /// main-thread clear() that used to touch these dicts directly is gone. No
+    /// observer is added: this object is driven from the resolver's serial work
+    /// queue, and a NotificationCenter observer would touch its state from an
+    /// arbitrary thread.
     private func saveLocked() {
         guard let dir = documentsDirectory ?? LocalStore.documentsDirectoryOrNil() else { return }
         lastSaveAt = now()
@@ -245,22 +287,28 @@ final class ResolverCooldown {
             map[key] = ResolverSpeedRecord(
                 avg: averages[key],
                 fails: fails[key],
-                cooledUntilMs: cooledUntil[key].map { Int($0.timeIntervalSince1970 * 1000) })
+                cooledUntilMs: cooledUntil[key].map { Int($0.timeIntervalSince1970 * 1000) },
+                updatedAtMs: updatedAt[key].map { Int($0.timeIntervalSince1970 * 1000) })
         }
         if let diskData = try? Data(contentsOf: dir.appendingPathComponent("\(Self.speedKey).json")),
            let disk = try? JSONDecoder().decode([String: ResolverSpeedRecord].self, from: diskData) {
-            for (key, record) in disk where map[key] == nil {
-                map[key] = record
-                // b49fix21 D23-3: backfill — map[key] == nil
-                // means memory recorded nothing for this key,
-                // so the imported record is the only speed data
-                // for it. Memory-known keys still win disk (the
-                // where clause above); this branch never
-                // overwrites a live recording.
-                if let avg = record.avg { averages[key] = avg }
-                if let fails = record.fails { self.fails[key] = fails }
-                if let ms = record.cooledUntilMs {
-                    cooledUntil[key] = Date(timeIntervalSince1970: TimeInterval(ms) / 1000.0)
+            for (key, record) in disk {
+                if map[key] == nil {
+                    // Disk-only key (an imported speed): take it
+                    // and backfill memory (b49fix21 D23-3).
+                    map[key] = record
+                    backfill(key: key, record: record)
+                } else {
+                    // Both sides know the key: the newer record
+                    // wins. An unstamped side counts as epoch.
+                    let diskMs = record.updatedAtMs ?? 0
+                    let memoryMs = updatedAt[key].map { Int($0.timeIntervalSince1970 * 1000) } ?? 0
+                    if diskMs > memoryMs {
+                        map[key] = record
+                        backfill(key: key, record: record)
+                    }
+                    // Else memory wins — the live recording is
+                    // fresher than the backup's, or a tie.
                 }
             }
         }
@@ -268,6 +316,26 @@ final class ResolverCooldown {
         try? data.write(
             to: dir.appendingPathComponent("\(Self.speedKey).json"),
             options: [.atomic])
+    }
+
+    /// Replaces memory's view of one key with a disk record,
+    /// wholesale (b49fix22 D24-1): a winning disk record's
+    /// absent fields mean "no value", not "keep memory's" — a
+    /// newer imported record that cleared a failure streak must
+    /// not leave the old streak behind in memory.
+    private func backfill(key: String, record: ResolverSpeedRecord) {
+        if let avg = record.avg { averages[key] = avg } else { averages.removeValue(forKey: key) }
+        if let fails = record.fails { self.fails[key] = fails } else { self.fails.removeValue(forKey: key) }
+        if let ms = record.cooledUntilMs {
+            cooledUntil[key] = Date(timeIntervalSince1970: TimeInterval(ms) / 1000.0)
+        } else {
+            cooledUntil.removeValue(forKey: key)
+        }
+        if let ms = record.updatedAtMs {
+            updatedAt[key] = Date(timeIntervalSince1970: TimeInterval(ms) / 1000.0)
+        } else {
+            updatedAt.removeValue(forKey: key)
+        }
     }
 }
 

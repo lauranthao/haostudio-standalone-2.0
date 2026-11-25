@@ -252,14 +252,31 @@ final class LXSourceResolver: SourceResolver {
 
     /// b46: manual-play bypass — forget every failure recorded
     /// for one song, so the next resolve re-asks every source.
+    /// b49fix22 D24-3: the whole body runs on the resolver's
+    /// serial work queue, not the caller's thread. The caller
+    /// (PlaybackCoordinator.clearResolveFailureMemory) runs on
+    /// the main thread, and the old direct call mutated
+    /// ResolverCooldown's dicts (cooledUntil/fails, then the
+    /// saveLocked backfill) on main while a resolve callback on
+    /// the work queue could concurrently run record() on the
+    /// same plain Swift dictionaries — a write/write race the
+    /// fix21 backfill made real (before it, saveLocked only
+    /// read them). Enqueuing here is safe and order-preserving:
+    /// resolve() itself enqueues on the same queue, and a
+    /// manual play always resolves after clearing, so the
+    /// clear runs first. Never sync here — a work-queue caller
+    /// would deadlock on itself.
     func clearFailureMemory(forSongId songId: String) {
-        // b49sweep P1-5: a manual "re-ask every source" was only
-        // half-kept — the failure memory cleared, but the cooldown
-        // (5 min after 3 hard errors, persisted to disk) kept the
-        // sources deprioritised. Clear both for the same keys.
-        let keys = failureMemory.sourceKeys(forSongId: songId)
-        failureMemory.clear(songId: songId)
-        cooldown.clear(keys: keys)
+        workQueue.async { [weak self] in
+            guard let self = self else { return }
+            // b49sweep P1-5: a manual "re-ask every source" was only
+            // half-kept — the failure memory cleared, but the cooldown
+            // (5 min after 3 hard errors, persisted to disk) kept the
+            // sources deprioritised. Clear both for the same keys.
+            let keys = self.failureMemory.sourceKeys(forSongId: songId)
+            self.failureMemory.clear(songId: songId)
+            self.cooldown.clear(keys: keys)
+        }
     }
 
     /// A completed download for this song, resolved to its file,

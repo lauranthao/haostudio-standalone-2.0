@@ -1747,7 +1747,16 @@ extension BackupEngineCore {
             // whole-file files verify by subset at the final
             // sweep — lists by identity key, string lists by
             // set subset, dicts by key only; a scalar falls
-            // back to canonical byte equality.
+            // back to value equality (b49fix22 O-2: Route B
+            // already compared scalars by value with
+            // jsonValuesEqual; canonicalJSONData returns nil
+            // for a scalar, which used to fall back to raw byte
+            // equality here). Dicts are key-only on purpose
+            // (b49fix22 D24-1, see wholeFileSubsetVerifies):
+            // a dict value may legitimately be superseded by a
+            // newer live recording — ResolverSpeedRecord merges
+            // newest-wins — and value equality here would
+            // re-introduce the D23-1 false-fail.
             guard let expected = try? JSONSerialization.jsonObject(with: expectedBytes, options: []),
                   let actual = try? JSONSerialization.jsonObject(with: actualData, options: [])
             else { return actualData == expectedBytes }
@@ -1763,10 +1772,7 @@ extension BackupEngineCore {
                let actualDict = actual as? [String: Any] {
                 return dictContainsAll(actualDict, expectedDict, keyOnly: true)
             }
-            guard let expectedCanonical = MigrationStore.canonicalJSONData(expected),
-                  let actualCanonical = MigrationStore.canonicalJSONData(actual)
-            else { return actualData == expectedBytes }
-            return actualCanonical == expectedCanonical
+            return MigrationStore.jsonValuesEqual(expected, actual)
         }
         guard concurrentlyWrittenCollections.contains(base),
               let expected = try? JSONSerialization.jsonObject(with: expectedBytes, options: []),
@@ -1844,14 +1850,15 @@ extension BackupEngineCore {
             return dictContainsAll(actualDict, expectedDict, keyOnly: true, toleratingDeleted: MigrationStore.cacheEvictionRecord(for: base))
         }
         // Expected parses but is neither a list nor a dict (a
-        // scalar): nothing to subset-compare — canonical byte
-        // equality (b49fix19 P2-9d).
+        // scalar): nothing to subset-compare — value equality
+        // (b49fix22 O-2: jsonValuesEqual wraps in an array, so
+        // a bare scalar compares; canonicalJSONData returns nil
+        // for one, which used to fall back to raw byte equality
+        // here while Route B already compared by value).
         guard let expectedParsed = try? JSONSerialization.jsonObject(with: expectedBytes, options: []),
-              let actualParsed = try? JSONSerialization.jsonObject(with: actualData, options: []),
-              let expectedCanonical = MigrationStore.canonicalJSONData(expectedParsed),
-              let actualCanonical = MigrationStore.canonicalJSONData(actualParsed)
+              let actualParsed = try? JSONSerialization.jsonObject(with: actualData, options: [])
         else { return actualData == expectedBytes }
-        return actualCanonical == expectedCanonical
+        return MigrationStore.jsonValuesEqual(expectedParsed, actualParsed)
     }
 
     /// Multiset subset: every expected entry must still be in
@@ -2294,12 +2301,21 @@ extension BackupEngineCore {
             // increments made during the import (see
             // restoreFilesFromSnapshot) instead of writing the
             // snapshot bytes back whole.
-            let (rollbackFailures, keptLive, keptLiveDefaults) = rollback(
+            let (rollbackFailures, keptLive, keptLiveDefaults, normalizedHistory) = rollback(
                 journal: journal, snapshotDir: snapshotDir,
                 documentsURL: documentsURL, defaults: defaults,
                 writtenBytes: expectedCollectionBytes,
                 writtenPayloadPaths: writtenPayloadPaths
             )
+            // b49fix22 D24-2: the rollback normalises restored
+            // history files (see normalizeRestoredHistory) — the
+            // dropped count used to be dropped by rollback()
+            // itself, so a failed import never told the user
+            // history entries were skipped, while a manual
+            // restore of the same snapshot did. Same wording as
+            // the manual restore (see historyDroppedLines).
+            let droppedLines = historyDroppedLines(for: normalizedHistory)
+            let droppedSuffix = droppedLines.isEmpty ? "" : "；" + droppedLines.joined(separator: "；")
             // b49fix4 P2-36: "已全量回滚" is only true when the
             // rollback itself restored everything. When it did
             // not, say so and name what was not put back.
@@ -2308,11 +2324,13 @@ extension BackupEngineCore {
                 detail = reason + "，已全量回滚"
                     + (keptLive.isEmpty ? "" : "（导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：" + keptLive.joined(separator: "、") + "）")
                     + (keptLiveDefaults.isEmpty ? "" : "（导入期间被改写的设置已保留 live 值：" + keptLiveDefaults.joined(separator: "、") + "）")
+                    + droppedSuffix
             } else {
                 detail = reason + "，回滚未完成，未恢复："
                     + rollbackFailures.joined(separator: "、")
                     + (keptLive.isEmpty ? "" : "；导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：" + keptLive.joined(separator: "、"))
                     + (keptLiveDefaults.isEmpty ? "" : "；导入期间被改写的设置已保留 live 值：" + keptLiveDefaults.joined(separator: "、"))
+                    + droppedSuffix
             }
             return BackupImportDetail(
                 outcome: .failed, appliedKeys: 0, appliedCollections: 0,
@@ -2873,6 +2891,22 @@ extension BackupEngineCore {
         }
     }
 
+    /// One dropped-history line per history file the restore
+    /// normalised (b49fix21 D23-2, shared by b49fix22 D24-2):
+    /// "影视历史有 N 条记录格式不符，已跳过。" /
+    /// "直播历史有 N 条记录格式不符，已跳过。" — the same
+    /// wording the import warnings use for the same drops, and
+    /// the manual restore's restoreMessage (SettingsGroupsView
+    /// delegates here so the wording has one home).
+    static func historyDroppedLines(for normalizedHistory: [String: Int]) -> [String] {
+        var lines: [String] = []
+        for (path, count) in normalizedHistory.sorted(by: { $0.key < $1.key }) where count > 0 {
+            let kind = path.hasPrefix("hao_video_hist") ? "影视" : "直播"
+            lines.append("\(kind)历史有 \(count) 条记录格式不符，已跳过。")
+        }
+        return lines
+    }
+
     /// Puts every touched value back the way the snapshot found
     /// it: defaults from the in-memory journal, files from the
     /// snapshot folder (restored, or removed when they did not
@@ -2887,14 +2921,14 @@ extension BackupEngineCore {
         defaults: UserDefaults,
         writtenBytes: [String: Data]? = nil,
         writtenPayloadPaths: Set<String> = []
-    ) -> (failures: [String], keptLive: [String], keptLiveDefaults: [String]) {
+    ) -> (failures: [String], keptLive: [String], keptLiveDefaults: [String], normalizedHistory: [String: Int]) {
         let keptLiveDefaults = journal.restore(defaults: defaults)
         let restored = restoreFilesFromSnapshot(
             snapshotDir: snapshotDir, documentsURL: documentsURL,
             writtenBytes: writtenBytes,
             writtenPayloadPaths: writtenPayloadPaths
         )
-        return (restored.failures, restored.keptLive, keptLiveDefaults)
+        return (restored.failures, restored.keptLive, keptLiveDefaults, restored.normalizedHistory)
     }
 
     /// Normalises a restored history file (b49fix20 D22-10):

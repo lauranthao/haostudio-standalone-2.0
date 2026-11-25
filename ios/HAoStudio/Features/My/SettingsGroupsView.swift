@@ -1820,13 +1820,11 @@ struct BackupSnapshotView: View {
     /// (b49fix21 D23-2): "影视历史有 N 条记录格式不符，已跳过"
     /// / "直播历史有 N 条记录格式不符，已跳过" — the same
     /// wording the import warnings use for the same drops.
+    /// Delegates to BackupEngineCore (b49fix22 D24-2) so the
+    /// wording has one home — the import-internal rollback
+    /// uses the same lines.
     private static func historyDroppedLines(for result: BackupEngineCore.SnapshotRestoreResult) -> [String] {
-        var lines: [String] = []
-        for (path, count) in result.historyNormalizedDropped.sorted(by: { $0.key < $1.key }) where count > 0 {
-            let kind = path.hasPrefix("hao_video_hist") ? "影视" : "直播"
-            lines.append("\(kind)历史有 \(count) 条记录格式不符，已跳过。")
-        }
-        return lines
+        BackupEngineCore.historyDroppedLines(for: result.historyNormalizedDropped)
     }
 }
 
