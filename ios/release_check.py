@@ -4,7 +4,9 @@
 Verifies the manual release chain agrees before the download link goes
 out — the chain preflight does NOT guard (2026-11-25, b49fix2 P2-67):
   repo version.json  <->  Info.plist (version/build)
-  repo version.json  <->  README (version/build/size/download URL)
+  repo version.json  <->  README (version/build/size/download URL;
+    version-table row must carry Bitrise #N + triggering commit
+    for rows written after the rule landed — see P2-1 note below)
   repo version.json  <->  bitrise.yml artifact name (derived, not hardcoded)
   repo version.json  <->  shop's live manifest (--shop-manifest-url)
     (version/build/ipaUrl/size/sha256 AND changelog text)
@@ -41,7 +43,8 @@ SHA-256 (2026-11-25, b49fix3 P1-12): the app verifies a downloaded
 IPA against version.json's sha256 (UpdateManifest.asSHA256), so the
 field must be filled at release time or the check is dead code. The
 release step, in the same release commit that fills size:
-  1. download the shipped IPA (or hash the built file),
+  1. download the IPA built from the release commit (Bitrise
+     deploy dir — NOT the live shop file; or hash the built file),
   2. sha256sum it,
   3. write the 64-hex value into version.json's "sha256" alongside
      "size" (and deploy so the shop manifest carries it too).
@@ -155,7 +158,9 @@ def main():
     ap.add_argument("--shop-manifest-url", default=None,
                     help="live shop version.json URL to compare against")
     ap.add_argument("--ipa", default=None,
-                    help="built IPA path to verify (size + md5 + sha256)")
+                    help="IPA built from the release commit to verify "
+                         "(size + md5 + sha256); NEVER a file downloaded "
+                         "from the live shop")
     ap.add_argument("--release", action="store_true",
                     help="release-time enforcement: an empty, missing or "
                          "malformed version.json sha256 FAILS instead of "
@@ -188,9 +193,28 @@ def main():
     check("README download URL matches version.json ipaUrl",
           isinstance(vj.get("ipaUrl"), str) and vj["ipaUrl"] in readme,
           str(vj.get("ipaUrl")))
+    _row_m = re.search(rf"\|\s*{re.escape(str(version))}\s*\|\s*{build}\s*\|[^\n]*", readme)
     check("README version table has this version/build row",
-          re.search(rf"\|\s*{re.escape(str(version))}\s*\|\s*{build}\s*\|", readme) is not None,
+          _row_m is not None,
           f"looking for | {version} | {build} |")
+    # (2026-11-26, b49-sweep14 release P2-1) The build# +
+    # triggering-commit rule (README:100, landed in a94f0cf)
+    # requires the version-table row ITSELF to carry
+    # "Bitrise #N (commit <full 40-hex hash>)". The old regex
+    # only matched "| version | build |", so a row without the
+    # build number passed the gate. Enforce it here — but
+    # grandfather the 0.0.2 row: it was written before the rule
+    # landed and has no Bitrise #N by design, so it is checked
+    # on version/build only and must NOT fail this gate.
+    if _row_m is not None and str(version) != "0.0.2":
+        _row_text = _row_m.group(0)
+        _has_build = re.search(r"Bitrise\s*#\d+", _row_text) is not None
+        _has_hash = re.search(r"commit[^0-9a-f]{0,3}[0-9a-f]{40}\b", _row_text) is not None
+        check("README version table row carries Bitrise build # + triggering commit",
+              _has_build and _has_hash,
+              f"row: {_row_text.strip()!r}"
+              + ("" if _has_build else " — missing Bitrise #N")
+              + ("" if _has_hash else " — missing 40-hex triggering commit"))
 
     # Repo-side: Bitrise artifact name derived from version.json.
     check("Bitrise artifact name derived from version.json",
@@ -208,10 +232,12 @@ def main():
     elif repo_sha == "":
         if args.release:
             check("version.json sha256 filled (--release)", False,
-                  "empty — fill it from the shipped IPA before shipping")
+                  "empty — fill it from an IPA built from the release commit "
+                  "(Bitrise download); never from a live shop file")
         else:
             skip("version.json sha256 (empty until release)",
-                 "fill it from the shipped IPA at release time")
+                 "fill it at release time from an IPA built from the release "
+                 "commit (Bitrise download); never from a live shop file")
     else:
         check("version.json sha256 is 64 lowercase hex", repo_sha_ok,
               str(repo_sha))
@@ -311,10 +337,15 @@ def main():
                       f"ipa={ipa_sha} repo={repo_sha}")
             elif args.release:
                 check("IPA sha256 recorded in version.json (--release)", False,
-                      f"version.json sha256 is empty; this IPA hashes to {ipa_sha}")
+                      f"version.json sha256 is empty; this IPA hashes to {ipa_sha} — "
+                      "copy it into version.json ONLY if this file was built from the "
+                      "release commit (Bitrise download); NEVER if it was downloaded "
+                      "from the live shop (a live hash cannot prove which commit built it)")
             else:
                 skip("IPA sha256 (version.json sha256 empty until release)",
-                     f"this IPA hashes to {ipa_sha} — copy it into version.json at release time")
+                     f"this IPA hashes to {ipa_sha} — copy it into version.json at release time "
+                     "ONLY if this file was built from the release commit (Bitrise download); "
+                     "NEVER if it was downloaded from the live shop")
 
     print()
     if failures:
