@@ -131,46 +131,42 @@ struct VideoTabView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            GeometryReader { geo in
-                VStack(spacing: 0) {
-                    // b42: in-content "影视" title (HomeView's
-                    // homeHeader pattern) — build 41 there was no
-                    // title at all and the Picker's "影视" text was
-                    // clipped under the status bar / Dynamic Island.
-                    videoHeader
-                    Picker("片源", selection: $mode) {
-                    Text("影视").tag("cms")
-                    Text("Emby").tag("emby")
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .onChange(of: mode) { newMode in
-                    VideoLibraryStore.setTabMode(newMode)
-                }
-                .haoSensoryFeedback(.selection, trigger: mode)
-                if mode == "emby" {
-                    EmbyTabView(
-                        onSelect: { path.append(.embyDetail($0)) },
-                        onSelectGenre: { path.append(.embyGenre($0)) },
-                        onSearch: { path.append(.embySearch) }
-                    )
-                } else {
-                    cmsHome
-                }
+            VStack(spacing: 0) {
+                // b42: in-content "影视" title (HomeView's
+                // homeHeader pattern) — build 41 there was no
+                // title at all and the Picker's "影视" text was
+                // clipped under the status bar / Dynamic Island.
+                videoHeader
+                Picker("片源", selection: $mode) {
+                Text("影视").tag("cms")
+                Text("Emby").tag("emby")
             }
-            // b42: the backdrop ZStack (haoBackdropLayer) expands
-            // to full screen — its image ignores the safe area —
-            // so a plain VStack here starts at y=0, under the
-            // status bar and Dynamic Island (build 41: the Picker's
-            // "影视" text was clipped there, and the hero went
-            // right to the top with no room for a title). The
-            // GeometryReader reads the real top safe-area inset
-            // and the VStack is padded by it, so the title sits
-            // below the status bar on every phone. The value is 0
-            // when the stack already insets the content, so this
-            // never double-pads.
-            .padding(.top, geo.safeAreaInsets.top)
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .onChange(of: mode) { newMode in
+                VideoLibraryStore.setTabMode(newMode)
+            }
+            .haoSensoryFeedback(.selection, trigger: mode)
+            if mode == "emby" {
+                EmbyTabView(
+                    onSelect: { path.append(.embyDetail($0)) },
+                    onSelectGenre: { path.append(.embyGenre($0)) },
+                    onSearch: { path.append(.embySearch) }
+                )
+            } else {
+                cmsHome
+            }
+            }
+            // b43: the GeometryReader + top padding are gone —
+            // they existed only to compensate for the backdrop
+            // ZStack inflating this root to full screen (build 41:
+            // the Picker's "影视" text was clipped under the
+            // status bar). The backdrop is a background now
+            // (haoBackdropLayer) — it never sizes its parent — so
+            // this VStack starts at the safe-area top like the
+            // other roots' ScrollViews, and the title sits below
+            // the status bar with no compensation.
             .haoBackdropLayer()
             .haoTabBackground()
             // b39: no system nav bar on this root — VidHub's home
@@ -226,7 +222,6 @@ struct VideoTabView: View {
                     mode = VideoLibraryStore.tabMode()
                 }
             }
-        }
     }
 }
 

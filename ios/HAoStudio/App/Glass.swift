@@ -21,22 +21,21 @@ enum HaoLayout {
     static let tabBarContentHeight: CGFloat = 56
     /// Total height of the glass tab bar as laid out in the
     /// floating stack: 56pt — exactly the system UITabBar's own
-    /// glass height (tabBarContentHeight). b42 (chen 2026-11-25
-    /// build 41: the mini overlaps the bar's top by ~4pt, the
-    /// mini's bottom edge + progress line disappearing behind the
-    /// bar's glass): the b40 frame was 64pt (content 56 + 4pt
-    /// inset top and bottom), on the assumption that a taller
-    /// frame makes the glass "run edge to edge". It does not —
-    /// the system bar paints glass over its own 56pt frame only,
-    /// and inside the 64pt frame that 56pt glass sits ~4pt ABOVE
-    /// the frame's top edge (measured on chen's build-41
-    /// screenshot: mini glass 2316–2423, bar glass 2423–2592 in
-    /// a 1260x2736 shot — the bar's glass starts ~13px above
-    /// the mini's bottom edge, so the two pills overlap instead
-    /// of touching). The frame must equal the rendered glass,
-    /// so the mini's bottom edge IS the bar's top edge at
-    /// VStack spacing 0. The 4pt inset is deleted (it was only
-    /// ever the b40 arithmetic, never a real inset).
+    /// glass height (tabBarContentHeight). b43 CORRECTS b42 (chen
+    /// 2026-11-25 build 42: the mini still overlaps the bar, the
+    /// singer line under "爱情转移" sliced): the b42 theory — "the
+    /// frame must equal the rendered glass, so the mini's bottom
+    /// edge IS the bar's top edge at spacing 0" — is DISPROVEN on
+    /// device. The bar's glass top is frame-independent: it sits
+    /// at ~2420 on chen's 11:51 build-42 screenshot whether the
+    /// frame is 64 (build 41: glass top ~2423) or 56 (build 42:
+    /// glass top ~2420), while the frame top moved 24px. The
+    /// 64 -> 56 change therefore moved the mini DOWN 23px (the
+    /// stack is bottom-anchored) and the overlap grew from ~4pt
+    /// to ~13pt. The overlap is fixed by floatingStackSpacing
+    /// (13), not by the frame. The frame stays 56 (the system
+    /// bar's content height) and the 4pt inset stays deleted (it
+    /// was only ever the b40 arithmetic, never a real inset).
     static let tabBarTotalHeight: CGFloat = tabBarContentHeight
     /// Distance from the safe-area bottom edge: 2. The bar sits
     /// 2pt above the safe-area boundary — fully inside the
@@ -80,13 +79,25 @@ enum HaoLayout {
     /// margins, so the cover's left edge and the buttons' right
     /// edge sit on the same rhythm as the bar.
     static let miniPlayerContentPadding: CGFloat = 12
-    /// Gap between the mini player strip and the tab bar: 0 (b38).
-    /// The two are ONE connected floating unit — the mini's bottom
-    /// edge touches the bar's top edge, no seam, same width, same
-    /// margins (chen 2026-11-24: "你看布局啊" — Apple Music's mini
-    /// and bar read as a single block). Was 8: two separate
-    /// capsules with a gap, each floating on its own.
-    static let floatingStackSpacing: CGFloat = 0
+    /// Gap between the mini player strip and the tab bar: 13 (b43).
+    /// The two are ONE connected floating unit — the mini's GLASS
+    /// bottom edge touches the bar's GLASS top edge, no seam, no
+    /// overlap, same width, same margins (chen 2026-11-24: "你看布局啊"
+    /// — Apple Music's mini and bar read as a single block). The
+    /// gap is a GLASS compensation, not a frame gap: the system
+    /// tab bar's Liquid Glass renders ~13pt ABOVE its SwiftUI
+    /// frame's top edge (measured on chen's build-42 screenshot,
+    /// 1260x2736: mini glass bottom ~2459, bar glass top ~2420 —
+    /// the singer line under "爱情转移" is sliced at the glass
+    /// top, and a 638px-wide specular band sits at 2420-2422),
+    /// so the glass top is frame-independent. b42's frame change
+    /// (64 -> 56) therefore did NOT move the glass — it moved the
+    /// mini DOWN 23px (the stack is bottom-anchored) and the
+    /// overlap grew from ~4pt to ~13pt. The 13pt frame gap puts
+    /// the mini's glass bottom back on the bar's glass top. Was 0
+    /// (b38-b42), 8 before that: two separate capsules with a gap,
+    /// each floating on its own.
+    static let floatingStackSpacing: CGFloat = 13
     /// Name of the coordinate space a tab root's scroll view publishes
     /// for the chrome scroll anchor (HaoChromeScrollAnchor): the
     /// anchor reports its top offset in this space, 0 at the top,
@@ -104,7 +115,8 @@ enum HaoLayout {
     /// bottom margin + tab bar + (gap + mini player while one is
     /// showing). This is the clearance a scroll page under the stack
     /// must add so its last row can scroll fully above the stack —
-    /// 58pt idle, 98pt while playing (b42: the bar is 56, not 64).
+    /// 58pt idle, 111pt while playing (b43: the 13pt glass-
+    /// compensation spacing joins the stack while playing).
     /// The stack is never dropped below the safe-area edge, so the
     /// clearance is the full stack height — nothing is subtracted.
     /// See haoBottomChromePadding(). (Build 37: the scroll-minimize
@@ -496,7 +508,7 @@ extension View {
     /// scrolled fully above the chrome. Apply to the tab root's
     /// content, and remove haoBottomChromePadding from that root's
     /// ScrollView / List — keeping both would double the gap
-    /// (98 + 98).
+    /// (111 + 111).
     func haoBottomChromeContentPadding() -> some View {
         modifier(HaoBottomChromeContentPadding())
     }
@@ -509,7 +521,7 @@ extension View {
 /// coordinator has a current item OR a music song is still loaded
 /// (MusicPlayerViewModel.miniFallbackSong — a failed / stopped track
 /// the full player keeps showing). Using only `currentItem` here
-/// would leave 58pt of clearance under a visible 98pt stack.
+/// would leave 58pt of clearance under a visible 111pt stack.
 private struct HaoBottomChromePadding: ViewModifier {
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var musicPlayer: MusicPlayerViewModel
@@ -571,14 +583,24 @@ private struct HaoBottomChromeContentPadding: ViewModifier {
 /// off. The b40 frame pin did not change the on-device result.
 ///
 /// The backdrop therefore lives INSIDE each tab root now, as the
-/// bottom layer of a ZStack wrapping the root's scroll content
-/// (haoBackdropLayer): above the NavigationStack's background, so
-/// it is always visible, and nowhere near MainTabView's ZStack,
-/// so no image can size the chrome's layout in any way. The
-/// custom background colour had the same defect (it was drawn
-/// behind the stack too), so it rides the same layer. MainTabView
-/// resolves the backdrop once from MyBackgroundColor.kind and
-/// passes it down; the five tab roots only draw it.
+/// root's background (haoBackdropLayer): above the NavigationStack's
+/// background, so it is always visible, and nowhere near
+/// MainTabView's ZStack, so no image can size the chrome's layout
+/// in any way. The custom background colour had the same defect
+/// (it was drawn behind the stack too), so it rides the same layer.
+/// MainTabView resolves the backdrop once from
+/// MyBackgroundColor.kind and passes it down; the five tab roots
+/// only draw it.
+///
+/// b43 (chen 2026-11-25 build 42: "字会往上移"): the backdrop
+/// used to be a ZStack WRAPPING the root's scroll content — the
+/// wrapper's ignoresSafeArea image sized the ZStack to full
+/// screen, the ScrollView / VStack then started at y=0, and with
+/// the wallpaper on every title moved up ~59pt (the Video tab's
+/// GeometryReader + top padding only patched that one root). A
+/// background never sizes its parent, so the wallpaper-on layout
+/// is now pixel-identical to wallpaper-off; the background's
+/// ignoresSafeArea still paints it full-bleed.
 enum HaoBackdrop {
     case wallpaper(UIImage)
     case color(Color)
@@ -640,12 +662,19 @@ extension EnvironmentValues {
 }
 
 /// The backdrop layer (b41): the wallpaper photo or the custom
-/// background colour, drawn full-bleed as the bottom layer of the
-/// tab root's own content — above the NavigationStack's opaque
-/// background, so it can never be covered by it. The image is
-/// clipped to the root's bounds; it fills the root, never sizes
-/// it (the root's size comes from the scroll content). Use on the
-/// five tab roots only, next to haoTabBackground.
+/// background colour, drawn full-bleed as the tab root's
+/// background — above the NavigationStack's opaque background, so
+/// it can never be covered by it. A background never sizes its
+/// parent (b43: the old ZStack wrapper's ignoresSafeArea image
+/// sized the ZStack to full screen, the ScrollView / VStack then
+/// started at y=0, and with the wallpaper on every title moved
+/// up ~59pt — chen 2026-11-25 build 42 "字会往上移"), so the
+/// wallpaper-on layout is pixel-identical to wallpaper-off: the
+/// wallpaper only changes the background, never the layout. The
+/// background's ignoresSafeArea still paints it full-bleed
+/// (behind the status bar and the home indicator), and it does
+/// not scroll with the content. Use on the five tab roots only,
+/// next to haoTabBackground.
 ///
 /// b42 (chen 2026-11-25 build 41, wallpaper on): black section
 /// titles and 0.55-alpha cards drawn straight on a busy photo
@@ -664,10 +693,10 @@ private struct HaoBackdropLayer: ViewModifier {
     @Environment(\.haoTheme) private var theme
 
     func body(content: Content) -> some View {
-        ZStack {
-            backdropView
-            content
-        }
+        // b43: background, not a ZStack wrapper — a background
+        // never sizes its parent (see the doc above), and its
+        // ignoresSafeArea content still paints full-bleed.
+        content.background { backdropView }
     }
 
     @ViewBuilder

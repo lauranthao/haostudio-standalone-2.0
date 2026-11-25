@@ -99,7 +99,9 @@ struct MainTabView: View {
     /// drop pushed the whole unit 26pt below the safe-area edge on
     /// Face ID iPhones, so taps fell through to the page below.
     /// The mini (40pt) sits directly above the bar, VStack spacing
-    /// 0 — one connected unit, same width, same margins. The bar
+    /// 13 (b43: the bar's glass renders ~13pt above its frame, so
+    /// the 13pt frame gap is what makes the GLASS edges touch) —
+    /// one connected unit, same width, same margins. The bar
     /// sits 2pt above the safe-area bottom edge (tabBarBottomMargin),
     /// fully inside the hit-testable safe area. The b35
     /// scroll-minimize stays reverted (build 37, chen: "菜单恢复原样"
