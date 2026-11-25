@@ -172,7 +172,20 @@ final class MusicDiscoveryViewModel: ObservableObject {
         // and replaceDailySong; the compare-and-swap still guards
         // against a Home reload that published in between. force
         // (explicit refresh) writes unconditionally.
-        if let saveTracks = result.saveTracks {
+        // b49fix11 P2-2: re-check today's key before writing — this
+        // call is synchronous, so midnight must fall inside it to
+        // matter (local reads + ranking, generally <100ms), but if
+        // it does, the result was computed under yesterday's key
+        // and saving it would stamp yesterday's list as today's
+        // cache — the exact bug b49fix10 P2-3 closed on the Home
+        // side. Reuse shouldPublishDaily's same-key rule: on
+        // rollover, skip the write and publish memory only; the
+        // next reload recomputes. dailyDayKey stays at the start
+        // key, which correctly names the list on screen. (Saving
+        // under the fresh key instead would be worse: it would
+        // persist yesterday's ranking as today's cache.)
+        if let saveTracks = result.saveTracks,
+           HomeViewModel.shouldPublishDaily(startDayKey: dayKey, publishDayKey: musicDayKey(of: Date())) {
             MusicLibraryStore.saveDailyTracksIfUnchanged(
                 saveTracks, for: dayKey,
                 expectedKeys: result.expectedDiskKeys, force: force)

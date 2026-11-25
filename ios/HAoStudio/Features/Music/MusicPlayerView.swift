@@ -1807,6 +1807,11 @@ struct MusicPlayerView: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: HaoLayout.iconSize, weight: .medium))
+                // b49fix11 (对齐 P2-4): the unselected 0.65 is the
+                // Coda §2.6 toolbar spec (coda-copy-plan §2.6:
+                // "未选 白 0.65 / 已选 白 1.0 + 背景 白 0.16 r10"),
+                // NOT the 0.85 inactive-white family value used
+                // elsewhere in the player — do not "unify" it away.
                 .foregroundStyle(isSelected ? .white : .white.opacity(0.65))
                 .frame(width: 44, height: 44)
                 // b49fix5 P2-39(b): the selected-state highlight
