@@ -79,8 +79,17 @@ enum LocalStore {
             formatter.dateFormat = "yyyyMMdd-HHmmss"
             return formatter.string(from: Date())
         }()
+        // b49fix18 D-9: the stamp alone is second-precision —
+        // a second quarantine of the same file within the same
+        // second collided on the destination, moveItem failed,
+        // and the guard below returned silently: the corrupt
+        // file stayed in place and the following overwrite
+        // destroyed the very bytes quarantine exists to
+        // preserve, with no record. The UUID suffix makes the
+        // destination unique (same pattern as
+        // MigrationBackup.timestamp()).
         let quarantinedURL = docs
-            .appendingPathComponent("\(name).corrupt-\(stamp).json")
+            .appendingPathComponent("\(name).corrupt-\(stamp)-\(UUID().uuidString.prefix(8)).json")
         guard (try? FileManager.default.moveItem(at: url, to: quarantinedURL)) != nil else {
             return
         }

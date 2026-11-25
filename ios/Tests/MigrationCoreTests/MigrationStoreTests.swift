@@ -440,4 +440,167 @@ final class MigrationStoreTests: XCTestCase {
         XCTAssertTrue(MigrationStore.resumeEntriesPresent(
             ["a": 1.0, "b": 2.0], documentsURL: docs, toleratingDeleted: []))
     }
+
+    // MARK: - b49fix18: identity normalisation, recent budget, shape, quarantine, Route B
+
+    func testFix18SongIdentityKeyNormalisesUnknownPlatformToWy() {
+        // A Flutter backup's lx:… entry and the live wy entry
+        // for the same song are one song (D-4): the merge key
+        // must not keep both.
+        let lx: [String: Any] = ["platform": "lx:netease", "songId": "s1"]
+        let wy: [String: Any] = ["platform": "wy", "songId": "s1"]
+        XCTAssertEqual(MigrationStore.songIdentityKey(for: lx),
+                       MigrationStore.songIdentityKey(for: wy))
+        // A known code stays distinct — normalisation is not
+        // collapsing everything onto wy.
+        XCTAssertNotEqual(MigrationStore.songIdentityKey(for: ["platform": "tx", "songId": "s1"]),
+                          MigrationStore.songIdentityKey(for: wy))
+        // A missing platform normalises the same way the typed
+        // layer does (fromCode(nil) -> wy).
+        XCTAssertEqual(MigrationStore.songIdentityKey(for: ["songId": "s1"]),
+                       MigrationStore.songIdentityKey(for: wy))
+        // The empty-id fallback normalises too (title/artist/album).
+        let lxTitle: [String: Any] = ["platform": "lx:netease", "title": "t", "artist": "a", "album": ""]
+        let wyTitle: [String: Any] = ["platform": "wy", "title": "t", "artist": "a", "album": ""]
+        XCTAssertEqual(MigrationStore.songIdentityKey(for: lxTitle),
+                       MigrationStore.songIdentityKey(for: wyTitle))
+    }
+
+    func testFix18ListenDedupeKeyNormalisesUnknownPlatform() {
+        let lx: [String: Any] = ["platform": "lx:netease", "songId": "s1", "at": 1700000000000]
+        let wy: [String: Any] = ["platform": "wy", "songId": "s1", "at": 1700000000000]
+        XCTAssertEqual(MigrationStore.listenDedupeKey(for: lx),
+                       MigrationStore.listenDedupeKey(for: wy))
+        let later: [String: Any] = ["platform": "wy", "songId": "s1", "at": 1700000001000]
+        XCTAssertNotEqual(MigrationStore.listenDedupeKey(for: wy),
+                          MigrationStore.listenDedupeKey(for: later))
+    }
+
+    func testFix18RecentContainsAllIgnoresReAddsAndCapsBudget() {
+        // D-5: a re-add displaces nothing, so it gives no
+        // budget — a lost tail entry next to a re-add is a
+        // real loss and must fail.
+        let merged = (0..<100).map { recentSong("k\($0)") }
+        var reAdded = merged
+        reAdded.remove(at: 50)
+        reAdded.insert(merged[50], at: 0)
+        reAdded.removeLast() // the tail entry is gone
+        XCTAssertFalse(MigrationStore.recentContainsAll(actual: reAdded, expected: merged))
+        XCTAssertEqual(MigrationStore.recentMissingKeys(actual: reAdded, expected: merged), ["k99"])
+
+        // One genuinely new song still excuses one displaced
+        // tail entry, and the missing entry is observable.
+        var oneNew = [recentSong("new-1")] + Array(merged.prefix(99))
+        XCTAssertTrue(MigrationStore.recentContainsAll(actual: oneNew, expected: merged))
+        XCTAssertEqual(MigrationStore.recentMissingKeys(actual: oneNew, expected: merged), ["k99"])
+        oneNew = merged
+        XCTAssertTrue(MigrationStore.recentMissingKeys(actual: oneNew, expected: merged).isEmpty)
+
+        // The cap: 11 new songs displace 11 tail entries, but
+        // the budget stops at 10 — the 11th loss fails.
+        let elevenNew = (0..<11).map { recentSong("new-\($0)") } + Array(merged.prefix(89))
+        XCTAssertFalse(MigrationStore.recentContainsAll(actual: elevenNew, expected: merged))
+        // Exactly at the cap it still passes.
+        let tenNew = (0..<10).map { recentSong("new-\($0)") } + Array(merged.prefix(90))
+        XCTAssertTrue(MigrationStore.recentContainsAll(actual: tenNew, expected: merged))
+    }
+
+    func testFix18CappedVodProgSoftCapKeepsAllIncomingOver200() {
+        // D-6: a single backup's incoming set alone exceeds
+        // 200 — the file keeps all 250 (soft cap, not hard),
+        // and a re-import of the same backup stays at 250.
+        var incoming: [String: Any] = [:]
+        for i in 0..<250 { incoming["haoVodProg:zzz:\(i)"] = Double(i) }
+        let capped = MigrationStore.cappedVodProgEntries(incoming, keeping: Set(incoming.keys))
+        XCTAssertEqual(capped.count, 250)
+        XCTAssertEqual(MigrationStore.cappedVodProgEntries(capped, keeping: Set(incoming.keys)).count, 250)
+    }
+
+    func testFix18ExpectedCollectionShapeSpotRows() {
+        // D-8: the shape table the plan check and the
+        // whole-file guard share.
+        XCTAssertEqual(MigrationStore.expectedCollectionShape(for: "hao_fav"), .list)
+        XCTAssertEqual(MigrationStore.expectedCollectionShape(for: "musicQueue"), .dict)
+        XCTAssertEqual(MigrationStore.expectedCollectionShape(for: "hao_music_search_hist"), .stringList)
+        XCTAssertNil(MigrationStore.expectedCollectionShape(for: "hao_music_sources"))
+        // A dict where a list belongs is the wrong shape;
+        // a list of dicts is the wrong shape for a string list.
+        let fav = MigrationStore.expectedCollectionShape(for: "hao_fav")!
+        XCTAssertFalse(fav.matches(["a": 1] as [String: Any]))
+        XCTAssertTrue(fav.matches([["key": "k1"]] as [[String: Any]]))
+        let hist = MigrationStore.expectedCollectionShape(for: "hao_music_search_hist")!
+        XCTAssertFalse(hist.matches([["q": "x"]] as [[String: Any]]))
+        XCTAssertTrue(hist.matches(["a", "b"]))
+        XCTAssertFalse(hist.matches(bytes: Data("not json".utf8)))
+    }
+
+    func testFix18QuarantineSameSecondTwiceKeepsBothFiles() {
+        // D-9: two quarantines of the same file in the same
+        // second used to collide on one destination — the
+        // second move failed silently and the corrupt bytes
+        // were destroyed by the following overwrite. The UUID
+        // suffix makes both destinations distinct.
+        let firstURL = docs.appendingPathComponent("hao_fav.json")
+        try! "first-corrupt".write(to: firstURL, atomically: true, encoding: .utf8)
+        LocalStore.quarantineFile(at: firstURL, name: "hao_fav", reason: "test-1", documentsURL: docs)
+        let secondURL = docs.appendingPathComponent("hao_fav.json")
+        try! "second-corrupt".write(to: secondURL, atomically: true, encoding: .utf8)
+        LocalStore.quarantineFile(at: secondURL, name: "hao_fav", reason: "test-2", documentsURL: docs)
+
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: docs.path)) ?? []
+        let quarantined = names.filter { $0.hasPrefix("hao_fav.corrupt-") && $0.hasSuffix(".json") }
+        XCTAssertEqual(quarantined.count, 2)
+        let contents = quarantined.compactMap {
+            try? String(contentsOf: docs.appendingPathComponent($0), encoding: .utf8)
+        }
+        XCTAssertTrue(contents.contains("first-corrupt"))
+        XCTAssertTrue(contents.contains("second-corrupt"))
+    }
+
+    func testFix18RouteBFavMergesLiveToggleInsteadOfOverwriting() {
+        // D-1: a favourite toggled before the import used to
+        // be silently dropped by Route B's whole-file write.
+        writeJSONFile("hao_fav", [["key": "live-1"]])
+        writeSnapshot(["hao_fav": jsonString([["key": "backup-1"]])])
+
+        let report = runMigration()
+
+        XCTAssertEqual(report.outcome, .migrated)
+        let file = readJSONFile("hao_fav") as? [[String: Any]]
+        XCTAssertEqual(file?.count, 2)
+        XCTAssertEqual(file?.first?["key"] as? String, "live-1")
+        XCTAssertEqual(file?.last?["key"] as? String, "backup-1")
+    }
+
+    func testFix18RouteBMusicQueueLiveWins() {
+        // D-1: Route B had no live-wins rule — the backup
+        // queue directly replaced the listening queue.
+        writeJSONFile("musicQueue", ["songs": [recentSong("live-1")], "index": 0])
+        writeSnapshot(["musicQueue": jsonString(["songs": [recentSong("backup-1")], "index": 0])])
+
+        let report = runMigration()
+
+        XCTAssertEqual(report.outcome, .migrated)
+        XCTAssertTrue(report.skippedKeyNames.contains("musicQueue"))
+        let kept = readJSONFile("musicQueue") as? [String: Any]
+        let songs = kept?["songs"] as? [[String: Any]]
+        XCTAssertEqual(songs?.count, 1)
+        XCTAssertEqual(songs?.first?["songId"] as? String, "live-1")
+    }
+
+    func testFix18RouteBWrongShapeWholeFileIsSkippedNotInstalled() {
+        // D-8: a dict where a list belongs used to be
+        // installed as-is; the next live write then rewrote
+        // from an empty table. Healthy live file -> skipped.
+        writeJSONFile("hao_fav", [["key": "live-1"]])
+        writeSnapshot(["hao_fav": jsonString(["not": "a list"])])
+
+        let report = runMigration()
+
+        XCTAssertEqual(report.outcome, .migrated)
+        XCTAssertTrue(report.skippedKeyNames.contains("hao_fav"))
+        let kept = readJSONFile("hao_fav") as? [[String: Any]]
+        XCTAssertEqual(kept?.count, 1)
+        XCTAssertEqual(kept?.first?["key"] as? String, "live-1")
+    }
 }

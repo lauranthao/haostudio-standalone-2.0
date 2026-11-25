@@ -1283,7 +1283,18 @@ final class DownloadEngine: NSObject {
         // The LocalStore collection stays as a compatibility mirror.
         catalogRevision += 1
         DownloadCatalogStore.save(DownloadCatalogFile(revision: catalogRevision, tasks: infos))
-        LocalStore.saveCollection(named: DownloadEngine.tasksCollection, value: infos)
+        // b49fix18 D-7: the mirror write takes
+        // MigrationStore.collectionWriteQueue, the same queue
+        // the backup import / rollback takes for downloadTasks
+        // — a state mutation landing inside the restore's
+        // remove → copy gap no longer cancels the rollback.
+        // The catalog (the primary index) is untouched by the
+        // import, so only the mirror needs the queue. The
+        // import never calls into DownloadEngine, so taking
+        // the queue here cannot deadlock.
+        MigrationStore.collectionWriteQueue.sync {
+            LocalStore.saveCollection(named: DownloadEngine.tasksCollection, value: infos)
+        }
         // b49fix2 P2-59: every state mutation re-derives activity
         // (start/stop of the app-root background task).
         refreshActivityLocked()

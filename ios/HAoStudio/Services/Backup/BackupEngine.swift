@@ -861,20 +861,23 @@ extension BackupEngineCore {
                     planned.collections.append(PlannedCollection(name: base, bytes: scrubbed))
                     planned.hasEmbyConfig = true
                 } else {
-                    // b49fix17 P1-1: shape-check the three merge
-                    // files' bytes at plan time — corrupt bytes
-                    // never reach apply. Damaged entries go to
-                    // skipped with a warning; the apply-time
-                    // fallback (fallbackForUnparseable) stays as
-                    // the second line of defence.
-                    if base == "hao_listen" || base == "hao_daily" || base == "haoVodProg" {
-                        let parses: Bool
-                        if base == "hao_listen" {
-                            parses = (try? JSONSerialization.jsonObject(with: bytes, options: [])) is [[String: Any]]
-                        } else {
-                            parses = (try? JSONSerialization.jsonObject(with: bytes, options: [])) is [String: Any]
-                        }
-                        guard parses else {
+                    // b49fix17 P1-1 / b49fix18 D-8: shape-check
+                    // every collection with a known expected
+                    // shape (see
+                    // MigrationStore.expectedCollectionShape),
+                    // not just the three merge files — a
+                    // whole-file file whose backup bytes parse
+                    // but have the wrong shape (a dict where a
+                    // list belongs) used to be installed
+                    // straight through, and the next live write
+                    // then rewrote it from an empty table.
+                    // Damaged entries go to skipped with a
+                    // warning; the apply-time guard in
+                    // writeWholeCollectionBytes stays as the
+                    // second line of defence. Files with no
+                    // known shape (nil) are not checked here.
+                    if let shape = MigrationStore.expectedCollectionShape(for: base) {
+                        guard shape.matches(bytes: bytes) else {
                             planned.warnings.append("备份条目损坏，已跳过：\(entry.name)")
                             planned.skipped.append(base)
                             continue
@@ -1046,15 +1049,19 @@ extension BackupEngineCore {
     ///   collectionWriteQueue, dedupe by id+name.
     /// - fmDislikedIds — addFMDisliked, FM dislike tap —
     ///   string-list merge under collectionWriteQueue.
-    ///
-    /// MERGE ON THE IMPORT SIDE ONLY, live writer unqueued
-    /// (their stores are outside this round's scope, so the
-    /// residual window is the millisecond re-read → write gap;
-    /// the subset verify still catches anything larger):
     /// - hao_video_hist — VideoLibraryStore.saveHistory, every
-    ///   VOD play — merge, dedupe title+year, cap 20.
+    ///   VOD play — merge under collectionWriteQueue, dedupe
+    ///   title+year, cap 20 (b49fix18 D-7: the writer takes
+    ///   the queue now).
     /// - hao_live_hist — LiveLibraryStore.saveHistory, every
-    ///   room open — merge, dedupe platform|roomId, cap 50.
+    ///   room open — merge under collectionWriteQueue, dedupe
+    ///   platform|roomId, cap 50 (b49fix18 D-7: the writer
+    ///   takes the queue now).
+    ///
+    /// Route B (MigrationStore.importData) shares these
+    /// dispositions — see MigrationStore.applyRouteBFileWrite
+    /// for the 33-file table (the merge files above plus the
+    /// whole-file files below, same rules).
     ///
     /// MERGE ON THE IMPORT SIDE ONLY, live-wins rule:
     /// - musicQueue — saveQueueAsync, every switch + queue edit
@@ -1089,10 +1096,16 @@ extension BackupEngineCore {
     /// - hao_eq_custom_presets — EQ presets, settings action.
     /// - hao_wallpaper_paths — wallpaper, settings action.
     /// - hao_resolver_speed — ResolverPolicy speed persistence,
-    ///   per resolve; writer outside this round's scope.
+    ///   per resolve; the writer takes collectionWriteQueue
+    ///   (b49fix18 D-7), so the whole-file write serialises
+    ///   against it — but the write → verify gap is still
+    ///   open, and a speed save landing there fails the
+    ///   import loud (byte verify). Millisecond window.
     /// - downloadTasks — DownloadEngine task mirror, every
-    ///   download state mutation; writer outside this round's
-    ///   scope (downloads.json is the primary index now).
+    ///   download state mutation; the writer takes
+    ///   collectionWriteQueue (b49fix18 D-7), same residual
+    ///   write → verify gap as hao_resolver_speed
+    ///   (downloads.json is the primary index now).
     /// - hao_emby_config — Emby config, settings action.
     /// - migration_unknown_keys — import-only, no live writer.
     /// - Legacy Flutter-only files (downloads.json,
@@ -1250,18 +1263,33 @@ extension BackupEngineCore {
     }
 
     /// The whole-file write itself, assuming the caller's queue
-    /// is held when the file has one (b49fix17 P1-1): backup
-    /// bytes that do not parse as JSON at all never overwrite
-    /// a healthy live file — the live file is checked first
-    /// (parseable → `.skipped`); only a missing or unparseable
-    /// live file is replaced, after quarantine when it exists.
-    /// Parseable backup bytes write straight through, as before.
+    /// is held when the file has one (b49fix17 P1-1, b49fix18
+    /// D-8): backup bytes that do not parse as JSON at all
+    /// never overwrite a healthy live file — the live file is
+    /// checked first (parseable → `.skipped`); only a missing
+    /// or unparseable live file is replaced, after quarantine
+    /// when it exists. b49fix18 D-8: parseable-but-wrong-shape
+    /// bytes are corrupt for this file, same as unparseable
+    /// bytes — a dict where the reader expects a list would
+    /// otherwise be installed straight through, and the next
+    /// live write would rewrite the file from an empty table.
+    /// Files with no known shape keep the old parse-only
+    /// check. The plan-time check in planImport already skips
+    /// these, so this is the second line of defence.
     private static func writeWholeCollectionBytes(
         _ collection: PlannedCollection,
         documentsURL: URL
     ) -> CollectionWriteOutcome {
         let url = documentsURL.appendingPathComponent(collection.name + ".json")
-        if (try? JSONSerialization.jsonObject(with: collection.bytes, options: [])) == nil {
+        // b49fix18 D-8: expected-shape check (nil shape =
+        // unknown file = parse-only, as before).
+        let parsesAsExpectedShape: Bool = {
+            if let shape = MigrationStore.expectedCollectionShape(for: collection.name) {
+                return shape.matches(bytes: collection.bytes)
+            }
+            return (try? JSONSerialization.jsonObject(with: collection.bytes, options: [])) != nil
+        }()
+        if !parsesAsExpectedShape {
             if let liveData = try? Data(contentsOf: url),
                (try? JSONSerialization.jsonObject(with: liveData, options: [])) != nil {
                 return .skipped
@@ -1591,8 +1619,11 @@ extension BackupEngineCore {
     /// entries a concurrent append can push the oldest imported
     /// entry out of the cap — extremely unlikely, and the
     /// failure mode is the same loud failure + rollback as
-    /// today, just far rarer.
-    private static func listContainsAll(
+    /// today, just far rarer. Internal, not private: Route B
+    /// (MigrationStore.importData) verifies its merged lists
+    /// with the same rule (b49fix18 D-1) — one subset rule for
+    /// both import routes.
+    static func listContainsAll(
         _ actual: [[String: Any]], _ expected: [[String: Any]]
     ) -> Bool {
         var counts: [Data: Int] = [:]
@@ -1618,7 +1649,10 @@ extension BackupEngineCore {
     /// serialised directly. `toleratingDeleted` excuses keys
     /// a legitimate concurrent deletion removed after the write
     /// (b49fix17 P2-2: clearResume on natural completion).
-    private static func dictContainsAll(
+    /// Internal, not private: Route B (MigrationStore.importData)
+    /// verifies its merged dicts with the same rule (b49fix18
+    /// D-1) — one subset rule for both import routes.
+    static func dictContainsAll(
         _ actual: [String: Any], _ expected: [String: Any], keyOnly: Bool, toleratingDeleted deletedKeys: Set<String> = []
     ) -> Bool {
         for (key, expectedValue) in expected {
@@ -1694,6 +1728,11 @@ extension BackupEngineCore {
         // or the live queue wins) — reported as skipped, not
         // applied and not failed.
         var applySkipped: [String] = []
+        // b49fix18 D-5c/D-6: warnings a passing verify still
+        // owes the user (tolerated recent displacement, soft
+        // vodProg cap) — collected here, merged into the
+        // report at commit.
+        var verifyWarnings: [String] = []
         var failureReason: String?
 
         // Import is a MERGE, not a replace (b49fix17 §6): live
@@ -1878,6 +1917,18 @@ extension BackupEngineCore {
                     failureReason = "校验失败：\(entry.key)"
                     break
                 }
+                // b49fix18 D-5c: a passing recent verify that
+                // still excused missing entries warns — the
+                // displacement is observable instead of silent.
+                if entry.key == "hao_recent.json",
+                   let expected = try? JSONSerialization.jsonObject(with: entry.value, options: []) as? [[String: Any]],
+                   let actualData = try? Data(contentsOf: documentsURL.appendingPathComponent(entry.key)),
+                   let actual = try? JSONSerialization.jsonObject(with: actualData, options: []) as? [[String: Any]] {
+                    let missing = MigrationStore.recentMissingKeys(actual: actual, expected: expected).count
+                    if missing > 0 {
+                        verifyWarnings.append("最近播放有 \(missing) 条记录在导入期间被替换，已按容忍规则通过校验")
+                    }
+                }
             }
         }
         if failureReason == nil {
@@ -1925,9 +1976,22 @@ extension BackupEngineCore {
         // The snapshot folder is kept (same rule as S1's
         // migration_backup): the pre-import state stays on disk
         // until the user clears it.
-        var warnings = planned.warnings
+        var warnings = planned.warnings + verifyWarnings
         if planned.hasEmbyConfig, !embyCredentialPresent() {
             warnings.append(embyCredentialWarning)
+        }
+        // b49fix18 D-6: the vodProg cap is a soft cap — when
+        // the incoming set alone exceeded 200 the merged file
+        // exceeds 200 too (see cappedVodProgEntries), and it
+        // will not converge back below 200 on re-import of the
+        // same backup. The merged count equals the incoming
+        // count whenever it exceeds 200 (the cap only ever
+        // fills UP to 200), so the written count is the
+        // incoming count here.
+        if let vodData = expectedCollectionBytes["haoVodProg.json"],
+           let vod = try? JSONSerialization.jsonObject(with: vodData, options: []) as? [String: Any],
+           vod.count > 200 {
+            warnings.append("点播续播记录超过 200 条上限（本次导入带入 \(vod.count) 条），已全部保留")
         }
         // b49fix2 P2-13: the scripts are back, their keys are
         // not — they live in the Keychain and never enter a

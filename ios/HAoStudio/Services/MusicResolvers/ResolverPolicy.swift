@@ -195,6 +195,25 @@ final class ResolverCooldown {
     }
 
     private func save() {
+        // b49fix18 D-7: the write takes
+        // MigrationStore.collectionWriteQueue, the same queue
+        // the backup import / rollback takes for
+        // hao_resolver_speed — a speed save (every 10 resolves
+        // or ≥ 5 s) landing inside the restore's remove → copy
+        // gap no longer cancels the rollback. Resolution never
+        // runs while holding that queue (the import writes the
+        // file directly, it never calls back into the
+        // resolver), so taking it here cannot deadlock.
+        MigrationStore.collectionWriteQueue.sync {
+            saveLocked()
+        }
+    }
+
+    /// The speed write itself, assuming the caller's queue is
+    /// held (b49fix18 D-7): save() takes
+    /// collectionWriteQueue, so the body must not sync on it
+    /// again.
+    private func saveLocked() {
         guard let dir = documentsDirectory ?? LocalStore.documentsDirectoryOrNil() else { return }
         lastSaveAt = now()
         var map: [String: ResolverSpeedRecord] = [:]
