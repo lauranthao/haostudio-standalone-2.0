@@ -68,19 +68,21 @@ struct GlassTabBar: View {
             colorScheme: colorScheme,
             tabAccent: tabAccent
         )
-        // b42: the UITabBar fills its own 56pt frame — the b40
-        // 64pt frame (content 56 + 4pt inset top/bottom) let the
-        // 56pt glass sit ~4pt above the frame's top edge, so the
-        // mini overlapped the bar instead of touching it (chen
-        // 2026-11-25 build 41). The frame now equals the rendered
-        // glass (HaoLayout.tabBarTotalHeight = 56), so at VStack
-        // spacing 0 the mini's bottom edge IS the bar's top edge.
-        // No SwiftUI .padding(.vertical) around it: the padding
-        // left a transparent band above the bar and read as a seam
-        // (chen 2026-11-25 build 39). Horizontal padding was never
-        // here: the visible bar spans exactly the mini player's
-        // width (screen minus the shared 12pt side margins in
-        // MainTabView).
+        // b43 CORRECTS b42: the frame is 56pt, but the frame is
+        // NOT the rendered glass — the system bar's Liquid Glass
+        // renders ~13pt ABOVE its frame's top edge (chen
+        // 2026-11-25 build 42: mini glass bottom ~2459, bar glass
+        // top ~2420 on a 1260x2736 shot; the b42 frame change
+        // 64 -> 56 moved the mini DOWN 23px and the overlap grew
+        // from ~4pt to ~13pt). The overlap is fixed by the 13pt
+        // VStack spacing (HaoLayout.floatingStackSpacing), not by
+        // this frame — the spacing is what makes the GLASS edges
+        // touch. No SwiftUI .padding(.vertical) around it: the
+        // padding left a transparent band above the bar and read
+        // as a seam (chen 2026-11-25 build 39). Horizontal
+        // padding was never here: the visible bar spans exactly
+        // the mini player's width (screen minus the shared 12pt
+        // side margins in MainTabView).
         .frame(height: HaoLayout.tabBarTotalHeight)
     }
 }
