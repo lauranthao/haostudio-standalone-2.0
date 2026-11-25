@@ -240,17 +240,22 @@ enum MusicLyrics {
 
     // MARK: - Row distance visuals (b45-a, §2.8)
 
-    /// Non-active row opacity by distance from the active line:
-    /// 0.58 − |d| × 0.055, floor 0.30; already-sung rows sit at
-    /// 0.30; while the user is browsing, rows sit at 0.72.
+    /// Non-active row opacity by distance from the active line
+    /// (b46-player, Coda lyrics): neighbours stay READABLE —
+    /// 0.72 − |d| × 0.035, floor 0.45; already-sung rows sit at
+    /// 0.45; while the user is browsing, rows sit at 0.75. The
+    /// old floor (0.30) + steep falloff left every line below the
+    /// current one nearly invisible on chen's phone.
     static func lineOpacity(distance: Int, browsing: Bool, sung: Bool) -> Double {
-        if browsing { return 0.72 }
-        if sung { return 0.30 }
-        return max(0.30, 0.58 - Double(abs(distance)) * 0.055)
+        if browsing { return 0.75 }
+        if sung { return 0.45 }
+        return max(0.45, 0.72 - Double(abs(distance)) * 0.035)
     }
 
-    /// Non-active row blur: min(3.5, |d| × 0.65).
+    /// Non-active row blur (b46-player): a faint depth cue only —
+    /// min(1.0, |d| × 0.15). The old cap (3.5) blurred distant
+    /// lines into illegibility.
     static func lineBlur(distance: Int) -> Double {
-        return min(3.5, Double(abs(distance)) * 0.65)
+        return min(1.0, Double(abs(distance)) * 0.15)
     }
 }
