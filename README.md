@@ -148,8 +148,7 @@ version.json                # 当前版本、更新日志、IPA 地址
 - [LX Music](https://github.com/lyswhut/lx-music-mobile)（Apache-2.0）——音乐解析与播放逻辑
 - [歌一刀 / KMusic](https://github.com/Mac-XK/KMusic)——播放与解析思路
 - [Pure Live](https://github.com/liuchuancong/pure_live)——直播与播放器
-- [Kumone](https://github.com/missuo/kumone)——界面设计
-- [Coda](https://github.com/Wow-CaiCai/Coda)（GNU AGPL-3.0）——音乐播放器、页面、设置/关于、搜索、菜单栏与迷你播放器、交互设计与实现
+- [Kumone](https://github.com/missuo/kumone)——界面设计；音乐播放器、页面、设置/关于、搜索、交互的设计源头（Coda 是它的 fork）
 - VidHub、Apple Music——影视、音乐界面设计参照
 - IJKPlayer、mpv（libmpv）——播放内核
 - 豆瓣——影视元数据（评分、演职员、海报、简介）
