@@ -261,7 +261,7 @@ struct LiveTabView: View {
                 .haoChromeScrollTracking()
                 .haoReselectScrollToTop(tab: .live, proxy: proxy)
                 .refreshable { viewModel.reload() }
-                .background(theme.scaffoldBackground)
+                .haoTabBackground()
                 .navigationTitle("直播")
                 .navigationBarTitleDisplayMode(.large)
                 .toolbar {

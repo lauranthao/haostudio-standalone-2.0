@@ -539,6 +539,52 @@ private struct HaoBottomChromeContentPadding: ViewModifier {
     }
 }
 
+// MARK: - Wallpaper backdrop (b40)
+
+/// Whether a wallpaper is active behind the UI. MainTabView sets
+/// this from the same background-kind decision it renders with
+/// (MyBackgroundColor.kind == .wallpaper), so the flag and the
+/// picture can never disagree: the picture is up exactly when
+/// the tab roots go transparent for it. Default false (no
+/// MainTabView above — previews, sheets): tab roots stay opaque.
+private struct HaoWallpaperActiveKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var haoWallpaperActive: Bool {
+        get { self[HaoWallpaperActiveKey.self] }
+        set { self[HaoWallpaperActiveKey.self] = newValue }
+    }
+}
+
+/// Tab-root background (b40, chen 2026-11-25: 壁纸导入之后用了
+/// 也不显示): every tab root used to paint the opaque theme
+/// scaffold colour over its whole area, so the wallpaper MainTabView
+/// draws behind the tabs was always covered — it could never show
+/// no matter what was imported. While a wallpaper is active the
+/// root goes clear and the picture shows through; otherwise the
+/// root keeps the opaque scaffold exactly as before. Pushed pages
+/// keep their opaque scaffold (they are transient; the wallpaper
+/// is back when you pop).
+private struct HaoTabBackground: ViewModifier {
+    @Environment(\.haoTheme) private var theme
+    @Environment(\.haoWallpaperActive) private var wallpaperActive
+
+    func body(content: Content) -> some View {
+        content.background(wallpaperActive ? Color.clear : theme.scaffoldBackground)
+    }
+}
+
+extension View {
+    /// Tab-root background that lets an active wallpaper show
+    /// through (clear), or paints the opaque theme scaffold when
+    /// no wallpaper is active. Use on the five tab roots only.
+    func haoTabBackground() -> some View {
+        modifier(HaoTabBackground())
+    }
+}
+
 /// A circle with native liquid glass on iOS 26+, regular frosted
 /// glass below. Same stroke as the capsule (white 0.22 light /
 /// 0.08 dark, 0.5pt) so round controls read as the same component

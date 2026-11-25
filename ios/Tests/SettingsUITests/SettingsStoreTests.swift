@@ -267,4 +267,37 @@ final class SettingsStoreTests: XCTestCase {
         settings.wallpaperCurrent = "wallpapers/gone.jpg"
         XCTAssertNil(settings.wallpaperBackgroundURL)
     }
+
+    /// b40 (chen 2026-11-25: 壁纸导入之后用了也不显示): the
+    /// import -> save -> resolve chain round-trips the exact bytes,
+    /// survives a fresh store (kill + relaunch: same defaults suite
+    /// + Documents dir, new SettingsStore instance), and deleting
+    /// the wallpaper returns the background to nil (default).
+    /// The render half of the bug (opaque tab backgrounds covering
+    /// the picture) is fixed in MainTabView / haoTabBackground and
+    /// is device-only to see.
+    func testWallpaperImportRoundTripsAndDeleteRestoresDefault() {
+        let data = SettingsTestImages.pngData()
+        let name = WallpaperStore.importImage(data: data, documentsURL: docs)
+        XCTAssertNotNil(name)
+        settings.wallpaperCurrent = name ?? ""
+        settings.wallpaperEnabled = true
+        let url = settings.wallpaperBackgroundURL
+        XCTAssertNotNil(url)
+        XCTAssertEqual(try? Data(contentsOf: url!), data)
+
+        // Kill + relaunch: a fresh store over the same suite/dir
+        // still resolves the same wallpaper.
+        let relaunched = SettingsStore(defaults: defaults, themeStore: themeStore, documentsURL: docs)
+        XCTAssertEqual(relaunched.wallpaperCurrent, name)
+        XCTAssertTrue(relaunched.wallpaperEnabled)
+        XCTAssertEqual(relaunched.wallpaperBackgroundURL, url)
+
+        // Delete: back to default (no background, empty list).
+        WallpaperStore.delete(name ?? "", documentsURL: docs)
+        settings.wallpaperCurrent = ""
+        settings.reloadWallpapers()
+        XCTAssertTrue(settings.wallpaperPaths.isEmpty)
+        XCTAssertNil(settings.wallpaperBackgroundURL)
+    }
 }

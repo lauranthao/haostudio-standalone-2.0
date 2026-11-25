@@ -72,7 +72,7 @@ struct MusicHomeView: View {
                 }
                 .haoChromeScrollTracking()
                 .haoReselectScrollToTop(tab: .music, proxy: proxy)
-                .background(theme.scaffoldBackground)
+                .haoTabBackground()
                 .navigationTitle("音乐")
                 .navigationBarTitleDisplayMode(.large)
                 .navigationDestination(for: MusicDestination.self) { destination in

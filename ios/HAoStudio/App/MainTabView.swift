@@ -189,6 +189,12 @@ struct MainTabView: View {
             }
         }
         .environment(\.haoTheme, palette)
+        // b40: tells the five tab roots whether a wallpaper is
+        // showing behind them — they go transparent for it
+        // (haoTabBackground), opaque otherwise. Same decision as
+        // backgroundLayer (isWallpaperActive), so the two can
+        // never disagree.
+        .environment(\.haoWallpaperActive, isWallpaperActive)
         // b36-1: each tab has its own scroll rest offset — forget
         // the previous tab's so the new tab calibrates from scratch
         // (isAtTop for the reselect scroll-to-top guard).
@@ -204,6 +210,11 @@ struct MainTabView: View {
     /// Scaffold background, three-layer priority (S5-C):
     /// wallpaper > background color > theme scaffold. A wallpaper
     /// that cannot be loaded falls through to the next layer.
+    ///
+    /// b40: the wallpaper decision lives in `isWallpaperActive`
+    /// (below) — backgroundLayer and the `haoWallpaperActive`
+    /// environment flag both read it, so the picture and the tab
+    /// roots' transparency can never disagree.
     @ViewBuilder
     private func backgroundLayer(palette: HaoThemePalette) -> some View {
         let wallpaper = cachedWallpaper
@@ -215,9 +226,20 @@ struct MainTabView: View {
         ) {
         case .wallpaper:
             if let wallpaper = wallpaper {
+                // b40: the image is pinned to the container
+                // (frame maxWidth/maxHeight infinity). An unframed
+                // `resizable().scaledToFill()` photo reports the
+                // photo's own pixel size as its ideal size, and on
+                // chen's phone (build 39, 壁纸 on) the bottom chrome
+                // sat ~106pt too low — mini half off the screen,
+                // tab bar gone entirely — with the wallpaper itself
+                // hidden behind the tab roots' opaque scaffold.
+                // The frame makes the picture fill the screen
+                // without ever sizing its parent.
                 Image(uiImage: wallpaper)
                     .resizable()
                     .scaledToFill()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea()
             } else {
                 palette.scaffoldBackground.ignoresSafeArea()
@@ -231,6 +253,22 @@ struct MainTabView: View {
         case .theme:
             palette.scaffoldBackground.ignoresSafeArea()
         }
+    }
+
+    /// True when a wallpaper is actually showing behind the UI —
+    /// the switch is on AND the image loaded. The single source
+    /// for both backgroundLayer and the `haoWallpaperActive`
+    /// environment flag the tab roots read (b40: before this, the
+    /// flag did not exist and every tab root painted opaque
+    /// scaffold over the picture, so an imported wallpaper could
+    /// never show).
+    private var isWallpaperActive: Bool {
+        MyBackgroundColor.kind(
+            wallpaperEnabled: settingsStore.wallpaperEnabled,
+            wallpaperAvailable: cachedWallpaper != nil,
+            bgColorEnabled: settingsStore.bgColorEnabled,
+            bgColorHex: settingsStore.bgColorHex
+        ) == .wallpaper
     }
 
     /// Load the wallpaper image into the cache when it is

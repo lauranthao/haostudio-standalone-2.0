@@ -70,7 +70,7 @@ struct HomeView: View {
                 .haoChromeScrollTracking()
                 .haoReselectScrollToTop(tab: .home, proxy: proxy)
                 .refreshable { viewModel.reload() }
-                .background(theme.scaffoldBackground)
+                .haoTabBackground()
                 // b39: no system nav bar on this root. The large
                 // title "首页" did not render on chen's iPhone Air
                 // (build 38 screenshot: zero dark pixels in the
