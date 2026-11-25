@@ -104,6 +104,29 @@ struct MigrationReport {
 }
 
 enum MigrationStore {
+    /// Serial queue for listen-log read-modify-write (b49fix15
+    /// P2-1): the listen log has writers on two threads — the
+    /// player's recordListenEvent (main thread, synchronous) and
+    /// the backup import (workQueue / DispatchQueue.global).
+    /// Deferring the import merge to apply time (see
+    /// BackupEngineCore) closes the seconds-long plan→apply
+    /// window, but the apply-time re-read → merge → write is
+    /// still a read-modify-write: without this queue a
+    /// completion landing between the re-read and the write is
+    /// lost. The queue makes each read-modify-write atomic, so
+    /// no lost update is left: a completion either lands before
+    /// the import's re-read (merged in) or after its write (a
+    /// fresh write on top). Readers (getListenLog)
+    /// take no lock: writes are .atomic, so a reader always
+    /// sees a complete old or new file, never a torn one. The
+    /// queue is held only across file I/O (milliseconds) and is
+    /// uncontended in normal playback; it is never taken
+    /// re-entrantly and never held across a dispatch or await,
+    /// so it cannot deadlock. Same shape as MusicLibraryStore's
+    /// dailyPoolQueue (b49fix8 P2-4), which serialises the
+    /// pool's read-modify-write the same way.
+    static let listenLogWriteQueue = DispatchQueue(label: "com.haostudio.listenLog")
+
     static let snapshotFileName = "migration_snapshot.json"
     static let backupDirectoryName = "migration_backup"
     static let doneKey = "hao_migration_done_v1"
@@ -602,16 +625,28 @@ enum MigrationStore {
 
         if !listenEntries.isEmpty {
             journal.recordFile(name: "hao_listen", documentsURL: documentsURL)
-            var existing = readJSONList(name: "hao_listen", documentsURL: documentsURL)
-            existing.append(contentsOf: listenEntries)
-            // b49fix2 P2-11: a re-import of the same backup used to
-            // double the history (append with no dedupe). Same
-            // song at the same second is the same listen, not two.
-            existing = dedupedListenEntries(existing)
-            if existing.count > 3000 {
-                existing = Array(existing.suffix(3000))
+            // b49fix15 P2-1: the re-read → merge → write runs
+            // under listenLogWriteQueue, the same queue the
+            // player's recordListenEvent uses — a completion
+            // landing mid-merge is serialised after this write
+            // instead of being overwritten by it. (Route B
+            // already re-read at apply time; the queue closes
+            // the remaining re-read → write gap. The write
+            // result is captured out of the closure because the
+            // failure path returns from this function.)
+            let wroteListen = listenLogWriteQueue.sync { () -> Bool in
+                var existing = readJSONList(name: "hao_listen", documentsURL: documentsURL)
+                existing.append(contentsOf: listenEntries)
+                // b49fix2 P2-11: a re-import of the same backup used to
+                // double the history (append with no dedupe). Same
+                // song at the same second is the same listen, not two.
+                existing = dedupedListenEntries(existing)
+                if existing.count > 3000 {
+                    existing = Array(existing.suffix(3000))
+                }
+                return writeJSONFile(name: "hao_listen", value: existing, documentsURL: documentsURL)
             }
-            if !writeJSONFile(name: "hao_listen", value: existing, documentsURL: documentsURL) {
+            if !wroteListen {
                 rollback(journal: journal, priorEmbyApiKey: priorEmbyApiKey,
                          wroteEmbyKeychain: wroteEmbyKeychain,
                          documentsURL: documentsURL, defaults: defaults)

@@ -744,7 +744,26 @@ extension BackupEngineCore {
     private struct PlannedImport {
         var defaultWrites: [(key: String, value: Any, kind: MigrationKeyKind)] = []
         var collections: [PlannedCollection] = []
-        var mergedFiles: [String: Data] = [:]
+        /// Merge INPUTS accumulated at plan time (b49fix15 P2-1):
+        /// the incoming values per merged file — listen entries
+        /// for hao_listen, key→value pairs for dict files
+        /// (hao_daily, haoVodProg). The plan only classifies; it
+        /// must NOT read the disk file. The old shape stored the
+        /// fully merged bytes here, computed from the plan-time
+        /// file — apply then wrote those bytes back whole, so a
+        /// listen event recorded between plan and apply (the
+        /// window spans the whole import: plan + snapshot +
+        /// apply) was overwritten and lost. The merge itself now
+        /// happens in applyPlannedImport, re-reading the live
+        /// file first, so an event recorded mid-import is in the
+        /// file the merge reads.
+        var mergedListInputs: [String: [[String: Any]]] = [:]
+        var mergedDictInputs: [String: [String: Any]] = [:]
+        /// Names of the files the merge will touch (derived from
+        /// the inputs above); used for the pre-import snapshot.
+        var mergedFileNames: Set<String> {
+            Set(mergedListInputs.keys).union(mergedDictInputs.keys)
+        }
         var payloadFiles: [PlannedFile] = []
         var unknown: [String: Any] = [:]
         var skipped: [String] = []
@@ -804,7 +823,7 @@ extension BackupEngineCore {
                 if let coerced = MigrationStore.coerce(rawValue, as: rule.kind) {
                     mergePrefixValue(
                         key: key, value: coerced, rule: rule,
-                        documentsURL: documentsURL, planned: &planned
+                        planned: &planned
                     )
                 } else {
                     planned.skipped.append(key)
@@ -869,56 +888,30 @@ extension BackupEngineCore {
         return .planned(planned)
     }
 
-    /// Merges one key-family member (resume position, daily
-    /// pick, listen shard) into its merged file, mirroring
-    /// MigrationStore: resume positions cap at 200 entries,
-    /// listen shards append and cap at 3000.
+    /// Accumulates one key-family member (resume position, daily
+    /// pick, listen shard) into the plan's merge inputs,
+    /// mirroring MigrationStore: resume positions cap at 200 entries,
+    /// listen shards append and cap at 3000. Plan-time only: this
+    /// records the INCOMING values and reads nothing from disk
+    /// (b49fix15 P2-1) — the merge against the live file happens
+    /// in applyPlannedImport.
     private static func mergePrefixValue(
         key: String,
         value: Any,
         rule: MigrationPrefixRule,
-        documentsURL: URL,
         planned: inout PlannedImport
     ) {
         if rule.fileName == "hao_listen" {
-            var existing = MigrationStore.readJSONList(name: "hao_listen", documentsURL: documentsURL)
-            if let priorBytes = planned.mergedFiles["hao_listen"],
-               let priorParsed = try? JSONSerialization.jsonObject(with: priorBytes, options: []),
-               let priorList = priorParsed as? [[String: Any]] {
-                existing = priorList
-            }
             if let list = value as? [[String: Any]] {
-                existing.append(contentsOf: list)
+                planned.mergedListInputs["hao_listen", default: []].append(contentsOf: list)
             } else if let single = value as? [String: Any] {
-                existing.append(single)
+                planned.mergedListInputs["hao_listen", default: []].append(single)
             } else {
                 planned.skipped.append(key)
-                return
-            }
-            // b49fix2 P2-11: same dedupe as MigrationStore's own
-            // import — a re-import must not double the history.
-            existing = MigrationStore.dedupedListenEntries(existing)
-            if existing.count > 3000 {
-                existing = Array(existing.suffix(3000))
-            }
-            if let bytes = try? JSONSerialization.data(withJSONObject: existing, options: []) {
-                planned.mergedFiles["hao_listen"] = bytes
             }
             return
         }
-        var existing = MigrationStore.readJSONDictionary(name: rule.fileName, documentsURL: documentsURL)
-        if let priorBytes = planned.mergedFiles[rule.fileName],
-           let priorParsed = try? JSONSerialization.jsonObject(with: priorBytes, options: []),
-           let priorDict = priorParsed as? [String: Any] {
-            existing = priorDict
-        }
-        existing[key] = value
-        if rule.fileName == "haoVodProg", existing.count > 200 {
-            existing = Dictionary(uniqueKeysWithValues: Array(existing.prefix(200)))
-        }
-        if let bytes = try? JSONSerialization.data(withJSONObject: existing, options: []) {
-            planned.mergedFiles[rule.fileName] = bytes
-        }
+        planned.mergedDictInputs[rule.fileName, default: [:]][key] = value
     }
 
     private static func isIgnoredImportKey(_ key: String) -> Bool {
@@ -971,7 +964,7 @@ extension BackupEngineCore {
         for collection in planned.collections {
             touchedFiles.append(collection.name + ".json")
         }
-        for name in planned.mergedFiles.keys {
+        for name in planned.mergedFileNames {
             touchedFiles.append(name + ".json")
         }
         if !planned.unknown.isEmpty {
@@ -1034,20 +1027,72 @@ extension BackupEngineCore {
                 appliedCollections += 1
             }
         }
+        // Merged files (b49fix15 P2-1): the merge happens HERE,
+        // at apply time — the plan only accumulated the incoming
+        // values, so this re-reads the LIVE file first. A listen
+        // event recorded while the import was running is in the
+        // file this merge reads, not overwritten by plan-time
+        // bytes. The listen merge's re-read → merge → write runs
+        // whole under MigrationStore.listenLogWriteQueue, the
+        // same queue recordListenEvent uses — the write must be
+        // in the same critical section as the re-read, or a
+        // completion landing between merge and write is lost.
+        // The dict merges have no concurrent read-modify-write
+        // writer (hao_daily is CAS-guarded, haoVodProg has none)
+        // and need no queue. A serialisation failure here is a
+        // write failure (the old plan-time code silently dropped
+        // the file instead — inputs are JSON-parsed, so this
+        // cannot trigger in practice).
         if failureReason == nil {
-            for name in planned.mergedFiles.keys.sorted() {
-                guard let bytes = planned.mergedFiles[name] else { continue }
+            for name in planned.mergedFileNames.sorted() {
                 let relativePath = name + ".json"
                 if testFailOnFile == relativePath {
                     failureReason = "写入失败：\(relativePath)"
                     break
                 }
                 let url = documentsURL.appendingPathComponent(relativePath)
-                do {
-                    try bytes.write(to: url, options: [.atomic])
-                } catch {
+                var didWrite = false
+                let bytes: Data?
+                if name == "hao_listen" {
+                    bytes = MigrationStore.listenLogWriteQueue.sync { () -> Data? in
+                        var existing = MigrationStore.readJSONList(name: name, documentsURL: documentsURL)
+                        existing.append(contentsOf: planned.mergedListInputs[name] ?? [])
+                        // b49fix2 P2-11: same dedupe as MigrationStore's own
+                        // import — a re-import must not double the history.
+                        existing = MigrationStore.dedupedListenEntries(existing)
+                        if existing.count > 3000 {
+                            existing = Array(existing.suffix(3000))
+                        }
+                        guard let merged = try? JSONSerialization.data(withJSONObject: existing, options: []) else { return nil }
+                        do {
+                            try merged.write(to: url, options: [.atomic])
+                        } catch {
+                            return nil
+                        }
+                        didWrite = true
+                        return merged
+                    }
+                } else {
+                    var existing = MigrationStore.readJSONDictionary(name: name, documentsURL: documentsURL)
+                    for (key, value) in planned.mergedDictInputs[name] ?? [:] {
+                        existing[key] = value
+                    }
+                    if name == "haoVodProg", existing.count > 200 {
+                        existing = Dictionary(uniqueKeysWithValues: Array(existing.prefix(200)))
+                    }
+                    bytes = try? JSONSerialization.data(withJSONObject: existing, options: [])
+                }
+                guard let bytes else {
                     failureReason = "写入失败：\(relativePath)"
                     break
+                }
+                if !didWrite {
+                    do {
+                        try bytes.write(to: url, options: [.atomic])
+                    } catch {
+                        failureReason = "写入失败：\(relativePath)"
+                        break
+                    }
                 }
                 expectedCollectionBytes[relativePath] = bytes
                 appliedCollections += 1

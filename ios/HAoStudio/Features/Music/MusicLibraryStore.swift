@@ -615,13 +615,23 @@ enum MusicLibraryStore {
         return readArray(named: listenCollection).map(ListenEvent.init(json:))
     }
 
+    /// Read-modify-write under MigrationStore.listenLogWriteQueue
+    /// (b49fix15 P2-1): the backup import also writes this file
+    /// from a background queue, so the get → append → write must
+    /// be atomic against the import's merge — otherwise a
+    /// completion landing between the import's apply-time re-read
+    /// and its write is overwritten and lost. The queue is held
+    /// only across file I/O; readers (getListenLog) take no lock
+    /// because writes are .atomic.
     static func recordListenEvent(_ event: ListenEvent) {
-        var log = getListenLog()
-        log.append(event)
-        if log.count > maxListenEvents {
-            log.removeFirst(log.count - maxListenEvents)
+        MigrationStore.listenLogWriteQueue.sync {
+            var log = getListenLog()
+            log.append(event)
+            if log.count > maxListenEvents {
+                log.removeFirst(log.count - maxListenEvents)
+            }
+            writeArray(named: listenCollection, log.map { $0.toJSON() })
         }
-        writeArray(named: listenCollection, log.map { $0.toJSON() })
     }
 
     // MARK: - Search history
@@ -953,7 +963,14 @@ enum MusicLibraryStore {
     /// the one the caller read (`expectedKeys`, identityKey
     /// order). Returns true when the write happened. Callers
     /// save on the main thread, so the read-compare-write is
-    /// atomic against replaceDailySong's save (also main).
+    /// atomic against replaceDailySong's save (also main) — but
+    /// NOT against a backup import writing hao_daily from a
+    /// background queue (b49-sweep17 deepread P2-1): the CAS
+    /// still detects that interleaving and refuses, so callers
+    /// MUST honor the return value and publish the disk table
+    /// on refusal (Discovery reloadDaily, b49fix15 P2-2; Home
+    /// since b49fix6/7). A discarded `false` would leave the
+    /// screen showing a list the disk does not have.
     @discardableResult
     static func saveDailyTracksIfUnchanged(_ tracks: [MusicSong], for dayKey: String, expectedKeys: [String], force: Bool = false) -> Bool {
         let current = dailyTracks(for: dayKey)?.map { $0.identityKey } ?? []
