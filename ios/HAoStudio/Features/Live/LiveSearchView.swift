@@ -202,7 +202,7 @@ struct LiveSearchView: View {
                             .padding(.top, 12)
                     }
                     resultsSection
-                        .padding(.top, 16)
+                        .padding(.top, HaoLayout.sectionTopSpacing)
                     Spacer(minLength: 16)
                 }
                 .background(
