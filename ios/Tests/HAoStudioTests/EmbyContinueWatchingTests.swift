@@ -23,7 +23,7 @@ private final class StubVideoGateway: VideoDataGateway {
     var fetchDetailCalls = 0
     var fetchEmbyDetailCalls = 0
     var cmsDetailResult: VideoDetail?
-    var embyDetailResults: [VideoDetail?] = []
+    var embyDetailResults: [Result<VideoDetail, EmbyError>] = []
     /// Build 38: scripted server Resume answer.
     var resumeResult: Result<[EmbyResumeItem], EmbyError> = .success([])
 
@@ -45,10 +45,10 @@ private final class StubVideoGateway: VideoDataGateway {
     ) {
         completion(.success(.empty))
     }
-    func fetchEmbyDetail(item: VideoItem, completion: @escaping (VideoDetail?) -> Void) {
+    func fetchEmbyDetail(item: VideoItem, completion: @escaping (Result<VideoDetail, EmbyError>) -> Void) {
         fetchEmbyDetailCalls += 1
         if embyDetailResults.isEmpty {
-            completion(nil)
+            completion(.failure(.unreachable()))
             return
         }
         completion(embyDetailResults.removeFirst())
@@ -148,7 +148,7 @@ final class EmbyContinueWatchingTests: XCTestCase {
             lineName: "直链", positionSeconds: 600, durationSeconds: 7200,
             updatedAt: Date())
         let gateway = StubVideoGateway()
-        gateway.embyDetailResults = [embyMovieDetail(item: item)]
+        gateway.embyDetailResults = [.success(embyMovieDetail(item: item))]
 
         // The Home path builds the detail view from the entry's
         // item with no explicit source — the item must decide.
@@ -198,11 +198,47 @@ final class EmbyContinueWatchingTests: XCTestCase {
     /// button reads "暂无可播内容", not "暂无可播剧集".
     func testEmbyLoadFailureHasNoEpisodeCopy() {
         let gateway = StubVideoGateway()
-        gateway.embyDetailResults = [nil]
+        gateway.embyDetailResults = [.failure(.unreachable())]
         let viewModel = VideoDetailViewModel(item: embyMovieItem(), gateway: gateway)
         viewModel.load()
         XCTAssertFalse(viewModel.canPlay)
         XCTAssertEqual(viewModel.playButtonLabel, "暂无可播内容")
+    }
+
+    /// A deleted Emby item (404) is a different state from a
+    /// failed fetch (b49fix7 P2-9): the view model records the
+    /// notFound tier, the play button reads "影片已删" — never
+    /// "详情加载失败" with a retry that can never succeed.
+    func testEmbyDeletedItemShowsDeletedNotFailure() {
+        let gateway = StubVideoGateway()
+        gateway.embyDetailResults = [.failure(.notFound("这部影片在 Emby 里找不到了"))]
+        let viewModel = VideoDetailViewModel(item: embyMovieItem(), gateway: gateway)
+        viewModel.load()
+        XCTAssertTrue(viewModel.loadFailed)
+        XCTAssertTrue(viewModel.detailNotFound)
+        XCTAssertFalse(viewModel.canPlay)
+        XCTAssertEqual(viewModel.playButtonLabel, "影片已删")
+    }
+
+    /// A detail whose only episode has no stream URL never
+    /// lights the play button (b49fix7 P2-12): the episode
+    /// exists, but there is nothing to play.
+    func testEmbyDetailWithNilUrlEpisodeCannotPlay() {
+        let item = embyMovieItem()
+        let detail = VideoDetail(
+            item: item,
+            lines: [PlayLine(name: "直链", episodes: [
+                PlayEpisode(name: "正片", url: nil, index: 0),
+            ])],
+            meta: nil)
+        let gateway = StubVideoGateway()
+        gateway.embyDetailResults = [.success(detail)]
+        let viewModel = VideoDetailViewModel(item: item, gateway: gateway)
+        viewModel.load()
+        XCTAssertFalse(viewModel.loadFailed)
+        XCTAssertFalse(viewModel.canPlay)
+        XCTAssertNil(viewModel.selectedEpisode?.url)
+        XCTAssertNil(viewModel.detail?.firstPlayableLine)
     }
 
     /// A watched Emby film resumes with a play entry, not an
@@ -214,7 +250,7 @@ final class EmbyContinueWatchingTests: XCTestCase {
             lineName: "直链", positionSeconds: 600, durationSeconds: 7200)
         defer { VideoLibraryStore.removeHistory(title: item.title, year: item.year) }
         let gateway = StubVideoGateway()
-        gateway.embyDetailResults = [embyMovieDetail(item: item)]
+        gateway.embyDetailResults = [.success(embyMovieDetail(item: item))]
         let viewModel = VideoDetailViewModel(item: item, gateway: gateway)
         viewModel.load()
         XCTAssertTrue(viewModel.canPlay)
@@ -232,7 +268,7 @@ final class EmbyContinueWatchingTests: XCTestCase {
             lineName: "第 2 季", positionSeconds: 300, durationSeconds: 2700)
         defer { VideoLibraryStore.removeHistory(title: item.title, year: item.year) }
         let gateway = StubVideoGateway()
-        gateway.embyDetailResults = [embySeriesDetail(item: item)]
+        gateway.embyDetailResults = [.success(embySeriesDetail(item: item))]
         let viewModel = VideoDetailViewModel(item: item, gateway: gateway)
         viewModel.load()
         XCTAssertEqual(gateway.fetchEmbyDetailCalls, 1)
@@ -250,7 +286,7 @@ final class EmbyContinueWatchingTests: XCTestCase {
     func testRetryRefetchesAndRecovers() {
         let item = embyMovieItem()
         let gateway = StubVideoGateway()
-        gateway.embyDetailResults = [nil, embyMovieDetail(item: item)]
+        gateway.embyDetailResults = [.failure(.unreachable()), .success(embyMovieDetail(item: item))]
         let viewModel = VideoDetailViewModel(item: item, gateway: gateway)
         viewModel.load()
         XCTAssertEqual(gateway.fetchEmbyDetailCalls, 1)
@@ -271,7 +307,7 @@ final class EmbyContinueWatchingTests: XCTestCase {
     func testRefreshLocalStatePicksUpNewResume() {
         let item = embyMovieItem()
         let gateway = StubVideoGateway()
-        gateway.embyDetailResults = [embyMovieDetail(item: item)]
+        gateway.embyDetailResults = [.success(embyMovieDetail(item: item))]
         let viewModel = VideoDetailViewModel(item: item, gateway: gateway)
         viewModel.load()
         XCTAssertEqual(viewModel.playButtonLabel, "播放")

@@ -171,6 +171,174 @@ final class EmbyClientTests: XCTestCase {
         XCTAssertEqual(detail.lines[0].episodes.count, 2)
     }
 
+    // MARK: - Series detail edges (b49fix7 P2-10 / P2-11 / P2-12 / P2-13)
+
+    /// Zero seasons is a successful empty load (b49fix7 P2-10):
+    /// the seasons query itself succeeded and returned [] — the
+    /// server answered, the series simply has no seasons. The
+    /// old code failed here (sawAnySeasonSuccess stayed false)
+    /// and pinned a retry that re-fetches the same empty list.
+    func testDetailWithZeroSeasonsIsSuccessfulEmpty() {
+        let fetcher: EmbyFetcher = { url, _, _, completion in
+            if url.path.contains("/Seasons") {
+                completion(EmbyResponse(statusCode: 200, json: ["Items": [] as [Any]]))
+                return
+            }
+            completion(EmbyResponse(statusCode: 200, json: [
+                "Id": "series-1", "Name": "剧", "Type": "Series",
+                "ProductionYear": 2024, "Genres": [] as [Any],
+                "Overview": "", "People": [] as [Any],
+            ]))
+        }
+        let client = client(fetcher: fetcher)
+        var result: Result<VideoDetail, EmbyError>?
+        client.detail(itemId: "series-1") { result = $0 }
+        guard case .success(let detail) = result else {
+            return XCTFail("expected successful empty detail, got \(String(describing: result))")
+        }
+        XCTAssertTrue(detail.lines.isEmpty)
+    }
+
+    /// One season answered with zero episodes and another
+    /// season's query failed (b49fix7 P2-11): the empty answer
+    /// is not trustworthy — the failed season may still have
+    /// episodes — so this stays a failure with its retry,
+    /// not a successful empty that hides the missing season.
+    func testDetailWithOneEmptyAndOneFailedSeasonFails() {
+        let fetcher: EmbyFetcher = { url, _, _, completion in
+            let path = url.path
+            if path.contains("/Episodes") {
+                let seasonId = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first(where: { $0.name == "seasonId" })?.value
+                switch seasonId {
+                case "s1":
+                    completion(EmbyResponse(statusCode: 200, json: ["Items": [] as [Any]]))
+                default:
+                    completion(EmbyResponse(statusCode: 500, json: nil))
+                }
+                return
+            }
+            if path.contains("/Seasons") {
+                completion(EmbyResponse(statusCode: 200, json: [
+                    "Items": [
+                        ["Id": "s1", "Name": "Season 1", "Type": "Season", "IndexNumber": 1],
+                        ["Id": "s2", "Name": "Season 2", "Type": "Season", "IndexNumber": 2],
+                    ],
+                ]))
+                return
+            }
+            completion(EmbyResponse(statusCode: 200, json: [
+                "Id": "series-1", "Name": "剧", "Type": "Series",
+                "ProductionYear": 2024, "Genres": [] as [Any],
+                "Overview": "", "People": [] as [Any],
+            ]))
+        }
+        let client = client(fetcher: fetcher)
+        var result: Result<VideoDetail, EmbyError>?
+        client.detail(itemId: "series-1") { result = $0 }
+        guard case .failure = result else {
+            return XCTFail("expected failure (a season may still have episodes), got \(String(describing: result))")
+        }
+    }
+
+    /// A season whose episodes all have nil URLs is not a
+    /// found season (b49fix7 P2-12): the detail is honestly
+    /// empty instead of a line whose play button can only fail
+    /// inside the player. The nil URL here comes from a strm
+    /// target URL(string:) rejects (a space in the host).
+    func testDetailWithAllNilUrlEpisodesIsSuccessfulEmpty() {
+        let config = EmbyServerConfig(baseUrl: baseUrl, apiKey: "k", userId: "u1", strmDirect: true)
+        let fetcher: EmbyFetcher = { url, _, _, completion in
+            let path = url.path
+            if path.contains("/Episodes") {
+                completion(EmbyResponse(statusCode: 200, json: [
+                    "Items": [
+                        ["Id": "e1", "Name": "第1集", "Type": "Episode", "IndexNumber": 1,
+                         "MediaSources": [["Path": "http://exa mple.com/x.strm"]]],
+                    ],
+                ]))
+                return
+            }
+            if path.contains("/Seasons") {
+                completion(EmbyResponse(statusCode: 200, json: [
+                    "Items": [
+                        ["Id": "s1", "Name": "Season 1", "Type": "Season", "IndexNumber": 1],
+                    ],
+                ]))
+                return
+            }
+            completion(EmbyResponse(statusCode: 200, json: [
+                "Id": "series-1", "Name": "剧", "Type": "Series",
+                "ProductionYear": 2024, "Genres": [] as [Any],
+                "Overview": "", "People": [] as [Any],
+            ]))
+        }
+        let client = EmbyClient(config: config, fetcher: fetcher)
+        var result: Result<VideoDetail, EmbyError>?
+        client.detail(itemId: "series-1") { result = $0 }
+        guard case .success(let detail) = result else {
+            return XCTFail("expected successful empty detail, got \(String(describing: result))")
+        }
+        XCTAssertTrue(detail.lines.isEmpty)
+    }
+
+    /// A bare Season id lists its episodes by ParentId (b49fix7
+    /// P2-13): it is not a "successful empty" — it has episodes.
+    /// One line, named like the series leg names it.
+    func testDetailForBareSeasonListsItsEpisodes() {
+        let fetcher: EmbyFetcher = { url, _, _, completion in
+            let path = url.path
+            // The ParentId list query (no trailing item id).
+            if path.hasSuffix("/Items") {
+                let parentId = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first(where: { $0.name == "ParentId" })?.value
+                XCTAssertEqual(parentId, "season-1")
+                completion(EmbyResponse(statusCode: 200, json: [
+                    "Items": [
+                        ["Id": "e1", "Name": "第1集", "Type": "Episode", "IndexNumber": 1],
+                        ["Id": "e2", "Name": "第2集", "Type": "Episode", "IndexNumber": 2],
+                    ],
+                ]))
+                return
+            }
+            completion(EmbyResponse(statusCode: 200, json: [
+                "Id": "season-1", "Name": "第一季", "Type": "Season", "IndexNumber": 1,
+                "ProductionYear": 2024, "Genres": [] as [Any],
+                "Overview": "", "People": [] as [Any],
+            ]))
+        }
+        let client = client(fetcher: fetcher)
+        var result: Result<VideoDetail, EmbyError>?
+        client.detail(itemId: "season-1") { result = $0 }
+        guard case .success(let detail) = result else {
+            return XCTFail("expected detail success, got \(String(describing: result))")
+        }
+        XCTAssertEqual(detail.lines.count, 1)
+        XCTAssertEqual(detail.lines[0].name, "第 1 季")
+        XCTAssertEqual(detail.lines[0].episodes.count, 2)
+    }
+
+    /// A MusicVideo plays as a single stream (b49fix7 P2-13):
+    /// it is a video, not a container — same branch as Movie.
+    func testDetailForMusicVideoPlaysAsSingleStream() {
+        let fetcher: EmbyFetcher = { _, _, _, completion in
+            completion(EmbyResponse(statusCode: 200, json: [
+                "Id": "mv1", "Name": "MV", "Type": "MusicVideo",
+                "ProductionYear": 2024, "Genres": [] as [Any],
+                "Overview": "", "People": [] as [Any],
+            ]))
+        }
+        let client = client(fetcher: fetcher)
+        var result: Result<VideoDetail, EmbyError>?
+        client.detail(itemId: "mv1") { result = $0 }
+        guard case .success(let detail) = result else {
+            return XCTFail("expected detail success, got \(String(describing: result))")
+        }
+        XCTAssertEqual(detail.lines.count, 1)
+        XCTAssertEqual(detail.lines[0].episodes.count, 1)
+        XCTAssertEqual(detail.lines[0].episodes[0].name, "正片")
+    }
+
     // MARK: - Stream URL
 
     func testStreamUrlEncodesTokenStrictly() {

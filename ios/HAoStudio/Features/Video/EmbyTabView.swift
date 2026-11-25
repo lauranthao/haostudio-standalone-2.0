@@ -390,7 +390,7 @@ struct EmbyTabView: View {
 
     /// Search entry (build 36, item 17): visually identical to
     /// the CMS `searchEntry` in VideoTabView (48pt,
-    /// RoundedRectangle(cornerRadius: 12), magnifyingglass +
+    /// RoundedRectangle(cornerRadius: HaoLayout.cornerMedium), magnifyingglass +
     /// placeholder) so the two modes feel consistent — but it
     /// opens the dedicated Emby search page, never CMS search.
     /// Configured branch only: the not-configured branch shows

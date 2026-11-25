@@ -1260,6 +1260,45 @@ final class EmbyClient {
         }
     }
 
+    /// Episodes parented by one season, as playable
+    /// PlayEpisodes (b49fix7 P2-13): a bare Season id has no
+    /// series id to feed the /Shows/{seriesId}/Episodes
+    /// endpoint, so the episodes are listed by ParentId
+    /// instead — the standard Emby way to list a season's
+    /// episodes. One request, never a sweep; ordering is the
+    /// same client-side IndexNumber sort as episodes().
+    func episodesOfSeason(seasonId: String, completion: @escaping (Result<[PlayEpisode], EmbyError>) -> Void) {
+        guard let url = apiQuery("/Users/\(config.userId)/Items", query: [
+            "ParentId": seasonId,
+            "IncludeItemTypes": "Episode",
+            "Recursive": "true",
+            "Limit": "1000",
+            "Fields": EmbyClient.detailFields,
+        ]) else {
+            completion(.failure(.unreachable()))
+            return
+        }
+        getJSON(url: url) { result in
+            switch result {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success(let json):
+                var items = VideoJSON.asList(json["Items"])
+                items.sort { EmbyClient.compareIndexNumber($0, $1) }
+                let eps = items.map { item in
+                    EmbyEpisode(
+                        item: self.toVideoItem(item),
+                        facts: EmbyStreamFacts.fromMediaSources(item["MediaSources"]),
+                        markers: EmbySkipMarkers.fromChapters(item["Chapters"])
+                    )
+                }
+                completion(.success(EmbyClient.episodesToPlayEpisodes(eps, streamUrl: { [weak self] id, facts in
+                    self?.streamUrl(itemId: id, facts: facts) ?? ""
+                })))
+            }
+        }
+    }
+
     /// One season's fetched episodes → playable episodes (name
     /// falls back to '第 N 集' from the list position; the stream
     /// URL is tagged with the episode's stream facts for the
@@ -1312,7 +1351,11 @@ final class EmbyClient {
         let type = VideoJSON.asString(item["Type"])
         let meta = toVideoMeta(item)
         let facts = EmbyStreamFacts.fromMediaSources(item["MediaSources"])
-        if type == "Movie" || type == "Episode" || type == "Video" {
+        // b49fix7 P2-13: MusicVideo is a video too — same
+        // single-stream branch as Movie (it carries MediaSources
+        // like a film, and the browse/search lists never surface
+        // it as a separate kind).
+        if type == "Movie" || type == "Episode" || type == "Video" || type == "MusicVideo" {
             let episodeName = type == "Episode" ? EmbyClient.episodeDisplayName(item) : "正片"
             let markers = EmbySkipMarkers.fromChapters(item["Chapters"])
             guard let stream = URL(string: streamUrl(itemId: itemId, facts: facts)) else {
@@ -1346,38 +1389,94 @@ final class EmbyClient {
             }
             return
         }
-        // b49fix6 P2-9: an item type with no video to play (the
-        // server answered, the item exists) is a successful empty
-        // load, same as the no-stream case above — not a failure.
-        // Genuine fetch failures (unreachable / timedOut /
-        // unauthorized / notFound — the item was deleted) still
-        // come back as .failure from detail() above and keep the
-        // loadFailed path; the two states are distinct on purpose.
+        if type == "Season" {
+            // b49fix7 P2-13: a bare Season id (continue-watching
+            // / deep link) is not a "successful empty" — it has
+            // episodes, listed by ParentId (the /Shows/{id}/
+            // Episodes endpoint needs a series id, which a bare
+            // season does not have). One line named like the
+            // series leg names it; a query that answers with
+            // zero playable episodes is a successful empty, a
+            // failed query stays a failure.
+            episodesOfSeason(seasonId: itemId) { result in
+                switch result {
+                case .failure(let error):
+                    completion(.failure(error))
+                case .success(let eps):
+                    if !eps.contains(where: { $0.url != nil }) {
+                        completion(.success(VideoDetail(item: toVideoItem(item), lines: [], meta: meta)))
+                        return
+                    }
+                    let seasonIndex = VideoJSON.asIntOrNil(item["IndexNumber"])
+                    let lineName: String
+                    if let seasonIndex = seasonIndex {
+                        lineName = "第 \(seasonIndex) 季"
+                    } else {
+                        let name = VideoJSON.asString(item["Name"])
+                        lineName = name.isEmpty ? "季" : name
+                    }
+                    completion(.success(VideoDetail(item: toVideoItem(item), lines: [PlayLine(name: lineName, episodes: eps)], meta: meta)))
+                }
+            }
+            return
+        }
+        // b49fix6 P2-9, b49fix7 P2-13: an item type with no video
+        // to play — Folder / Collection / UserView and other
+        // containers (Movie / Episode / Video / MusicVideo /
+        // Series / Season are all routed above) — is a
+        // successful empty load, same as the no-stream case
+        // above: the server answered, the item exists, but there
+        // is nothing playable under it. Genuine fetch failures
+        // (unreachable / timedOut / unauthorized / notFound —
+        // the item was deleted) still come back as .failure
+        // from detail() above and keep the loadFailed path; the
+        // two states are distinct on purpose.
         completion(.success(VideoDetail(item: toVideoItem(item), lines: [], meta: meta)))
     }
 
     private func buildSeriesDetail(itemId: String, item: [String: Any], meta: VideoMeta, seasonList: [[String: Any]], completion: @escaping (Result<VideoDetail, EmbyError>) -> Void) {
         var lines: [PlayLine] = []
         var foundEpisodes = false
-        // b49fix6 P2-9: whether any season's episode query was
-        // actually answered. It separates "the server answered
-        // but no season has episodes" (successful empty) from
-        // "every season query failed" (a real fetch failure,
-        // where a retry may help).
+        // b49fix6 P2-9, b49fix7 P2-11: whether any season's
+        // episode query was actually answered, and whether any
+        // failed. The terminator needs both: "every season
+        // answered, none has episodes" is a successful empty,
+        // but "some season failed" is not — a retry may reach
+        // the missing season.
         var sawAnySeasonSuccess = false
+        var sawAnySeasonFailure = false
         var index = 0
         func step() {
             if index >= seasonList.count {
                 if lines.isEmpty || !foundEpisodes {
-                    if sawAnySeasonSuccess {
-                        // The seasons were fetched and none has a
-                        // playable episode — successful empty, same
-                        // as the CMS leg (b49fix5 P2-1). A failure
-                        // here would pin a retry that re-fetches
-                        // the same empty answer forever.
+                    if seasonList.isEmpty {
+                        // b49fix7 P2-10: zero seasons — the
+                        // seasons() query itself succeeded and
+                        // returned []. The server answered; the
+                        // series simply has no seasons.
+                        // Successful empty, same as the CMS leg.
+                        // (The old code fell through to the
+                        // failure below because
+                        // sawAnySeasonSuccess was still false.)
                         completion(.success(VideoDetail(item: toVideoItem(item), lines: [], meta: meta)))
-                    } else {
+                    } else if sawAnySeasonFailure || !sawAnySeasonSuccess {
+                        // b49fix7 P2-11: at least one season's
+                        // episode query failed — or no season
+                        // query was ever answered (every season
+                        // id was empty, so step() skipped them
+                        // all). The empty answer is not
+                        // trustworthy: a retry may reach the
+                        // missing season, so this stays a
+                        // failure with its retry.
                         completion(.failure(.other("这部剧集在 Emby 里没有可播的集")))
+                    } else {
+                        // Every season query was answered and
+                        // none has a playable episode —
+                        // successful empty, same as the CMS leg.
+                        // A failure here would pin a retry that
+                        // re-fetches the same empty answer
+                        // forever.
+                        completion(.success(VideoDetail(item: toVideoItem(item), lines: [], meta: meta)))
                     }
                     return
                 }
@@ -1402,13 +1501,19 @@ final class EmbyClient {
             episodes(seriesId: itemId, seasonId: seasonId) { result in
                 switch result {
                 case .failure:
-                    // A season whose episodes cannot be fetched
-                    // contributes no line: an empty line opens an
-                    // empty grid with a dead play button (b35
-                    // sweep — the same dead-line shape the eager
-                    // fetch fixed for later seasons). When every
-                    // season fails, the step() terminator below
-                    // reports "没有可播的集" instead.
+                    // b49fix7 P2-11: record the failure — a season
+                    // whose episodes cannot be fetched contributes
+                    // no line, but its absence must not be read as
+                    // "the series has nothing". When every season
+                    // fails, the step() terminator above reports
+                    // "没有可播的集" instead; when some succeed
+                    // with zero episodes and one fails, the
+                    // terminator stays a failure too, so the
+                    // missing season keeps its retry. (An empty
+                    // line opens an empty grid with a dead play
+                    // button — b35 sweep — so the failed season
+                    // still contributes no line.)
+                    sawAnySeasonFailure = true
                     step()
                 case .success(let fetched):
                     // b49fix6 P2-9: this season's query was
@@ -1423,7 +1528,18 @@ final class EmbyClient {
                         step()
                         return
                     }
-                    foundEpisodes = true
+                    // b49fix7 P2-12: a season counts as "found"
+                    // only when at least one episode actually has
+                    // a stream URL. A season whose episodes are
+                    // all nil-URL (strm target broken, base URL
+                    // gone stale) contributes its line to `lines`
+                    // but not to foundEpisodes, so the terminator
+                    // drops it into the successful-empty branch
+                    // instead of publishing a line whose play
+                    // button can only fail inside the player.
+                    if eps.contains(where: { $0.url != nil }) {
+                        foundEpisodes = true
+                    }
                     lines.append(PlayLine(name: lineName, episodes: eps))
                     step()
                 }
