@@ -27,7 +27,12 @@
 //   bytes 2026-11-24 (see item7-sources-report.md). QQ/TX playback
 //   still has LX script cover too (stellarwave verified PLAYABLE
 //   2026-11-24 — the only QQ success in the item-7 probe)) + LX
-//   script jobs.
+//   script jobs. b47-qq (2026-11-25): QQ still unplayable on device
+//   — vkeys hiRes leg 110001s on songs with no hiRes file, and the
+//   LX script QQ chains all time out at the 3 s job cap, starving
+//   the 8 s resolve budget before vkeys is ever asked; vkeys_tx now
+//   falls back through lower tiers inside the job and ranks first
+//   (order 1) among tx jobs.
 // - Per-job 3 s timeout, whole resolve 8 s (P0-16: first tier pass
 //   capped at 5 s, 3 s reserved for lower tiers, later passes at
 //   most 2 s each — see `ResolverBudget`).
@@ -873,37 +878,76 @@ extension LXSourceResolver {
                     }
                 }
             },
-            BuiltInResolver(key: "vkeys_tx", name: "落月QQ", order: 50, platforms: [.tx]) { resolver, songId, _, tier, _, _, token, done in
+            BuiltInResolver(key: "vkeys_tx", name: "落月QQ", order: 1, platforms: [.tx]) { resolver, songId, _, tier, _, _, token, done in
                 // 落月 v3 song/link (api.vkeys.cn, no key): the first
-                // built-in QQ resolver. The v2 geturl leg answers 503
+                // built-in QQ resolver — and the ONLY built-in for
+                // [.tx]. The v2 geturl leg answers 503
                 // "系统运行错误！" as of 2026-11-24, so only v3 is
                 // used. Verified 2026-11-24 (item 7): code 0 ->
                 // ws.stream.qqmusic.qq.com mp3, range GET 206,
                 // 65536 bytes. Trial guard (b37 M1-b, same as the
                 // stellarwave script's isTrialTxUrl): RS0 URLs and
                 // 音乐试听/付费 answers are previews, never URLs.
-                let quality: Int
-                switch tier {
-                case .master: quality = 14
-                case .hiRes: quality = 11
-                case .flac: quality = 10
-                case .high320: quality = 8
-                case .standard128: quality = 6
-                }
-                let urlString = "https://api.vkeys.cn/music/tencent/song/link?mid=\(resolver.urlEncode(songId))&quality=\(quality)"
-                resolver.fetchJson(urlString, headers: ["User-Agent": Self.musicUserAgent, "Accept": "application/json"], cancelToken: token) { json in
-                    guard let json = json, (json["code"] as? Int) == 0,
-                          let data = json["data"] as? [String: Any] else {
-                        done(.empty)
-                        return
+                // b47-qq: two defects made QQ unplayable on device.
+                // (1) The vkeys hiRes leg answers code 110001
+                // ("cookie异常：账号被风控无法获取") for songs with
+                // no hiRes file (e.g. 偷心 004IShrs2AZZIL — q11
+                // and q6 both 110001 while q10/q8 serve code 0),
+                // so a single-quality job returns empty at the
+                // default hiRes target. (2) The resolve then burns
+                // its 8 s budget on the LX script jobs, whose QQ
+                // chains are long sequential lists of mostly-dead
+                // backends (v2 503, 海棠 APP_UPGRADE_REQUIRED,
+                // 103.79.184.97 hangs ~8-10 s, a.aa.cab dead,
+                // yy.zddyr.top 403 auth-required) — every script
+                // job times out at the 3 s cap, and timeouts never
+                // record a speed (averageMs stays unknown 500 ms),
+                // so the scripts keep outranking vkeys by order
+                // (2 < 50) and vkeys is never asked in any tier
+                // pass. Fix: fall back through the lower tiers
+                // INSIDE this job (first tier that serves a real
+                // URL wins, labelled with the tier actually
+                // served), and order 1 so the only built-in QQ
+                // path is asked before the script jobs on ties.
+                let tiers = AudioQuality.chain(from: tier)
+                var index = 0
+                func qualityInt(_ t: AudioQuality) -> Int {
+                    switch t {
+                    case .master: return 14
+                    case .hiRes: return 11
+                    case .flac: return 10
+                    case .high320: return 8
+                    case .standard128: return 6
                     }
-                    let url = (data["url"] as? String) ?? ""
-                    let trial = PreviewAudioClassifier.isPreviewURL(url)
-                        || (data["quality"] as? String) == "音乐试听"
-                        || (data["pay"] as? String) == "付费"
-                    guard !url.isEmpty, !trial else { done(.empty); return }
-                    done(.url(url, nil))
                 }
+                func tryNext() {
+                    guard !token.isCancelled else { done(.empty); return }
+                    guard index < tiers.count else { done(.empty); return }
+                    let t = tiers[index]
+                    index += 1
+                    let urlString = "https://api.vkeys.cn/music/tencent/song/link?mid=\(resolver.urlEncode(songId))&quality=\(qualityInt(t))"
+                    resolver.fetchJson(urlString, headers: ["User-Agent": Self.musicUserAgent, "Accept": "application/json"], cancelToken: token) { json in
+                        guard !token.isCancelled else { done(.empty); return }
+                        if let json = json, (json["code"] as? Int) == 0,
+                           let data = json["data"] as? [String: Any] {
+                            let url = (data["url"] as? String) ?? ""
+                            let trial = PreviewAudioClassifier.isPreviewURL(url)
+                                || (data["quality"] as? String) == "音乐试听"
+                                || (data["pay"] as? String) == "付费"
+                            if !url.isEmpty, !trial {
+                                // Master honesty gate: vkeys is not
+                                // an allowlisted Master source — a
+                                // q14 hit is labelled hires, never
+                                // master (same as declaredTier).
+                                let served: AudioQuality = (t == .master) ? .hiRes : t
+                                done(.url(url, served))
+                                return
+                            }
+                        }
+                        tryNext()
+                    }
+                }
+                tryNext()
             },
             BuiltInResolver(key: "oiapi_wy", name: "oiapi-网易", order: 60, platforms: [.wy]) { resolver, songId, _, _, _, _, token, done in
                 let urlString = "https://oiapi.net/api/Music_163?id=\(resolver.urlEncode(songId))"
