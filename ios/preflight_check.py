@@ -189,6 +189,18 @@ check("4i-d. version.json changelog is trilingual and names this version",
           isinstance(_cl.get(k), str) and _cl[k].startswith(f"v{_v}")
           for k in ("zh", "tw", "en")),
       f"keys: {sorted(_cl.keys()) if isinstance(_cl, dict) else type(_cl).__name__}")
+# (2026-11-25, b49fix3 P1-12): sha256 is written at release time
+# (download the shipped IPA, sha256sum it, write it into
+# version.json alongside size, in the same release commit) and
+# is what the app verifies the downloaded IPA against
+# (UpdateManifest.asSHA256). Before release the field is empty
+# and that must NOT fail preflight; a non-empty value must be
+# exactly 64 lowercase hex, and the field must exist at all.
+_sh = vj.get("sha256", None)
+check("4i-e. version.json sha256 empty until release, else 64 lowercase hex",
+      _sh is not None and (_sh == "" or (isinstance(_sh, str)
+          and re.fullmatch(r"[0-9a-f]{64}", _sh) is not None)),
+      f"sha256={_sh!r}")
 # --- 4m. Bitrise artifact name derived from version.json ---------------
 # (2026-11-25, b49fix2 P1-42/P2-65): bitrise.yml hardcoded
 # HAoStudio-standalone-v0.0.2.zip, so the 0.0.3 build would have

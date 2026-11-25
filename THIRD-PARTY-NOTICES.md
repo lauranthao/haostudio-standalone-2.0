@@ -14,11 +14,11 @@ endorsement by those projects, nor any affiliation with them.
   resolution approach. Only the public README and its five audio-source
   scripts were referenced; no keys or secrets from those scripts are
   copied.
-- **Pure Live** (https://github.com/liuchuancong/pure_live) — live
-  streaming and player design.
-- **Kumone** (https://github.com/missuo/kumone) — interface design:
-  the music player, pages, settings / about, search and interaction
-  design source (Coda is a fork of Kumone).
+- **Pure Live** (https://github.com/liuchuancong/pure_live) — AGPL-3.0.
+  Live streaming and player design.
+- **Kumone** (https://github.com/missuo/kumone) — LGPL-3.0.
+  Interface design: the music player, pages, settings / about,
+  search and interaction design source (Coda is a fork of Kumone).
 - **IJKPlayer** (https://github.com/Bilibili/ijkplayer) — playback
   engine (LGPL-2.1, with the FFmpeg components under their own
   licences).
