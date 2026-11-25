@@ -152,13 +152,25 @@ struct MyView: View {
                     entriesSection
                     migrationSection
                     settingsSection
+                    // b40: bottom clearance lives INSIDE the list as
+                    // a trailing clear row (same value as the other
+                    // tab roots' in-content padding) — safeAreaPadding
+                    // on the List never reached the rows inside a
+                    // NavigationStack, so the last row stayed under
+                    // the chrome. Zero-height row + bottom padding =
+                    // exactly the clearance, no visible row.
+                    Color.clear
+                        .frame(height: 0)
+                        .haoBottomChromeContentPadding()
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                 }
-                .haoBottomChromePadding()
                 .haoChromeScrollTracking()
                 .haoReselectScrollToTop(tab: .my, proxy: proxy)
                 .listStyle(.insetGrouped)
                 .scrollContentBackground(.hidden)
-                .background(theme.scaffoldBackground)
+                .haoTabBackground()
                 .navigationTitle("我的")
                 .navigationDestination(item: $selectedLiveRoom) { room in
                     LiveRoomView(room: room, playlist: [room])

@@ -19,14 +19,23 @@ import UIKit
 enum HaoLayout {
     /// Glass tab bar content height (56).
     static let tabBarContentHeight: CGFloat = 56
-    /// Inner inset around the tab bar content, top and bottom only
-    /// (4; total 64pt). Vertical only: the system UITabBar paints
-    /// its background over its own frame, so horizontal padding
-    /// would shrink the visible bar 4pt per side and it would read
-    /// 8pt narrower than the mini player above it (chen 2026-11-24
-    /// build 33: mini must be exactly as wide as the bar). The
-    /// visible bar spans exactly the mini player's width (screen
-    /// minus the shared 12pt side margins in MainTabView).
+    /// Vertical breathing room inside the tab bar's 64pt frame
+    /// (4 top / 4 bottom; total 64pt). b40: this is NOT SwiftUI
+    /// padding any more — GlassTabBar used to wrap the bar in
+    /// `.padding(.vertical, 4)`, which left a transparent band
+    /// above the bar (the system UITabBar only paints glass over
+    /// its own 56pt frame) and read as a seam between the mini
+    /// and the bar (chen 2026-11-25 build 39). The bar now fills
+    /// the full 64pt frame; the 4pt survives only as the
+    /// arithmetic that sizes the frame (content 56 centred in
+    /// 64). Horizontal padding was never here: the system tab bar
+    /// paints its background over its own frame, so horizontal
+    /// padding would shrink the visible bar 4pt per side and it
+    /// would read 8pt narrower than the mini player above it
+    /// (chen 2026-11-24 build 33: mini must be exactly as wide
+    /// as the bar). The visible bar spans exactly the mini
+    /// player's width (screen minus the shared 12pt side margins
+    /// in MainTabView).
     static let tabBarInnerInset: CGFloat = 4
     /// Distance from the safe-area bottom edge: 2. The bar sits
     /// 2pt above the safe-area boundary — fully inside the
@@ -91,7 +100,10 @@ enum HaoLayout {
     /// to the full player's cover (up to 340).
     static let playerCoverMorphID = "haoPlayerCover"
     /// Total height of the glass tab bar as laid out in the floating
-    /// stack: content 56 + 4pt inner inset top and bottom (64).
+    /// stack: content 56 + 4pt inset top and bottom (64). The bar
+    /// fills this whole height (b40: no SwiftUI vertical padding —
+    /// the glass must run edge to edge so it touches the mini
+    /// above it with no seam).
     static let tabBarTotalHeight: CGFloat = tabBarContentHeight + tabBarInnerInset * 2
     /// Height of the floating stack above the safe-area bottom edge:
     /// bottom margin + tab bar + (gap + mini player while one is
@@ -450,8 +462,31 @@ extension View {
     /// the mini player — 40pt taller while something is playing,
     /// so there is no dead gap while idle.
     /// One source of truth: HaoLayout.floatingStackClearance.
+    /// NOTE (b40): the five tab roots no longer use this — their
+    /// clearance moved INSIDE the scroll content
+    /// (haoBottomChromeContentPadding), because safeAreaPadding on
+    /// the ScrollView never reached the content inside a
+    /// NavigationStack and the last row stayed under the chrome
+    /// (chen 2026-11-25 build 39: "最近播放" half hidden). Pushed
+    /// pages keep this one (not reported broken; scope stays
+    /// narrow).
     func haoBottomChromePadding() -> some View {
         modifier(HaoBottomChromePadding())
+    }
+
+    /// Bottom clearance INSIDE a tab root's scroll content (b40).
+    ///
+    /// Same value and same mini-visibility rule as
+    /// haoBottomChromePadding — only the placement differs:
+    /// `.padding(.bottom, …)` on the content VStack itself (or a
+    /// trailing clear row in a List), so the clearance is part of
+    /// the scrollable area and the last row can actually be
+    /// scrolled fully above the chrome. Apply to the tab root's
+    /// content, and remove haoBottomChromePadding from that root's
+    /// ScrollView / List — keeping both would double the gap
+    /// (106 + 106).
+    func haoBottomChromeContentPadding() -> some View {
+        modifier(HaoBottomChromeContentPadding())
     }
 }
 
@@ -475,6 +510,78 @@ private struct HaoBottomChromePadding: ViewModifier {
                     || musicPlayer.miniFallbackSong != nil
             )
         )
+    }
+}
+
+/// The modifier behind haoBottomChromeContentPadding() (b40).
+/// Same mini-visibility rule and same single source of truth
+/// (HaoLayout.floatingStackClearance) as HaoBottomChromePadding —
+/// only the placement differs: `.padding(.bottom, …)` inside the
+/// scroll content, so the clearance is part of the scrollable area
+/// and the last row can actually be scrolled fully above the
+/// chrome. safeAreaPadding on the ScrollView never reached the
+/// content inside a NavigationStack (the UIKit nav controller owns
+/// the safe area there), so the last row stayed under the bar
+/// (chen 2026-11-25 build 39: "最近播放" half hidden under the
+/// mini). Tab roots only; pushed pages keep safeAreaPadding.
+private struct HaoBottomChromeContentPadding: ViewModifier {
+    @EnvironmentObject private var coordinator: PlaybackCoordinator
+    @EnvironmentObject private var musicPlayer: MusicPlayerViewModel
+
+    func body(content: Content) -> some View {
+        content.padding(
+            .bottom,
+            HaoLayout.floatingStackClearance(
+                miniPlayerVisible: coordinator.currentItem != nil
+                    || musicPlayer.miniFallbackSong != nil
+            )
+        )
+    }
+}
+
+// MARK: - Wallpaper backdrop (b40)
+
+/// Whether a wallpaper is active behind the UI. MainTabView sets
+/// this from the same background-kind decision it renders with
+/// (MyBackgroundColor.kind == .wallpaper), so the flag and the
+/// picture can never disagree: the picture is up exactly when
+/// the tab roots go transparent for it. Default false (no
+/// MainTabView above — previews, sheets): tab roots stay opaque.
+private struct HaoWallpaperActiveKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var haoWallpaperActive: Bool {
+        get { self[HaoWallpaperActiveKey.self] }
+        set { self[HaoWallpaperActiveKey.self] = newValue }
+    }
+}
+
+/// Tab-root background (b40, chen 2026-11-25: 壁纸导入之后用了
+/// 也不显示): every tab root used to paint the opaque theme
+/// scaffold colour over its whole area, so the wallpaper MainTabView
+/// draws behind the tabs was always covered — it could never show
+/// no matter what was imported. While a wallpaper is active the
+/// root goes clear and the picture shows through; otherwise the
+/// root keeps the opaque scaffold exactly as before. Pushed pages
+/// keep their opaque scaffold (they are transient; the wallpaper
+/// is back when you pop).
+private struct HaoTabBackground: ViewModifier {
+    @Environment(\.haoTheme) private var theme
+    @Environment(\.haoWallpaperActive) private var wallpaperActive
+
+    func body(content: Content) -> some View {
+        content.background(wallpaperActive ? Color.clear : theme.scaffoldBackground)
+    }
+}
+
+extension View {
+    /// Tab-root background that lets an active wallpaper show
+    /// through (clear), or paints the opaque theme scaffold when
+    /// no wallpaper is active. Use on the five tab roots only.
+    func haoTabBackground() -> some View {
+        modifier(HaoTabBackground())
     }
 }
 

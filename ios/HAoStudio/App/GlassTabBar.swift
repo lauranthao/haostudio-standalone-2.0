@@ -68,18 +68,20 @@ struct GlassTabBar: View {
             colorScheme: colorScheme,
             tabAccent: tabAccent
         )
-        .frame(height: HaoLayout.tabBarContentHeight)
-        // Vertical inner inset only (4 top / 4 bottom; total 64pt).
-        // Horizontal padding used to be here too, but the system
-        // tab bar paints its background over its own frame, so it
-        // shrank the visible bar 4pt per side — the bar read 8pt
-        // narrower than the mini player above it (chen 2026-11-24
-        // build 33: mini must be exactly as wide as the bar).
-        // Beans pads all sides only because its capsule background
-        // is painted OVER the padded area. The visible bar now spans
-        // exactly the mini player's width (screen minus the shared
-        // 12pt side margins in MainTabView).
-        .padding(.vertical, HaoLayout.tabBarInnerInset)
+        // b40: the UITabBar fills the FULL 64pt stack height — no
+        // SwiftUI .padding(.vertical) around it. The padding left
+        // a 4pt transparent band above the bar (the system bar only
+        // paints glass over its own 56pt frame), and with the mini's
+        // glass ending at its own bottom edge the two read as two
+        // separate floating pills with a see-through seam between
+        // them (chen 2026-11-25 build 39). The bar is still the
+        // real system UITabBar — only its frame is taller, so its
+        // glass now runs edge to edge and touches the mini above
+        // it with no seam. Horizontal padding was never here: the
+        // visible bar spans exactly the mini player's width
+        // (screen minus the shared 12pt side margins in
+        // MainTabView).
+        .frame(height: HaoLayout.tabBarTotalHeight)
     }
 }
 

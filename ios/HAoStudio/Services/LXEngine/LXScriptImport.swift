@@ -8,7 +8,10 @@
 // never took part in search or playback, with no error shown.
 // This file is the single validation path both import entries use:
 //   - file import: `.js` extension, readable UTF-8, non-empty,
-//     contains the `globalThis.lx` marker, parses + runs clean in
+//     contains the `globalThis.lx` marker (dot form, or the
+//     bracket forms `globalThis['lx']` / `globalThis["lx"]` —
+//     b40: 念心脚本混淆后只有括号写法，旧校验只认点号写法就
+//     把它拦在门外), parses + runs clean in
 //     a throwaway JSContext (prelude only, no network, no host
 //     bridge — a top-level throw fails here too).
 //   - URL import: http(s) address ending in `.js`; the engine
@@ -35,7 +38,8 @@ enum LXScriptImportError: Error, Equatable {
     case emptyFile
     /// The file could not be read (damaged, gone, permission).
     case unreadableFile
-    /// No `globalThis.lx` marker: not an LX music-source script.
+    /// No LX marker (`globalThis.lx` / `globalThis['lx']` /
+    /// `globalThis["lx"]`): not an LX music-source script.
     case missingLXMarker
     /// JS syntax error or top-level throw; the detail is the JS
     /// exception line, truncated.
@@ -61,7 +65,7 @@ enum LXScriptImportError: Error, Equatable {
         case .unreadableFile:
             return "读不到这个文件，请确认文件没有损坏，再选一次。"
         case .missingLXMarker:
-            return "这不是 LX 音源脚本：文件里找不到 globalThis.lx。"
+            return "这不是 LX 音源脚本：文件里找不到 LX 标记。"
         case .syntaxError(let detail):
             return "脚本无法执行：\(detail)"
         case .writeFailed:
@@ -86,7 +90,9 @@ enum LXScriptImportValidator {
         if code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return .failure(.emptyFile)
         }
-        guard code.contains("globalThis.lx") else {
+        guard code.contains("globalThis.lx")
+            || code.contains("globalThis['lx']")
+            || code.contains("globalThis[\"lx\"]") else {
             return .failure(.missingLXMarker)
         }
         let probe = JSContext()

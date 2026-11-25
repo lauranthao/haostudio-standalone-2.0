@@ -153,7 +153,7 @@ struct VideoTabView: View {
                     cmsHome
                 }
             }
-            .background(theme.scaffoldBackground)
+            .haoTabBackground()
             // b39: no system nav bar on this root — VidHub's home
             // has a custom header, not a large title, and the
             // system large title proved unreliable on chen's phone
@@ -256,8 +256,8 @@ struct VideoTabView: View {
                     }
                     Spacer(minLength: 16)
                 }
+                .haoBottomChromeContentPadding()
             }
-            .haoBottomChromePadding()
             .haoChromeScrollTracking()
             .haoReselectScrollToTop(tab: .movies, proxy: proxy)
             .refreshable { viewModel.loadFresh() }

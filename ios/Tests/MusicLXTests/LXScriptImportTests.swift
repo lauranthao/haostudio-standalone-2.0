@@ -71,6 +71,29 @@ final class LXScriptImportTests: XCTestCase {
         }
     }
 
+    /// b40 (chen 2026-11-25: 念心音源导入不进去): the marker check
+    /// accepts the bracket forms too — 念心's script is obfuscated
+    /// and only ever writes `globalThis['lx']`, never the dot form,
+    /// so the old dot-only check rejected a legal script at the
+    /// gate before it could even load. Same script body as
+    /// fakeScript, only the marker spelling differs.
+    func testValidatorAcceptsBracketFormMarker() {
+        let singleQuote = fakeScript.replacingOccurrences(
+            of: "globalThis.lx", with: "globalThis['lx']")
+        XCTAssertFalse(singleQuote.contains("globalThis.lx"))
+        if case .success = LXScriptImportValidator.validate(code: singleQuote) {
+        } else {
+            XCTFail("globalThis['lx'] script must pass validation")
+        }
+        let doubleQuote = fakeScript.replacingOccurrences(
+            of: "globalThis.lx", with: "globalThis[\"lx\"]")
+        XCTAssertFalse(doubleQuote.contains("globalThis.lx"))
+        if case .success = LXScriptImportValidator.validate(code: doubleQuote) {
+        } else {
+            XCTFail("globalThis[\"lx\"] script must pass validation")
+        }
+    }
+
     func testValidatorRejectsEmptyFile() {
         if case .failure(.emptyFile) = LXScriptImportValidator.validate(code: "") {
         } else {

@@ -106,6 +106,52 @@ final class MusicAPIParserTests: XCTestCase {
         XCTAssertEqual(items[0].platform, .kw)
     }
 
+    // MARK: - NetEase song detail (b40)
+
+    /// b40 (chen 2026-11-25: 广场/排行榜歌单打开后歌曲读不出
+    /// 信息): `/api/song/detail/` dropped `ar` / `al` — the live
+    /// payload (热歌榜, 2026-11-25) carries `artists` / `album`
+    /// on 100/100 songs and the old keys on 0/100. Fixture below
+    /// is the real shape (first song of that payload: 海屿你 /
+    /// 马也_Crabbit). The old-shape case pins the fallback.
+    func testParseWySongDetailReadsNewArtistsAlbumKeys() {
+        let json: [String: Any] = ["songs": [
+            ["id": 1973665667, "name": "海屿你", "duration": 295940,
+             "artists": [["name": "马也_Crabbit"]],
+             "album": ["name": "海屿你",
+                       "picUrl": "https://p1.music.126.net/Enhy6dPn4gpyqrKhVEQvgA==/109951170483249998.jpg"]],
+            ["id": 287398, "name": "我不难过", "duration": 320400,
+             "artists": [["name": "孙燕姿"]],
+             "album": ["name": "未完成",
+                       "picUrl": "https://p1.music.126.net/Pzxy6py26NgNmhJjYMf2RQ==/109951169868874363.jpg"]],
+        ]]
+        let tracks = MusicPlaylistImportAPI.parseWySongDetail(json)
+        XCTAssertEqual(tracks.count, 2)
+        XCTAssertEqual(tracks[0].title, "海屿你")
+        XCTAssertEqual(tracks[0].artist, "马也_Crabbit")
+        XCTAssertEqual(tracks[0].album, "海屿你")
+        XCTAssertTrue(tracks[0].coverURL?.absoluteString.contains("p1.music.126.net") == true)
+        XCTAssertEqual(tracks[0].duration, 296)
+        XCTAssertEqual(tracks[1].title, "我不难过")
+        XCTAssertEqual(tracks[1].artist, "孙燕姿")
+        XCTAssertEqual(tracks[1].album, "未完成")
+        XCTAssertFalse(tracks[1].coverURL?.absoluteString.isEmpty == true)
+    }
+
+    func testParseWySongDetailFallsBackToOldArAlKeys() {
+        let json: [String: Any] = ["songs": [
+            ["id": 123, "name": "旧歌", "dt": 200000,
+             "ar": [["name": "旧歌手"]],
+             "al": ["name": "旧专辑", "picUrl": "https://example.com/cover.jpg"]],
+        ]]
+        let tracks = MusicPlaylistImportAPI.parseWySongDetail(json)
+        XCTAssertEqual(tracks.count, 1)
+        XCTAssertEqual(tracks[0].artist, "旧歌手")
+        XCTAssertEqual(tracks[0].album, "旧专辑")
+        XCTAssertEqual(tracks[0].coverURL?.absoluteString, "https://example.com/cover.jpg")
+        XCTAssertEqual(tracks[0].duration, 200)
+    }
+
     // MARK: - Playlist-link id extractors
 
     func testWyPlaylistIdFromURL() {
