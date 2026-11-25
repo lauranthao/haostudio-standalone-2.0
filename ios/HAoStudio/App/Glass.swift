@@ -230,6 +230,22 @@ private struct HaoChromeScrollOffsetKey: PreferenceKey {
     }
 }
 
+/// The offset-reporting GeometryReader, shared by
+/// HaoChromeScrollAnchor and by roots that cannot spare a row for
+/// it. A GeometryReader used as a `.background` fills its parent's
+/// frame, so the offset it reports is the parent's top edge — the
+/// same value the anchor row reports.
+struct HaoChromeScrollOffsetReader: View {
+    var body: some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: HaoChromeScrollOffsetKey.self,
+                value: proxy.frame(in: .named(HaoLayout.chromeScrollSpace)).minY
+            )
+        }
+    }
+}
+
 /// Zero-height view placed as the FIRST child of a tab root's
 /// vertical scroll content (ScrollView or List). It reports its top
 /// offset in the scroll view's coordinate space — 0 at the top,
@@ -253,23 +269,24 @@ private struct HaoChromeScrollOffsetKey: PreferenceKey {
 /// exactly the same. ScrollView roots are unaffected (a zero
 /// frame was already zero there); the List root is fixed.
 ///
-/// Only the five tab roots carry one. A page pushed inside a tab has
-/// no anchor: scrolling it leaves the chrome as it was when the page
-/// was pushed, and the state self-corrects from the root anchor when
+/// b44 (chen 2026-11-25 build 43, My tab: the gap was STILL
+/// ~85pt after b42): the b42 reshape did not remove the gap on
+/// device — a List row costs row height in ANY form, and the
+/// anchor row was ~44pt of the gap. The My tab no longer carries
+/// an anchor row at all: its in-content title row carries
+/// HaoChromeScrollOffsetReader in its background instead, and the
+/// title itself replaced the system large title. Only the four
+/// ScrollView tab roots (Home/Music/Live/Video) still carry an
+/// anchor row. A page pushed inside a tab has no anchor:
+/// scrolling it leaves the chrome as it was when the page was
+/// pushed, and the state self-corrects from the root anchor when
 /// the user pops back. Wiring every pushed scroll page is a later
 /// pass, not this leg.
 struct HaoChromeScrollAnchor: View {
     var body: some View {
         Color.clear
             .frame(height: 0)
-            .background {
-                GeometryReader { proxy in
-                    Color.clear.preference(
-                        key: HaoChromeScrollOffsetKey.self,
-                        value: proxy.frame(in: .named(HaoLayout.chromeScrollSpace)).minY
-                    )
-                }
-            }
+            .background { HaoChromeScrollOffsetReader() }
             .accessibilityHidden(true)
     }
 }

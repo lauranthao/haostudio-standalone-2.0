@@ -44,6 +44,7 @@ import MediaPlayer
 import MediaToolbox
 import AVKit
 import SwiftUI
+import UIKit
 
 // MARK: - Play modes
 
@@ -989,6 +990,36 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     private var stallFailed: Bool = false
 
     private var openTimeoutWork: DispatchWorkItem?
+    /// b44 (chen 2026-11-25: 切歌读不到信息，要打开 app 重新播放):
+    /// a manual / remote track switch stops the current audio FIRST
+    /// (coordinator.requestPlay -> driver.stop()), so the app has no
+    /// playing audio while the next track's URL resolves (LX scripts
+    /// + network, up to the resolver's 8 s budget) — and this app
+    /// holds no background-task assertion anywhere, so iOS may
+    /// suspend a backgrounded app mid-resolve. The resolve
+    /// completion then never fires: no failure is reported, Now
+    /// Playing stays cleared (teardownNowPlaying ran in stop() and
+    /// setupNowPlaying only runs after a successful load), and the
+    /// view model already shows the new song paused — the user has
+    /// to open the app and tap play, which re-requests in the
+    /// foreground and works. Two layers, both in this file:
+    /// (1) a background task spans every resolve that starts after
+    /// audio stops, so the resolve + open can finish in background;
+    /// (2) a resolve timeout (12 s > the resolver's 8 s budget, so
+    /// it can only fire when the completion is really lost) turns a
+    /// silent stall into a reported failure, which the view model
+    /// already handles (advance / "无法播放").
+    private var switchBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+    /// Id of the currently armed resolve timeout (0 = none). The id
+    /// — not the work item alone — guards the timeout: a superseding
+    /// request arms a new timeout, and a late completion from the old
+    /// request must never cancel the new one.
+    private var resolveTimeoutId = 0
+    private var resolveTimeoutWork: DispatchWorkItem?
+    /// Resolve timeout seconds. The resolver's own budget caps a
+    /// resolve at 8 s, so a completion still missing at 12 s is
+    /// lost, not slow.
+    static let resolveTimeout: TimeInterval = 12
     private var crossfadeTimer: Timer?
     private var fadeTimer: Timer?
     private var watchdogTimer: Timer?
@@ -1039,6 +1070,10 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     /// (play / attemptOpen) call this — recovery and auto-advance
     /// failures go through recoverFromFailure / advanceAuto.
     private func reportFailedRequest(_ item: PlaybackItem, _ error: MusicPlayerError) {
+        // b44: a failed switch settles the request — end the
+        // background task (a task left running would hold the app
+        // awake for nothing).
+        endSwitchBackgroundTask()
         lastFailedRequestId = item.id
         failedRequestCount += 1
         onTrackFailed?(item, error)
@@ -1110,6 +1145,69 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
 
     private func ensureMain(_ work: @escaping () -> Void) {
         if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
+    }
+
+    /// Begin the background task that keeps a post-audio-stop
+    /// resolve alive in background (b44). Ends any previous task
+    /// first (one switch at a time). No-op when tasks are
+    /// unavailable (beginBackgroundTask returns .invalid) — the
+    /// resolve timeout below still converts a stall into a reported
+    /// failure. Called on main (every call site runs in ensureMain).
+    private func beginSwitchBackgroundTask() {
+        endSwitchBackgroundTask()
+        switchBackgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
+            self?.handleSwitchBackgroundTaskExpired()
+        }
+    }
+
+    private func endSwitchBackgroundTask() {
+        guard switchBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(switchBackgroundTask)
+        switchBackgroundTask = .invalid
+    }
+
+    /// The system ran out of background time before the switch
+    /// settled: fail the pending request now (on main) instead of
+    /// leaving it hung — the view model advances / shows
+    /// "无法播放", exactly as for any other resolve failure.
+    private func handleSwitchBackgroundTaskExpired() {
+        ensureMain {
+            self.endSwitchBackgroundTask()
+            if let item = self.pendingItem {
+                self.pendingItem = nil
+                self.reportFailedRequest(item, .timeout)
+            }
+        }
+    }
+
+    /// Arm the resolve timeout for one resolve (b44). Returns its
+    /// id; the caller's resolve completion cancels it by id (a late
+    /// completion from a superseded request must not cancel the new
+    /// request's timeout). On fire, the request is still pending, so
+    /// the timeout reports it as a failure through onFire.
+    private func beginResolveTimeout(onFire: @escaping () -> Void) -> Int {
+        cancelResolveTimeout()
+        resolveTimeoutId += 1
+        let myId = resolveTimeoutId
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            guard self.resolveTimeoutId == myId else { return }
+            self.resolveTimeoutWork = nil
+            onFire()
+        }
+        resolveTimeoutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.resolveTimeout, execute: work)
+        return myId
+    }
+
+    private func cancelResolveTimeout() {
+        resolveTimeoutWork?.cancel()
+        resolveTimeoutWork = nil
+    }
+
+    private func cancelResolveTimeout(id: Int) {
+        guard resolveTimeoutId == id else { return }
+        cancelResolveTimeout()
     }
 
     private func nextGeneration() -> Int {
@@ -1190,9 +1288,22 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             self.stopEnginesForNewRequest()
             self.pendingItem = item
             self.stallFailed = false
+            // b44: this switch stopped audio first, so the resolve
+            // runs with no audio keeping the app alive in
+            // background — hold a background task for it, and arm
+            // the resolve timeout (a lost completion must fail
+            // loudly, never hang silently).
+            self.beginSwitchBackgroundTask()
+            let timeoutId = self.beginResolveTimeout { [weak self] in
+                guard let self = self else { return }
+                guard self.pendingItem?.id == item.id else { return }
+                self.pendingItem = nil
+                self.reportFailedRequest(item, .timeout)
+            }
             self.resolveURL?(item, []) { [weak self] url, tier in
                 guard let self = self else { return }
                 self.ensureMain {
+                    self.cancelResolveTimeout(id: timeoutId)
                     guard self.pendingItem?.id == item.id else { return }
                     guard let url = url else {
                         self.pendingItem = nil
@@ -1226,9 +1337,19 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                     self.reportFailedRequest(item, error)
                     return
                 }
+                // b44: same stall class as the first resolve — the
+                // fallback re-resolve gets its own timeout (the
+                // background task from play() is still active).
+                let timeoutId = self.beginResolveTimeout { [weak self] in
+                    guard let self = self else { return }
+                    guard self.pendingItem?.id == item.id else { return }
+                    self.pendingItem = nil
+                    self.reportFailedRequest(item, error)
+                }
                 self.resolveURL?(item, tried) { [weak self] nextURL, tier in
                     guard let self = self else { return }
                     self.ensureMain {
+                        self.cancelResolveTimeout(id: timeoutId)
                         guard self.pendingItem?.id == item.id else { return }
                         guard let nextURL = nextURL else {
                             self.pendingItem = nil
@@ -1333,6 +1454,9 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         currentTrack = item
         failedTrackIds.remove(item.id)
         pendingItem = nil
+        // b44: the switch settled (audio is playing again) — the
+        // background task is no longer needed.
+        endSwitchBackgroundTask()
         position = 0
         duration = engine.durationSeconds
         // Build 36 item 3: the load-time preview check already ran
@@ -1430,6 +1554,10 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             self.fadeTimer = nil
             self.openTimeoutWork?.cancel()
             self.openTimeoutWork = nil
+            // b44: a stop abandons any pending switch — end its
+            // background task and cancel its resolve timeout.
+            self.endSwitchBackgroundTask()
+            self.cancelResolveTimeout()
             self.watchdogTimer?.invalidate()
             self.watchdogTimer = nil
             self.playRequested = false
@@ -1650,9 +1778,21 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         let item = queue[nextIndex]
         queueIndex = nextIndex
         let gen = generation
+        // b44: auto-advance resolves after the previous track ends —
+        // audio has stopped, so the same suspension window as a
+        // manual switch applies. Hold a background task and arm the
+        // resolve timeout (a lost completion advances, never hangs).
+        beginSwitchBackgroundTask()
+        let timeoutId = beginResolveTimeout { [weak self] in
+            guard let self = self else { return }
+            guard gen == self.generation else { return }
+            self.failedTrackIds.insert(item.id)
+            self.advanceAutoFrom(index: nextIndex, attempts: attempts + 1)
+        }
         resolveURL?(item, []) { [weak self] url, tier in
             guard let self = self else { return }
             self.ensureMain {
+                self.cancelResolveTimeout(id: timeoutId)
                 guard gen == self.generation else { return }
                 guard let url = url else {
                     // A13: unresolvable during auto-advance — the
@@ -1725,9 +1865,18 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                     // with this URL in `tried`, so the next source
                     // is tried instead of the same clip.
                     if tried.count < 2 {
+                        // b44: same stall class as the first resolve
+                        // (task from advanceAutoFrom is still active).
+                        let timeoutId = self.beginResolveTimeout { [weak self] in
+                            guard let self = self else { return }
+                            guard gen == self.generation else { return }
+                            self.failedTrackIds.insert(item.id)
+                            self.advanceAutoFrom(index: self.queueIndex, attempts: attempts + 1)
+                        }
                         self.resolveURL?(item, tried) { [weak self] nextURL, tier in
                             guard let self = self else { return }
                             self.ensureMain {
+                                self.cancelResolveTimeout(id: timeoutId)
                                 guard gen == self.generation else {
                                     if incoming === self.standbyEngine { incoming.pause() }
                                     return
@@ -1808,6 +1957,9 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         currentTrack = item
         failedTrackIds.remove(item.id)
         pendingItem = nil
+        // b44: the auto-advance settled (audio is playing again) —
+        // the background task is no longer needed.
+        endSwitchBackgroundTask()
         position = activeEngine.currentTimeSeconds
         duration = activeEngine.durationSeconds
         // Build 36 item 3: the load-time preview check already ran
@@ -1972,9 +2124,18 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     private func recoverFromFailure(item: PlaybackItem, excluding: [URL] = []) {
         let resumePosition = position
         let gen = nextGeneration()
+        // b44: recovery resolves after the engine died — audio has
+        // stopped, so the same suspension window as a switch applies.
+        beginSwitchBackgroundTask()
+        let timeoutId = beginResolveTimeout { [weak self] in
+            guard let self = self else { return }
+            guard gen == self.generation, self.currentTrack?.id == item.id else { return }
+            self.advanceAuto()
+        }
         resolveURL?(item, excluding) { [weak self] url, tier in
             guard let self = self else { return }
             self.ensureMain {
+                self.cancelResolveTimeout(id: timeoutId)
                 guard gen == self.generation, self.currentTrack?.id == item.id else { return }
                 guard let url = url else {
                     self.advanceAuto()
