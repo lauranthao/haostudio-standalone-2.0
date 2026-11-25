@@ -7,6 +7,7 @@ out — the chain preflight does NOT guard (2026-11-25, b49fix2 P2-67):
   repo version.json  <->  README (version/build/size/download URL)
   repo version.json  <->  bitrise.yml artifact name (derived, not hardcoded)
   repo version.json  <->  shop's live manifest (--shop-manifest-url)
+    (version/build/ipaUrl/size/sha256 AND changelog text)
   repo version.json  <->  built IPA file (--ipa: size + md5 vs README)
 
 Usage:
@@ -28,6 +29,12 @@ release step, in the same release commit that fills size:
   2. sha256sum it,
   3. write the 64-hex value into version.json's "sha256" alongside
      "size" (and deploy so the shop manifest carries it too).
+The hash must come from an IPA built from the release commit.
+Never fill it from a hash measured off a live file whose provenance
+is unknown: the shipped IPA carries no commit field, so a live hash
+cannot prove which commit built it (2026-11-25, b49-sweep8 P2-24:
+the live build-48 IPA's measured hash 0207b137... must NOT be
+copied in — rebuild from the release commit and re-hash instead).
 Before release the field is "" and plain runs SKIP the hash
 comparisons (preflight check 4i-e likewise passes on empty). Pass
 --release at ship time: an empty, missing or malformed sha256 then
@@ -160,6 +167,29 @@ def main():
             check("shop manifest sha256 matches version.json",
                   (shop.get("sha256") or "") == (vj.get("sha256") or ""),
                   f"shop={shop.get('sha256')!r} repo={vj.get('sha256')!r}")
+            # changelog: the in-app update prompt shows the shop
+            # manifest's release notes verbatim
+            # (BackupUpdateLogic.promptContent takes
+            # result.releaseNotes), so a drifted shop changelog
+            # shows users stale text while every other check stays
+            # green (2026-11-25, b49-sweep8 P1-2: the live manifest
+            # still said the landscape player overflows after the
+            # repo was fixed to "overflow is fixed"). Compare
+            # verbatim, all three languages.
+            repo_cl = vj.get("changelog")
+            shop_cl = shop.get("changelog")
+            if not isinstance(repo_cl, dict) or not isinstance(shop_cl, dict):
+                check("shop manifest changelog matches version.json", False,
+                      f"shop changelog={type(shop_cl).__name__} "
+                      f"repo changelog={type(repo_cl).__name__}")
+            else:
+                langs = sorted(set(repo_cl) | set(shop_cl))
+                diffs = [lang for lang in langs
+                         if repo_cl.get(lang) != shop_cl.get(lang)]
+                check("shop manifest changelog matches version.json",
+                      not diffs,
+                      ("languages differ: " + ", ".join(diffs)) if diffs
+                      else "zh/tw/en verbatim")
         except Exception as e:
             check("shop manifest fetched", False, f"{args.shop_manifest_url}: {e}")
             shop = None
