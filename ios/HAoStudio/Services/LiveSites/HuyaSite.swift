@@ -633,6 +633,14 @@ final class HuyaLiveSite: LiveSiteResolver {
         }
     }
 
+    /// Resolves that arrived while a line walk for the same room
+    /// + bitrate is still in flight (b49fix2 P1-24 — same shape
+    /// as DouyuLiveSite): a second resolve used to start a second
+    /// serial chain, whose early completion returned the same dead
+    /// first line. Joiners wait for the in-flight walk and get its
+    /// FULL resolution when it ends.
+    private var lineWalkInFlight: [String: [(Result<LivePlayUrlResolution, Error>) -> Void]] = [:]
+
     init(fetcher: LiveDataFetcher? = nil, wupClient: HuyaWupClient? = nil) {
         let resolvedFetcher = fetcher ?? LiveHTTP.defaultFetcher
         self.fetcher = resolvedFetcher
@@ -761,11 +769,28 @@ final class HuyaLiveSite: LiveSiteResolver {
                     completion(.success(cached))
                     return
                 }
+                // (b49fix2 P1-24) A line walk for this room +
+                // bitrate is still in flight (its first line
+                // already completed early): join it instead of
+                // starting a second serial chain. The joiner gets
+                // the FULL resolution when the walk ends.
+                let walkKey = self.backgroundCacheKey(roomId: trimmed, qualityId: requested.id)
+                if self.locked({ self.lineWalkInFlight[walkKey] != nil }) {
+                    self.locked { self.lineWalkInFlight[walkKey, default: []].append(completion) }
+                    return
+                }
+                self.locked { self.lineWalkInFlight[walkKey] = [] }
                 var deliveredEarly = false
                 self.resolveHuyaLines(data.lines, bitRate: bitRate, onFirst: { [weak self] first in
                     guard let self = self, !deliveredEarly else { return }
                     deliveredEarly = true
-                    let liveLines = [LiveLine(name: first.line.cdnType, urls: [first.url], format: first.line.lineType == .hls ? "hls" : "flv")]
+                    // (b49fix2 P2-24) One gameStreamInfoList item
+                    // yields one FLV and one HLS line, both named
+                    // by cdnType — the menu showed two identical
+                    // names. Suffix the format so the user can
+                    // tell them apart (selection is by index, so
+                    // this is display-only).
+                    let liveLines = [LiveLine(name: first.line.cdnType + " " + (first.line.lineType == .hls ? "HLS" : "FLV"), urls: [first.url], format: first.line.lineType == .hls ? "hls" : "flv")]
                     var filled = qualities
                     var applied = requested
                     if let index = filled.firstIndex(where: { $0.id == requested.id }) {
@@ -775,15 +800,39 @@ final class HuyaLiveSite: LiveSiteResolver {
                     completion(.success(LivePlayUrlResolution.applying(applied, in: filled)))
                 }) { [weak self] resolved in
                     guard let self = self else { return }
+                    /// Drain one finished walk (b49fix2 P1-24):
+                    /// the entry is removed BEFORE the completions
+                    /// run, so a completion that re-enters
+                    /// resolve() registers a fresh walk instead of
+                    /// joining a finished one. When the walk
+                    /// delivered early, the original completion
+                    /// already fired — bank the full resolution
+                    /// and answer the joiners only; otherwise
+                    /// answer the original completion too.
+                    func finishWalk(_ result: Result<LivePlayUrlResolution, Error>) {
+                        let waiters = self.locked { self.lineWalkInFlight.removeValue(forKey: walkKey) ?? [] }
+                        switch result {
+                        case .success(let resolution):
+                            if deliveredEarly {
+                                self.storeBackgroundResolution(resolution, roomId: trimmed, qualityId: requested.id)
+                            } else {
+                                completion(.success(resolution))
+                            }
+                            for waiter in waiters { waiter(.success(resolution)) }
+                        case .failure(let error):
+                            completion(.failure(error))
+                            for waiter in waiters { waiter(.failure(error)) }
+                        }
+                    }
                     if resolved.isEmpty {
                         if !deliveredEarly {
-                            completion(.failure(LiveError.transportFailed("虎牙全部线路均不可用")))
+                            finishWalk(.failure(LiveError.transportFailed("虎牙全部线路均不可用")))
                         }
                         return
                     }
                     var filled = qualities
                     let liveLines = resolved.map { item in
-                        LiveLine(name: item.line.cdnType, urls: [item.url], format: item.line.lineType == .hls ? "hls" : "flv")
+                        LiveLine(name: item.line.cdnType + " " + (item.line.lineType == .hls ? "HLS" : "FLV"), urls: [item.url], format: item.line.lineType == .hls ? "hls" : "flv")
                     }
                     var applied = requested
                     if let index = filled.firstIndex(where: { $0.id == requested.id }) {
@@ -801,14 +850,7 @@ final class HuyaLiveSite: LiveSiteResolver {
                         }
                     }
                     let full = LivePlayUrlResolution.applying(applied, in: filled, refreshAt: refreshAt, invalidAt: invalidAt)
-                    if deliveredEarly {
-                        // The driver already opened the first line;
-                        // bank the full resolution for the next
-                        // re-parse instead of completing twice.
-                        self.storeBackgroundResolution(full, roomId: trimmed, qualityId: requested.id)
-                    } else {
-                        completion(.success(full))
-                    }
+                    finishWalk(.success(full))
                 }
             case .failure(let error):
                 completion(.failure(error))
