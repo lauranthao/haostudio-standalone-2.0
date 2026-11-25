@@ -140,15 +140,15 @@ struct MyView: View {
         NavigationStack {
             ScrollViewReader { proxy in
                 List {
-                    // Scroll anchor for the bottom chrome (b35 tab-bar
-                    // link): drives minimize / restore as this tab scrolls.
-                    // A zero-height, separator-less first row — the List
-                    // equivalent of the ScrollView anchor.
-                    HaoChromeScrollAnchor()
-                        .id(HaoTabScrollTop.id(for: .my))
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
+                    // b44: in-content title, same as the other tab
+                    // roots (Home/Music/Live/Video) — see myHeader
+                    // below. The system large title is gone, and
+                    // with it the anchor List row: a List row of ANY
+                    // content costs row height (b42's Color.clear
+                    // reshape did not remove the gap on device), so
+                    // the scroll-offset reader now lives in the title
+                    // row's background instead.
+                    myHeader
                     entriesSection
                     migrationSection
                     settingsSection
@@ -169,10 +169,19 @@ struct MyView: View {
                 .haoChromeScrollTracking()
                 .haoReselectScrollToTop(tab: .my, proxy: proxy)
                 .listStyle(.insetGrouped)
+                // b44: tighten the section rhythm to the other tab
+                // roots' 12pt rhythm — the grouped default leaves a
+                // wide band between the title and the first section
+                // header, which was part of the "空这么多" gap.
+                .listSectionSpacing(12)
                 .scrollContentBackground(.hidden)
                 .haoBackdropLayer()
                 .haoTabBackground()
-                .navigationTitle("我的")
+                // b44: no system large title — the title is the
+                // in-content myHeader row above, exactly like the
+                // other pages. The navigation bar stays hidden so a
+                // pushed page's own bar / back button is unaffected.
+                .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(item: $selectedLiveRoom) { room in
                     LiveRoomView(room: room, playlist: [room])
                 }
@@ -246,6 +255,30 @@ struct MyView: View {
                 }
             }
         }
+    }
+
+    // MARK: - In-content title (b44)
+
+    /// b44 (chen 2026-11-25: 我的页标题要和其他页面一样，标题下
+    /// 空一大片): the title is an in-content row like the other
+    /// tab roots (homeHeader pattern — 34pt bold, theme text
+    /// colour, 12pt top padding), NOT the system large title, so
+    /// the first section header sits tight under it. The row also
+    /// carries the chrome scroll-offset reader in its background
+    /// (the reselect-scroll-to-top id lives here too), which is
+    /// what let the anchor List row be deleted — see Glass.swift:
+    /// a List row of any content costs row height, and the anchor
+    /// row was ~44pt of the ~85pt gap.
+    private var myHeader: some View {
+        Text("我的")
+            .font(.system(size: 34, weight: .bold))
+            .foregroundStyle(theme.textPrimary)
+            .padding(.top, 12)
+            .id(HaoTabScrollTop.id(for: .my))
+            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .background { HaoChromeScrollOffsetReader() }
     }
 
     // MARK: - My entries
