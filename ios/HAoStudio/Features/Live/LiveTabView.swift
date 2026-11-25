@@ -580,9 +580,12 @@ struct LiveTabView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.haoSubheadStrong)
                     .foregroundStyle(theme.textMuted)
+                // (sweep-6 P1-1) The placeholder sits on
+                // theme.surface: muted fails AA there in dark
+                // gold/mint/ice-blue — textSecondary passes.
                 Text("搜索直播间、主播")
                     .font(.haoSubhead)
-                    .foregroundStyle(theme.textMuted)
+                    .foregroundStyle(theme.textSecondary)
                 Spacer()
             }
             .padding(.horizontal, 16)
@@ -674,11 +677,13 @@ struct LiveTabView: View {
                 )
                 .padding(.horizontal, 24)
                 if viewModel.hasGateway && viewModel.loadFailed {
+                    // (sweep-6 P2-6) Standard retry capsule:
+                    // 15 semibold, 24/12.
                     Button("重试") { viewModel.loadFresh() }
-                        .font(.haoDenseTitle)
+                        .font(.haoSubheadStrong)
                         .foregroundStyle(theme.onAccent)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
                         .background(theme.accent, in: Capsule())
                         .buttonStyle(.plain)
                         .frame(maxWidth: .infinity)
@@ -704,11 +709,15 @@ struct LiveTabView: View {
                     // retry instead of leaving stale rooms with no
                     // indication. loadFresh clears the flag when it
                     // starts, so a good refresh hides this row.
+                    // (sweep-6 P2-6) Inline text retry: 13 medium
+                    // with the same 12pt top as the categories
+                    // retry above; the bottom stays 16.
                     Button("刷新没有返回新房间，点击重试") { viewModel.loadFresh() }
                         .font(.haoFootnoteMedium)
                         .foregroundStyle(theme.accentText)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
+                        .padding(.top, 12)
+                        .padding(.bottom, 16)
                         .buttonStyle(.plain)
                 } else if viewModel.loadingMore {
                     ProgressView()
@@ -724,11 +733,15 @@ struct LiveTabView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
                 } else if viewModel.loadMoreFailed {
+                    // (sweep-6 P2-6) Inline text retry: 13 medium
+                    // with the same 12pt top as the other inline
+                    // retries; the bottom stays 16.
                     Button("加载失败，点击重试") { viewModel.loadMore() }
                         .font(.haoFootnoteMedium)
                         .foregroundStyle(theme.accentText)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
+                        .padding(.top, 12)
+                        .padding(.bottom, 16)
                         .buttonStyle(.plain)
                 } else if viewModel.hasMore {
                     ProgressView()
@@ -909,6 +922,10 @@ struct LivePlatformTextTabs: View {
     /// behaves exactly as before.
     var platforms: [LivePlatform] = LivePlatform.allCases
     var selected: LivePlatform
+    /// (sweep-6 P2-1) The strip's own horizontal padding IS the
+    /// page's side margin: 24 on the tab root (the default),
+    /// 20 on the pushed search page (pushedPageMargin).
+    var edgePadding: CGFloat = 24
     var onSelect: (LivePlatform) -> Void
 
     @Environment(\.haoTheme) private var theme
@@ -933,7 +950,7 @@ struct LivePlatformTextTabs: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, edgePadding)
         }
         .haoSensoryFeedback(.selection, trigger: selected)
     }
