@@ -269,7 +269,7 @@ struct LiveRoomView: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 9)
-                    .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .haoDarkGlassRoundedRect(cornerRadius: 10, darkness: 0.7)
                     .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
                     .padding(.bottom, 96)
                     .allowsHitTesting(false)
@@ -552,7 +552,7 @@ struct LiveRoomView: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(Color.black.opacity(0.87), in: RoundedRectangle(cornerRadius: 10))
+                .haoDarkGlassRoundedRect(cornerRadius: 10, darkness: 0.87)
                 .allowsHitTesting(false)
             }
         }
@@ -725,7 +725,7 @@ struct LiveRoomView: View {
                             .font(.haoBodyStrong)
                             .foregroundStyle(theme.accentOnVideo)
                             .frame(width: 36, height: 36)
-                            .background(Color.black.opacity(0.45), in: Circle())
+                            .haoGlassCircle()
                     }
                     .buttonStyle(.plain)
                     .frame(width: 44, height: 44)
@@ -1207,7 +1207,7 @@ struct LiveRoomView: View {
                     .font(.haoBodyStrong)
                     .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 36, height: 36)
-                    .background(Color.black.opacity(0.45), in: Circle())
+                    .haoGlassCircle()
             }
             .buttonStyle(.plain)
             // 44pt hit target, visual stays 36pt (same as the
@@ -1244,7 +1244,7 @@ struct LiveRoomView: View {
                     .font(.haoBodyStrong)
                     .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 36, height: 36)
-                    .background(Color.black.opacity(0.45), in: Circle())
+                    .haoGlassCircle()
             }
             .buttonStyle(.plain)
             .frame(width: 44, height: 44)
@@ -1255,7 +1255,7 @@ struct LiveRoomView: View {
                     .font(.haoBodyStrong)
                     .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 36, height: 36)
-                    .background(Color.black.opacity(0.45), in: Circle())
+                    .haoGlassCircle()
             }
             .buttonStyle(.plain)
             .frame(width: 44, height: 44)

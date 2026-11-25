@@ -427,7 +427,7 @@ struct MusicCoverCardBody: View {
 }
 
 /// Coda PlayCountBadge: 8pt bold play icon + badge semibold,
-/// white, padding 8×4, black 0.35 + ultraThinMaterial 0.6,
+/// white, padding 8×4, dark liquid glass (black 0.35 tint),
 /// capsule, cover top-trailing corner.
 struct MusicPlayCountBadge: View {
     var count: Int
@@ -442,8 +442,7 @@ struct MusicPlayCountBadge: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(Color.black.opacity(0.35), in: Capsule())
-        .background(.ultraThinMaterial, in: Capsule())
+        .haoDarkGlassCapsule(darkness: 0.35)
         .opacity(0.9)
     }
 }
@@ -601,8 +600,7 @@ struct MusicDetailPrimaryActions<More: View>: View {
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(isFavourite ? theme.accentText : theme.textPrimary)
                     .frame(width: 56, height: 56)
-                    .background(.ultraThinMaterial, in: Circle())
-                    .overlay { Circle().strokeBorder(theme.hairline, lineWidth: 0.5) }
+                    .haoGlassCircle()
             }
             .buttonStyle(MusicPressScaleStyle())
             .accessibilityLabel(isFavourite ? "已收藏" : "收藏")
@@ -626,8 +624,7 @@ struct MusicDetailPrimaryActions<More: View>: View {
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(theme.textPrimary)
                     .frame(width: 56, height: 56)
-                    .background(.ultraThinMaterial, in: Circle())
-                    .overlay { Circle().strokeBorder(theme.hairline, lineWidth: 0.5) }
+                    .haoGlassCircle()
             }
             .accessibilityLabel("更多操作")
         }

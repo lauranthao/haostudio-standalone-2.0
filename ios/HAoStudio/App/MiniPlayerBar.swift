@@ -89,7 +89,7 @@ struct MiniPlayerBar: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 9)
-                .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .haoDarkGlassRoundedRect(cornerRadius: 10, darkness: 0.7)
                 .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .allowsHitTesting(false)

@@ -1154,14 +1154,14 @@ struct VideoPlayerView: View {
             }
             // Build 36, item 9: middle double-tap feedback — a
             // brief centre pause/play icon for the new state.
-            // Same white-on-black-scrim treatment as the top-bar
+            // Same liquid-glass treatment as the top-bar
             // buttons; fades out after 0.7 s.
             if pauseFlashVisible {
                 Image(systemName: pauseFlashShowsPause ? "pause.fill" : "play.fill")
                     .font(.system(size: 44, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 96, height: 96)
-                    .background(Color.black.opacity(0.45), in: Circle())
+                    .haoGlassCircle()
             }
             // Drag-seek preview (build 36, item 9, leg 3): the
             // same accent-capsule pill as the 2x badge, no new
@@ -1186,7 +1186,7 @@ struct VideoPlayerView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
-                        .background(Color.black.opacity(0.7), in: Capsule())
+                        .haoDarkGlassCapsule(darkness: 0.7)
                         .padding(.bottom, 120)
                         .onAppear {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
@@ -1400,7 +1400,7 @@ struct VideoPlayerView: View {
                     .font(.haoBodyStrong)
                     .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 40, height: 40)
-                    .background(Color.black.opacity(0.45), in: Circle())
+                    .haoGlassCircle()
             }
             .buttonStyle(.plain)
             VStack(alignment: .leading, spacing: 2) {
@@ -1424,7 +1424,7 @@ struct VideoPlayerView: View {
                     .font(.haoBodyStrong)
                     .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 40, height: 40)
-                    .background(Color.black.opacity(0.45), in: Circle())
+                    .haoGlassCircle()
             }
             .buttonStyle(.plain)
         }
@@ -1698,7 +1698,7 @@ struct VideoSeekBar: View {
                     .monospacedDigit()
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .background(Color.black.opacity(0.7), in: Capsule())
+                    .haoDarkGlassCapsule(darkness: 0.7)
                     .position(
                         x: VideoSeekBarMath.previewCenterX(
                             knobX: fill, totalWidth: geometry.size.width, bubbleWidth: 72),

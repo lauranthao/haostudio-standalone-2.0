@@ -232,16 +232,17 @@ struct MusicPlayerView: View {
                             // 0.3 in/out. POSITION stays our bottom
                             // capsule slot — only the style params
                             // are Coda's, so the entry edge mirrors
-                            // to the bottom. The dark 0.7 fill stays:
-                            // white text on glass would be unreadable
-                            // in light mode (theme rule: light +
-                            // dark). Dwell stays our 2s — Coda's was
-                            // never located (§14 item 1).
+                            // to the bottom. The fill is dark liquid
+                            // glass (black 0.7 tint): white text stays
+                            // readable in light mode (plain regular
+                            // glass would wash it out — theme rule:
+                            // light + dark). Dwell stays our 2s —
+                            // Coda's was never located (§14 item 1).
                             .font(.system(size: 12.5, weight: .medium))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 9)
-                            .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .haoDarkGlassRoundedRect(cornerRadius: 10, darkness: 0.7)
                             .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
                             // b47-player: the root is full-screen now,
                             // so the toast keeps its old distance from
