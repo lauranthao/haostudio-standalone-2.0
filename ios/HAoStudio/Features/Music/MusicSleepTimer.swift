@@ -132,6 +132,11 @@ final class MusicSleepTimer {
 
     private var deadline: Date?
     private var ticker: Timer?
+    /// Generation guard (b45-a, Coda SleepTimer): every start /
+    /// cancel bumps the generation, and the 1 s ticker only fires
+    /// when its captured generation is still current — a stale
+    /// ticker from a replaced timer can never pause playback.
+    private var generation = 0
 
     var isActive: Bool { option != .off }
     var isQueueEnd: Bool { option == .queueEnd }
@@ -191,6 +196,8 @@ final class MusicSleepTimer {
 
     func start(_ option: SleepTimerOption) {
         cancel(silent: true)
+        generation += 1
+        let capturedGeneration = generation
         self.option = option
         let duration: TimeInterval?
         if option == .custom {
@@ -201,7 +208,7 @@ final class MusicSleepTimer {
         if let duration = duration {
             deadline = now().addingTimeInterval(duration)
             ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-                self?.checkFire()
+                self?.checkFire(generation: capturedGeneration)
             }
         }
         onChanged?()
@@ -211,6 +218,14 @@ final class MusicSleepTimer {
     /// the 1 s ticker in production and directly by tests with a
     /// fake clock.
     func checkFire() {
+        checkFire(generation: generation)
+    }
+
+    /// Generation-checked fire: a ticker captured by an older
+    /// start is a no-op once a newer start / cancel bumped the
+    /// generation.
+    func checkFire(generation: Int) {
+        guard generation == self.generation else { return }
         guard let deadline = deadline else { return }
         if now() >= deadline {
             cancel(silent: true)
@@ -223,6 +238,7 @@ final class MusicSleepTimer {
     func cancel(silent: Bool = false) {
         ticker?.invalidate()
         ticker = nil
+        generation += 1
         option = .off
         deadline = nil
         tracksCompleted = 0
