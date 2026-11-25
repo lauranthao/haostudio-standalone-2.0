@@ -251,3 +251,216 @@ private extension LocalStore {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
     }
 }
+
+// MARK: - b45-F: 10-minute failure memory (plan §7.4)
+//
+// When a track is skipped, the next resolve does NOT re-ask the
+// sources that just failed for that song: a failure is remembered
+// per source + song for 10 minutes (max 500 entries, expired
+// entries purged). Nothing is deleted: a 403/444 is geo-blocking,
+// not death — the source stays in the list and the memory only
+// expires. A later success clears the entry. In-memory only;
+// the resolver calls this from its serial work queue.
+
+final class ResolveFailureMemory {
+    static let ttl: TimeInterval = 10 * 60
+    static let maxEntries = 500
+
+    private var failedAt: [String: Date] = [:]
+    var now: () -> Date = { Date() }
+
+    static func key(sourceKey: String, songId: String) -> String {
+        "\(sourceKey)|\(songId)"
+    }
+
+    func record(sourceKey: String, songId: String) {
+        purgeExpired()
+        failedAt[Self.key(sourceKey: sourceKey, songId: songId)] = now()
+        while failedAt.count > Self.maxEntries, let oldest = failedAt.min(by: { $0.value < $1.value })?.key {
+            failedAt.removeValue(forKey: oldest)
+        }
+    }
+
+    /// True when this source failed for this song within the TTL.
+    /// `before` bounds the memory to failures recorded before a
+    /// resolve started: a source that fails mid-resolve must still
+    /// be tried at the lower tiers of the same resolve.
+    func isFailed(sourceKey: String, songId: String, before: Date? = nil) -> Bool {
+        guard let at = failedAt[Self.key(sourceKey: sourceKey, songId: songId)] else { return false }
+        if now().timeIntervalSince(at) >= Self.ttl {
+            failedAt.removeValue(forKey: Self.key(sourceKey: sourceKey, songId: songId))
+            return false
+        }
+        if let before = before { return at < before }
+        return true
+    }
+
+    func clear(sourceKey: String, songId: String) {
+        failedAt.removeValue(forKey: Self.key(sourceKey: sourceKey, songId: songId))
+    }
+
+    func purgeExpired() {
+        let cutoff = now().addingTimeInterval(-Self.ttl)
+        failedAt = failedAt.filter { $0.value > cutoff }
+    }
+
+    var count: Int { failedAt.count }
+}
+
+// MARK: - b45-F: cross-platform track matching (plan §7.3)
+//
+// "宁可不播，不播错版": a candidate from another platform only
+// counts when it passes hard gates (duration, normalised title,
+// version-tag set, first artist) and wins on score. Pure
+// Foundation — the harness test drives this directly.
+
+struct MatchCandidate {
+    let title: String
+    let artists: [String]
+    let album: String?
+    /// Full length in milliseconds, nil when unknown.
+    let durationMs: Int?
+}
+
+enum AudioSourceTrackMatcher {
+    /// Version tags: a conflict on either side vetoes the match.
+    /// Both sides' tag sets must be identical.
+    static let versionTags = [
+        "live", "remix", "伴奏", "dj", "cover", "翻唱",
+        "instrumental", "karaoke", "现场", "纯音乐",
+    ]
+
+    /// Hard-gate window for the duration check.
+    static let maxDurationDifferenceMs = 5_000
+    /// Only the first 5 candidates are ever considered.
+    static let maxCandidates = 5
+
+    /// Query string for a cross-platform lookup: title + first
+    /// artist (+ NetEase id when the source is NetEase).
+    static func queryString(title: String, artist: String, neteaseId: String? = nil) -> String {
+        var parts = [title, artist].filter { !$0.isEmpty }
+        if let id = neteaseId, !id.isEmpty { parts.append(id) }
+        return parts.joined(separator: " ")
+    }
+
+    /// Version tags present in a title (lowercased contains).
+    static func versionTagSet(of title: String) -> Set<String> {
+        let lowered = title.lowercased()
+        return Set(versionTags.filter { lowered.contains($0) })
+    }
+
+    /// Score a candidate against the expected track, or nil when
+    /// a hard gate fails. Scoring: 100 − durationDiff/100,
+    /// exact title +20, same album +15, identical artist set +10.
+    static func matchScore(
+        expectedTitle: String,
+        expectedArtists: [String],
+        expectedAlbum: String?,
+        expectedDurationMs: Int?,
+        candidate: MatchCandidate
+    ) -> Int? {
+        // Hard gate 1: duration within 5 s (unknown on either side
+        // passes — it cannot prove a mismatch, and the other gates
+        // still apply).
+        var durationDiffMs = 0
+        if let expected = expectedDurationMs, let got = candidate.durationMs {
+            durationDiffMs = abs(expected - got)
+            guard durationDiffMs <= maxDurationDifferenceMs else { return nil }
+        }
+        // Hard gate 2: normalised title equal, or equal after
+        // stripping brackets / subtitles.
+        let expectedNorm = MusicText.normalizeName(expectedTitle)
+        let candidateNorm = MusicText.normalizeName(candidate.title)
+        let expectedBase = MusicText.normalizeName(MusicText.baseSongTitle(expectedTitle))
+        let candidateBase = MusicText.normalizeName(MusicText.baseSongTitle(candidate.title))
+        let titleMatches = expectedNorm == candidateNorm
+            || (!expectedBase.isEmpty && expectedBase == candidateBase)
+        guard titleMatches else { return nil }
+        // Hard gate 3: version-tag sets must be identical — a
+        // live / remix / 伴奏 / cover on one side only vetoes.
+        guard versionTagSet(of: expectedTitle) == versionTagSet(of: candidate.title) else { return nil }
+        // Hard gate 4: the first artist must appear among the
+        // candidate's artists (normalised; empty expected list
+        // passes — nothing to check against).
+        let expectedFirst = expectedArtists.first.map { MusicText.normalizeName($0) } ?? ""
+        if !expectedFirst.isEmpty {
+            let candidateArtists = candidate.artists.map { MusicText.normalizeName($0) }
+            guard candidateArtists.contains(expectedFirst) else { return nil }
+        }
+        // Score.
+        var score = 100 - durationDiffMs / 100
+        if expectedNorm == candidateNorm { score += 20 }
+        if let expectedAlbum = expectedAlbum, !expectedAlbum.isEmpty,
+           let candidateAlbum = candidate.album,
+           MusicText.normalizeName(expectedAlbum) == MusicText.normalizeName(candidateAlbum) {
+            score += 15
+        }
+        let expectedSet = Set(expectedArtists.map { MusicText.normalizeName($0) }.filter { !$0.isEmpty })
+        let candidateSet = Set(candidate.artists.map { MusicText.normalizeName($0) }.filter { !$0.isEmpty })
+        if !expectedSet.isEmpty && expectedSet == candidateSet { score += 10 }
+        return score
+    }
+
+    /// Best match among the first 5 candidates, or nil when none
+    /// passes the gates. Returns the candidate index + score.
+    static func bestMatch(
+        expectedTitle: String,
+        expectedArtists: [String],
+        expectedAlbum: String?,
+        expectedDurationMs: Int?,
+        candidates: [MatchCandidate]
+    ) -> (index: Int, score: Int)? {
+        var best: (index: Int, score: Int)?
+        for (index, candidate) in candidates.prefix(maxCandidates).enumerated() {
+            guard let score = matchScore(
+                expectedTitle: expectedTitle, expectedArtists: expectedArtists,
+                expectedAlbum: expectedAlbum, expectedDurationMs: expectedDurationMs,
+                candidate: candidate) else { continue }
+            if best == nil || score > best!.score { best = (index, score) }
+        }
+        return best
+    }
+}
+
+// MARK: - b45-F: 10-minute match cache (plan §7.3/§7.4)
+//
+// Cross-platform match answers are cached for 10 minutes
+// (max 300). Only definite answers are stored — errors are
+// never cached (there is no error API at all by construction).
+
+final class TrackMatchCache {
+    static let ttl: TimeInterval = 10 * 60
+    static let maxEntries = 300
+
+    struct Entry {
+        let matchedKey: String
+        let expiresAt: Date
+    }
+
+    private var entries: [String: Entry] = [:]
+    private var order: [String] = []
+    var now: () -> Date = { Date() }
+
+    func get(_ key: String) -> String? {
+        guard let entry = entries[key] else { return nil }
+        if now() >= entry.expiresAt {
+            entries.removeValue(forKey: key)
+            order.removeAll { $0 == key }
+            return nil
+        }
+        return entry.matchedKey
+    }
+
+    func put(_ key: String, matchedKey: String) {
+        if entries[key] == nil {
+            order.append(key)
+            while order.count > Self.maxEntries, let oldest = order.first {
+                order.removeFirst()
+                entries.removeValue(forKey: oldest)
+            }
+        }
+        entries[key] = Entry(matchedKey: matchedKey, expiresAt: now().addingTimeInterval(Self.ttl))
+    }
+
+    var count: Int { entries.count }
+}

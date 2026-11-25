@@ -251,3 +251,103 @@ enum MusicText {
         return s
     }
 }
+
+// MARK: - b45-F: NetEase CDN twin-host failover (plan §7.4)
+//
+// NetEase serves audio from twin hosts `m801` ↔ `m801c` (the
+// signature lives in the path, so it is host-independent). A host
+// that fails BEFORE the request (DNS / connect / certificate) is
+// remembered unreachable for 10 minutes on a monotonic clock;
+// a playback failure then retries the same URL on the twin host
+// once. Playback-mid-stream failures are not host failures and
+// never mark a host.
+
+enum NeteaseCDNHostFailover {
+    /// Unreachable-host TTL (10 minutes, monotonic clock).
+    static let unreachableTTL: TimeInterval = 10 * 60
+
+    private static var unreachableUntil: [String: TimeInterval] = [:]
+    private static let lock = NSLock()
+
+    /// Monotonic now (survives wall-clock changes).
+    static var monotonicNow: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+
+    /// True when this host is a NetEase audio CDN twin host
+    /// (`m801…` / `m801c…`).
+    static func isTwinHost(_ host: String) -> Bool {
+        host.lowercased().hasPrefix("m801")
+    }
+
+    /// The twin-host URL for a NetEase CDN URL: `m801.` ↔
+    /// `m801c.` swapped, everything else (path, query, signature)
+    /// untouched. Nil for non-twin hosts.
+    static func twinHostURL(for url: URL) -> URL? {
+        guard let host = url.host, isTwinHost(host) else { return nil }
+        let lowered = host.lowercased()
+        let twin: String
+        if lowered.hasPrefix("m801c.") {
+            twin = "m801." + host.dropFirst("m801c.".count)
+        } else if lowered.hasPrefix("m801.") {
+            twin = "m801c." + host.dropFirst("m801.".count)
+        } else {
+            return nil
+        }
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.host = twin
+        return components?.url
+    }
+
+    /// True when a pre-request failure (DNS / connection /
+    /// certificate) should mark the host unreachable. Timeouts
+    /// and HTTP statuses are not pre-request failures.
+    static func isPreRequestFailure(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        guard nsError.domain == NSURLErrorDomain else { return false }
+        switch nsError.code {
+        case NSURLErrorCannotFindHost,
+             NSURLErrorCannotConnectToHost,
+             NSURLErrorDNSLookupFailed,
+             NSURLErrorSecureConnectionFailed,
+             NSURLErrorServerCertificateHasBadDate,
+             NSURLErrorServerCertificateHasUnknownRoot,
+             NSURLErrorServerCertificateNotYetValid,
+             NSURLErrorClientCertificateRequired:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Record a pre-request failure for the URL's host. Callers
+    /// must check `isPreRequestFailure` first (or pass the error
+    /// through `noteFailure(url:error:)`).
+    static func noteUnreachable(host: String) {
+        lock.lock()
+        unreachableUntil[host.lowercased()] = monotonicNow() + unreachableTTL
+        lock.unlock()
+    }
+
+    static func noteFailure(url: URL, error: Error) {
+        guard isPreRequestFailure(error), let host = url.host else { return }
+        noteUnreachable(host: host)
+    }
+
+    static func isUnreachable(host: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let until = unreachableUntil[host.lowercased()] else { return false }
+        if monotonicNow() >= until {
+            unreachableUntil.removeValue(forKey: host.lowercased())
+            return false
+        }
+        return true
+    }
+
+    /// Preferred URL to request: the twin host when the URL's host
+    /// is currently remembered unreachable, otherwise the URL
+    /// itself.
+    static func preferredURL(for url: URL) -> URL {
+        guard let host = url.host, isUnreachable(host: host) else { return url }
+        return twinHostURL(for: url) ?? url
+    }
+}

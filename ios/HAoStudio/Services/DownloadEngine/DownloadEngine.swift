@@ -34,6 +34,9 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+#if canImport(Network)
+import Network
+#endif
 
 // MARK: - Public types
 
@@ -58,11 +61,41 @@ struct DownloadRequest: Codable, Equatable {
 
 enum DownloadState: String, Codable {
     case queued
+    case fetchingURL
     case downloading
+    case waitingNetwork
     case paused
+    case validating
     case completed
     case failed
+    case notDownloadable
     case cancelled
+
+    /// Chinese copy for the 12-state machine (plan §9.3). The
+    /// 12th Coda state, "等待登录原账号", is excluded — this app
+    /// has no login.
+    var chineseLabel: String {
+        switch self {
+        case .queued: return "排队中"
+        case .fetchingURL: return "获取下载地址"
+        case .downloading: return "下载中"
+        case .waitingNetwork: return "等待可用网络"
+        case .paused: return "已暂停"
+        case .validating: return "校验中"
+        case .completed: return "已下载"
+        case .failed: return "下载失败"
+        case .notDownloadable: return "暂不可下载"
+        case .cancelled: return "已取消"
+        }
+    }
+
+    var isActive: Bool {
+        self == .queued || self == .fetchingURL || self == .downloading || self == .validating
+    }
+
+    var isTerminal: Bool {
+        self == .completed || self == .failed || self == .cancelled || self == .notDownloadable
+    }
 }
 
 /// Serializable snapshot of one task. `localRelativePath` is set
@@ -76,6 +109,79 @@ struct DownloadTaskInfo: Codable, Equatable {
     var totalBytes: Int64
     var errorMessage: String?
     var localRelativePath: String?
+    /// Owners sharing this one job (plan §9.3): the same song
+    /// downloaded from several playlists / singles builds ONE
+    /// job. Cancelling removes one owner; the job only really
+    /// cancels when the owner set is empty.
+    var owners: Set<String> = []
+    /// Retry attempts used so far (backoff 1s / 2s / 4s).
+    var retryCount: Int = 0
+    /// Absolute URL string the resume state (`.part` file) belongs
+    /// to. When the request URL changes (CDN switch) the old
+    /// resume is discarded and the download restarts from 0.
+    var lastSourceURL: String? = nil
+    /// True until the user approves a metered-network download
+    /// (batch on cellular/hotspot/low-data, or a single song in
+    /// low-data mode). Unapproved tasks wait for Wi-Fi.
+    var needsMeteredConfirmation: Bool = false
+}
+
+// MARK: - b45-F: metered-network confirmation policy (plan §9.3)
+//
+// Pure decision rule: a BATCH download on cellular / hotspot /
+// low-data mode asks once first ("继续下载 / 等待 Wi-Fi /
+// 取消"); a SINGLE song only asks in low-data mode. Unapproved
+// batch tasks wait for Wi-Fi.
+
+enum MeteredDownloadPolicy {
+    static func needsConfirmation(
+        isBatch: Bool,
+        isCellular: Bool,
+        isHotspot: Bool,
+        isLowDataMode: Bool
+    ) -> Bool {
+        if isBatch { return isCellular || isHotspot || isLowDataMode }
+        return isLowDataMode
+    }
+}
+
+// MARK: - b45-F: downloads.json catalog store (plan §9.3)
+//
+// The download directory persists as `downloads.json` with a
+// monotonically increasing revision, so a slow old save can never
+// overwrite a newer pause / cancel. The LocalStore collection is
+// kept as a compatibility mirror on write and a fallback on read.
+
+struct DownloadCatalogFile: Codable {
+    var revision: Int
+    var tasks: [DownloadTaskInfo]
+}
+
+enum DownloadCatalogStore {
+    static let fileName = "downloads.json"
+
+    static func catalogURL(documentsURL: URL? = nil) -> URL {
+        let docs = documentsURL ?? LocalStore.documentsDirectory()
+        return docs.appendingPathComponent(DownloadEngine.downloadSubdir)
+            .appendingPathComponent(fileName)
+    }
+
+    static func load(documentsURL: URL? = nil) -> DownloadCatalogFile? {
+        guard let data = try? Data(contentsOf: catalogURL(documentsURL: documentsURL)) else { return nil }
+        return try? JSONDecoder().decode(DownloadCatalogFile.self, from: data)
+    }
+
+    @discardableResult
+    static func save(_ file: DownloadCatalogFile, documentsURL: URL? = nil) -> Bool {
+        let url = catalogURL(documentsURL: documentsURL)
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard let data = try? JSONEncoder().encode(file) else { return false }
+        do {
+            try data.write(to: url, options: [.atomic])
+            return true
+        } catch { return false }
+    }
 }
 
 // MARK: - Engine
@@ -122,9 +228,24 @@ final class DownloadEngine: NSObject {
         /// server that always 416s fails instead of looping.
         var restartAfter416Pending = false
         var restartedAfter416 = false
+        /// MIME type of the current response (completion
+        /// validation: music must be audio/*).
+        var mimeType: String?
+        /// Last HTTP status received (completion validation
+        /// requires 200 / 206).
+        var lastStatusCode: Int?
+        /// Source URL the `.part` file on disk belongs to (CDN
+        /// switch detection: a changed URL discards the resume).
+        var resumeSourceURL: String?
+        /// Pending backoff retry (cancelled by pause / cancel).
+        var retryWork: DispatchWorkItem?
+        /// Whether the metered-confirmation callback already fired
+        /// for this task (fire once).
+        var meteredCallbackFired = false
 
         init(info: DownloadTaskInfo) {
             self.info = info
+            self.resumeSourceURL = info.lastSourceURL
         }
     }
 
@@ -144,9 +265,70 @@ final class DownloadEngine: NSObject {
     /// Enqueue order, for a stable snapshot.
     private var order: [String] = []
 
+    /// Monotonic revision of `downloads.json` (plan §9.3).
+    private var catalogRevision = 0
+    /// Retry backoff delays, seconds (plan §9.3): 1s / 2s / 4s.
+    static let retryDelays: [TimeInterval] = [1, 2, 4]
+    /// Max automatic retries for a network failure.
+    static let maxRetries = 3
+
+    /// Network state from the path monitor (b45-F). Defaults
+    /// assume "online, unmetered" until the first path update.
+    private(set) var isNetworkAvailable = true
+    private(set) var isMeteredNetwork = false
+    private(set) var isLowDataMode = false
+#if canImport(Network)
+    private var pathMonitor: NWPathMonitor?
+#endif
+
+    /// Fired once (main queue) when a task needs metered-network
+    /// confirmation — the UI shows "继续下载 / 等待 Wi-Fi /
+    /// 取消" and calls `approveMetered(key:)` / `denyMetered(key:)`.
+    var onMeteredConfirmationNeeded: ((DownloadTaskInfo) -> Void)?
+
     override init() {
         super.init()
         restorePersistedTasks()
+        startPathMonitor()
+    }
+
+    /// Max concurrent downloads for the current network
+    /// (plan §9.3): Wi-Fi 2, metered 1.
+    var currentMaxConcurrent: Int { isMeteredNetwork ? 1 : DownloadEngine.maxConcurrent }
+
+    /// Start the path monitor: a disconnect moves active tasks to
+    /// `waitingNetwork`, a reconnect resumes them automatically.
+    private func startPathMonitor() {
+#if canImport(Network)
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            guard let self = self else { return }
+            self.syncQueue.async {
+                let wasAvailable = self.isNetworkAvailable
+                self.isNetworkAvailable = path.status == .satisfied
+                self.isMeteredNetwork = path.isExpensive
+                self.isLowDataMode = path.isConstrained
+                if !self.isNetworkAvailable {
+                    // Active downloads will fail through the error
+                    // path into waitingNetwork; queued ones move now.
+                    for record in self.records.values where record.info.state == .queued {
+                        record.info.state = .waitingNetwork
+                    }
+                    self.persistLocked()
+                } else if !wasAvailable {
+                    // Reconnected: waiting tasks re-queue and run.
+                    for record in self.records.values where record.info.state == .waitingNetwork {
+                        record.info.state = .queued
+                        record.info.errorMessage = nil
+                    }
+                    self.persistLocked()
+                    self.startNextLocked()
+                }
+            }
+        }
+        monitor.start(queue: DispatchQueue(label: "com.haostudio.downloadpath"))
+        pathMonitor = monitor
+#endif
     }
 
     // MARK: Directories / paths
@@ -302,15 +484,30 @@ final class DownloadEngine: NSObject {
     /// terminal state.
     @discardableResult
     func enqueue(request: DownloadRequest, progress: ((Int64, Int64) -> Void)? = nil, completion: ((DownloadTaskInfo) -> Void)? = nil) -> DownloadTaskInfo {
+        enqueue(request: request, owner: nil, isBatch: false, progress: progress, completion: completion)
+    }
+
+    /// Enqueue with a sharing owner and a batch flag (plan §9.3).
+    /// The same song from several playlists / singles builds ONE
+    /// job (`owners` grows); a batch enqueue on a metered network
+    /// (or any enqueue in low-data mode) waits for the user's
+    /// metered confirmation before it starts.
+    func enqueue(request: DownloadRequest, owner: String?, isBatch: Bool, progress: ((Int64, Int64) -> Void)? = nil, completion: ((DownloadTaskInfo) -> Void)? = nil) -> DownloadTaskInfo {
         var result: DownloadTaskInfo!
         syncQueue.sync {
-            if let existing = records[request.key], existing.info.state == .queued || existing.info.state == .downloading || existing.info.state == .paused {
+            if let existing = records[request.key], existing.info.state == .queued || existing.info.state == .downloading || existing.info.state == .paused || existing.info.state == .waitingNetwork || existing.info.state == .fetchingURL || existing.info.state == .validating {
+                if let owner = owner { existing.info.owners.insert(owner) }
                 if let progress = progress { existing.progress = progress }
                 if let completion = completion { existing.completion = completion }
                 result = existing.info
+                persistLocked()
                 return
             }
-            let info = DownloadTaskInfo(request: request, state: .queued, downloadedBytes: 0, totalBytes: -1, errorMessage: nil, localRelativePath: nil)
+            var info = DownloadTaskInfo(request: request, state: .queued, downloadedBytes: 0, totalBytes: -1, errorMessage: nil, localRelativePath: nil)
+            if let owner = owner { info.owners.insert(owner) }
+            info.needsMeteredConfirmation = MeteredDownloadPolicy.needsConfirmation(
+                isBatch: isBatch, isCellular: isMeteredNetwork,
+                isHotspot: false, isLowDataMode: isLowDataMode)
             let record = TaskRecord(info: info)
             record.progress = progress
             record.completion = completion
@@ -318,9 +515,91 @@ final class DownloadEngine: NSObject {
             if !order.contains(request.key) { order.append(request.key) }
             result = info
             persistLocked()
-            startNextLocked()
+            if info.needsMeteredConfirmation {
+                fireMeteredConfirmationLocked(record)
+            } else {
+                startNextLocked()
+            }
         }
         return result
+    }
+
+    private func fireMeteredConfirmationLocked(_ record: TaskRecord) {
+        guard !record.meteredCallbackFired else { return }
+        record.meteredCallbackFired = true
+        let info = record.info
+        let callback = onMeteredConfirmationNeeded
+        DispatchQueue.main.async { callback?(info) }
+    }
+
+    /// Approve a metered-network download: it starts now.
+    func approveMetered(key: String) {
+        syncQueue.sync {
+            guard let record = records[key] else { return }
+            guard record.info.needsMeteredConfirmation else { return }
+            record.info.needsMeteredConfirmation = false
+            record.info.state = .queued
+            persistLocked()
+            startNextLocked()
+        }
+    }
+
+    /// Decline a metered-network download: the task is cancelled.
+    func denyMetered(key: String) {
+        syncQueue.sync {
+            guard let record = records[key] else { return }
+            guard record.info.needsMeteredConfirmation else { return }
+            record.info.needsMeteredConfirmation = false
+            finishLocked(record, state: .cancelled, errorMessage: nil)
+        }
+    }
+
+    /// Cancel one owner of a shared job (plan §9.3): the job only
+    /// really cancels when the owner set is empty. Passing nil
+    /// cancels the whole job (the old behaviour).
+    func cancel(key: String, owner: String?) {
+        syncQueue.sync {
+            guard let record = records[key] else { return }
+            if let owner = owner {
+                record.info.owners.remove(owner)
+                persistLocked()
+                guard record.info.owners.isEmpty else { return }
+            }
+            cancelLocked(record)
+        }
+    }
+
+    private func cancelLocked(_ record: TaskRecord) {
+        switch record.info.state {
+        case .completed, .cancelled:
+            return
+        default:
+            break
+        }
+        record.retryWork?.cancel()
+        record.retryWork = nil
+        record.stopRequested = true
+        record.sessionTask?.cancel()
+        closeHandleLocked(record)
+        try? FileManager.default.removeItem(at: partURL(for: record.info.request))
+        finishLocked(record, state: .cancelled, errorMessage: nil)
+    }
+
+    /// Quality upgrade (plan §9.3): move the overlapping owners
+    /// from the old-quality job to the new one; the old job stays
+    /// for its remaining owners.
+    func migrateOwners(fromKey: String, toKey: String, owners: Set<String>) {
+        syncQueue.sync {
+            guard let from = records[fromKey], let to = records[toKey] else { return }
+            for owner in owners where from.info.owners.contains(owner) {
+                from.info.owners.remove(owner)
+                to.info.owners.insert(owner)
+            }
+            persistLocked()
+            if from.info.owners.isEmpty, from.info.state != .completed {
+                cancelLocked(from)
+            }
+        }
     }
 
     func pause(key: String) {
@@ -328,12 +607,16 @@ final class DownloadEngine: NSObject {
             guard let record = records[key] else { return }
             switch record.info.state {
             case .downloading:
+                record.retryWork?.cancel()
+                record.retryWork = nil
                 record.stopRequested = true
                 record.sessionTask?.cancel()
                 record.info.state = .paused
                 closeHandleLocked(record)
                 persistLocked()
-            case .queued:
+            case .queued, .waitingNetwork, .fetchingURL, .validating:
+                record.retryWork?.cancel()
+                record.retryWork = nil
                 record.info.state = .paused
                 persistLocked()
             default:
@@ -345,9 +628,10 @@ final class DownloadEngine: NSObject {
     func resume(key: String) {
         syncQueue.sync {
             guard let record = records[key] else { return }
-            guard record.info.state == .paused || record.info.state == .failed else { return }
+            guard record.info.state == .paused || record.info.state == .failed || record.info.state == .waitingNetwork else { return }
             record.info.state = .queued
             record.info.errorMessage = nil
+            record.info.retryCount = 0
             record.stopRequested = false
             persistLocked()
             startNextLocked()
@@ -355,20 +639,7 @@ final class DownloadEngine: NSObject {
     }
 
     func cancel(key: String) {
-        syncQueue.sync {
-            guard let record = records[key] else { return }
-            switch record.info.state {
-            case .completed, .cancelled:
-                return
-            default:
-                break
-            }
-            record.stopRequested = true
-            record.sessionTask?.cancel()
-            closeHandleLocked(record)
-            try? FileManager.default.removeItem(at: partURL(for: record.info.request))
-            finishLocked(record, state: .cancelled, errorMessage: nil)
-        }
+        cancel(key: key, owner: nil)
     }
 
     /// Remove a task record (and its file when completed). The
@@ -408,8 +679,20 @@ final class DownloadEngine: NSObject {
     }
 
     private func startNextLocked() {
-        while activeCountLocked() < DownloadEngine.maxConcurrent {
-            guard let next = order.compactMap({ records[$0] }).first(where: { $0.info.state == .queued }) else { return }
+        while activeCountLocked() < currentMaxConcurrent {
+            // Unapproved metered tasks and offline tasks never
+            // start: the former wait for the user's confirmation,
+            // the latter for the network (waitingNetwork).
+            if !isNetworkAvailable {
+                for record in records.values where record.info.state == .queued {
+                    record.info.state = .waitingNetwork
+                }
+                persistLocked()
+                return
+            }
+            guard let next = order.compactMap({ records[$0] }).first(where: {
+                $0.info.state == .queued && !$0.info.needsMeteredConfirmation
+            }) else { return }
             startLocked(next)
         }
     }
@@ -419,7 +702,7 @@ final class DownloadEngine: NSObject {
         record.stopRequested = false
         let request = record.info.request
         guard let scheme = request.sourceURL.scheme?.lowercased() else {
-            finishLocked(record, state: .failed, errorMessage: "不支持的下载地址")
+            finishLocked(record, state: .notDownloadable, errorMessage: "暂不可下载")
             return
         }
         if scheme == "file" {
@@ -427,7 +710,7 @@ final class DownloadEngine: NSObject {
             return
         }
         if scheme != "http" && scheme != "https" {
-            finishLocked(record, state: .failed, errorMessage: "不支持的下载地址")
+            finishLocked(record, state: .notDownloadable, errorMessage: "暂不可下载")
             return
         }
         startHTTPDownloadLocked(record)
@@ -438,6 +721,15 @@ final class DownloadEngine: NSObject {
     private func startHTTPDownloadLocked(_ record: TaskRecord) {
         let request = record.info.request
         let part = partURL(for: request)
+        // b45-F: the URL changed (CDN switch) — the old resume
+        // belongs to another URL, so discard it and restart from 0.
+        if let resumeURL = record.resumeSourceURL,
+           resumeURL != request.sourceURL.absoluteString {
+            try? FileManager.default.removeItem(at: part)
+            record.info.downloadedBytes = 0
+        }
+        record.resumeSourceURL = request.sourceURL.absoluteString
+        record.info.lastSourceURL = request.sourceURL.absoluteString
         let existing = (try? FileManager.default.attributesOfItem(atPath: part.path)[.size] as? NSNumber)?.int64Value ?? 0
         record.baseOffset = existing
         // Finding E: the part size on disk is the truth — reconcile
@@ -481,6 +773,10 @@ final class DownloadEngine: NSObject {
         syncQueue.async {
             guard let record = self.record(forSessionTask: task) else { return }
             if record.stopRequested { return }
+            record.lastStatusCode = response.statusCode
+            if response.statusCode == 200 || response.statusCode == 206 {
+                record.mimeType = response.mimeType
+            }
             if response.statusCode == 206 {
                 // Server honours Range: validate the segment before
                 // appending anything (§2.1 Problem B). A wrong
@@ -495,6 +791,9 @@ final class DownloadEngine: NSObject {
                     record.info.totalBytes = expectedTotal
                     // Finding E: reconcile with the part on disk.
                     record.info.downloadedBytes = record.baseOffset
+                    // b45-F: reserve only the REMAINING space — the
+                    // bytes already on disk are already paid for.
+                    if !self.checkRemainingSpaceLocked(record) { return }
                 case .invalid(let reason):
                     // Discard the part so a later resume restarts
                     // from 0 instead of appending to bad bytes.
@@ -522,6 +821,8 @@ final class DownloadEngine: NSObject {
                 if let length = response.value(forHTTPHeaderField: "Content-Length").flatMap({ Int64($0) }), length >= 0 {
                     record.expectedTotal = length
                     record.info.totalBytes = length
+                    // b45-F: reserve only the remaining space.
+                    if !self.checkRemainingSpaceLocked(record) { return }
                 }
             } else if response.statusCode == 416 {
                 // Range no longer satisfiable (part past EOF after a
@@ -539,6 +840,17 @@ final class DownloadEngine: NSObject {
                 record.info.downloadedBytes = 0
                 record.expectedTotal = -1
                 task.cancel()
+                return
+            } else if response.statusCode == 401 || response.statusCode == 403 || response.statusCode == 404 {
+                // b45-F: 401 / 403 / 404 get ONE retry (plan §9.3);
+                // a second failure is terminal.
+                record.stopRequested = true
+                task.cancel()
+                if record.info.retryCount == 0 {
+                    self.scheduleRetryLocked(record, errorMessage: "服务器返回了错误（\(response.statusCode)）")
+                } else {
+                    self.finishLocked(record, state: .failed, errorMessage: "服务器返回了错误（\(response.statusCode)）")
+                }
                 return
             } else {
                 record.stopRequested = true
@@ -587,6 +899,50 @@ final class DownloadEngine: NSObject {
         }
     }
 
+    /// True when the remaining bytes fit in the free space (the
+    /// bytes already downloaded are already paid for). Fails the
+    /// task with the storage message when they do not fit.
+    private func checkRemainingSpaceLocked(_ record: TaskRecord) -> Bool {
+        guard record.expectedTotal >= 0 else { return true }
+        let remaining = record.expectedTotal - record.info.downloadedBytes
+        guard remaining > 0 else { return true }
+        if remaining > AutomaticCacheLimit.freeBytes() {
+            record.stopRequested = true
+            record.sessionTask?.cancel()
+            closeHandleLocked(record)
+            finishLocked(record, state: .failed, errorMessage: "存储空间不足，请清理后重试")
+            return false
+        }
+        return true
+    }
+
+    /// Schedule a backoff retry (1s / 2s / 4s). The task keeps its
+    /// `.downloading` state — holding its slot — until the delay
+    /// elapses, then re-queues. The completion callback does NOT
+    /// fire: a retry is not a terminal state.
+    private func scheduleRetryLocked(_ record: TaskRecord, errorMessage: String) {
+        record.info.retryCount += 1
+        let delay = DownloadEngine.retryDelays[
+            min(record.info.retryCount - 1, DownloadEngine.retryDelays.count - 1)]
+        record.info.errorMessage = errorMessage
+        record.info.state = .downloading
+        closeHandleLocked(record)
+        record.sessionTask = nil
+        persistLocked()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.syncQueue.async {
+                guard record.retryWork != nil, record.info.state == .downloading else { return }
+                record.retryWork = nil
+                record.info.state = .queued
+                self.persistLocked()
+                self.startNextLocked()
+            }
+        }
+        record.retryWork = work
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
     /// Called by the session delegate on the delegate queue.
     fileprivate func httpDidComplete(_ task: URLSessionTask, error: Error?) {
         syncQueue.async {
@@ -611,6 +967,23 @@ final class DownloadEngine: NSObject {
                         record.restartAfter416Pending = false
                         self.startHTTPDownloadLocked(record)
                     }
+                    // A cancelled task whose backoff retry owns the
+                    // restart does nothing here.
+                    return
+                }
+                // b45-F: a disconnect parks the task in
+                // waitingNetwork — it resumes automatically on
+                // reconnect instead of failing.
+                if !self.isNetworkAvailable {
+                    record.info.state = .waitingNetwork
+                    record.info.errorMessage = error.localizedDescription
+                    self.persistLocked()
+                    return
+                }
+                // b45-F: network failures retry 1s / 2s / 4s
+                // (max 3); then they fail for real.
+                if record.info.retryCount < DownloadEngine.maxRetries {
+                    self.scheduleRetryLocked(record, errorMessage: error.localizedDescription)
                     return
                 }
                 self.finishLocked(record, state: .failed, errorMessage: error.localizedDescription)
@@ -619,6 +992,26 @@ final class DownloadEngine: NSObject {
             if record.expectedTotal >= 0 && record.info.downloadedBytes != record.expectedTotal {
                 self.finishLocked(record, state: .failed, errorMessage: "下载不完整，请重试")
                 return
+            }
+            // b45-F: completion validation (plan §9.3) — status
+            // must be 200 / 206 and the MIME must match the kind.
+            record.info.state = .validating
+            if let status = record.lastStatusCode, status != 200 && status != 206 {
+                self.finishLocked(record, state: .failed, errorMessage: "服务器返回了错误（\(status)）")
+                return
+            }
+            if let mime = record.mimeType, !mime.isEmpty {
+                let isMusic = record.info.request.kind == .music
+                let ok = isMusic
+                    ? (mime.hasPrefix("audio/") || mime == "application/octet-stream")
+                    : (mime.hasPrefix("video/") || mime == "application/octet-stream"
+                        || mime == "application/vnd.apple.mpegurl")
+                if !ok {
+                    self.finishLocked(
+                        record, state: .failed,
+                        errorMessage: isMusic ? "音频校验失败，请重试" : "视频校验失败，请重试")
+                    return
+                }
             }
             self.completeLocked(record)
         }
@@ -820,6 +1213,11 @@ final class DownloadEngine: NSObject {
 
     private func persistLocked() {
         let infos = order.compactMap { records[$0]?.info }
+        // b45-F: downloads.json with a monotonic revision — a slow
+        // old save can never overwrite a newer pause / cancel.
+        // The LocalStore collection stays as a compatibility mirror.
+        catalogRevision += 1
+        DownloadCatalogStore.save(DownloadCatalogFile(revision: catalogRevision, tasks: infos))
         LocalStore.saveCollection(named: DownloadEngine.tasksCollection, value: infos)
     }
 
@@ -827,14 +1225,25 @@ final class DownloadEngine: NSObject {
     /// paused — the `.part` file on disk makes them resumable, and
     /// nothing auto-starts on launch.
     private func restorePersistedTasks() {
-        let infos: [DownloadTaskInfo] = LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: [])
+        // b45-F: downloads.json is primary; the LocalStore
+        // collection is the fallback for pre-b45 indexes.
+        let catalog = DownloadCatalogStore.load()
+        let infos: [DownloadTaskInfo]
+        if let catalog = catalog {
+            catalogRevision = catalog.revision
+            infos = catalog.tasks
+        } else {
+            infos = LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: [])
+        }
         for info in infos {
             let key = info.request.key
             // Dedupe: a crafted index can repeat a key; the second
             // copy must not duplicate the snapshot.
             guard records[key] == nil else { continue }
             var restored = info
-            if restored.state == .downloading || restored.state == .queued {
+            if restored.state == .downloading || restored.state == .queued
+                || restored.state == .fetchingURL || restored.state == .validating
+                || restored.state == .waitingNetwork {
                 restored.state = .paused
             }
             restored.errorMessage = restored.state == .failed ? restored.errorMessage : nil
@@ -851,13 +1260,44 @@ final class DownloadEngine: NSObject {
                     kind: restored.request.kind,
                     qualityCode: restored.request.qualityCode)
             }
-            // A completed entry whose file is gone is a dangling
-            // path — drop it instead of reporting .completed.
+            // b45-F: a completed entry whose file is gone is a
+            // FAILED task with a message — not a silent drop.
+            // ("本地文件缺失，请重新下载")
             if restored.state == .completed {
-                guard let relative = restored.localRelativePath,
-                      let url = LocalFileIndex.resolve(relative, subdir: DownloadEngine.downloadSubdir),
-                      FileManager.default.fileExists(atPath: url.path) else { continue }
+                let missing: Bool
+                if let relative = restored.localRelativePath,
+                   let url = LocalFileIndex.resolve(relative, subdir: DownloadEngine.downloadSubdir) {
+                    missing = !FileManager.default.fileExists(atPath: url.path)
+                } else {
+                    missing = true
+                }
+                if missing {
+                    restored.state = .failed
+                    restored.errorMessage = "本地文件缺失，请重新下载"
+                    restored.localRelativePath = nil
+                    let record = TaskRecord(info: restored)
+                    records[key] = record
+                    order.append(key)
+                    continue
+                }
             } else {
+                // b45-F: a crash between "file finished" and
+                // "catalog entry written" leaves an in-flight task
+                // whose FINAL file is already on disk — claim it
+                // instead of re-downloading.
+                let final = finalURL(for: restored.request)
+                if FileManager.default.fileExists(atPath: final.path),
+                   restored.downloadedBytes > 0 || restored.totalBytes > 0 {
+                    restored.state = .completed
+                    restored.localRelativePath = DownloadEngine.relativePath(for: final.lastPathComponent)
+                    restored.downloadedBytes = restored.totalBytes >= 0
+                        ? restored.totalBytes
+                        : ((try? FileManager.default.attributesOfItem(atPath: final.path)[.size] as? NSNumber)?.int64Value ?? restored.downloadedBytes)
+                    let record = TaskRecord(info: restored)
+                    records[key] = record
+                    order.append(key)
+                    continue
+                }
                 // Adopt a legacy `<name>.part` (pre-2.1 layout, shared
                 // per file name) into this task's per-key part name,
                 // so an in-flight download from before the upgrade

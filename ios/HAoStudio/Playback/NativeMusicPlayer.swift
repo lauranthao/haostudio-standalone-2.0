@@ -1035,6 +1035,68 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     private var interruptionObserver: NSObjectProtocol?
     private var wasPlayingBeforeInterruption: Bool = false
 
+    // MARK: - b45-F: prefetch / offline / failure recovery
+    // (plan §7.4 / §9.2 / §9.3)
+
+    /// Manual track switch: 0.8 s quick crossfade when the next
+    /// track is already cached locally, otherwise an immediate
+    /// hard cut. (Auto-advance keeps the 2.5 s crossfade.)
+    static let manualCrossfadeDuration: TimeInterval = 0.8
+
+    /// Local-audio lookup, installed by the coordinator: the
+    /// downloaded file or audio-cache file for an item, or nil.
+    /// Drives the manual crossfade, the offline selector and the
+    /// prefetch "already cached" check.
+    var localAudioURL: ((PlaybackItem) -> URL?)?
+
+    /// Offline when the download engine's path monitor says so
+    /// (single source of truth for the player).
+    var isOffline: Bool { !DownloadEngine.shared.isNetworkAvailable }
+
+    /// Offline fallback state for the UI leg: how many upcoming
+    /// tracks were skipped to reach a local one, and whether the
+    /// "no offline song at all" alert must show.
+    @Published private(set) var offlineSkippedCount = 0
+    @Published private(set) var offlineAlertNeeded = false
+
+    /// Offline alert copy (plan §9.3, OfflinePlaybackAlert).
+    enum OfflinePlaybackAlert {
+        static let title = "离线播放"
+        static let message = "当前无网络，已跳过无法离线播放的歌曲。"
+        static let playNextOfflineTitle = "播放下一首离线歌曲"
+        static let viewDownloadsTitle = "查看已下载"
+    }
+
+    /// Dismiss the offline alert (called by the UI leg).
+    func dismissOfflineAlert() { offlineAlertNeeded = false }
+
+    /// Consecutive unplayable tracks (plan §7.4: 5 in a row stops
+    /// playback). Reset on every successful track start.
+    private var consecutiveFailureCount = 0
+    /// Recovery stage for the current item: 0 = fresh, 1 = twin
+    /// host tried, 2 = re-resolved. Reset on success.
+    private var recoverStage = 0
+
+    /// Last successfully opened URL + tier, for quality-switch
+    /// rollback: a failed quality switch returns to the exact
+    /// URL / tier that was playing.
+    private var lastGoodURL: URL?
+    private var lastGoodQuality: AudioQuality?
+    private var lastGoodItemID: String?
+
+    /// True while a crossfade ramp is running. A manual "next"
+    /// during a transition does NOT hard-cut: it is remembered
+    /// and runs once the audible transition finishes.
+    private var crossfadeInProgress = false
+    private var pendingManualNext = false
+    /// True when the running crossfade is a manual 0.8 s one
+    /// (its failure path falls back to a hard cut, never to
+    /// auto-advance).
+    private var crossfadeIsManual = false
+
+    /// Upcoming-track prefetcher (plan §7.4/§9.2).
+    let prefetcher = QueuePrefetcher()
+
     private var normalizationEnabled: Bool = false
     private var normalizationStrength: Int = 1
     private var measuredLoudness: [String: Double] = [:]
@@ -1477,6 +1539,8 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             engine.volume = Float(gain)
         }
         recomputePlayingState()
+        // b45-F: same success bookkeeping as the crossfade path.
+        noteSuccessfulStart(item: item)
         finish(.success(()))
         onTrackStarted?(item)
     }
@@ -1563,6 +1627,12 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             self.playRequested = false
             self.stallFailed = false
             self.pendingItem = nil
+            // b45-F: a stop also abandons any remembered manual
+            // "next" and any running transition.
+            self.pendingManualNext = false
+            self.crossfadeInProgress = false
+            self.crossfadeIsManual = false
+            self.prefetcher.cancel()
             self.failedTrackIds.removeAll()
             self.activeEngine.pause()
             self.activeEngine.unload()
@@ -1676,6 +1746,13 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     func next() {
         ensureMain {
             guard !self.queue.isEmpty, self.currentTrack != nil else { return }
+            // b45-F: a transition already in progress is never
+            // hard-cut — the tap is remembered and runs once the
+            // audible transition finishes.
+            if self.crossfadeInProgress {
+                self.pendingManualNext = true
+                return
+            }
             let nextIndex = musicNextTrackIndex(mode: self.playMode, current: self.queueIndex, length: self.queue.count, auto: false)
             guard nextIndex >= 0, nextIndex != self.queueIndex else {
                 // Dead end (1-song queue, or the end in sequential /
@@ -1685,8 +1762,16 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                 self.restartCurrentTrack()
                 return
             }
+            let target = self.queue[nextIndex]
+            // b45-F: manual switch, next track already cached
+            // locally → 0.8 s quick crossfade; otherwise hard cut.
+            if self.isPlaying, let localURL = self.localAudioURL?(target) {
+                self.queueIndex = nextIndex
+                self.manualCrossfade(to: target, url: localURL)
+                return
+            }
             self.queueIndex = nextIndex
-            self.play(item: self.queue[nextIndex])
+            self.play(item: target)
         }
     }
 
@@ -1697,6 +1782,12 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     func previous() {
         ensureMain {
             guard !self.queue.isEmpty, self.currentTrack != nil else { return }
+            // b45-F: same transition rule as next() — never cut an
+            // audible crossfade; remember the tap instead.
+            if self.crossfadeInProgress {
+                self.pendingManualNext = true
+                return
+            }
             let prevIndex = musicPrevTrackIndex(mode: self.playMode, current: self.queueIndex, length: self.queue.count)
             guard prevIndex >= 0, prevIndex != self.queueIndex else {
                 // Dead end (first track in sequential / single mode)
@@ -1706,9 +1797,29 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                 self.restartCurrentTrack()
                 return
             }
+            let target = self.queue[prevIndex]
+            // b45-F: previous ALWAYS changes track (never a
+            // restart-by-position rule); loop modes wrap at the
+            // head to the tail (musicPrevTrackIndex). A cached
+            // previous track gets the same 0.8 s quick crossfade.
+            if self.isPlaying, let localURL = self.localAudioURL?(target) {
+                self.queueIndex = prevIndex
+                self.manualCrossfade(to: target, url: localURL)
+                return
+            }
             self.queueIndex = prevIndex
-            self.play(item: self.queue[prevIndex])
+            self.play(item: target)
         }
+    }
+
+    /// Manual 0.8 s quick crossfade to an already-cached track
+    /// (b45-F, plan §9.2). The regular crossfade path, but with
+    /// the manual duration and a manual failure path (a failed
+    /// cached load falls back to a hard cut via play(), never to
+    /// auto-advance).
+    private func manualCrossfade(to item: PlaybackItem, url: URL) {
+        crossfadeIsManual = true
+        crossfade(to: item, url: url, tried: [url], attempts: 0, duration: NativeMusicPlayer.manualCrossfadeDuration)
     }
 
     // MARK: - Automatic advance and crossfade
@@ -1770,6 +1881,34 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             stop()
             return
         }
+        // b45-F: offline — jump to the first locally available
+        // track (download or audio cache), counting the skips;
+        // with no local track at all, show the offline alert.
+        // NOTE (wiring): the re-resolve below goes through the
+        // coordinator, which returns `item.localFileURL` first
+        // when set — a failed LOCAL copy is therefore re-offered
+        // by the coordinator. Skipping a failed local copy needs
+        // a coordinator-side `skipLocal` flag (not this file).
+        if isOffline {
+            let isLooping = playMode == .listLoop || playMode == .singleLoop
+            if let found = OfflineQueueSelector.firstAvailableIndex(
+                itemCount: queue.count, currentIndex: index,
+                isLooping: isLooping, isFM: false,
+                isAvailable: { [weak self] i in
+                    guard let self = self else { return false }
+                    let candidate = self.queue[i]
+                    return candidate.localFileURL != nil || self.localAudioURL?(candidate) != nil
+                }) {
+                offlineSkippedCount = found.skipped
+                queueIndex = found.index
+                play(item: queue[found.index])
+            } else {
+                offlineSkippedCount = 0
+                offlineAlertNeeded = true
+                stop()
+            }
+            return
+        }
         let nextIndex = musicNextTrackIndex(mode: playMode, current: index, length: queue.count, auto: true)
         guard nextIndex >= 0 else {
             stop()
@@ -1817,10 +1956,11 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     /// playback can survive a rapid series of track changes. When
     /// the outgoing track already ended, the incoming starts at full
     /// volume instead of swallowing its intro with a ramp.
-    private func crossfade(to item: PlaybackItem, url: URL, tried: [URL], attempts: Int) {
+    private func crossfade(to item: PlaybackItem, url: URL, tried: [URL], attempts: Int, duration: TimeInterval = NativeMusicPlayer.crossfadeDuration) {
         let gen = nextGeneration()
         stopCrossfadeTimer()
         standbyEndedDuringCrossfade = false
+        crossfadeInProgress = true
         let outgoing = activeEngine
         let incoming = standbyEngine
         // Crossfade load timeout (mirrors open()): a load that
@@ -1864,6 +2004,13 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                     // preview, and the fallback below re-resolves
                     // with this URL in `tried`, so the next source
                     // is tried instead of the same clip.
+                    // b45-F: a MANUAL crossfade never auto-advances
+                    // on failure — it falls back to a hard cut.
+                    if self.crossfadeIsManual {
+                        self.endCrossfadeTransition()
+                        self.play(item: item)
+                        return
+                    }
                     if tried.count < 2 {
                         // b44: same stall class as the first resolve
                         // (task from advanceAutoFrom is still active).
@@ -1885,17 +2032,19 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                                     // A13: the fallback resolve found
                                     // nothing — failure-driven skip.
                                     self.failedTrackIds.insert(item.id)
+                                    self.endCrossfadeTransition()
                                     self.advanceAutoFrom(index: self.queueIndex, attempts: attempts + 1)
                                     return
                                 }
                                 self.actualQuality = tier
-                                self.crossfade(to: item, url: nextURL, tried: tried + [nextURL], attempts: attempts)
+                                self.crossfade(to: item, url: nextURL, tried: tried + [nextURL], attempts: attempts, duration: duration)
                             }
                         }
                     } else {
                         // A13: the fallback could not save this
                         // track either — failure-driven skip.
                         self.failedTrackIds.insert(item.id)
+                        self.endCrossfadeTransition()
                         self.advanceAutoFrom(index: self.queueIndex, attempts: attempts + 1)
                     }
                     return
@@ -1912,19 +2061,26 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                     incoming.volume = 0
                     incoming.play()
                     incoming.rate = Float(self.playbackSpeed)
-                    self.runCrossfadeRamp(item: item, gen: gen, outgoingStartVolume: outgoing.volume, target: target)
+                    self.runCrossfadeRamp(item: item, gen: gen, outgoingStartVolume: outgoing.volume, target: target, duration: duration)
                 }
             }
         }
     }
 
-    private func runCrossfadeRamp(item: PlaybackItem, gen: Int, outgoingStartVolume: Float, target: Float) {
+    /// Clear the transition flags without advancing (a crossfade
+    /// that failed before any audio swapped in).
+    private func endCrossfadeTransition() {
+        crossfadeInProgress = false
+        crossfadeIsManual = false
+    }
+
+    private func runCrossfadeRamp(item: PlaybackItem, gen: Int, outgoingStartVolume: Float, target: Float, duration: TimeInterval = NativeMusicPlayer.crossfadeDuration) {
         let outgoing = activeEngine
         let incoming = standbyEngine
         let steps = 50
         var step = 0
         stopCrossfadeTimer()
-        crossfadeTimer = Timer.scheduledTimer(withTimeInterval: NativeMusicPlayer.crossfadeDuration / Double(steps), repeats: true) { [weak self] timer in
+        crossfadeTimer = Timer.scheduledTimer(withTimeInterval: duration / Double(steps), repeats: true) { [weak self] timer in
             guard let self = self else { timer.invalidate(); return }
             guard gen == self.generation else {
                 timer.invalidate()
@@ -1973,11 +2129,98 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         resetNowPlayingArtwork()
         fetchNowPlayingArtworkIfNeeded()
         recomputePlayingState()
+        // b45-F: the transition settled — record the success
+        // (resets the consecutive-failure count and the recovery
+        // stage, banks the last-good URL/tier, persists the
+        // confirmed quality badge), then honour a manual "next"
+        // that arrived mid-transition.
+        noteSuccessfulStart(item: item)
+        endCrossfadeTransition()
         onTrackStarted?(item)
+        if pendingManualNext {
+            pendingManualNext = false
+            next()
+            return
+        }
         if standbyEndedDuringCrossfade {
             standbyEndedDuringCrossfade = false
             advanceAuto()
         }
+    }
+
+    /// Shared success bookkeeping for a track that is now
+    /// sounding (manual open + crossfade): reset the failure
+    /// counters, bank the last-good URL/tier for quality-switch
+    /// rollback, persist the confirmed quality badge, and kick
+    /// the prefetcher for the upcoming tracks.
+    private func noteSuccessfulStart(item: PlaybackItem) {
+        consecutiveFailureCount = 0
+        recoverStage = 0
+        lastGoodURL = currentURL
+        lastGoodQuality = actualQuality
+        lastGoodItemID = item.id
+        if let tier = actualQuality {
+            ConfirmedQualityBadge.save(identityKey: item.id, quality: tier)
+        }
+        maybePrefetch()
+    }
+
+    /// Quality-switch rollback (plan §7.4): a failed quality
+    /// switch returns to the exact URL / tier that was playing.
+    /// No-op when nothing good was ever banked for this track.
+    func rollbackToLastGoodQuality() {
+        ensureMain {
+            guard let item = self.currentTrack,
+                  let url = self.lastGoodURL,
+                  self.lastGoodItemID == item.id
+            else { return }
+            self.actualQuality = self.lastGoodQuality
+            self.open(item: item, url: url) { _ in }
+        }
+    }
+
+    /// Kick the prefetcher for the upcoming queue (b45-F). The
+    /// prefetcher checks its own conditions and window; a new
+    /// track start supersedes the previous round.
+    private func maybePrefetch() {
+        guard !queue.isEmpty, queueIndex >= 0, queueIndex < queue.count else { return }
+        let upcoming = Array(queue[(queueIndex + 1)...].prefix(QueuePrefetcher.windowSongs))
+        guard !upcoming.isEmpty else { return }
+        prefetcher.prefetch(
+            items: upcoming,
+            conditions: QueuePrefetcher.Conditions(
+                isPlaying: isPlaying,
+                isBuffering: pendingItem != nil,
+                cacheEnabled: HaoAudioCache.isEnabled(),
+                networkConnected: DownloadEngine.shared.isNetworkAvailable,
+                isMetered: DownloadEngine.shared.isMeteredNetwork,
+                isConstrained: DownloadEngine.shared.isLowDataMode,
+                isLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled),
+            resolveURL: { [weak self] item, completion in
+                guard let self = self else { completion(nil, nil, false); return }
+                self.resolveURL?(item, []) { url, tier in
+                    let isTrial = url.map {
+                        PreviewAudioClassifier.isPreviewURL($0, trialOnly: item.trialOnly)
+                    } ?? false
+                    completion(url, tier, isTrial)
+                }
+                if self.resolveURL == nil { completion(nil, nil, false) }
+            },
+            cachedBytes: { [weak self] item in
+                guard let self = self else { return nil }
+                if item.localFileURL != nil {
+                    return (try? FileManager.default.attributesOfItem(
+                        atPath: item.localFileURL!.path)[.size] as? NSNumber)?.int64Value ?? 0
+                }
+                guard let entry = HaoAudioCache.entry(
+                    trackID: item.id, requestedQuality: "",
+                    sourceIsNetease: false)
+                else { return nil }
+                return entry.byteCount
+            },
+            cacheDownload: { item, url, tier, completion in
+                QueuePrefetcher.downloadIntoCache(item: item, url: url, tier: tier, completion: completion)
+            })
     }
 
     /// Volume ramp helper (manual-open fade-in, resume fade-in).
@@ -2121,16 +2364,51 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     /// item 3: a URL that failed, or proved to be a 30 s preview,
     /// is never handed out twice — the resolver skips it and the
     /// coordinator evicts it from cache first).
+    /// b45-F staged failure recovery (plan §7.4):
+    /// - Stage 0 → 1: the failing URL is a NetEase CDN host →
+    ///   retry the SAME URL on the twin host once, resuming from
+    ///   the breakpoint.
+    /// - Stage 1 → 2: full re-resolve (skipping the failed URL;
+    ///   the local copy is skipped too when it is the failed one
+    ///   — the coordinator must honour that, see the wiring note
+    ///   in `advanceAutoFrom`), resuming from the breakpoint.
+    /// - Stage 2: offline → the downloaded copy; online → the
+    ///   serial multi-source resolve already ran, so advance to
+    ///   the next track. Five consecutive unplayable tracks stop
+    ///   playback.
     private func recoverFromFailure(item: PlaybackItem, excluding: [URL] = []) {
         let resumePosition = position
         let gen = nextGeneration()
         // b44: recovery resolves after the engine died — audio has
         // stopped, so the same suspension window as a switch applies.
         beginSwitchBackgroundTask()
+        // Stage 0: twin-host retry of the same URL.
+        if recoverStage == 0,
+           let current = currentURL,
+           let twin = NeteaseCDNHostFailover.twinHostURL(for: current),
+           twin != current {
+            recoverStage = 1
+            // A pre-request failure on this host also marks it
+            // unreachable for 10 minutes (the twin is preferred
+            // next time); a mid-stream failure does not.
+            open(item: item, url: twin) { [weak self] result in
+                guard let self = self else { return }
+                switch result {
+                case .success:
+                    self.actualQuality = self.lastGoodQuality
+                    if resumePosition > 0 {
+                        self.seek(to: resumePosition) { _ in }
+                    }
+                case .failure:
+                    self.recoverFromFailure(item: item, excluding: excluding)
+                }
+            }
+            return
+        }
         let timeoutId = beginResolveTimeout { [weak self] in
             guard let self = self else { return }
             guard gen == self.generation, self.currentTrack?.id == item.id else { return }
-            self.advanceAuto()
+            self.noteFailedAdvance(item: item)
         }
         resolveURL?(item, excluding) { [weak self] url, tier in
             guard let self = self else { return }
@@ -2138,9 +2416,24 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                 self.cancelResolveTimeout(id: timeoutId)
                 guard gen == self.generation, self.currentTrack?.id == item.id else { return }
                 guard let url = url else {
-                    self.advanceAuto()
+                    // Stage 2: the re-resolve found nothing.
+                    // Offline → downloaded copy; online → next.
+                    if self.isOffline, let local = self.localAudioURL?(item) ?? item.localFileURL {
+                        self.open(item: item, url: local) { [weak self] result in
+                            guard let self = self else { return }
+                            switch result {
+                            case .success:
+                                if resumePosition > 0 { self.seek(to: resumePosition) { _ in } }
+                            case .failure:
+                                self.noteFailedAdvance(item: item)
+                            }
+                        }
+                    } else {
+                        self.noteFailedAdvance(item: item)
+                    }
                     return
                 }
+                self.recoverStage = 2
                 self.actualQuality = tier
                 self.open(item: item, url: url) { [weak self] result in
                     guard let self = self else { return }
@@ -2150,14 +2443,29 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                             self.seek(to: resumePosition) { _ in }
                         }
                     case .failure:
-                        self.advanceAuto()
+                        self.noteFailedAdvance(item: item)
                     }
                 }
             }
         }
         if resolveURL == nil {
-            advanceAuto()
+            noteFailedAdvance(item: item)
         }
+    }
+
+    /// Count one unplayable track toward the 5-in-a-row stop
+    /// (plan §7.4). A success anywhere resets the count (see
+    /// noteSuccessfulStart).
+    private func noteFailedAdvance(item: PlaybackItem) {
+        consecutiveFailureCount += 1
+        failedTrackIds.insert(item.id)
+        recoverStage = 0
+        if consecutiveFailureCount >= 5 {
+            consecutiveFailureCount = 0
+            stop()
+            return
+        }
+        advanceAuto()
     }
 
     // MARK: - Loudness and normalisation
@@ -2538,4 +2846,178 @@ struct AirPlayPickerView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+}
+
+// MARK: - b45-F: queue prefetcher (plan §7.4 / §9.2)
+//
+// Window: 5 songs / 20 minutes / 100 MB. Only while playing,
+// not buffering, cache on, network connected / unmetered /
+// unconstrained, and not in Low Power Mode. One bounded worker,
+// sequential. Already-cached tracks only count their bytes;
+// uncached tracks resolve a URL and download the whole file.
+// A full window stops the round; a network error ends the round
+// without retry. Trial clips are never prefetched and never
+// cached. Unlike Coda, "always highest" does NOT disable
+// prefetch — it prefetches the target tier (the resolve closure
+// already carries the coordinator's target quality).
+
+final class QueuePrefetcher {
+    static let windowSongs = 5
+    static let windowMinutes: TimeInterval = 20 * 60
+    static let windowBytes: Int64 = 100 * 1024 * 1024
+
+    struct Conditions {
+        var isPlaying: Bool
+        var isBuffering: Bool
+        var cacheEnabled: Bool
+        var networkConnected: Bool
+        var isMetered: Bool
+        var isConstrained: Bool
+        var isLowPowerMode: Bool
+
+        var permits: Bool {
+            isPlaying && !isBuffering && cacheEnabled
+                && networkConnected && !isMetered && !isConstrained
+                && !isLowPowerMode
+        }
+    }
+
+    private let workQueue = DispatchQueue(label: "com.haostudio.prefetch")
+    private var generation = 0
+
+    /// Cancel any in-flight round (queue / track change, stop).
+    func cancel() {
+        workQueue.async { self.generation += 1 }
+    }
+
+    /// Run one prefetch round over `items` (already limited to
+    /// the window size by the caller). All work is sequential on
+    /// the worker queue; a new round supersedes this one.
+    func prefetch(
+        items: [PlaybackItem],
+        conditions: Conditions,
+        resolveURL: @escaping (PlaybackItem, @escaping (URL?, AudioQuality?, Bool) -> Void) -> Void,
+        cachedBytes: @escaping (PlaybackItem) -> Int64?,
+        cacheDownload: @escaping (PlaybackItem, URL, AudioQuality?, @escaping (Int64?) -> Void) -> Void
+    ) {
+        workQueue.async {
+            self.generation += 1
+            let gen = self.generation
+            guard conditions.permits else { return }
+            var songs = 0
+            var accountedSeconds: TimeInterval = 0
+            var accountedBytes: Int64 = 0
+            for item in items {
+                guard gen == self.generation else { return } // superseded
+                guard songs < Self.windowSongs,
+                      accountedSeconds < Self.windowMinutes,
+                      accountedBytes < Self.windowBytes
+                else { return } // window full: stop
+                // Trial clips are never prefetched.
+                if item.trialOnly { continue }
+                if let bytes = cachedBytes(item) {
+                    // Already cached: only count the bytes.
+                    songs += 1
+                    accountedSeconds += item.duration ?? 0
+                    accountedBytes += bytes
+                    continue
+                }
+                // Resolve, then download the whole file.
+                let resolved = self.waitForResolve(item: item, resolveURL: resolveURL)
+                guard gen == self.generation else { return }
+                guard let url = resolved.url, !resolved.isTrial else { continue }
+                guard let downloaded = self.waitForDownload(
+                    item: item, url: url, tier: resolved.tier, cacheDownload: cacheDownload)
+                else { return } // network error ends the round, no retry
+                songs += 1
+                accountedSeconds += item.duration ?? 0
+                accountedBytes += downloaded
+            }
+        }
+    }
+
+    private func waitForResolve(
+        item: PlaybackItem,
+        resolveURL: @escaping (PlaybackItem, @escaping (URL?, AudioQuality?, Bool) -> Void) -> Void
+    ) -> (url: URL?, tier: AudioQuality?, isTrial: Bool) {
+        var result: (url: URL?, tier: AudioQuality?, isTrial: Bool) = (nil, nil, false)
+        let semaphore = DispatchSemaphore(value: 0)
+        resolveURL(item) { url, tier, isTrial in
+            result = (url, tier, isTrial)
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return result
+    }
+
+    private func waitForDownload(
+        item: PlaybackItem,
+        url: URL,
+        tier: AudioQuality?,
+        cacheDownload: @escaping (PlaybackItem, URL, AudioQuality?, @escaping (Int64?) -> Void) -> Void
+    ) -> Int64? {
+        var result: Int64?
+        let semaphore = DispatchSemaphore(value: 0)
+        cacheDownload(item, url, tier) { bytes in
+            result = bytes
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return result
+    }
+
+    /// Whole-file download into the audio cache (the prefetch
+    /// download leg). Streams the temp file into the cache writer
+    /// in 64 KB chunks — the whole file is never held in memory.
+    /// Returns the cached byte count, 0 when the file was over
+    /// the cap (stream-only, not an error), nil on network error.
+    static func downloadIntoCache(
+        item: PlaybackItem,
+        url: URL,
+        tier: AudioQuality?,
+        completion: @escaping (Int64?) -> Void
+    ) {
+        let task = URLSession.shared.downloadTask(with: url) { tempURL, response, error in
+            guard error == nil, let tempURL = tempURL else {
+                completion(nil)
+                return
+            }
+            let ext: String
+            if let mime = (response as? HTTPURLResponse)?.mimeType, !mime.isEmpty {
+                ext = HaoAudioCache.fileExtension(forMimeType: mime)
+            } else if !url.pathExtension.isEmpty {
+                ext = url.pathExtension
+            } else {
+                ext = "mp3"
+            }
+            guard let writer = HaoAudioCache.StreamingWriter(
+                trackID: item.id,
+                requestedQuality: tier?.lxCode ?? "",
+                servedQuality: tier?.lxCode ?? "",
+                source: "prefetch",
+                servedBitrate: 0,
+                fileExtension: ext)
+            else {
+                completion(0)
+                return
+            }
+            guard let handle = try? FileHandle(forReadingFrom: tempURL) else {
+                writer.cancel()
+                completion(nil)
+                return
+            }
+            while true {
+                let chunk = handle.readData(ofLength: 64 * 1024)
+                if chunk.isEmpty { break }
+                writer.append(chunk)
+            }
+            try? handle.close()
+            if let entry = writer.finish() {
+                completion(entry.byteCount)
+            } else {
+                completion(0) // over the cap: stream-only, not an error
+            }
+        }
+        task.resume()
+    }
 }
