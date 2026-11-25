@@ -195,9 +195,16 @@ struct VideoDetail: Codable, Equatable {
     let lines: [PlayLine]
     let meta: VideoMeta?
 
-    /// The line the player should open: first line with episodes.
+    /// The line the player should open: first line with at least
+    /// one episode that actually has a stream URL (b49fix7
+    /// P2-12). A line whose episodes are all nil-URL (Emby strm
+    /// target broken, base URL gone stale) is not playable —
+    /// the old episodes-non-empty test lit the play button for
+    /// it, and the tap only failed later inside the player.
+    /// CMS lines never carry nil URLs (parsePlayLines drops
+    /// them), so this only bites on the Emby leg.
     var firstPlayableLine: PlayLine? {
-        lines.first { !$0.episodes.isEmpty }
+        lines.first { $0.episodes.contains { $0.url != nil } }
     }
 }
 

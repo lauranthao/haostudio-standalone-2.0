@@ -32,6 +32,31 @@ final class VideoDetailViewModel: ObservableObject {
     /// failure; a successful empty load is an honest empty state
     /// with no retry that could never succeed.
     @Published private(set) var loadFailed = false
+    /// Whether the last detail fetch failed because the item was
+    /// deleted from the Emby server (b49fix7 P2-9, Emby only):
+    /// the gateway used to drop the error kind, so a 404 looked
+    /// exactly like a network failure — same "详情加载失败" +
+    /// pinned retry. A deleted item is a different state: the
+    /// empty state says so and offers no retry (a retry can
+    /// never bring a deleted item back). Any other failure (or
+    /// nil) keeps the generic failed state with its retry.
+    /// Set from the gateway's Result in load(); reset in load()
+    /// alongside loadFailed.
+    @Published private(set) var detailNotFound = false
+    /// Whether any load on this page visit has landed empty or
+    /// failed (b49fix7 P2-14): once set it is never cleared for
+    /// the life of this view model — NOT in load(). The
+    /// empty→has-lines transition happens mid-visit (the CMS
+    /// gateway publishes twice; switchToAltSource reloads while
+    /// the user sits at the bottom of the empty state), and
+    /// clearing the latch in load() would re-open the 54pt jump
+    /// on the very next publish. The view holds the (hidden)
+    /// retry inset while the latch is set, so the bottom
+    /// geometry is identical in every state of the visit; the
+    /// cost is a stable 54pt of empty space at the very bottom
+    /// of the has-lines page (same background, above the mini /
+    /// tab bar) — no jump, no misinformation.
+    @Published private(set) var hasSeenEmptyOrFailedLoad = false
     @Published private(set) var isFavourite = false
     @Published private(set) var resume: ResumeInfo?
     /// Whether this title has any watch history (S7 wiring: the
@@ -71,6 +96,12 @@ final class VideoDetailViewModel: ObservableObject {
     /// empty state says it is looking, instead of claiming no
     /// other source exists.
     @Published private(set) var altSourcesLoading = false
+    /// Whether the alternate-source search has already run for
+    /// the current load (b49fix7 P2-19): the gateway publishes
+    /// twice (CMS detail, then the Douban-merged detail), and the
+    /// completion calls loadAltSources() on every empty publish —
+    /// the same title was searched twice. Reset in load().
+    private var altSourcesLoaded = false
     /// Whether the resume selection has been applied for the
     /// current load (sweep-4 P1-23): the gateway publishes twice
     /// (CMS detail, then the Douban-merged detail), and the
@@ -132,6 +163,9 @@ final class VideoDetailViewModel: ObservableObject {
     var playButtonLabel: String {
         guard let line = selectedLine, let episode = line.episode(at: playEpisodeIndex) else {
             if isLoading { return "加载中…" }
+            // b49fix7 P2-9: a deleted Emby item says so — "暂无可播内容"
+            // would claim the server might still have a version.
+            if source == .emby, detailNotFound { return "影片已删" }
             // A film has no episodes: never show the series copy
             // ("剧集") for an Emby title that failed to load.
             return source == .emby ? "暂无可播内容" : "暂无可播剧集"
@@ -150,7 +184,12 @@ final class VideoDetailViewModel: ObservableObject {
         return episode.displayName
     }
 
-    var canPlay: Bool { selectedEpisode != nil }
+    /// The selected episode must actually have a stream URL
+    /// (b49fix7 P2-12): an episode whose URL is nil (Emby strm
+    /// target broken, base URL gone stale) is not playable —
+    /// the old existence test lit the play button for it, and
+    /// the tap only failed later inside the player.
+    var canPlay: Bool { selectedEpisode?.url != nil }
 
     /// Re-resolve the detail from the source, every time. The
     /// previous detail is dropped first, so a retry visibly
@@ -160,18 +199,26 @@ final class VideoDetailViewModel: ObservableObject {
     func load() {
         isLoading = true
         loadFailed = false
+        detailNotFound = false
         detail = nil
         downloadCheckKey = nil
         downloadAvailable = nil
         downloadResolveWork?.cancel()
         altSources = []
         altSourcesLoading = false
+        altSourcesLoaded = false
         didApplyResumeSelection = false
         let completion: (VideoDetail?) -> Void = { [weak self] loaded in
             guard let self = self else { return }
             self.isLoading = false
             self.detail = loaded
             self.loadFailed = loaded == nil
+            // b49fix7 P2-14: latch — any empty or failed publish
+            // on this visit arms it (see the property comment:
+            // never cleared in load()).
+            if loaded == nil || loaded?.lines.isEmpty == true {
+                self.hasSeenEmptyOrFailedLoad = true
+            }
             let entry = VideoLibraryStore.historyEntry(title: self.item.title, year: self.item.year)
             self.isWatched = entry != nil
             // sweep-4 P1-23: apply the resume selection only on
@@ -197,6 +244,22 @@ final class VideoDetailViewModel: ObservableObject {
                     self.didApplyResumeSelection = true
                 }
             }
+            // b49fix7 P2-12: with no resume to apply, the
+            // selection still starts on the first line that can
+            // actually play — a leading all-nil-URL line (Emby
+            // strm broken) must not leave the play button dimmed
+            // on entry when a later line plays. CMS lines always
+            // have URLs, so this only moves the Emby leg. The
+            // flag is set for the same reason as above: the
+            // selection is settled, so a second publish must not
+            // snap a user-changed selection back.
+            if !self.didApplyResumeSelection, let loaded = loaded, let line = loaded.firstPlayableLine {
+                self.selectedLineIndex = loaded.lines.firstIndex(where: { $0.id == line.id }) ?? 0
+                if let episodeIndex = line.episodes.firstIndex(where: { $0.url != nil }) {
+                    self.selectedEpisodeIndex = episodeIndex
+                }
+                self.didApplyResumeSelection = true
+            }
             // b49 sweep #8: resolve downloadability for the
             // selected episode (no-op when the selection didSet
             // already checked this exact episode — the key guard).
@@ -212,7 +275,21 @@ final class VideoDetailViewModel: ObservableObject {
         case .cms:
             gateway.fetchDetail(item: item, completion: completion)
         case .emby:
-            gateway.fetchEmbyDetail(item: item, completion: completion)
+            gateway.fetchEmbyDetail(item: item) { [weak self] result in
+                guard let self = self else { return }
+                switch result {
+                case .failure(let error):
+                    // b49fix7 P2-9: the kind rides to the view —
+                    // a deleted item is a different state from a
+                    // failed fetch, and the view must not offer a
+                    // retry for it.
+                    self.detailNotFound = error.kind == .notFound
+                    completion(nil)
+                case .success(let detail):
+                    self.detailNotFound = false
+                    completion(detail)
+                }
+            }
         }
     }
 
@@ -277,10 +354,14 @@ final class VideoDetailViewModel: ObservableObject {
     /// P1-8). Runs only when the detail landed with no playable
     /// lines (or failed outright) — a title that plays needs no
     /// switcher. Guarded by the loading flag so the gateway's
-    /// second publish does not start a second search.
+    /// second publish does not start a second search — and by
+    /// altSourcesLoaded (b49fix7 P2-19) so the second publish
+    /// does not start a second search after the first one
+    /// finished, either. One load searches once.
     private func loadAltSources() {
-        guard !altSourcesLoading else { return }
+        guard !altSourcesLoading && !altSourcesLoaded else { return }
         altSourcesLoading = true
+        altSourcesLoaded = true
         gateway.altSources(title: item.title, year: item.year ?? "", excludeSourceId: item.sourceId ?? -1) { [weak self] alts in
             guard let self = self else { return }
             self.altSources = alts
@@ -458,7 +539,7 @@ struct VideoDetailContentView: View {
                     } else if !viewModel.isLoading {
                         MusicEmptyState(
                             icon: "film",
-                            title: viewModel.loadFailed ? "详情加载失败" : (viewModel.source == .emby ? "暂无可播内容" : "暂无可播剧集"),
+                            title: viewModel.detailNotFound ? "影片已删" : (viewModel.loadFailed ? "详情加载失败" : (viewModel.source == .emby ? "暂无可播内容" : "暂无可播剧集")),
                             note: viewModel.source == .emby
                                 // b49fix5 P2-2: the "重试" wording
                                 // only belongs to the failed state,
@@ -466,7 +547,13 @@ struct VideoDetailContentView: View {
                                 // actually shows. A successful empty
                                 // load has no retry button, so it
                                 // must not promise one.
-                                ? (viewModel.loadFailed
+                                // b49fix7 P2-9: a deleted item is
+                                // not a connection problem and no
+                                // retry can bring it back — say so,
+                                // and never promise a retry.
+                                ? (viewModel.detailNotFound
+                                    ? "这部影片已从你的 Emby 服务器删除，无法再播放。"
+                                    : viewModel.loadFailed
                                     ? "Emby 没有返回这部影片的播放地址，检查服务器连接后重试。"
                                     : "Emby 没有返回这部影片的播放地址，服务器上可能没有可播的版本。")
                                 : viewModel.loadFailed
@@ -537,14 +624,16 @@ struct VideoDetailContentView: View {
                 // under the cover header — the same 16 rhythm as
                 // the section gaps, so it takes the token.
                 .padding(.top, HaoLayout.sectionTopSpacing)
-                // b49fix5 P2-16, b49fix6 P2-10: the loading
-                // placeholder (and the success-empty placeholder)
-                // counts as a retry state for clearance ownership
-                // — while it holds the inset, the scroll content
-                // carries no clearance of its own, exactly like
-                // the retry state, so the bottom geometry never
-                // changes between retry / loading / failed /
-                // success-empty.
+                // b49fix5 P2-16, b49fix6 P2-10, b49fix7 P2-14: the loading
+                // placeholder (and the success-empty placeholder,
+                // and the latch-held placeholder once this visit
+                // has seen an empty or failed publish) counts as a
+                // retry state for clearance ownership — while it
+                // holds the inset, the scroll content carries no
+                // clearance of its own, exactly like the retry
+                // state, so the bottom geometry never changes
+                // between retry / loading / failed / success-empty
+                // / has-lines-after-empty.
                 .modifier(DetailBottomChromePadding(showRetry: showRetryButton || showRetryPlaceholder))
             }
         }
@@ -591,24 +680,38 @@ struct VideoDetailContentView: View {
     /// hidden while loading, once lines arrive, and when the
     /// load succeeded but the source genuinely has nothing
     /// (a successful empty load must not offer a retry that
-    /// can never succeed).
+    /// can never succeed). Also hidden for a deleted Emby item
+    /// (b49fix7 P2-9): the server answered, the item is gone,
+    /// and no retry can bring it back.
     private var showRetryButton: Bool {
-        viewModel.loadFailed && !viewModel.isLoading
+        viewModel.loadFailed && !viewModel.isLoading && !viewModel.detailNotFound
     }
 
     /// Whether the loading state holds the retry inset as an
-    /// invisible placeholder (b49fix5 P2-16, b49fix6 P2-10): loading
-    /// with no detail yet, OR a successful empty load. The
-    /// placeholder keeps the bottom geometry identical across
-    /// the retry / loading / failed / success-empty states, so
-    /// tapping "重试" (or the load landing failed — or landing
-    /// empty) never moves the content bottom by 54pt. A success
-    /// WITH lines is unaffected: the content is long and the
-    /// user is at the top, so no jump is visible there, and the
-    /// inset stays empty with the clearance inside the content.
+    /// invisible placeholder (b49fix5 P2-16, b49fix6 P2-10,
+    /// b49fix7 P2-14): loading with no detail yet, OR a
+    /// successful empty load, OR — the latch — a load that has
+    /// lines after this visit already saw an empty or failed
+    /// publish. The placeholder keeps the bottom geometry
+    /// identical across the retry / loading / failed /
+    /// success-empty states, so tapping "重试" (or the load
+    /// landing failed — or landing empty) never moves the
+    /// content bottom by 54pt. The old comment claimed a
+    /// success WITH lines is unaffected because "the content
+    /// is long and the user is at the top" — that premise is
+    /// false at the exact moment it matters: the CMS gateway
+    /// publishes twice (empty, then with lines) and an
+    /// alternate-source switch reloads while the user sits at
+    /// the bottom of the empty state, so the empty→has-lines
+    /// transition happens with the user NOT at the top. The
+    /// latch holds the placeholder for the rest of the visit
+    /// instead, so the bottom geometry can never jump
+    /// mid-visit; the cost is a stable 54pt of empty space at
+    /// the very bottom of the has-lines page.
     private var showRetryPlaceholder: Bool {
         (viewModel.isLoading && viewModel.detail == nil)
             || (viewModel.detail?.lines.isEmpty == true && !viewModel.loadFailed)
+            || (viewModel.hasSeenEmptyOrFailedLoad && viewModel.detail?.lines.isEmpty == false && !viewModel.loadFailed)
     }
 
     /// Bottom-chrome clearance for this page, from the same rule

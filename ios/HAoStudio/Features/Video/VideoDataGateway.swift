@@ -126,8 +126,14 @@ protocol VideoDataGateway {
     )
     /// Emby detail: streams as play lines. Movies get one line
     /// with one "正片" episode; series get one line per season
-    /// group with one episode per item.
-    func fetchEmbyDetail(item: VideoItem, completion: @escaping (VideoDetail?) -> Void)
+    /// group with one episode per item. The failure tier is
+    /// preserved (b49fix7 P2-9): the old `(VideoDetail?) -> Void`
+    /// shape dropped the error kind, so a deleted item (404)
+    /// looked exactly like a network failure — same "详情加载
+    /// 失败" + pinned retry. Callers map `.notFound` to their
+    /// deleted-item state; every other failure stays a plain
+    /// failure.
+    func fetchEmbyDetail(item: VideoItem, completion: @escaping (Result<VideoDetail, EmbyError>) -> Void)
     /// Emby library search. Failures surface as EmbyError (not
     /// swallowed to []): the dedicated Emby search page shows an
     /// honest offline error, while the CMS search page keeps the
@@ -561,20 +567,19 @@ final class RealVideoDataGateway: VideoDataGateway {
         }
     }
 
-    func fetchEmbyDetail(item: VideoItem, completion: @escaping (VideoDetail?) -> Void) {
+    /// Emby detail, with the failure tier preserved (b49fix7
+    /// P2-9): the old `(VideoDetail?) -> Void` shape dropped the
+    /// error kind, so a deleted item (404) looked exactly like a
+    /// network failure — same "详情加载失败" + pinned retry. The
+    /// caller maps `.notFound` to its deleted-item state; every
+    /// other failure stays a plain failure.
+    func fetchEmbyDetail(item: VideoItem, completion: @escaping (Result<VideoDetail, EmbyError>) -> Void) {
         guard let client = embyClient() else {
-            DispatchQueue.main.async { completion(nil) }
+            DispatchQueue.main.async { completion(.failure(.unreachable())) }
             return
         }
         client.detail(itemId: item.id) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .failure:
-                    completion(nil)
-                case .success(let detail):
-                    completion(detail)
-                }
-            }
+            DispatchQueue.main.async { completion(result) }
         }
     }
 

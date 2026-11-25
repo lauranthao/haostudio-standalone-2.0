@@ -64,7 +64,7 @@ private final class FakeBrowseGateway: VideoDataGateway {
         embyCalls.append(EmbyCall(libraryId: libraryId, genre: genre, page: page))
         pendingEmby.append(completion)
     }
-    func fetchEmbyDetail(item: VideoItem, completion: @escaping (VideoDetail?) -> Void) { completion(nil) }
+    func fetchEmbyDetail(item: VideoItem, completion: @escaping (Result<VideoDetail, EmbyError>) -> Void) { completion(.failure(.unreachable())) }
     /// Hold the Emby search completion when `holdSearchEmby` is
     /// set, so a test can observe the spinner while Emby is still
     /// in flight (V9: it must not clear on the CMS answer alone).

@@ -284,8 +284,17 @@ struct VideoSearchView: View {
                             }
                             .padding(.horizontal, HaoLayout.pushedPageMargin)
                         }
+                        // b49fix7 P2-18: an Emby failure must not
+                        // be swallowed by the "no results" state —
+                        // the hint row below (in the else branch)
+                        // is the only place the Emby failure and
+                        // its "去 Emby 搜索" entry appear. When
+                        // the CMS search succeeded with zero
+                        // results AND the Emby search failed, the
+                        // page shows the Emby failure instead of
+                        // claiming nothing was found.
                         if viewModel.results.isEmpty && viewModel.embyResults.isEmpty
-                            && viewModel.cmsErrorMessage == nil {
+                            && viewModel.cmsErrorMessage == nil && viewModel.embyErrorMessage == nil {
                             MusicEmptyState(
                                 icon: "magnifyingglass",
                                 title: "没有找到相关影片",
@@ -320,7 +329,14 @@ struct VideoSearchView: View {
                                 // banner would otherwise stick to
                                 // the search field was wrong: the
                                 // container top 12 provides it.)
+                                // b49fix7 P2-17: it carries a bottom
+                                // 12 instead — the banner sits
+                                // directly above its own grid in a
+                                // spacing-0 VStack, so without it
+                                // the banner and the "影视源" title
+                                // touch.
                                 .padding(.horizontal, HaoLayout.pushedPageMargin)
+                                .padding(.bottom, 12)
                             }
                             if !viewModel.results.isEmpty {
                                 resultSection(
@@ -344,17 +360,24 @@ struct VideoSearchView: View {
                                         .foregroundStyle(theme.accentText)
                                 }
                                 .foregroundStyle(theme.textSecondary)
-                                // b49fix6 P2-25: top 12 only when
-                                // the CMS grid is above this banner
-                                // (it is the gap from the grid, not
-                                // from the search field). When there
-                                // are no CMS results the banner is
-                                // the first element of the branch and
-                                // the container's top 12 already
-                                // provides the gap — an own 12 would
-                                // double it to 24.
+                                // b49fix6 P2-25, b49fix7 P2-15: top
+                                // 12 when anything renders above
+                                // this banner — the CMS error card,
+                                // the CMS banner, or the CMS grid
+                                // (hasElementAboveEmbyRow). The old
+                                // test (results.isEmpty) was wrong:
+                                // with a CMS error card above and
+                                // no CMS results, the banner sat at
+                                // top 0, stuck to the card's retry
+                                // button. When nothing is above,
+                                // the container's top 12 is the gap.
+                                // b49fix7 P2-17: a bottom 12 too —
+                                // the banner sits directly above its
+                                // own grid, and the grid's own top
+                                // is 0 when the banner is above it.
                                 .padding(.horizontal, HaoLayout.pushedPageMargin)
-                                .padding(.top, viewModel.results.isEmpty ? 0 : 12)
+                                .padding(.top, hasElementAboveEmbyRow ? 12 : 0)
+                                .padding(.bottom, 12)
                             }
                             // sweep-5 P2-13: Emby is configured but
                             // the search failed — one hint row with a
@@ -373,16 +396,17 @@ struct VideoSearchView: View {
                                     }
                                 }
                                 .foregroundStyle(theme.textSecondary)
-                                // b49fix6 P2-25: top 12 only when
-                                // the CMS grid is above this row
-                                // (same rule as the Emby banner
-                                // above — it never co-shows with it).
-                                // With no CMS results this row is
-                                // the first element of the branch
-                                // and the container's top 12 is the
-                                // gap; an own 12 would double it.
+                                // b49fix6 P2-25, b49fix7 P2-15: same
+                                // rule as the Emby banner above —
+                                // top 12 when anything renders
+                                // above this row (the CMS error
+                                // card, the CMS banner, or the CMS
+                                // grid). The old results.isEmpty
+                                // test left it at top 0 under the
+                                // CMS error card. This row never
+                                // co-shows with the Emby banner.
                                 .padding(.horizontal, HaoLayout.pushedPageMargin)
-                                .padding(.top, viewModel.results.isEmpty ? 0 : 12)
+                                .padding(.top, hasElementAboveEmbyRow ? 12 : 0)
                             }
                             if !viewModel.embyResults.isEmpty {
                                 resultSection(
@@ -390,7 +414,7 @@ struct VideoSearchView: View {
                                     hasMore: viewModel.embyHasMore,
                                     loadFailed: viewModel.embyErrorMessage != nil,
                                     onLoadMore: { viewModel.loadMoreEmby() })
-                                    .padding(.top, HaoLayout.sectionTopSpacing)
+                                    .padding(.top, embyGridTop)
                             }
                         }
                     } else {
@@ -482,6 +506,36 @@ struct VideoSearchView: View {
                     .padding(.horizontal, HaoLayout.pushedPageMargin)
             }
         }
+    }
+
+    /// Whether anything renders above the Emby banner / hint
+    /// row in the results branch (b49fix7 P2-15): the CMS error
+    /// card, the CMS banner, or the CMS grid. Any of them means
+    /// the row is not the first element and needs its own top
+    /// 12; when nothing is above, the container's top 12 is the
+    /// gap. One system for the whole branch: 12 is the
+    /// first-element gap and the banner-adjacent gap, 16
+    /// (sectionTopSpacing) is the section-to-section gap.
+    private var hasElementAboveEmbyRow: Bool {
+        viewModel.cmsErrorMessage != nil || !viewModel.results.isEmpty
+    }
+
+    /// Top gap of the Emby grid (b49fix7 P2-16/17): 0 when the
+    /// Emby banner is directly above (its bottom 12 is the gap)
+    /// or when the grid is the first element (the container's
+    /// top 12 is the gap — the old unconditional 16 made it
+    /// 28); 16 when a CMS grid or the CMS error card is
+    /// directly above (a new section after a section). At this
+    /// call site embyResults is non-empty, so the Emby banner
+    /// shows exactly when embyErrorMessage is set; the Emby
+    /// hint row can never co-show with the grid (it needs
+    /// embyResults empty).
+    private var embyGridTop: CGFloat {
+        if viewModel.embyErrorMessage != nil { return 0 }
+        if viewModel.cmsErrorMessage != nil || !viewModel.results.isEmpty {
+            return HaoLayout.sectionTopSpacing
+        }
+        return 0
     }
 
     private func resultSection(title: String, items: [VideoItem], isEmby: Bool = false, hasMore: Bool = false, loadFailed: Bool = false, onLoadMore: (() -> Void)? = nil) -> some View {

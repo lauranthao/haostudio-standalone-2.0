@@ -1544,7 +1544,7 @@ private final class StubEmbyGateway: VideoDataGateway {
     ) {
         pendingEmby.append(completion)
     }
-    func fetchEmbyDetail(item: VideoItem, completion: @escaping (VideoDetail?) -> Void) { completion(nil) }
+    func fetchEmbyDetail(item: VideoItem, completion: @escaping (Result<VideoDetail, EmbyError>) -> Void) { completion(.failure(.unreachable())) }
     func searchEmby(keyword: String, completion: @escaping (Result<[VideoItem], EmbyError>) -> Void) {
         completion(.success([]))
     }

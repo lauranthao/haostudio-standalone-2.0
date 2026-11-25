@@ -847,7 +847,7 @@ struct VideoDailyListView: View {
             } else {
                 VideoPosterGrid(items: items) { onSelect($0) }
                     .padding(.horizontal, HaoLayout.pushedPageMargin)
-                    .padding(.top, 16)
+                    .padding(.top, HaoLayout.sectionTopSpacing)
                 Spacer(minLength: 16)
             }
         }

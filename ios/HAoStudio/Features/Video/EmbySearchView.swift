@@ -196,7 +196,14 @@ struct EmbySearchView: View {
                                 // banner would otherwise stick to
                                 // the search field was wrong: the
                                 // container top 12 provides it.)
+                                // b49fix7 P2-17: it carries a bottom
+                                // 12 instead — the banner sits
+                                // directly above the grid in a
+                                // spacing-0 VStack, so without it
+                                // the banner and the "Emby" title
+                                // touch.
                                 .padding(.horizontal, HaoLayout.pushedPageMargin)
+                                .padding(.bottom, 12)
                             }
                             resultSection(items: viewModel.results)
                         }
