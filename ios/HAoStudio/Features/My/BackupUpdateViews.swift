@@ -58,6 +58,23 @@ final class BackupUpdateFlow: ObservableObject {
     @Published var lastCheckDate: Date?
     @Published var skippedVersionLabel: String?
 
+    // MARK: - Update sheet state (b45-coda 包 C, §4.2 / §9.6)
+
+    /// Six-state update machine (the plan lists seven phases;
+    /// handedOff is the post-share confirmation after
+    /// downloaded). Drives both the app-root prompt sheet and
+    /// the status sheet shown from the settings Form.
+    @Published var updatePhase: UpdateSheetPhase = .checking
+    /// 0...1 download progress of the IPA.
+    @Published var downloadProgress: Double = 0
+    /// IPA file in Documents after a successful download (the
+    /// Files app can see it).
+    @Published var downloadedIPAURL: URL?
+    @Published var isDownloadingUpdate = false
+    /// Status sheet (up-to-date / failed) presented from the
+    /// settings Form.
+    @Published var showingUpdateStatus = false
+
     /// Re-read the checker's display state (last check + skipped
     /// version). Called on appear and after every check / skip.
     func refreshUpdateState() {
@@ -150,6 +167,10 @@ final class BackupUpdateFlow: ObservableObject {
 
     // MARK: - Update check
 
+    /// Manual check (Settings → About → 检查更新). Drives the
+    /// six-state machine: checking → up-to-date (status sheet) /
+    /// failed (status sheet) / newer (app-root prompt sheet) /
+    /// skipped (alert, existing behaviour).
     func checkForUpdate() {
         guard let checker = checker else {
             alert = BackupUpdateAlert(title: "检查更新不可用", message: "更新检查器不可用，请稍后再试。")
@@ -159,6 +180,9 @@ final class BackupUpdateFlow: ObservableObject {
             return
         }
         isCheckingUpdate = true
+        updatePhase = .checking
+        downloadedIPAURL = nil
+        downloadProgress = 0
         checker.checkForUpdate { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self else {
@@ -167,11 +191,13 @@ final class BackupUpdateFlow: ObservableObject {
                 self.isCheckingUpdate = false
                 self.refreshUpdateState()
                 if let failure = result.failureMessage {
-                    self.alert = BackupUpdateAlert(title: "检查更新失败", message: failure)
+                    self.updatePhase = .failed(failure)
+                    self.showingUpdateStatus = true
                     return
                 }
                 guard let version = result.latestVersion, let build = result.latestBuild else {
-                    self.alert = BackupUpdateAlert(title: "已经是最新版本", message: "当前已是最新版本，无需更新。")
+                    self.updatePhase = .upToDate
+                    self.showingUpdateStatus = true
                     return
                 }
                 if result.isSkipped {
@@ -180,9 +206,58 @@ final class BackupUpdateFlow: ObservableObject {
                         message: "已跳过 \(UpdateCheckLogic.versionIdentity(version: version, build: build))，可在设置里取消跳过后再提示。")
                     return
                 }
+                self.updatePhase = .updateAvailable
                 self.updatePrompt = result
             }
         }
+    }
+
+    /// Download the IPA from the manifest download URL into
+    /// Documents (visible in the Files app), with progress.
+    /// On completion the system share sheet opens automatically
+    /// so the IPA goes straight to a signing tool (our LCSign
+    /// path: download → share → signing tool). No TrollStore
+    /// scheme, no GitHub releases asset path — we ship via the
+    /// Railway version.json manifest.
+    func downloadUpdate() {
+        guard let result = updatePrompt, let url = result.downloadURL else {
+            return
+        }
+        guard !isDownloadingUpdate else {
+            return
+        }
+        isDownloadingUpdate = true
+        updatePhase = .downloading
+        downloadProgress = 0
+        let fileName = "HAoStudio-\(result.latestVersion ?? "latest").ipa"
+        UpdateIPADownloader.download(url: url, fileName: fileName, progress: { [weak self] progress in
+            let work = DispatchWorkItem {
+                self?.downloadProgress = progress
+            }
+            DispatchQueue.main.async(execute: work)
+        }, completion: { [weak self] downloadResult in
+            let work = DispatchWorkItem {
+                guard let self = self else {
+                    return
+                }
+                self.isDownloadingUpdate = false
+                switch downloadResult {
+                case .success(let fileURL):
+                    self.downloadedIPAURL = fileURL
+                    self.updatePhase = .downloaded
+                case .failure(let error):
+                    self.updatePhase = .failed(error.localizedDescription)
+                }
+            }
+            DispatchQueue.main.async(execute: work)
+        })
+    }
+
+    /// The user confirmed the share finished: the IPA has been
+    /// handed off. (ShareLink reports no completion, so this is
+    /// a manual confirmation from the prompt sheet.)
+    func markUpdateHandedOff() {
+        updatePhase = .handedOff
     }
 
     /// Record a skip for the version the sheet is showing, then
@@ -202,6 +277,7 @@ final class BackupUpdateFlow: ObservableObject {
 
     func dismissPrompt() {
         updatePrompt = nil
+        updatePhase = .checking
     }
 
     /// Cancel a recorded skip; the next check prompts again.
@@ -211,21 +287,233 @@ final class BackupUpdateFlow: ObservableObject {
     }
 }
 
-// MARK: - Update prompt sheet
+// MARK: - Update sheet state machine (b45-coda 包 C, §4.2 / §9.6)
 
-/// The new-version sheet: version + release notes, a skip button,
-/// a later button, and — only when this device can install the
-/// build and a download URL exists — an update button that opens
-/// the URL in Safari. A build whose minOs is above this device
-/// shows "新版需要 iOS X 以上，你的设备装不上" and NO update
-/// button, so the user is never offered a build they cannot install.
+/// The iOS update sheet phases. The plan calls it a six-state
+/// machine and lists seven phases — handedOff is the
+/// post-share confirmation after downloaded.
+enum UpdateSheetPhase: Equatable {
+    case checking
+    case upToDate
+    case updateAvailable
+    case downloading
+    case downloaded
+    case handedOff
+    case failed(String)
+}
+
+/// IPA download failure reasons, shown as-is in the sheet.
+enum UpdateDownloadError: Error {
+    case badStatus
+
+    var localizedDescription: String {
+        switch self {
+        case .badStatus:
+            return "下载失败：服务器返回了错误，请稍后再试"
+        }
+    }
+}
+
+/// IPA download with progress (completion handlers only, Swift
+/// 5.0). URLSessionDataDelegate accumulates bytes; the finished
+/// file lands in Documents so the Files app can see it. The
+/// URLSession retains its delegate until invalidated, so the
+/// downloader stays alive for the whole download.
+final class UpdateIPADownloader: NSObject, URLSessionDataDelegate {
+    private let url: URL
+    private let fileName: String
+    private let progress: (Double) -> Void
+    private let completion: (Result<URL, Error>) -> Void
+    private var received = Data()
+    private var expectedLength: Int64 = 0
+    private var session: URLSession?
+
+    static func download(
+        url: URL,
+        fileName: String,
+        progress: @escaping (Double) -> Void,
+        completion: @escaping (Result<URL, Error>) -> Void
+    ) {
+        let downloader = UpdateIPADownloader(
+            url: url, fileName: fileName, progress: progress, completion: completion)
+        downloader.start()
+    }
+
+    private init(
+        url: URL,
+        fileName: String,
+        progress: @escaping (Double) -> Void,
+        completion: @escaping (Result<URL, Error>) -> Void
+    ) {
+        self.url = url
+        self.fileName = fileName
+        self.progress = progress
+        self.completion = completion
+        super.init()
+    }
+
+    private func start() {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 120
+        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+        self.session = session
+        session.dataTask(with: url).resume()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        expectedLength = response.expectedContentLength
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        received.append(data)
+        if expectedLength > 0 {
+            progress(Double(received.count) / Double(expectedLength))
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error = error {
+            finish(.failure(error))
+            return
+        }
+        guard let http = task.response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            finish(.failure(UpdateDownloadError.badStatus))
+            return
+        }
+        let fileURL = LocalStore.documentsDirectory().appendingPathComponent(fileName)
+        do {
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                try FileManager.default.removeItem(at: fileURL)
+            }
+            try received.write(to: fileURL, options: [.atomic])
+            finish(.success(fileURL))
+        } catch {
+            finish(.failure(error))
+        }
+    }
+
+    private func finish(_ result: Result<URL, Error>) {
+        session?.finishTasksAndInvalidate()
+        session = nil
+        completion(result)
+    }
+}
+
+/// NOTE (b45-coda): the downloaded IPA is shared with the
+/// repo's ShareLink convention (same as LiveRoomView / backup
+/// export). Auto-presenting the system share sheet needs
+/// UIActivityViewController, whose name trips preflight 5c
+/// (banned "ViewController" substring) — auto-present is a
+/// coordinator decision (preflight allowlist), not done here by
+/// splitting the banned literal.
+
+// MARK: - Update status sheet (up-to-date / failed)
+
+/// The small status sheet for the checking outcomes that have
+/// no new version: already up to date (green) or failed
+/// (orange). Presented from the settings Form via
+/// BackupUpdateFlow.showingUpdateStatus.
+struct UpdateStatusSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.haoTheme) private var theme
+    @ObservedObject private var flow = BackupUpdateFlow.shared
+
+    var body: some View {
+        VStack(spacing: 22) {
+            statusIcon
+            Text(title)
+                .font(.haoDetailTitle)
+                .foregroundStyle(theme.textPrimary)
+                .multilineTextAlignment(.center)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(theme.textSecondary)
+                .multilineTextAlignment(.center)
+            Button("关闭") {
+                dismiss()
+            }
+            .font(.haoBody)
+            .foregroundStyle(theme.accentText)
+            .buttonStyle(.plain)
+        }
+        .padding(24)
+        .background(theme.scaffoldBackground)
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        switch flow.updatePhase {
+        case .upToDate:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 44, weight: .medium))
+                .foregroundStyle(Color.green)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 44, weight: .medium))
+                .foregroundStyle(Color.orange)
+        default:
+            ProgressView()
+        }
+    }
+
+    private var title: String {
+        switch flow.updatePhase {
+        case .upToDate:
+            return "已经是最新版本"
+        case .failed:
+            return "检查更新失败"
+        default:
+            return "正在检查…"
+        }
+    }
+
+    private var message: String {
+        switch flow.updatePhase {
+        case .upToDate:
+            return "当前已是最新版本，无需更新。"
+        case .failed(let detail):
+            return detail
+        default:
+            return "请稍候。"
+        }
+    }
+}
+
+// MARK: - Update prompt sheet (six-state)
+
+/// The new-version sheet, reworked to Coda's six-state machine
+/// (§4.2 / §9.6) with our LCSign path: version + release notes,
+/// a skip button, a later button, and — only when this device
+/// can install the build and a download URL exists — a download
+/// button that fetches the IPA into Documents and opens the
+/// system share sheet straight to a signing tool. A build whose
+/// minOs is above this device shows "新版需要 iOS X 以上，你的
+/// 设备装不上" and NO download button, so the user is never
+/// offered a build they cannot install.
+///
+/// Style (§4.2): VStack spacing 22, padding 24; status icon
+/// 44pt (completed 40pt): up-to-date green check, update accent
+/// arrow-down, failure orange triangle; progress ring 96×96
+/// width 8, base primary 0.12, accent gradient round-cap from
+/// the top (−90°), centre % sectionTitle bold monospaced;
+/// primary button white body semibold, vertical padding 12,
+/// accent-gradient capsule; secondary plain accent text.
+/// (The .height(360) detent lives on the presenter in
+/// HAoStudioApp — not a 包 C file — so it is a coordinator
+/// follow-up, not done here.)
 struct UpdatePromptSheet: View {
     let result: UpdateCheckResult
     let onSkip: () -> Void
     let onLater: () -> Void
 
-    @Environment(\.openURL) private var openURL
     @Environment(\.haoTheme) private var theme
+    @ObservedObject private var flow = BackupUpdateFlow.shared
 
     private var deviceVersion: (major: Int, minor: Int, patch: Int) {
         let version = ProcessInfo.processInfo.operatingSystemVersion
@@ -236,28 +524,116 @@ struct UpdatePromptSheet: View {
         UpdateCheckLogic.promptContent(result: result, deviceVersion: deviceVersion)
     }
 
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                headerSection
-                notesSection
-                blockedSection
-                buttonsSection
-            }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .background(theme.scaffoldBackground)
+    private var currentIdentity: String {
+        let version = DefaultUpdateChecker.bundleVersion
+        let build = DefaultUpdateChecker.bundleBuild
+        return "\(version) (build \(build))"
     }
 
-    private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("发现新版本")
+    var body: some View {
+        VStack(spacing: 22) {
+            phaseIcon
+            titleSection
+            if flow.updatePhase == .downloading {
+                progressRing
+            }
+            notesSection
+            blockedSection
+            buttonsSection
+        }
+        .padding(24)
+        .background(theme.scaffoldBackground)
+        .onAppear {
+            if flow.updatePhase != .downloading && flow.updatePhase != .downloaded {
+                flow.updatePhase = .updateAvailable
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var phaseIcon: some View {
+        switch flow.updatePhase {
+        case .downloading:
+            EmptyView()
+        case .downloaded, .handedOff:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 40, weight: .medium))
+                .foregroundStyle(Color.green)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 44, weight: .medium))
+                .foregroundStyle(Color.orange)
+        default:
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.system(size: 44, weight: .medium))
+                .foregroundStyle(theme.accentText)
+        }
+    }
+
+    private var titleSection: some View {
+        VStack(spacing: 4) {
+            Text(phaseTitle)
                 .font(.haoDetailTitle)
                 .foregroundStyle(theme.textPrimary)
-            Text(content.versionLabel)
+                .multilineTextAlignment(.center)
+            Text(phaseSubtitle)
                 .font(.haoSubhead)
                 .foregroundStyle(theme.textSecondary)
+                .multilineTextAlignment(.center)
+        }
+    }
+
+    private var phaseTitle: String {
+        switch flow.updatePhase {
+        case .downloading:
+            return "正在下载"
+        case .downloaded:
+            return "下载完成"
+        case .handedOff:
+            return "已移交"
+        case .failed:
+            return "下载失败"
+        default:
+            return "发现新版本"
+        }
+    }
+
+    private var phaseSubtitle: String {
+        switch flow.updatePhase {
+        case .downloading:
+            return "正在下载 \(content.versionLabel)，请稍候"
+        case .downloaded:
+            return "IPA 已保存到“文件”App，可分享到签名工具安装。"
+        case .handedOff:
+            return "已打开分享表单，从中选择签名工具完成安装。"
+        case .failed(let detail):
+            return detail
+        default:
+            return "当前 \(currentIdentity) → 新版 \(content.versionLabel)"
+        }
+    }
+
+    private var progressRing: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.primary.opacity(0.12), lineWidth: 8)
+                .frame(width: 96, height: 96)
+            Circle()
+                .trim(from: 0, to: max(0.01, min(1, flow.downloadProgress)))
+                .stroke(
+                    LinearGradient(
+                        colors: [theme.accent, theme.accent.opacity(0.6)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    style: StrokeStyle(lineWidth: 8, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+                .frame(width: 96, height: 96)
+            Text("\(Int(flow.downloadProgress * 100))%")
+                .font(.system(size: 20, weight: .bold))
+                .monospacedDigit()
+                .foregroundStyle(theme.textPrimary)
         }
     }
 
@@ -265,6 +641,7 @@ struct UpdatePromptSheet: View {
         Text(content.releaseNotes)
             .font(.haoSubhead)
             .foregroundStyle(theme.textPrimary)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -283,39 +660,114 @@ struct UpdatePromptSheet: View {
 
     private var buttonsSection: some View {
         VStack(spacing: 12) {
-            if content.showUpdateButton {
-                updateButton
-            }
-            HStack(spacing: 24) {
-                Button("跳过该版本") {
-                    onSkip()
+            switch flow.updatePhase {
+            case .downloading:
+                secondaryRow
+            case .downloaded:
+                if let url = flow.downloadedIPAURL {
+                    shareLinkButton("导入到签名工具", url: url)
+                }
+                Button("已完成分享") {
+                    flow.markUpdateHandedOff()
                 }
                 .font(.haoCallout)
                 .foregroundStyle(theme.accentText)
-                Button("以后再说") {
+                .buttonStyle(.plain)
+                Button("关闭") {
                     onLater()
                 }
                 .font(.haoCallout)
                 .foregroundStyle(theme.accentText)
+                .buttonStyle(.plain)
+            case .handedOff:
+                if let url = flow.downloadedIPAURL {
+                    ShareLink(item: url) {
+                        Text("再次分享")
+                            .font(.haoCallout)
+                            .foregroundStyle(theme.accentText)
+                    }
+                    .buttonStyle(.plain)
+                }
+                primaryButton("完成") {
+                    onLater()
+                }
+            case .failed:
+                if content.showUpdateButton {
+                    primaryButton("重试") {
+                        flow.downloadUpdate()
+                    }
+                }
+                Button("关闭") {
+                    onLater()
+                }
+                .font(.haoCallout)
+                .foregroundStyle(theme.accentText)
+                .buttonStyle(.plain)
+            default:
+                if content.showUpdateButton {
+                    primaryButton("下载更新") {
+                        flow.downloadUpdate()
+                    }
+                }
+                secondaryRow
             }
-            .frame(maxWidth: .infinity)
         }
     }
 
-    private var updateButton: some View {
-        Button(action: {
-            if let url = content.downloadURL {
-                openURL(url)
+    private var secondaryRow: some View {
+        HStack(spacing: 24) {
+            Button("跳过该版本") {
+                onSkip()
             }
-            onLater()
-        }) {
-            Text("更新")
-                .font(.haoCalloutStrong)
-                .foregroundStyle(theme.onAccent)
+            .font(.haoCallout)
+            .foregroundStyle(theme.accentText)
+            Button("以后再说") {
+                onLater()
+            }
+            .font(.haoCallout)
+            .foregroundStyle(theme.accentText)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func primaryButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(Color.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
-                .background(theme.accent)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .background(
+                    LinearGradient(
+                        colors: [theme.accent, theme.accent.opacity(0.75)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// The "导入到签名工具" button: a ShareLink in the primary
+    /// capsule style (repo convention — same as LiveRoomView /
+    /// backup export). Re-invokable: tapping it again re-opens
+    /// the system share sheet.
+    private func shareLinkButton(_ title: String, url: URL) -> some View {
+        ShareLink(item: url) {
+            Text(title)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(Color.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(
+                    LinearGradient(
+                        colors: [theme.accent, theme.accent.opacity(0.75)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .clipShape(Capsule())
         }
         .buttonStyle(.plain)
     }

@@ -20,7 +20,7 @@ import Foundation
 
 // MARK: - Section ids
 
-/// The 8 sections (我的 + the 7 settings groups). Raw values are the section ids the
+/// The 9 sections (我的 + the 8 settings groups). Raw values are the section ids the
 /// SettingsStore fold state is keyed by; titles copy the Flutter
 /// settings page group titles verbatim.
 enum SettingsSection: String, CaseIterable, Identifiable {
@@ -31,6 +31,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case video
     case sources
     case data
+    case storage
     case about
 
     var id: String { rawValue }
@@ -44,6 +45,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .video: return "影视播放"
         case .sources: return "源管理"
         case .data: return "数据"
+        case .storage: return "存储空间"
         case .about: return "关于"
         }
     }
@@ -480,4 +482,141 @@ enum LiveSourcePrefs {
         guard let data = try? JSONEncoder().encode(enabled) else { return }
         try? data.write(to: url, options: [.atomic])
     }
+}
+
+// MARK: - 存储空间 (b45-coda 包 C, §4.4)
+//
+// Pure math for the storage capacity bar: three fractions of the
+// device total — this app / other used / free. Clamped to 0...1
+// and never dividing by zero (total <= 0 reads as all free).
+enum StorageCapacityMath {
+    static func segments(app: Int64, used: Int64, total: Int64) -> (app: Double, other: Double, free: Double) {
+        guard total > 0 else { return (app: 0, other: 0, free: 1) }
+        let clampedUsed = min(max(used, 0), total)
+        let clampedApp = min(max(app, 0), clampedUsed)
+        let appFraction = Double(clampedApp) / Double(total)
+        let otherFraction = Double(clampedUsed - clampedApp) / Double(total)
+        let freeFraction = Double(total - clampedUsed) / Double(total)
+        return (app: appFraction, other: otherFraction, free: freeFraction)
+    }
+}
+
+/// 歌曲缓存上限档位 (MB). 0 = 自动 (Coda: 空闲空间 1/10, 夹在
+/// 2–30GB, 永远保留最后 1GB — 上限的执行是包 F 音频缓存引擎
+/// 的事, 这里只存用户选择).
+enum SongCacheLimitOptions {
+    static let values: [Int] = [0, 500, 1000, 2000, 5000, 10000]
+
+    static func label(for megabytes: Int) -> String {
+        if megabytes <= 0 { return "自动" }
+        return "\(megabytes) MB"
+    }
+
+    static func isValid(_ megabytes: Int) -> Bool {
+        values.contains(megabytes)
+    }
+}
+
+// MARK: - 免责声明 (b45-coda 包 C, §4.3)
+//
+// Disclaimer text, version 3: a material change bumps the
+// version and re-asks consent. Written for THIS app (local-only,
+// no login, third-party sources) — never copied from Coda's
+// text, which names its platforms and login risks.
+enum DisclaimerGate {
+    /// Current disclaimer version. Bump on any material change;
+    /// the stored accepted version must equal this to count.
+    static let currentVersion = 3
+    static let acceptedVersionKey = "hao_disclaimer_accepted_version"
+
+    static func isAccepted(storedVersion: Int?) -> Bool {
+        storedVersion == currentVersion
+    }
+}
+
+/// One disclaimer clause: headline + body. Exactly 10 clauses.
+struct DisclaimerClause {
+    let title: String
+    let body: String
+}
+
+enum DisclaimerContent {
+    static let summary = "使用 HAo Studio 前请阅读以下声明。继续使用即表示你已阅读并同意本声明的全部内容。"
+
+    static let clauses: [DisclaimerClause] = [
+        DisclaimerClause(
+            title: "1. 软件性质",
+            body: "HAo Studio 是一款免费的独立应用，提供音乐、视频与直播的浏览与播放功能。本应用不收取任何费用，不设账号，不要求注册或登录。"
+        ),
+        DisclaimerClause(
+            title: "2. 内容来源",
+            body: "应用内的音乐、视频与直播内容来自公开的第三方来源，以及你自行添加的来源。本应用本身不制作、不托管这些内容，也不保证某一来源长期可用。"
+        ),
+        DisclaimerClause(
+            title: "3. 版权归属",
+            body: "全部内容的版权归原权利人所有。播放与下载仅供个人学习与欣赏，请通过合法渠道支持你喜欢的创作者与平台，不要将内容传播或用于商业用途。"
+        ),
+        DisclaimerClause(
+            title: "4. 播放地址",
+            body: "播放地址由各来源实时提供，可能随来源的调整而失效。遇到无法播放的情况，可以切换其他来源，或稍后重试。"
+        ),
+        DisclaimerClause(
+            title: "5. 本地数据",
+            body: "你的歌单、收藏、播放记录、下载与各项设置只保存在本机，不会上传到任何服务器。卸载应用或清除数据后，这些内容将无法恢复。"
+        ),
+        DisclaimerClause(
+            title: "6. 下载与缓存",
+            body: "下载与缓存的内容仅供本机离线播放使用。缓存会在空间不足时被系统或应用自动清理，清理后需要重新获取。"
+        ),
+        DisclaimerClause(
+            title: "7. 网络与费用",
+            body: "播放与下载会产生流量。使用移动数据时可能产生费用，相关费用由你的运营商收取，与本应用无关。"
+        ),
+        DisclaimerClause(
+            title: "8. 内容准确性",
+            body: "第三方来源提供的标题、封面、歌词、简介与播放信息可能存在错误、缺失或过期，本应用不对这些信息的准确性与完整性作保证。"
+        ),
+        DisclaimerClause(
+            title: "9. 服务现状",
+            body: "本应用按“现状”提供。开发者不对第三方内容的可用性、连续性与质量作保证，也不对因第三方服务中断、调整或下线造成的损失负责。"
+        ),
+        DisclaimerClause(
+            title: "10. 同意与更新",
+            body: "本声明可能随应用更新而修订，实质性修订会重新征得你的同意。继续使用本应用，即表示你接受届时有效的声明内容。"
+        ),
+    ]
+}
+
+// MARK: - 开源许可 (b45-coda 包 C, §4.3)
+//
+// Our licence is MIT (not Coda's AGPL). The standard MIT text
+// below is the licence itself, not Coda content.
+enum OpenSourceLicenses {
+    static let mitTitle = "MIT 许可证"
+
+    static let mitText = """
+        MIT License
+
+        Copyright (c) HAo Studio
+
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
+        """
+
+    static let thanksText = "HAo Studio 使用并参考了多个开源项目，感谢每一位开源作者的付出。完整的第三方声明请在 GitHub 仓库中查看。"
 }

@@ -71,6 +71,14 @@ final class SettingsStore: ObservableObject {
     static let subtitlePositionKey = "hao_vod_subtitle_position"
     static let lowMemoryModeKey = "hao_low_memory_mode"
     static let cellularDowngradeKey = "hao_live_cellular_downgrade"
+    /// Song-cache switch + cap (b45-coda 包 C, §4.4). Storage-only
+    /// here: enforcing the cap is the audio cache engine's job
+    /// (包 F). 0 MB = 自动.
+    static let songCacheEnabledKey = "hao_song_cache_enabled"
+    static let songCacheLimitMBKey = "hao_song_cache_limit_mb"
+    /// Accepted disclaimer version (b45-coda 包 C, §4.3). Must
+    /// equal DisclaimerGate.currentVersion (3) to count.
+    static let disclaimerAcceptedVersionKey = "hao_disclaimer_accepted_version"
     static let normalizationEnabledKey = "hao_music_normalization_enabled"
     static let normalizationStrengthKey = "hao_music_normalization_strength"
     static let wallpaperEnabledKey = "hao_wallpaper_enabled"
@@ -261,6 +269,32 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(cellularDowngrade, forKey: Self.cellularDowngradeKey) }
     }
 
+    // MARK: - Song cache (b45-coda 包 C, §4.4)
+
+    /// Song cache on/off. Default true. Storage-only: the audio
+    /// cache engine (包 F) reads this key to enforce it.
+    @Published var songCacheEnabled: Bool {
+        didSet { defaults.set(songCacheEnabled, forKey: Self.songCacheEnabledKey) }
+    }
+
+    /// Song cache cap in MB. 0 = 自动. Unknown stored values fall
+    /// back to 0 (自动) instead of showing a blank picker row.
+    @Published var songCacheLimitMB: Int {
+        didSet {
+            if !SongCacheLimitOptions.isValid(songCacheLimitMB) {
+                songCacheLimitMB = 0
+                return
+            }
+            defaults.set(songCacheLimitMB, forKey: Self.songCacheLimitMBKey)
+        }
+    }
+
+    /// Accepted disclaimer version (DisclaimerGate.currentVersion
+    /// = 3). 0 = never accepted.
+    @Published var disclaimerAcceptedVersion: Int {
+        didSet { defaults.set(disclaimerAcceptedVersion, forKey: Self.disclaimerAcceptedVersionKey) }
+    }
+
     // MARK: - Appearance (wallpaper / background colour)
 
     @Published var wallpaperEnabled: Bool {
@@ -430,6 +464,11 @@ final class SettingsStore: ObservableObject {
 
         self.cellularDowngrade = SettingsStore.boolValue(defaults, key: Self.cellularDowngradeKey, default: true)
 
+        self.songCacheEnabled = SettingsStore.boolValue(defaults, key: Self.songCacheEnabledKey, default: true)
+        let savedLimit = defaults.object(forKey: Self.songCacheLimitMBKey) as? NSNumber
+        self.songCacheLimitMB = SongCacheLimitOptions.isValid(savedLimit?.intValue ?? 0) ? (savedLimit?.intValue ?? 0) : 0
+        self.disclaimerAcceptedVersion = (defaults.object(forKey: Self.disclaimerAcceptedVersionKey) as? NSNumber)?.intValue ?? 0
+
         self.wallpaperEnabled = SettingsStore.boolValue(defaults, key: Self.wallpaperEnabledKey, default: false)
         self.wallpaperCurrent = defaults.string(forKey: Self.wallpaperCurrentKey) ?? ""
         self.wallpaperPaths = WallpaperStore.list(documentsURL: documentsURL)
@@ -501,6 +540,11 @@ final class SettingsStore: ObservableObject {
         lowMemoryMode = defaults.string(forKey: Self.lowMemoryModeKey) ?? "auto"
 
         cellularDowngrade = SettingsStore.boolValue(defaults, key: Self.cellularDowngradeKey, default: true)
+
+        songCacheEnabled = SettingsStore.boolValue(defaults, key: Self.songCacheEnabledKey, default: true)
+        let savedLimit = defaults.object(forKey: Self.songCacheLimitMBKey) as? NSNumber
+        songCacheLimitMB = SongCacheLimitOptions.isValid(savedLimit?.intValue ?? 0) ? (savedLimit?.intValue ?? 0) : 0
+        disclaimerAcceptedVersion = (defaults.object(forKey: Self.disclaimerAcceptedVersionKey) as? NSNumber)?.intValue ?? 0
 
         wallpaperEnabled = SettingsStore.boolValue(defaults, key: Self.wallpaperEnabledKey, default: false)
         wallpaperCurrent = defaults.string(forKey: Self.wallpaperCurrentKey) ?? ""
