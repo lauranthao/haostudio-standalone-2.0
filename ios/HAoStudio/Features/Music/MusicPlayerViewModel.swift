@@ -103,10 +103,27 @@ final class MusicPlayerViewModel: ObservableObject {
     @Published private(set) var activeLyricIndex = -1
     @Published var lyricOffsetMs: Int {
         didSet {
-            MusicLibraryStore.setLyricOffsetMs(lyricOffsetMs)
+            // b45-a: the offset is remembered PER SONG (0.1 s steps,
+            // key `lyrics.timing.<identityKey>`, 0 deletes the key).
+            // Suppressed while a song switch loads its own value —
+            // otherwise every switch would stamp the new song's
+            // value onto the GLOBAL offset (and the next
+            // never-adjusted song would inherit it) and onto the
+            // new song as if the user had adjusted it. The global
+            // offset only moves on a real user edit.
+            if !applyingPerSongOffset {
+                MusicLibraryStore.setLyricOffsetMs(lyricOffsetMs)
+                if let song = currentSong {
+                    MusicLyrics.savePerSongOffsetMs(lyricOffsetMs, for: song.identityKey)
+                }
+            }
             updateActiveLyric()
         }
     }
+
+    /// True while setCurrentSong loads the new song's own offset,
+    /// so the didSet above does not write it back as a user edit.
+    private var applyingPerSongOffset = false
 
     /// A11/E5: show the matched translation under each lyric line.
     /// Default on; toggled from the player "更多" sheet, same
@@ -213,6 +230,10 @@ final class MusicPlayerViewModel: ObservableObject {
             miniFallbackSong = queue.current
             if let song = currentSong {
                 isCurrentFav = MusicLibraryStore.isFav(song)
+                // b45-a: the restored song reads its own remembered
+                // lyric offset back, same as a live song switch.
+                lyricOffsetMs = MusicLyrics.perSongOffsetMs(for: song.identityKey)
+                    ?? MusicLibraryStore.lyricOffsetMs()
                 loadLyrics(for: song, fetchIfMissing: false)
             }
         }
@@ -265,6 +286,7 @@ final class MusicPlayerViewModel: ObservableObject {
             // check — its result predates this toggle.
             self.favCheckGeneration += 1
             self.isCurrentFav = MusicLibraryStore.isFav(song)
+            self.syncNowPlayingLike()
         }
         // b41: remote next / previous (Dynamic Island / Control
         // Center / lock screen) run the SAME path as the in-app
@@ -276,6 +298,11 @@ final class MusicPlayerViewModel: ObservableObject {
         // falls back to its own next() / previous() when unset.
         player.onRemoteNext = { [weak self] in self?.next() }
         player.onRemotePrevious = { [weak self] in self?.previous() }
+        // b45-a: Control Center like command (NowPlayingManager):
+        // a long-press like in Control Center toggles the same
+        // favourite as the in-app heart, and likeCommand.isActive
+        // follows the current song (see syncNowPlayingLike).
+        player.onRemoteLike = { [weak self] in self?.toggleFavourite() }
     }
 
     // MARK: - Observation
@@ -460,6 +487,13 @@ final class MusicPlayerViewModel: ObservableObject {
 
     private func setCurrentSong(_ song: MusicSong) {
         currentSong = song
+        // b45-a: a song switch reads its own remembered lyric
+        // offset back (0.1 s steps); a song never adjusted falls
+        // back to the global offset.
+        applyingPerSongOffset = true
+        lyricOffsetMs = MusicLyrics.perSongOffsetMs(for: song.identityKey)
+            ?? MusicLibraryStore.lyricOffsetMs()
+        applyingPerSongOffset = false
         // b36-item10: the star keeps the previous song's state until
         // the background fav read lands — never flash a wrong state,
         // never block the switch on disk I/O.
@@ -468,6 +502,9 @@ final class MusicPlayerViewModel: ObservableObject {
         heardTrackKey = song.identityKey
         heardSeconds = 0
         refreshLocalQualityBadge()
+        // b45-a: a song change restores the control bar (the lyrics
+        // auto-hide / scroll-hide must never survive a track switch).
+        syncNowPlayingLike()
     }
 
     /// Favourite state for `song`, read off the main thread. Applies
@@ -482,6 +519,7 @@ final class MusicPlayerViewModel: ObservableObject {
             guard self.favCheckGeneration == generation,
                   self.currentSong?.identityKey == key else { return }
             self.isCurrentFav = fav
+            self.syncNowPlayingLike()
         }
     }
 
@@ -827,6 +865,43 @@ final class MusicPlayerViewModel: ObservableObject {
         hapticTick()
     }
 
+    /// Transport shuffle button (b45-a, Coda 5-part transport):
+    /// toggles shuffle on/off; turning it off returns to sequential.
+    var isShuffleActive: Bool { playMode == .shuffle }
+
+    func toggleShuffle() {
+        let next: MusicQueueMode = playMode == .shuffle ? .sequential : .shuffle
+        playMode = next
+        MusicLibraryStore.setPlayModeCode(next.code)
+        player.setPlayMode(next.toContract())
+        hapticTick()
+    }
+
+    /// Transport repeat button (b45-a): cycles off → list loop →
+    /// single loop → off. The shuffle state is untouched — the two
+    /// buttons are independent, unlike the single cycleMode order.
+    var repeatIcon: String {
+        switch playMode {
+        case .singleLoop: return "repeat.1"
+        default: return "repeat"
+        }
+    }
+
+    var isRepeatActive: Bool { playMode == .listLoop || playMode == .singleLoop }
+
+    func cycleRepeat() {
+        let next: MusicQueueMode
+        switch playMode {
+        case .listLoop: next = .singleLoop
+        case .singleLoop: next = .sequential
+        default: next = .listLoop
+        }
+        playMode = next
+        MusicLibraryStore.setPlayModeCode(next.code)
+        player.setPlayMode(next.toContract())
+        hapticTick()
+    }
+
     func setSpeed(_ value: Double) {
         let clamped = min(2.0, max(0.6, value))
         playbackSpeed = clamped
@@ -837,6 +912,69 @@ final class MusicPlayerViewModel: ObservableObject {
     func setTargetQuality(_ quality: AudioQuality) {
         coordinator.targetQuality = quality
         MusicLibraryStore.setTargetQualityCode(MusicLibraryStore.code(for: quality))
+        // b45-a: after a quality switch the lyrics re-align to the
+        // actual playback position (Coda §2.8).
+        realignLyrics()
+    }
+
+    /// Re-align the lyrics to the actual playback position after a
+    /// scrub, an offset change, a source switch or a quality switch
+    /// (Coda §2.8) — the active line is recomputed from the live
+    /// position instead of waiting for the next position tick.
+    func realignLyrics() {
+        updateActiveLyric()
+    }
+
+    /// Lyric timing ±0.2 s quick step (Coda §2.8: adjustLyricsTiming
+    /// by ±2 steps of 0.1 s). The Slider (±5000 ms, 100 ms steps)
+    /// stays; these buttons are the quick path next to it.
+    func adjustLyricOffset(byMs delta: Int) {
+        lyricOffsetMs = MusicLyrics.clampOffsetMs(lyricOffsetMs + delta)
+    }
+
+    /// Restore the lyric timing to 0 for the current song (and
+    /// delete its remembered per-song key).
+    func resetLyricOffset() {
+        lyricOffsetMs = 0
+    }
+
+    /// Share text for the current song (more-sheet ShareLink):
+    /// "title - artist". No URL is invented — the app has no public
+    /// song pages.
+    var shareText: String {
+        guard let song = currentSong else { return "HAo Studio" }
+        if song.artist.isEmpty { return song.title }
+        return "\(song.title) - \(song.artist)"
+    }
+
+    /// Heartbeat mode (b45-a, Coda §2.9 / §8.5): pick a random
+    /// liked song as the seed, build the local heartbeat queue
+    /// from the liked songs, and play it IN THIS player — no new
+    /// page, no push. Toasts "已开启心动模式"; with no liked songs
+    /// at all the mode is unavailable: "心动模式暂时不可用".
+    func startHeartbeatMode() {
+        let favourites = MusicLibraryStore.favSongs()
+        guard !favourites.isEmpty, let seed = favourites.randomElement() else {
+            showToast("心动模式暂时不可用")
+            return
+        }
+        var list = MusicRadio.heartbeatQueue(favourites: favourites, seed: seed.identityKey)
+        if let seedIndex = list.firstIndex(where: { $0.identityKey == seed.identityKey }) {
+            list.remove(at: seedIndex)
+        }
+        list.insert(seed, at: 0)
+        playFromQueue(at: 0, in: list)
+        showToast("已开启心动模式")
+    }
+
+    /// Play from a queue supplied by the caller (heartbeat mode):
+    /// same as playFromQueue(at:) but the queue itself is replaced
+    /// first, so the seed song plays at its position in the new
+    /// list instead of in the old queue.
+    private func playFromQueue(at index: Int, in tracks: [MusicSong]) {
+        guard index >= 0 && index < tracks.count else { return }
+        queue = MusicQueue(tracks: tracks, index: index)
+        playFromQueue(at: index)
     }
 
     /// Seek to an absolute position (seconds). On failure the bar
@@ -867,6 +1005,9 @@ final class MusicPlayerViewModel: ObservableObject {
             guard let self = self else { return }
             if self.scrubSeconds == scrubbed { self.scrubSeconds = nil }
             if !ok { self.handleSeekFailed() }
+            // b45-a: after a scrub the lyrics re-align to the actual
+            // playback position (Coda §2.8).
+            self.realignLyrics()
         }
     }
 
@@ -889,7 +1030,16 @@ final class MusicPlayerViewModel: ObservableObject {
         // — its result predates this toggle.
         favCheckGeneration += 1
         isCurrentFav = MusicLibraryStore.toggleFav(song)
+        syncNowPlayingLike()
         hapticTick()
+    }
+
+    /// Push the current favourite state to the Control Center like
+    /// command (b45-a, §9.2): likeCommand.isActive follows whether
+    /// the current song is liked, in both directions — the in-app
+    /// heart and the Control Center like stay the same state.
+    func syncNowPlayingLike() {
+        player.refreshLikeCommand(isLiked: isCurrentFav)
     }
 
     /// Download the current song (more sheet "下载" button, S3).
@@ -1005,7 +1155,13 @@ final class MusicPlayerViewModel: ObservableObject {
             guard let self = self else { return }
             guard self.currentSong?.identityKey == key else { return }
             if let cached = cached {
-                self.lyrics = MusicLyrics.toContractLines(cached)
+                // b45-a: lyrics show the body only — credits /
+                // copyright / a leading "title - artist" header are
+                // filtered at display time (cached copies predate
+                // the filter, so it runs here, not only on fetch).
+                self.lyrics = MusicLyrics.filterBodyLines(
+                    MusicLyrics.toContractLines(cached),
+                    title: song.title, artist: song.artist)
                 self.lyricsLoaded = true
                 self.updateActiveLyric()
                 return
@@ -1032,7 +1188,14 @@ final class MusicPlayerViewModel: ObservableObject {
                 }
                 // Only keep the result if the song is still current.
                 guard self.currentSong?.identityKey == song.identityKey else { return }
-                self.lyrics = result.lines
+                // b45-a: body-only filter (see the cached path above).
+                // The identity gate itself (MusicLyrics
+                // .lyricsIdentityMatches) cannot run here: Lyrics
+                // carries no candidate title/artist/duration, so the
+                // fetch-side check belongs to the API layer — the
+                // helpers ship in MusicLyrics.swift for that layer.
+                self.lyrics = MusicLyrics.filterBodyLines(
+                    result.lines, title: song.title, artist: song.artist)
                 self.lyricsLoaded = true
                 // A11: keep the translation in the cache too — the old
                 // mapping dropped it, so a cached song never showed one.
@@ -1136,6 +1299,28 @@ final class MusicPlayerViewModel: ObservableObject {
         queue.index = index
         expectedItemId = song.identityKey
         startPlayback()
+    }
+
+    /// Drag-reorder the queue (b45-a, Coda §2.9: List + .onMove,
+    /// constant-active edit mode). The current song keeps its
+    /// index by identity, so a reorder never retargets playback;
+    /// the player is driven track-by-track from this queue, so no
+    /// player re-sync is needed for a reorder of upcoming songs.
+    func moveQueue(from source: IndexSet, to destination: Int) {
+        guard !source.isEmpty else { return }
+        let currentKey = queue.current?.identityKey
+        var tracks = queue.tracks
+        let moving = source.map { tracks[$0] }
+        for index in source.sorted(by: >) {
+            tracks.remove(at: index)
+        }
+        let dest = min(max(0, destination), tracks.count)
+        tracks.insert(contentsOf: moving, at: dest)
+        let newIndex = currentKey.flatMap { key in
+            tracks.firstIndex(where: { $0.identityKey == key })
+        } ?? queue.index
+        queue = MusicQueue(tracks: tracks, index: min(newIndex, max(0, tracks.count - 1)))
+        MusicLibraryStore.saveQueueAsync(queue.toQueueData())
     }
 
     func removeFromQueue(at index: Int) {

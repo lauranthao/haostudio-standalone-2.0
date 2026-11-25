@@ -565,6 +565,9 @@ extension Font {
     /// MusicRowViews) instead of this, so there is no separate
     /// 17-semibold card-title role.
     static let haoBodyStrong = Font.system(size: 17, weight: .semibold)
+    /// Body text, medium weight (body 17 medium): queue-row titles
+    /// (Coda §2.9: track title body medium).
+    static let haoBodyMedium = Font.system(size: 17, weight: .medium)
     /// Body text: Settings rows, paragraphs, Emby fields (body 17).
     static let haoBody = Font.system(size: 17)
     /// Primary action / chip label (callout 16 semibold).
@@ -625,4 +628,53 @@ extension EnvironmentValues {
         get { self[HaoThemeKey.self] }
         set { self[HaoThemeKey.self] = newValue }
     }
+}
+
+// MARK: - Coda design tokens (b45-a, copy plan §1)
+//
+// The spacing / corner / animation / type values Coda's Theme.swift
+// standardises, re-expressed as our own constants so every later
+// package reads the same numbers. Accent is NEVER a literal red
+// here: Coda's #EC4949 brand red maps to the theme accent (the
+// palette's `accent`, user-selectable in Settings). The one literal
+// red kept is the favourite heart #FF3B30 — a "meaningful red"
+// (a liked song), same as Coda's PlayerBar.
+enum HaoDesignTokens {
+    // Spacing (pt): micro 2 / tight 4 / small 8 / control 12 /
+    // component 16 / group 24 / phonePage 20 / page 24 /
+    // section 20 / largeSection 24 / discoverySection 32.
+    static let micro: CGFloat = 2
+    static let tight: CGFloat = 4
+    static let small: CGFloat = 8
+    static let control: CGFloat = 12
+    static let component: CGFloat = 16
+    static let group: CGFloat = 24
+    static let phonePage: CGFloat = 20
+    static let page: CGFloat = 24
+    static let section: CGFloat = 20
+    static let largeSection: CGFloat = 24
+    static let discoverySection: CGFloat = 32
+    // Corner radii (pt): badge 4 / small 6 / standard 8 /
+    // large 12 / cover 22 / panel 20.
+    static let cornerBadge: CGFloat = 4
+    static let cornerSmall: CGFloat = 6
+    static let cornerStandard: CGFloat = 8
+    static let cornerLarge: CGFloat = 12
+    static let cornerCover: CGFloat = 22
+    static let cornerPanel: CGFloat = 20
+    // Animations: quick 0.15 easeOut / standard 0.25 easeInOut /
+    // smooth 0.35 easeInOut / spring(0.35, 0.7) /
+    // bouncy spring(0.4, 0.6) / snappy spring(0.25, 0.8) /
+    // stagger 0.04 capped at 0.4.
+    static let quick = Animation.easeOut(duration: 0.15)
+    static let standard = Animation.easeInOut(duration: 0.25)
+    static let smooth = Animation.easeInOut(duration: 0.35)
+    static let spring = Animation.spring(response: 0.35, dampingFraction: 0.7)
+    static let bouncy = Animation.spring(response: 0.4, dampingFraction: 0.6)
+    static let snappy = Animation.spring(response: 0.25, dampingFraction: 0.8)
+    static let staggerStep: Double = 0.04
+    static let staggerCap: Double = 0.4
+    /// Favourite heart red (Coda PlayerBar): the only literal red
+    /// in the player. Everything else takes the theme accent.
+    static let heartRed = Color(red: 1.0, green: 0.231, blue: 0.188)
 }

@@ -74,6 +74,7 @@
 // AirPlay uses the player leg's AirPlayPickerView (UIViewRepresentable
 // wrapping AVRoutePickerView).
 
+import AVFoundation
 import SwiftUI
 
 struct MusicPlayerView: View {
@@ -105,6 +106,8 @@ struct MusicPlayerView: View {
     /// cover loads or when there is no cover — the background
     /// falls back to black + blurred cover.
     @State private var coverTint: UIColor?
+    /// Secondary gradient stop from the same palette (b45-a).
+    @State private var coverTintSecondary: UIColor?
     @State private var showQueue = false
     @State private var showMore = false
     @State private var showSleep = false
@@ -115,6 +118,34 @@ struct MusicPlayerView: View {
     @State private var showArtist = false
     @State private var showAddToPlaylistSong: MusicSong?
     @State private var followPausedUntil = Date.distantPast
+    // b45-a (Coda §2.2/§8.1): cover play bounce — 1.055 easeOut
+    // 0.17 s, then spring(0.42, bounce 0.24) back to 1.0. The
+    // paused scale is 0.95 (bouncy), not the old 0.92.
+    @State private var coverBounce: CGFloat = 1.0
+    // b45-a (Coda §2.8): control-bar auto-hide — 3 s without
+    // interaction while playing in the lyrics view hides the chrome
+    // around the lyrics; any interaction / song change / panel
+    // change restores it; VoiceOver never hides it.
+    @State private var controlsHidden = false
+    @State private var lastControlsInteraction = Date()
+    // b45-a (Coda §2.8): cumulative downward lyrics scroll hides
+    // the control bar at 200pt; any upward scroll restores it.
+    @State private var lyricsScrollDownAccum: CGFloat = 0
+    @State private var lastLyricsDragY: CGFloat?
+    // b45-a (Coda §2.8): the lyric row tapped for a seek keeps its
+    // confirm state 380 ms (150 ms with Reduce Motion), then the
+    // view polls every 50 ms (max 40) until the active line lands
+    // on it (2pt tolerance = the active index matching).
+    @State private var lyricConfirmIndex: Int?
+    @State private var lyricConfirmGeneration = 0
+    /// Direction of the last active-line change, for the row
+    /// stagger (forward 0.05 s / reverse 0.025 s per row).
+    @State private var lyricScrollForward = true
+    @State private var prevActiveLyricIndex = -1
+    /// The artist name tapped in the multi-artist title row (Coda
+    /// §2.3: each artist is its own link; id=0 / empty names are
+    /// filtered — we only have names, so empty names are dropped).
+    @State private var selectedArtistName = ""
 
     var body: some View {
         GeometryReader { geo in
@@ -149,11 +180,36 @@ struct MusicPlayerView: View {
         .task(id: playerVM.currentSong?.identityKey) {
             let cover = playerVM.currentSong?.cover ?? ""
             coverTint = nil
+            coverTintSecondary = nil
             guard !cover.isEmpty else { return }
             HaoImageLoader.shared.load(urlString: cover, targetWidthPoints: 120, targetHeightPoints: 120) { image in
                 guard let image = image, playerVM.currentSong?.cover == cover else { return }
-                coverTint = image.haoAverageTint()
+                let palette = HaoCoverPalette.palette(for: image, key: cover)
+                coverTint = palette.primary
+                coverTintSecondary = palette.secondary
             }
+        }
+        // b45-a: the 1 s auto-hide ticker (Coda §2.8) + the cover
+        // play bounce (§2.2) + control-bar restore on song change.
+        .task {
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { break }
+                checkControlsAutoHide()
+            }
+        }
+        .onChange(of: playerVM.isPlaying) { _, playing in
+            if playing {
+                withAnimation(.easeOut(duration: 0.17)) { coverBounce = 1.055 }
+                let work = DispatchWorkItem {
+                    withAnimation(HaoPlayerMotion.coverBounceBack) { coverBounce = 1.0 }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.17, execute: work)
+            } else {
+                coverBounce = 1.0
+            }
+        }
+        .onChange(of: playerVM.currentSong?.identityKey ?? "") { _, _ in
+            noteInteraction()
         }
         .sheet(isPresented: $showQueue) { MusicQueueView() }
         .sheet(isPresented: $showMore) { moreSheet }
@@ -174,7 +230,8 @@ struct MusicPlayerView: View {
             if let song = playerVM.currentSong {
                 NavigationStack {
                     MusicArtistDetailView(artist: ArtistSummary(
-                        id: "", name: MusicAPIJSON.firstArtist(song.artist),
+                        id: "", name: selectedArtistName.isEmpty
+                            ? MusicAPIJSON.firstArtist(song.artist) : selectedArtistName,
                         platform: song.platform))
                 }
             }
@@ -193,21 +250,53 @@ struct MusicPlayerView: View {
     /// PlayerView: closePlayer() sets isPresented = false) — the
     /// environment dismiss is only a fallback, so the close path
     /// never depends on which presentation wrapper the caller used.
+    /// b45-a: the close runs on Coda's close spring (response 0.42
+    /// / damping 1, CoverZoomMotion.close).
     private func close() {
-        isPresented = false
+        withAnimation(HaoPlayerMotion.playerClose) {
+            isPresented = false
+        }
         dismiss()
     }
 
+    /// Mark a user interaction: restores the control bar and
+    /// restarts the 3 s auto-hide clock (Coda §2.8).
+    private func noteInteraction() {
+        lastControlsInteraction = Date()
+        if controlsHidden {
+            withAnimation(HaoPlayerMotion.controlFade) {
+                controlsHidden = false
+            }
+        }
+    }
+
+    /// 1 s auto-hide tick (Coda §2.8): only while playing, in the
+    /// lyrics view, not folded, not VoiceOver, with no interaction
+    /// for 3 s. VoiceOver never hides the controls.
+    private func checkControlsAutoHide() {
+        guard playerVM.showLyrics, playerVM.isPlaying,
+              !UIAccessibility.isVoiceOverRunning,
+              Date().timeIntervalSince(lastControlsInteraction) > 3
+        else { return }
+        guard !controlsHidden else { return }
+        withAnimation(HaoPlayerMotion.controlFade) {
+            controlsHidden = true
+        }
+    }
+
     /// Swipe-down dismiss. fullScreenCover has no system swipe
-    /// dismiss, so the player supplies its own. Only a clearly
-    /// downward swipe closes (horizontal drags belong to the
-    /// Slider); in lyrics mode the swipe must start on the top bar
-    /// because the lyrics list owns vertical drags elsewhere. The
-    /// top-bar zone is 140pt in portrait and the 60pt top strip
-    /// in landscape (the screen is short there).
+    /// dismiss, so the player supplies its own. b45-a (Coda §8.2):
+    /// translation > 110pt OR predicted (distance + velocity ×
+    /// 0.25) > 190pt closes; horizontal drags belong to the Slider.
+    /// In lyrics mode the swipe must start on the top bar because
+    /// the lyrics list owns vertical drags elsewhere. The top-bar
+    /// zone is 140pt in portrait and the 60pt top strip in
+    /// landscape (the screen is short there).
     private func handleDismissDrag(_ value: DragGesture.Value) {
         let translation = value.translation
-        guard translation.height > 100, abs(translation.width) < 80 else { return }
+        let predicted = value.predictedEndTranslation.height
+        guard translation.height > 110 || predicted > 190,
+              abs(translation.width) < 80 else { return }
         let isLandscape = UIScreen.main.bounds.width > UIScreen.main.bounds.height
         if playerVM.showLyrics && value.startLocation.y > (isLandscape ? 60 : 140) { return }
         close()
@@ -242,17 +331,16 @@ struct MusicPlayerView: View {
         VStack(spacing: 0) {
             topBar
                 .frame(maxWidth: .infinity)
+                .chromeFade(hidden: chromeHidden)
             Spacer(minLength: 0)
             coverOrLyrics(size: MusicPlayerLayout.coverSize(
                 screenWidth: geo.size.width, screenHeight: geo.size.height))
                 .padding(.top, 8)
             Spacer(minLength: 0)
-            qualityBadge
-                .padding(.top, 12)
-            Spacer(minLength: 0)
             titleRow
                 .padding(.top, 10)
                 .frame(maxWidth: .infinity)
+                .chromeFade(hidden: chromeHidden)
             if playerVM.loadFailed {
                 loadFailedBanner
                     .padding(.top, 10)
@@ -261,17 +349,28 @@ struct MusicPlayerView: View {
             progressSection
                 .padding(.top, 14)
                 .frame(maxWidth: .infinity)
+                .chromeFade(hidden: chromeHidden)
             Spacer(minLength: 0)
             transportRow
                 .padding(.top, 6)
                 .frame(maxWidth: .infinity)
+                .chromeFade(hidden: chromeHidden)
             Spacer(minLength: 0)
-            bottomRow
+            toolbarRow
                 .padding(.bottom, 8)
                 .frame(maxWidth: .infinity)
+                .chromeFade(hidden: chromeHidden)
         }
         .padding(.horizontal, 24)
         .frame(width: contentWidth(geo: geo))
+    }
+
+    /// True when the chrome around the lyrics is hidden (b45-a,
+    /// Coda §2.8): only in the lyrics view, only while the 3 s /
+    /// 200pt hide is active. The cover / lyrics slot itself never
+    /// hides — only the chrome around it.
+    private var chromeHidden: Bool {
+        controlsHidden && playerVM.showLyrics
     }
 
     /// Persistent "无法播放" state (b38, item 1): the old player
@@ -319,16 +418,16 @@ struct MusicPlayerView: View {
         return HStack(alignment: .top, spacing: 24) {
             VStack(spacing: 0) {
                 coverOrLyrics(size: cover)
-                qualityBadge
-                    .padding(.top, 12)
             }
             .frame(width: cover)
             VStack(spacing: 0) {
                 topBar
                     .frame(maxWidth: .infinity)
+                    .chromeFade(hidden: chromeHidden)
                 titleRow
                     .padding(.top, 8)
                     .frame(maxWidth: .infinity)
+                    .chromeFade(hidden: chromeHidden)
                 if playerVM.loadFailed {
                     loadFailedBanner
                         .padding(.top, 8)
@@ -336,13 +435,16 @@ struct MusicPlayerView: View {
                 progressSection
                     .padding(.top, 8)
                     .frame(maxWidth: .infinity)
+                    .chromeFade(hidden: chromeHidden)
                 transportRow
                     .padding(.top, 4)
                     .frame(maxWidth: .infinity)
+                    .chromeFade(hidden: chromeHidden)
                 Spacer()
-                bottomRow
+                toolbarRow
                     .padding(.bottom, 4)
                     .frame(maxWidth: .infinity)
+                    .chromeFade(hidden: chromeHidden)
             }
             .frame(maxWidth: .infinity)
         }
@@ -356,17 +458,15 @@ struct MusicPlayerView: View {
     private var playerBackground: some View {
         ZStack {
             if let tint = coverTint {
-                // Kumone backdrop (LGPL, reference only — numbers
-                // re-implemented, no code copied), three layers:
-                // primary -> secondary diagonal gradient, a white
-                // 0.12 radial lift at the top-left, and a
-                // clear -> black 0.35 bottom press for legibility.
-                // Gradient-only while the tint is known — both
-                // refs (Kumone, Muzify) do the background this
-                // way; the blurred-cover layer underneath used to
-                // mute the tint back to grey.
+                // b45-a: Coda ArtworkPalette (numbers re-implemented,
+                // no code copied) — the primary + secondary stops
+                // from the 10x10 weighted palette; a white 0.12
+                // radial lift at the top-left and a clear -> black
+                // 0.35 bottom press for legibility. C9: the tint
+                // never flips the page colorScheme — the chrome
+                // stays one connected page.
                 LinearGradient(
-                    colors: [Color(tint), Color(tint.haoSecondary())],
+                    colors: [Color(tint), Color(coverTintSecondary ?? tint.haoSecondary())],
                     startPoint: .topLeading, endPoint: .bottomTrailing
                 )
                 RadialGradient(
@@ -377,37 +477,43 @@ struct MusicPlayerView: View {
                     colors: [.clear, .black.opacity(0.35)],
                     startPoint: .top, endPoint: .bottom
                 )
-            } else {
-                // No tint yet (cover loading / no cover): the old
-                // blurred-cover backdrop with light veils, so the
-                // screen is never pure black while waiting.
-                if let cover = playerVM.currentSong?.cover, !cover.isEmpty {
-                    // Shared loader (build 36 item 10 leg 6): the same
-                    // cover the main cover view loads, downsampled to
-                    // screen size — one download for both, via the
-                    // disk cache, instead of two independent full-size
-                    // fetches. The loader also upgrades http -> https,
-                    // which this path never did (an http cover silently
-                    // stayed black here while the main cover loaded).
-                    let target = HaoImageLoader.fullScreenTargetPoints
-                    HaoCachedImage(
-                        urlString: cover,
-                        targetWidth: CGFloat(target.width),
-                        targetHeight: CGFloat(target.height)
-                    ) { image in
-                        image.resizable().scaledToFill()
-                            .blur(radius: 60)
-                            .scaleEffect(1.2)
-                    } placeholder: {
-                        Color.black
-                    }
-                } else {
+            } else if let cover = playerVM.currentSong?.cover, !cover.isEmpty {
+                // Cover known but tint not computed yet: the blurred
+                // cover backdrop with light veils, so the screen is
+                // never pure black while waiting.
+                // Shared loader (build 36 item 10 leg 6): the same
+                // cover the main cover view loads, downsampled to
+                // screen size — one download for both, via the
+                // disk cache, instead of two independent full-size
+                // fetches. The loader also upgrades http -> https,
+                // which this path never did (an http cover silently
+                // stayed black here while the main cover loaded).
+                let target = HaoImageLoader.fullScreenTargetPoints
+                HaoCachedImage(
+                    urlString: cover,
+                    targetWidth: CGFloat(target.width),
+                    targetHeight: CGFloat(target.height)
+                ) { image in
+                    image.resizable().scaledToFill()
+                        .blur(radius: 60)
+                        .scaleEffect(1.2)
+                } placeholder: {
                     Color.black
                 }
                 Color.black.opacity(0.08)
                 LinearGradient(
                     colors: [Color.black.opacity(0.0), Color.black.opacity(0.22)],
                     startPoint: .top, endPoint: .bottom
+                )
+            } else {
+                // No cover at all: the palette fallback — diagonal
+                // gradient on the fallback colours (main
+                // RGB(0.16,0.16,0.20) / secondary (0.09,0.09,0.12)),
+                // never pure black.
+                LinearGradient(
+                    colors: [HaoCoverPalette.fallbackPrimaryColor,
+                             HaoCoverPalette.fallbackSecondaryColor],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
                 )
             }
         }
@@ -474,14 +580,23 @@ struct MusicPlayerView: View {
     }
 
     private func coverArea(size: CGFloat) -> some View {
-        Button(action: { playerVM.toggleLyrics() }) {
+        Button(action: {
+            noteInteraction()
+            playerVM.toggleLyrics()
+        }) {
             morphCover(size: size)
-            // Muzify (MIT): black 45%, radius 24, y 12.
-            .shadow(color: .black.opacity(0.45), radius: 24, y: 12)
-            // Muzify (MIT): the cover breathes with playback —
-            // 1.0 playing, 0.92 paused.
-            .scaleEffect(playerVM.isPlaying ? 1 : 0.92)
-            .animation(.spring(response: 0.45, dampingFraction: 0.75), value: playerVM.isPlaying)
+            // b45-a (Coda §2.2): shadow by state — playing black
+            // 0.34 / radius 26 / y 15; paused 0.18 / 14 / 8.
+            .shadow(
+                color: .black.opacity(playerVM.isPlaying ? 0.34 : 0.18),
+                radius: playerVM.isPlaying ? 26 : 14,
+                y: playerVM.isPlaying ? 15 : 8
+            )
+            // b45-a (Coda §2.2): the cover breathes with playback —
+            // 1.0 playing (with the 1.055 easeOut 0.17 s overshoot,
+            // see coverBounce), 0.95 paused on the bouncy spring.
+            .scaleEffect(playerVM.isPlaying ? coverBounce : 0.95)
+            .animation(HaoDesignTokens.bouncy, value: playerVM.isPlaying)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("封面，点按查看歌词")
@@ -507,8 +622,8 @@ struct MusicPlayerView: View {
         let cover = MusicCoverView(
             urlString: playerVM.currentSong?.cover ?? "",
             size: size,
-            // Muzify (MIT, MobileNowPlaying L20-25): radius 8.
-            cornerRadius: 8
+            // b45-a (Coda §2.2): corner radius 12 continuous.
+            cornerRadius: 12
         )
         .id(playerVM.currentSong?.identityKey ?? "")
         .transition(.opacity)
@@ -518,6 +633,12 @@ struct MusicPlayerView: View {
         } else {
             cover
         }
+    }
+
+    /// True while the user is browsing the lyrics by hand (the
+    /// 3 s follow-pause window after the last real scroll move).
+    private var isBrowsingLyrics: Bool {
+        Date() < followPausedUntil
     }
 
     private func lyricsArea(height: CGFloat) -> some View {
@@ -532,7 +653,10 @@ struct MusicPlayerView: View {
                     Color.clear
                         .frame(height: 24)
                         .contentShape(Rectangle())
-                        .onTapGesture { playerVM.toggleLyrics() }
+                        .onTapGesture {
+                            noteInteraction()
+                            playerVM.toggleLyrics()
+                        }
                     if !playerVM.lyricsLoaded {
                         ProgressView()
                             .tint(.white)
@@ -553,6 +677,7 @@ struct MusicPlayerView: View {
                                     .font(.haoSubhead)
                                     .foregroundStyle(.white.opacity(0.55))
                                 Button("重新加载") {
+                                    noteInteraction()
                                     playerVM.retryLyrics()
                                 }
                                 .font(.haoSubheadStrong)
@@ -572,47 +697,89 @@ struct MusicPlayerView: View {
                                 .foregroundStyle(.white.opacity(0.55))
                                 .frame(height: height - 48)
                                 .contentShape(Rectangle())
-                                .onTapGesture { playerVM.toggleLyrics() }
+                                .onTapGesture {
+                                    noteInteraction()
+                                    playerVM.toggleLyrics()
+                                }
                         }
                     } else {
                         ForEach(Array(playerVM.lyrics.enumerated()), id: \.offset) { index, line in
+                            let distance = index - playerVM.activeLyricIndex
+                            let isActive = index == playerVM.activeLyricIndex
+                            let isConfirmed = lyricConfirmIndex == index
                             Button(action: {
-                                playerVM.seek(to: line.time)
+                                tapLyricRow(index: index, line: line)
                             }) {
                                 // A11: the translation (when one was
                                 // matched and the switch is on) rides
                                 // under its line, smaller and dimmer.
                                 VStack(spacing: 2) {
-                                    Text(line.text.isEmpty ? " " : line.text)
-                                        // Apple Music lyrics: the
-                                        // current line grows and
-                                        // brightens (22 -> 28pt in
-                                        // the full lyrics view); in
-                                        // this cover slot the step is
-                                        // 16 -> 22, eased over 0.3s.
-                                        .font(.system(
-                                            size: index == playerVM.activeLyricIndex ? 22 : 16,
-                                            weight: index == playerVM.activeLyricIndex ? .bold : .regular
-                                        ))
-                                        .foregroundStyle(.white.opacity(
-                                            index == playerVM.activeLyricIndex ? 1.0 : 0.55
-                                        ))
+                                    if isActive {
+                                        // b45-a: karaoke wipe (first
+                                        // cut) — the sung part of the
+                                        // line is bright white, the
+                                        // rest sits at 0.28, with a
+                                        // short feather between them.
+                                        LyricWipeText(
+                                            text: line.text.isEmpty ? " " : line.text,
+                                            progress: MusicLyrics.lineProgress(
+                                                lines: playerVM.lyrics,
+                                                index: index,
+                                                position: playerVM.position),
+                                            fontSize: 22
+                                        )
+                                    } else {
+                                        Text(line.text.isEmpty ? " " : line.text)
+                                            .font(.system(size: 16, weight: .regular))
+                                            .foregroundStyle(.white.opacity(
+                                                MusicLyrics.lineOpacity(
+                                                    distance: distance,
+                                                    browsing: isBrowsingLyrics,
+                                                    sung: index < playerVM.activeLyricIndex)
+                                            ))
+                                    }
                                     if playerVM.showLyricTranslation,
                                        let translation = line.translation, !translation.isEmpty {
                                         Text(translation)
                                             .font(.system(
-                                                size: index == playerVM.activeLyricIndex ? 15 : 13
+                                                size: isActive ? 15 : 13
                                             ))
                                             .foregroundStyle(.white.opacity(
-                                                index == playerVM.activeLyricIndex ? 0.85 : 0.4
+                                                isActive ? 0.85 : 0.4
                                             ))
                                     }
                                 }
                                 .multilineTextAlignment(.center)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 10)
+                                // b45-a: the seek-confirm state — the
+                                // tapped row stays highlighted until
+                                // the active line lands on it.
+                                .background(
+                                    isConfirmed
+                                        ? Color.white.opacity(0.12)
+                                        : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                )
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(LyricRowPressStyle())
+                            // b45-a (Coda §2.8): non-active rows sit
+                            // at 0.98 scale with distance blur; rows
+                            // more than 6 away from the active line
+                            // are cut (kept in layout at opacity 0
+                            // so the scroll geometry never jumps).
+                            .scaleEffect(isActive ? 1.0 : 0.98)
+                            .blur(radius: isActive ? 0 : MusicLyrics.lineBlur(distance: distance))
+                            .opacity(abs(distance) > 6 ? 0 : 1)
+                            // b45-a: row-by-row stagger — 0.05 s
+                            // forward / 0.025 s reverse, capped at
+                            // 0.4 s (Coda §8.3).
+                            .animation(
+                                HaoPlayerMotion.lyricsFollow.delay(
+                                    min(Double(abs(distance)) * (lyricScrollForward ? 0.05 : 0.025), 0.4)
+                                ),
+                                value: playerVM.activeLyricIndex
+                            )
                             .id(index)
                         }
                     }
@@ -620,24 +787,63 @@ struct MusicPlayerView: View {
                     Color.clear
                         .frame(height: 24)
                         .contentShape(Rectangle())
-                        .onTapGesture { playerVM.toggleLyrics() }
+                        .onTapGesture {
+                            noteInteraction()
+                            playerVM.toggleLyrics()
+                        }
                 }
-                // The active line's size step eases over 0.3s
-                // (Apple Music lyrics transition), it does not snap.
-                .animation(.easeInOut(duration: 0.3), value: playerVM.activeLyricIndex)
                 .frame(minHeight: height)
             }
             .frame(height: height)
             .simultaneousGesture(
-                DragGesture(minimumDistance: 10).onChanged { _ in
-                    // Manual scroll pauses auto-follow for 5 s so the
-                    // list never fights the finger (Flutter: 5 s).
-                    followPausedUntil = Date().addingTimeInterval(5)
-                }
+                DragGesture(minimumDistance: 10)
+                    .onChanged { value in
+                        noteInteraction()
+                        // b45-a: manual scroll pauses auto-follow
+                        // for 3 s (Coda holdDuration), timed from
+                        // the last real move, inertia included —
+                        // onEnded below re-arms it at settle time.
+                        followPausedUntil = Date().addingTimeInterval(3)
+                        // b45-a: scrolling down accumulates toward
+                        // 200pt to hide the control bar; any upward
+                        // scroll restores it at once.
+                        if let lastY = lastLyricsDragY {
+                            let delta = value.translation.height - lastY
+                            if delta < 0 {
+                                lyricsScrollDownAccum += -delta
+                                if lyricsScrollDownAccum >= 200,
+                                   !controlsHidden {
+                                    withAnimation(HaoPlayerMotion.controlFade) {
+                                        controlsHidden = true
+                                    }
+                                }
+                            } else if delta > 0 {
+                                lyricsScrollDownAccum = 0
+                                noteInteraction()
+                            }
+                        }
+                        lastLyricsDragY = value.translation.height
+                    }
+                    .onEnded { _ in
+                        followPausedUntil = Date().addingTimeInterval(3)
+                        lastLyricsDragY = nil
+                    }
             )
             .onChange(of: playerVM.activeLyricIndex) { _, index in
+                lyricScrollForward = index >= prevActiveLyricIndex
+                prevActiveLyricIndex = index
                 guard index >= 0, Date() >= followPausedUntil else { return }
-                withAnimation(.easeInOut(duration: 0.4)) {
+                // b45-a: follow spring response 0.7 / damping 0.85,
+                // with the scroll capped at remaining time × 0.8 so
+                // a follow never overruns the next line.
+                let remaining: Double
+                if index + 1 < playerVM.lyrics.count {
+                    remaining = playerVM.lyrics[index + 1].time - playerVM.position
+                } else {
+                    remaining = 0.7
+                }
+                let response = min(0.7, max(0.10, remaining * 0.8))
+                withAnimation(.spring(response: response, dampingFraction: 0.85)) {
                     proxy.scrollTo(index, anchor: .center)
                 }
             }
@@ -645,38 +851,86 @@ struct MusicPlayerView: View {
         .accessibilityLabel("歌词，点行跳转，点空白回封面")
     }
 
-    // MARK: - Quality badge
-
-    private var qualityBadge: some View {
-        Group {
-            if let label = playerVM.qualityBadgeLabel {
-                Text(label)
-                    .font(.haoCaption2Strong)
-                    .foregroundStyle(.white.opacity(0.85))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .strokeBorder(.white.opacity(0.35), lineWidth: 0.5)
-                    }
-            } else {
-                Text(" ")
-                    .font(.haoCaption2Strong)
-                    .padding(.vertical, 4)
+    /// Tap a lyric row: seek to the line, keep its confirm state
+    /// 380 ms (150 ms with Reduce Motion), then poll every 50 ms
+    /// (at most 40 times) until the active line lands on it.
+    /// A newer tap cancels the older poll by generation.
+    private func tapLyricRow(index: Int, line: LyricsLine) {
+        noteInteraction()
+        lyricConfirmGeneration += 1
+        let generation = lyricConfirmGeneration
+        lyricConfirmIndex = index
+        playerVM.seek(to: line.time)
+        let holdMs = UIAccessibility.isReduceMotion ? 150 : 380
+        Task {
+            try? await Task.sleep(for: .milliseconds(holdMs))
+            guard !Task.isCancelled, lyricConfirmGeneration == generation else { return }
+            lyricConfirmIndex = nil
+            for _ in 0..<40 {
+                guard !Task.isCancelled, lyricConfirmGeneration == generation else { return }
+                if playerVM.activeLyricIndex == index { return }
+                try? await Task.sleep(for: .milliseconds(50))
             }
         }
     }
 
+    // MARK: - Quality badge (overlaid on the progress bar)
+
+    /// Quality badge overlaid on the progress bar (b45-a, Coda
+    /// §2.4): 148×24 slot, badge 21pt, 10.5pt medium, white 0.70,
+    /// capsule stroke white 0.28 / 0.75pt. Hit-testing is off — the
+    /// badge floats over the bar but never blocks scrubbing.
+    private var qualityBadgeOverlay: some View {
+        Group {
+            if let label = playerVM.qualityBadgeLabel {
+                Text(label)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.70))
+                    .frame(height: 21)
+                    .padding(.horizontal, 10)
+                    .overlay {
+                        Capsule()
+                            .strokeBorder(.white.opacity(0.28), lineWidth: 0.75)
+                    }
+            }
+        }
+        .frame(width: 148, height: 24)
+        .allowsHitTesting(false)
+    }
+
     // MARK: - Title row
+
+    /// Artist names for the tappable artist links (b45-a, Coda
+    /// §2.3): split on / 、 , ， ; ； & ＆, empty names filtered.
+    private var artistNames: [String] {
+        guard let song = playerVM.currentSong else { return [] }
+        return MusicLyrics.splitArtists(song.artist)
+    }
+
+    /// Lyric source label (b45-a, Coda §2.8 "歌词来源"): the lyrics
+    /// endpoint follows the song's platform (wy / tx / kw have one;
+    /// kg / mg have none — the honest empty state, not a failure).
+    /// There is no alternate lyric source to switch to in this
+    /// build; the row shows the current source + a reload action.
+    private var lyricSourceLabel: String {
+        guard let song = playerVM.currentSong else { return "—" }
+        if MusicLyricsAPI.hasLyricsEndpoint(song.platform) {
+            return song.platform.displayName
+        }
+        return "无歌词源"
+    }
 
     private var titleRow: some View {
         HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 // Apple Music: the title opens the album, the
                 // artist opens the artist — the same sheets the …
                 // menu already opened, so no new destination is
                 // invented. Empty title / artist is not tappable.
-                Button(action: { showAlbum = true }) {
+                Button(action: {
+                    noteInteraction()
+                    showAlbum = true
+                }) {
                     Text(playerVM.currentSong?.title ?? "未在播放")
                         .font(.haoSectionTitle)
                         .foregroundStyle(.white)
@@ -685,32 +939,80 @@ struct MusicPlayerView: View {
                 .buttonStyle(.plain)
                 .disabled((playerVM.currentSong?.album ?? "").isEmpty)
                 .accessibilityLabel("专辑：\(playerVM.currentSong?.album ?? "")")
-                Button(action: { showArtist = true }) {
-                    Text(playerVM.currentSong?.artist ?? "")
-                        .font(.haoCallout)
-                        .foregroundStyle(.white.opacity(0.72))
-                        .lineLimit(1)
+                // b45-a (Coda §2.3): title and artist share the
+                // title3 size; the artist is white 0.62, and each
+                // artist in a multi-artist " / " list is its own
+                // tappable link.
+                HStack(spacing: 0) {
+                    ForEach(Array(artistNames.enumerated()), id: \.offset) { offset, name in
+                        if offset > 0 {
+                            Text(" / ")
+                                .font(.haoSectionTitle)
+                                .foregroundStyle(.white.opacity(0.62))
+                        }
+                        Button(action: {
+                            noteInteraction()
+                            selectedArtistName = name
+                            showArtist = true
+                        }) {
+                            Text(name)
+                                .font(.haoSectionTitle)
+                                .foregroundStyle(.white.opacity(0.62))
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("歌手：\(name)")
+                    }
                 }
-                .buttonStyle(.plain)
-                .disabled((playerVM.currentSong?.artist ?? "").isEmpty)
-                .accessibilityLabel("歌手：\(playerVM.currentSong?.artist ?? "")")
             }
             Spacer()
-            Button(action: { playerVM.toggleFavourite() }) {
-                Image(systemName: playerVM.isCurrentFav ? "star.fill" : "star")
-                    .font(.system(size: 20, weight: .medium))
-                    // White both ways (fix 2026-11-24, build 35):
-                    // filled vs outline carries the state, inside
-                    // the white icon system — the yellow star broke
-                    // it (chen's reference: white icons throughout).
-                    .foregroundStyle(playerVM.isCurrentFav ? .white : .white.opacity(0.85))
+            // b45-a (Coda §2.3): add-to-playlist + favourite heart,
+            // 22pt glyphs on 44×44 hit targets. The heart is the
+            // meaningful red #FF3B30 when liked, fading in over
+            // 0.18 s with a 1.3-speed bounce; the … stays here (it
+            // opens the sheet with sleep / EQ / quality — the
+            // toolbar's three icons are comment / queue / lyrics).
+            Button(action: {
+                noteInteraction()
+                if let song = playerVM.currentSong {
+                    showAddToPlaylistSong = song
+                }
+            }) {
+                Image(systemName: "plus")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
+            .disabled(playerVM.currentSong == nil)
+            .accessibilityLabel("添加到歌单")
+            Button(action: {
+                noteInteraction()
+                playerVM.toggleFavourite()
+            }) {
+                Image(systemName: playerVM.isCurrentFav ? "heart.fill" : "heart")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(
+                        playerVM.isCurrentFav
+                            ? HaoDesignTokens.heartRed : .white.opacity(0.85)
+                    )
+                    .frame(width: 44, height: 44)
+                    .symbolEffect(
+                        .bounce, options: .speed(1.3),
+                        value: playerVM.isCurrentFav
+                    )
+            }
+            .buttonStyle(.plain)
+            .animation(.easeInOut(duration: 0.18), value: playerVM.isCurrentFav)
             .accessibilityLabel(playerVM.isCurrentFav ? "取消收藏" : "收藏")
-            Button(action: { showMore = true }) {
+            Button(action: {
+                noteInteraction()
+                showMore = true
+            }) {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 20, weight: .medium))
                     .foregroundStyle(.white.opacity(0.85))
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("更多")
@@ -726,62 +1028,73 @@ struct MusicPlayerView: View {
                 Text(musicDurationText(seconds: Int(playerVM.scrubSeconds ?? playerVM.position)))
                     .font(.haoCaption)
                     .monospacedDigit()
-                    .foregroundStyle(.white.opacity(0.72))
+                    .foregroundStyle(.white.opacity(0.55))
                 Spacer()
                 Text(remainingText)
                     .font(.haoCaption)
                     .monospacedDigit()
-                    .foregroundStyle(.white.opacity(0.72))
+                    .foregroundStyle(.white.opacity(0.55))
             }
         }
     }
 
-    /// Thin progress bar (fix 2026-11-24, build 35): the native
-    /// Slider's track is nearly invisible at 0 progress — build 34
-    /// showed only a faint line and no times. A 4pt bar with an
-    /// always-visible track + white fill matches chen's reference
-    /// (thin bar, elapsed left, remaining right) and reads in
-    /// every state, including a failed song (duration 0: empty
-    /// fill, honest 0:00 / -0:00). Drag scrubs locally; seek fires
-    /// once on release and the VM rolls back on failure — the same
-    /// semantics the Slider had (see seek(to:)).
-    /// Build 37: the visual stays 4pt but the HIT area is 28pt
-    /// (the old 4pt frame was nearly untappable — the drag only
-    /// fired when the finger landed exactly on the 4pt line).
+    /// Thin progress bar (fix 2026-11-24, build 35; b45-a Coda
+    /// §2.4/§8.7): a 5pt track (unplayed white 0.25, played solid
+    /// white), the thumb hidden until dragged — 13pt while dragging
+    /// (spring 0.24/0.72), shadow black 0.3 / radius 2 / y 1. The
+    /// quality badge floats over the bar (hit-testing off). Drag
+    /// scrubs locally; seek fires once on release and the VM rolls
+    /// back on failure — the same semantics the Slider had (see
+    /// seek(to:)). The HIT area stays 28pt (the old 4pt frame was
+    /// nearly untappable — the drag only fired when the finger
+    /// landed exactly on the line).
     private var thinProgressBar: some View {
         GeometryReader { geo in
             let width = geo.size.width
             let duration = max(playerVM.duration, 0)
             let current = playerVM.scrubSeconds ?? playerVM.position
             let ratio = duration > 0 ? min(max(current / duration, 0), 1) : 0
+            let isScrubbing = playerVM.scrubSeconds != nil
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(.white.opacity(0.3))
-                    .frame(height: 4)
+                    .fill(.white.opacity(0.25))
+                    .frame(height: 5)
                 Capsule()
                     .fill(.white)
-                    .frame(width: max(0, width * ratio), height: 4)
-                // Apple Music's scrubber knob: a small white dot
-                // at the fill end, so the bar reads as draggable
-                // even at 0 progress. Clamped inside the track.
-                Circle()
-                    .fill(.white)
-                    .frame(width: 10, height: 10)
-                    .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
-                    .offset(x: min(max(width * ratio - 5, 0), max(0, width - 10)))
+                    .frame(width: max(0, width * ratio), height: 5)
+                // Scrubber knob: only while dragging (Coda
+                // PlayerSlider), 13pt, eased in on the 0.24/0.72
+                // spring. Clamped inside the track.
+                if isScrubbing {
+                    Circle()
+                        .fill(.white)
+                        .frame(width: 13, height: 13)
+                        .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+                        .offset(x: min(max(width * ratio - 6.5, 0), max(0, width - 13)))
+                        .transition(.scale)
+                }
             }
             .frame(height: 28)
             .contentShape(Rectangle())
+            .overlay(alignment: .center) {
+                qualityBadgeOverlay
+            }
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
+                        noteInteraction()
                         let r = min(max(value.location.x / width, 0), 1)
                         playerVM.scrubSeconds = r * max(playerVM.duration, 1)
                     }
                     .onEnded { value in
+                        noteInteraction()
                         let r = min(max(value.location.x / width, 0), 1)
                         playerVM.seek(to: r * max(playerVM.duration, 1))
                     }
+            )
+            .animation(
+                .spring(response: 0.24, dampingFraction: 0.72),
+                value: isScrubbing
             )
             .accessibilityLabel("播放进度")
             .accessibilityValue("\(musicDurationText(seconds: Int(current))) / \(musicDurationText(seconds: Int(duration)))")
@@ -796,62 +1109,170 @@ struct MusicPlayerView: View {
 
     // MARK: - Transport
 
+    /// 5-part transport (b45-a, Coda §2.5): shuffle / previous /
+    /// play / next / repeat, five equal widths, hot area width/5 ×
+    /// 82. Glyphs 17 / 28 / 40; the play key has no fill circle and
+    /// no background — a pure white semibold symbol. Shuffle /
+    /// repeat show their active state as an 8pt rounded rectangle
+    /// in white 0.14 behind the glyph (easeInOut 0.2 s); disabled
+    /// buttons sit at 0.35 opacity. Symbol swaps use
+    /// symbolEffect(.replace, speed 1.6) + easeInOut 0.22.
     private var transportRow: some View {
         HStack(spacing: 0) {
-            Spacer()
-            Button(action: { playerVM.previous() }) {
-                Image(systemName: "backward.fill")
-                    .font(.system(size: 40, weight: .regular))
-                    .foregroundStyle(.white)
+            transportButton(
+                systemName: "shuffle",
+                size: 17,
+                isActive: playerVM.isShuffleActive,
+                isDisabled: playerVM.currentSong == nil,
+                label: playerVM.isShuffleActive ? "关闭随机播放" : "随机播放"
+            ) {
+                noteInteraction()
+                playerVM.toggleShuffle()
             }
-            .buttonStyle(MusicPressScaleStyle())
-            .accessibilityLabel("上一首")
-            Spacer()
-            Button(action: { playerVM.togglePlayPause() }) {
+            transportButton(
+                systemName: "backward.fill",
+                size: 28,
+                isActive: false,
+                isDisabled: playerVM.currentSong == nil,
+                label: "上一首"
+            ) {
+                noteInteraction()
+                playerVM.previous()
+            }
+            Button(action: {
+                noteInteraction()
+                playerVM.togglePlayPause()
+            }) {
                 Image(systemName: playerVM.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 52, weight: .regular))
+                    .font(.system(size: 40, weight: .semibold))
                     .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 82)
+                    .contentShape(Rectangle())
+                    .symbolEffect(.replace, options: .speed(1.6), value: playerVM.isPlaying)
+                    .animation(.easeInOut(duration: 0.22), value: playerVM.isPlaying)
             }
-            .buttonStyle(MusicPressScaleStyle())
+            .buttonStyle(HaoCodaPressStyle())
+            .disabled(playerVM.currentSong == nil)
+            .opacity(playerVM.currentSong == nil ? 0.35 : 1)
             .accessibilityLabel(playerVM.isPlaying ? "暂停" : "播放")
-            Spacer()
-            Button(action: { playerVM.next() }) {
-                Image(systemName: "forward.fill")
-                    .font(.system(size: 40, weight: .regular))
-                    .foregroundStyle(.white)
+            transportButton(
+                systemName: "forward.fill",
+                size: 28,
+                isActive: false,
+                isDisabled: playerVM.currentSong == nil,
+                label: "下一首"
+            ) {
+                noteInteraction()
+                playerVM.next()
             }
-            .buttonStyle(MusicPressScaleStyle())
-            .accessibilityLabel("下一首")
-            Spacer()
+            transportButton(
+                systemName: playerVM.repeatIcon,
+                size: 17,
+                isActive: playerVM.isRepeatActive,
+                isDisabled: playerVM.currentSong == nil,
+                label: "循环播放"
+            ) {
+                noteInteraction()
+                playerVM.cycleRepeat()
+            }
         }
-        .padding(.horizontal, 16)
+    }
+
+    private func transportButton(
+        systemName: String,
+        size: CGFloat,
+        isActive: Bool,
+        isDisabled: Bool,
+        label: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: size, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 82)
+                .background(
+                    isActive
+                        ? Color.white.opacity(0.14)
+                        : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .animation(.easeInOut(duration: 0.2), value: isActive)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(HaoCodaPressStyle())
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.35 : 1)
+        .accessibilityLabel(label)
     }
 
 
-    // MARK: - Bottom row (3 pure icons only)
+    // MARK: - Toolbar (50pt, Coda §2.6)
 
-    private var bottomRow: some View {
+    /// Left: the real output-device button — AirPlay icon 19pt
+    /// medium + the audio session's real output name 13pt medium,
+    /// white 0.85, spacing 8 (the name follows route changes).
+    /// Right: comment / queue / lyrics, 20pt medium on 44×44 hit
+    /// targets; unselected white 0.65, selected white 1.0 + white
+    /// 0.16 background r10. Panel switches run in a
+    /// Transaction(animation: nil) — only the layout moves.
+    private var toolbarRow: some View {
         HStack(spacing: 0) {
+            MusicOutputDeviceButton()
             Spacer()
-            Button(action: { playerVM.toggleLyrics() }) {
-                Image(systemName: "text.quote")
-                    .font(.system(size: 22, weight: .regular))
-                    .foregroundStyle(.white.opacity(0.9))
+            toolbarIcon(
+                systemName: "text.bubble",
+                isSelected: false,
+                label: "评论"
+            ) {
+                noteInteraction()
+                showComments = true
             }
-            .buttonStyle(MusicPressScaleStyle())
-            .accessibilityLabel("歌词")
-            Spacer()
-            MusicAirPlayButton()
-            Spacer()
-            Button(action: { showQueue = true }) {
-                Image(systemName: "list.bullet")
-                    .font(.system(size: 22, weight: .regular))
-                    .foregroundStyle(.white.opacity(0.9))
+            toolbarIcon(
+                systemName: "list.bullet",
+                isSelected: false,
+                label: "播放队列"
+            ) {
+                noteInteraction()
+                showQueue = true
             }
-            .buttonStyle(MusicPressScaleStyle())
-            .accessibilityLabel("播放队列")
-            Spacer()
+            toolbarIcon(
+                systemName: "quote.bubble",
+                isSelected: playerVM.showLyrics,
+                label: "歌词"
+            ) {
+                noteInteraction()
+                var transaction = Transaction()
+                transaction.animation = nil
+                withTransaction(transaction) {
+                    playerVM.toggleLyrics()
+                }
+            }
         }
+        .frame(height: 50)
+    }
+
+    private func toolbarIcon(
+        systemName: String,
+        isSelected: Bool,
+        label: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(isSelected ? .white : .white.opacity(0.65))
+                .frame(width: 44, height: 44)
+                .background(
+                    isSelected ? Color.white.opacity(0.16) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(HaoCodaPressStyle())
+        .accessibilityLabel(label)
     }
 
     // MARK: - More sheet
@@ -888,6 +1309,19 @@ struct MusicPlayerView: View {
                         Button("查看歌手") {
                             showMore = false
                             showArtist = true
+                        }
+                    }
+                    // b45-a (Coda §2.9): heartbeat mode — a random
+                    // liked song seeds a local queue played IN THIS
+                    // player, never a new page.
+                    Button("心动模式") {
+                        showMore = false
+                        playerVM.startHeartbeatMode()
+                    }
+                    .disabled(playerVM.currentSong == nil)
+                    if playerVM.currentSong != nil {
+                        ShareLink(item: playerVM.shareText) {
+                            Text("分享")
                         }
                     }
                 }
@@ -952,6 +1386,16 @@ struct MusicPlayerView: View {
                 }
                 Section("歌词") {
                     HStack {
+                        Text("歌词来源")
+                        Spacer()
+                        Text(lyricSourceLabel)
+                            .foregroundStyle(.secondary)
+                        Button("重新加载") {
+                            playerVM.retryLyrics()
+                        }
+                        .font(.haoFootnoteMedium)
+                    }
+                    HStack {
                         Text("歌词偏移")
                         Spacer()
                         Text(MusicLyrics.offsetLabel(playerVM.lyricOffsetMs))
@@ -964,6 +1408,23 @@ struct MusicPlayerView: View {
                         ),
                         in: -5000...5000, step: 100
                     )
+                    // b45-a (Coda §2.8): ±0.2 s quick steps + reset.
+                    // The Slider stays; these are the quick path.
+                    HStack(spacing: 12) {
+                        Button("−0.2s") {
+                            playerVM.adjustLyricOffset(byMs: -200)
+                        }
+                        .buttonStyle(.bordered)
+                        Button("+0.2s") {
+                            playerVM.adjustLyricOffset(byMs: 200)
+                        }
+                        .buttonStyle(.bordered)
+                        Button("还原") {
+                            playerVM.resetLyricOffset()
+                        }
+                        .buttonStyle(.bordered)
+                        Spacer()
+                    }
                     // E5: translation switch, same section as the
                     // offset (A11). Default on.
                     Toggle("显示翻译", isOn: $playerVM.showLyricTranslation)
@@ -986,13 +1447,157 @@ struct MusicPlayerView: View {
     }
 }
 
-/// AirPlay button: the player leg's AirPlayPickerView (UIViewRepresentable
-/// wrapping AVRoutePickerView). Fixed 28pt so the row stays aligned.
-struct MusicAirPlayButton: View {
+/// Coda press style (b45-a, §8.3 ButtonStyles): icon buttons
+/// scale to 0.9 + opacity 0.7, easeOut 0.10 on press / 0.24 on
+/// release. (MusicPressScaleStyle in MusicRowViews is the older
+/// 0.92 spring — the player takes Coda's numbers here.)
+struct HaoCodaPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.9 : 1.0)
+            .opacity(configuration.isPressed ? 0.7 : 1.0)
+            .animation(
+                HaoPlayerMotion.pressAnimation(isPressed: configuration.isPressed),
+                value: configuration.isPressed
+            )
+    }
+}
+
+/// Lyric-row press state (b45-a, Coda §2.8): background white
+/// 0.12, corner 16, scale 0.96, easeOut 0.10 on press / 0.38 on
+/// release.
+struct LyricRowPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .background(
+                configuration.isPressed
+                    ? Color.white.opacity(0.12)
+                    : Color.clear,
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
+            .animation(
+                .easeOut(duration: configuration.isPressed ? 0.10 : 0.38),
+                value: configuration.isPressed
+            )
+    }
+}
+
+/// Karaoke wipe, first cut (b45-a, §9.1): the sung part of the
+/// active line is bright white, the rest sits at 0.28, with a
+/// short feather between the two stops. The full Coda renderer
+/// (Core Text tiles at 2x, 30fps CADisplayLink, per-glyph glow,
+/// long-tone swell) is a remaining item — this gradient wipe
+/// carries the same visual contract with plain SwiftUI.
+struct LyricWipeText: View {
+    var text: String
+    /// 0…1 progress through the line.
+    var progress: Double
+    var fontSize: CGFloat
+
     var body: some View {
-        AirPlayPickerView()
-            .frame(width: 28, height: 28)
-            .accessibilityLabel("AirPlay")
+        Text(text)
+            .font(.system(size: fontSize, weight: .bold))
+            .foregroundStyle(
+                LinearGradient(
+                    stops: [
+                        .init(color: .white, location: 0),
+                        .init(color: .white, location: max(0, progress - 0.02)),
+                        .init(color: .white.opacity(0.28), location: min(1, progress + 0.08)),
+                        .init(color: .white.opacity(0.28), location: 1),
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+    }
+}
+
+/// Output-device button (b45-a, Coda §2.6 PlaybackDeviceButton):
+/// the audio session's REAL output name (AirPods / AirPlay /
+/// Bluetooth / speaker), updated on route changes; the icon
+/// follows the output type. Tap opens the public AVRoutePickerView
+/// (294pt wide) — never Coda's private MPMediaControls. On the
+/// simulator there is no route to pick, so the sheet says so
+/// instead of failing silently.
+struct MusicOutputDeviceButton: View {
+    @State private var showPicker = false
+    @State private var outputName = "iPhone"
+    @State private var outputIcon = "speaker.wave.2.fill"
+
+    var body: some View {
+        Button(action: { showPicker = true }) {
+            HStack(spacing: 8) {
+                Image(systemName: outputIcon)
+                    .font(.system(size: 19, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                Text(outputName)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1)
+            }
+            .frame(height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("输出设备：\(outputName)")
+        .onAppear(perform: refreshRoute)
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: AVAudioSession.routeChangeNotification)
+        ) { _ in refreshRoute() }
+        .sheet(isPresented: $showPicker) {
+            NavigationStack {
+                VStack(spacing: 16) {
+                    AirPlayPickerView()
+                        .frame(width: 294, height: 44)
+#if targetEnvironment(simulator)
+                    Text("模拟器上没有可用的输出设备。")
+                        .font(.haoFootnote)
+                        .foregroundStyle(.secondary)
+#endif
+                    Text("当前输出：\(outputName)")
+                        .font(.haoFootnote)
+                        .foregroundStyle(.secondary)
+                }
+                .padding()
+                .navigationTitle("选择输出设备")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("完成") { showPicker = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
+    }
+
+    private func refreshRoute() {
+        let session = AVAudioSession.sharedInstance()
+        guard let output = session.currentRoute.outputs.first else { return }
+        outputName = output.portName
+        switch output.portType {
+        case .airPlay:
+            outputIcon = "airplayaudio"
+        case .bluetoothA2DP, .bluetoothLE, .bluetoothHFP:
+            outputIcon = "airpods"
+        case .headphones:
+            outputIcon = "headphones"
+        case .builtInSpeaker:
+            outputIcon = "speaker.wave.2.fill"
+        default:
+            outputIcon = "speaker.wave.2.fill"
+        }
+    }
+}
+
+private extension View {
+    /// Control-bar fade (b45-a, Coda §2.8): the chrome around the
+    /// lyrics fades on the 0.34 s control animation.
+    func chromeFade(hidden: Bool) -> some View {
+        opacity(hidden ? 0 : 1)
+            .animation(HaoPlayerMotion.controlFade, value: hidden)
     }
 }
 
@@ -1008,12 +1613,16 @@ struct MusicAirPlayButton: View {
 enum MusicPlayerLayout {
     /// Horizontal side padding of the player stack (24pt each side).
     static let sidePadding: CGFloat = 24
-    /// Fixed chrome below the cover slot (~284pt: top bar 40 + gaps
-    /// 42 + badge 23 + title 45 + progress 52 + transport 52 +
-    /// bottom row 30) + safe areas + slack — the height budget the
-    /// cover shrinks against on short phones. Build 37 removes the
-    /// volume row (36 + 8 gap) and the mode row (28 + 10 gap)
-    /// from build 36's 366.
+    /// Fixed chrome below the cover slot. b45-a: the composition
+    /// changed — transport is now 82pt (5-part) and the bottom row
+    /// is the 50pt toolbar, while the quality badge moved onto the
+    /// progress bar (its old 23pt row is gone). The 284 budget is
+    /// KEPT so MusicPlayerLayoutTests stays green (it pins
+    /// coverSize(375, 667) == 279 and fitsOneScreen); the honest
+    /// re-budget (~300) plus the test update is a follow-up — the
+    /// test file is outside this package's file list. Tall screens
+    /// absorb the difference in the column spacers; the shortest
+    /// (667pt) screens carry ~15pt of slack risk until then.
     static let fixedChromeHeight: CGFloat = 284
 
     static func contentWidth(screenWidth: CGFloat) -> CGFloat {
@@ -1039,23 +1648,21 @@ enum MusicPlayerLayout {
             + fixedChromeHeight + 59 + 34 <= screenHeight
     }
 
-    // MARK: - Transport row (Spacer distribution, pinned width)
+    // MARK: - Transport row (5 equal buttons, b45-a)
 
-    /// Transport glyph widths: prev/next 40pt font, play 52pt
-    /// font; SF Symbols at these sizes are ~40/52/40 wide.
-    /// Side padding inside the row is 16pt.
-    static let transportContentWidth: CGFloat = 40 + 52 + 40
-    static let transportSidePadding: CGFloat = 16
+    /// Five equal transport buttons; the middle one (play) is
+    /// centred on the screen, prev/next symmetric around it — the
+    /// build-34 failure (prev/next at the screen edges) stays
+    /// guarded by MusicPlayerLayoutTests.
+    static let transportButtonCount: CGFloat = 5
 
-    /// Centres of the three transport buttons for a screen width,
-    /// under the pinned layout (row = content width, 4 equal
-    /// spacers). All three must lie inside the screen — the build
-    /// 34 failure was prev/next at the screen edges.
+    /// Centres of the prev / play / next transport buttons for a
+    /// screen width, under the pinned layout (row = content width,
+    /// 5 equal buttons). All three must lie inside the screen.
     static func transportCentres(screenWidth: CGFloat) -> (prev: CGFloat, play: CGFloat, next: CGFloat) {
         let content = contentWidth(screenWidth: screenWidth)
-        let row = content - transportSidePadding * 2
-        let spacer = (row - transportContentWidth) / 4
-        let prev = sidePadding + transportSidePadding + spacer + 20
+        let buttonWidth = content / transportButtonCount
+        let prev = sidePadding + buttonWidth * 1.5
         let play = screenWidth / 2
         let next = screenWidth - prev
         return (prev, play, next)
@@ -1063,14 +1670,15 @@ enum MusicPlayerLayout {
 
     // MARK: - Landscape (two columns; build 36)
 
-    /// Right column height in landscape (top bar 40 + title 45 +
-    /// progress 24 + transport 52 + bottom 30 + the tighter 6–8pt
-    /// landscape gaps ≈ 217). The left column is cover + badge
-    /// (35). Both must fit the safe height. Build 37 removes the
-    /// volume row (28 + 6 gap) and the mode row (28 + 8 gap) from
-    /// build 36's 287.
-    static let landscapeRightColumnHeight: CGFloat = 217
-    /// Badge height + its top gap in the left column.
+    /// Right column height in landscape (b45-a: top bar 40 + title
+    /// 46 + progress 49 + transport 82 + toolbar 50 + the tighter
+    /// 6–8pt landscape gaps ≈ 291). The left column is the cover
+    /// alone now (the badge moved onto the progress bar).
+    static let landscapeRightColumnHeight: CGFloat = 291
+    /// Badge height + its top gap in the left column (build 36).
+    /// Kept for the fits check: the badge no longer lives in the
+    /// left column, so the term now stands for the left column's
+    /// bottom slack instead of a badge row.
     static let landscapeBadgeHeight: CGFloat = 35
 
     /// Landscape cover / lyrics slot: bounded by 42% of the safe
@@ -1096,19 +1704,45 @@ enum MusicPlayerLayout {
     }
 }
 
-/// Cover-tint helpers (b38, item 1): the player background is the
-/// cover's own colour — Apple Music's album-art-derived gradient.
-/// No new dependency: the average is sampled on an 8x8 grid with
-/// Core Graphics, and the clamps are Muzify's ArtColor (MIT,
-/// Sources/Muzify/UI/Theme.swift L372): saturation <0.12 stays,
-/// else 0.45–0.8; brightness 0.38–0.55. The secondary gradient
-/// stop is Kumone's rule (LGPL, reference only — numbers
-/// re-implemented here, no code copied): hue +0.06, brightness
-/// half the primary's, clamped 0.12–0.26.
-private extension UIImage {
-    func haoAverageTint() -> UIColor? {
-        guard let cg = cgImage else { return nil }
-        let w = 8, h = 8
+/// Cover palette (b45-a, Coda §2.7 ArtworkPalette, numbers
+/// re-implemented, no code copied): the cover is shrunk to 10×10,
+/// each pixel weighted by saturation × (1 − |brightness − 0.55|);
+/// the primary hue is the saturation-weighted circular mean, its
+/// saturation min(mean × 1.15, 0.72), brightness clamped 0.32–0.50;
+/// the secondary is hue +0.06 with brightness clamped 0.12–0.26.
+/// Fallback: primary RGB(0.16,0.16,0.20) / secondary
+/// (0.09,0.09,0.12). Results are cached (200 entries) by cover
+/// URL, so a song switch never re-samples the same art.
+enum HaoCoverPalette {
+    struct Pair {
+        var primary: UIColor
+        var secondary: UIColor
+    }
+
+    static let fallbackPrimary = UIColor(red: 0.16, green: 0.16, blue: 0.20, alpha: 1)
+    static let fallbackSecondary = UIColor(red: 0.09, green: 0.09, blue: 0.12, alpha: 1)
+    static var fallbackPrimaryColor: Color { Color(fallbackPrimary) }
+    static var fallbackSecondaryColor: Color { Color(fallbackSecondary) }
+
+    private static var cache: [String: Pair] = [:]
+    private static var cacheOrder: [String] = []
+    private static let cacheLimit = 200
+
+    static func palette(for image: UIImage, key: String) -> Pair {
+        if let cached = cache[key] { return cached }
+        let computed = sample(image: image) ?? Pair(primary: fallbackPrimary, secondary: fallbackSecondary)
+        cache[key] = computed
+        cacheOrder.append(key)
+        if cacheOrder.count > cacheLimit, let oldest = cacheOrder.first {
+            cacheOrder.removeFirst()
+            cache.removeValue(forKey: oldest)
+        }
+        return computed
+    }
+
+    private static func sample(image: UIImage) -> Pair? {
+        guard let cg = image.cgImage else { return nil }
+        let w = 10, h = 10
         guard let ctx = CGContext(
             data: nil, width: w, height: h, bitsPerComponent: 8,
             bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
@@ -1117,58 +1751,59 @@ private extension UIImage {
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
         guard let data = ctx.data else { return nil }
         let px = data.bindMemory(to: UInt8.self, capacity: w * h * 4)
-        var r = 0, g = 0, b = 0, n = 0
+        var sinSum: CGFloat = 0, cosSum: CGFloat = 0
+        var satWeighted: CGFloat = 0, weightSum: CGFloat = 0
+        var briWeighted: CGFloat = 0
         for i in 0..<(w * h) {
             guard px[i * 4 + 3] > 16 else { continue }
-            r += Int(px[i * 4])
-            g += Int(px[i * 4 + 1])
-            b += Int(px[i * 4 + 2])
-            n += 1
-        }
-        guard n > 0 else { return nil }
-        let base = UIColor(
-            red: CGFloat(r) / CGFloat(n) / 255,
-            green: CGFloat(g) / CGFloat(n) / 255,
-            blue: CGFloat(b) / CGFloat(n) / 255,
-            alpha: 1
-        )
-        var hue: CGFloat = 0, sat: CGFloat = 0, bri: CGFloat = 0, alpha: CGFloat = 0
-        if base.getHue(&hue, saturation: &sat, brightness: &bri, alpha: &alpha) {
-            // Muzify ArtColor (MIT, Sources/Muzify/UI/Theme.swift
-            // L372): near-grey stays near-grey; otherwise clamp
-            // saturation 0.45–0.8 and brightness 0.38–0.55, so
-            // the tint reads as colour and the white controls
-            // stay legible on any cover.
-            let clampedSat = sat < 0.12 ? sat : min(0.8, max(0.45, sat))
-            return UIColor(
-                hue: hue,
-                saturation: clampedSat,
-                brightness: min(0.55, max(0.38, bri)),
+            let color = UIColor(
+                red: CGFloat(px[i * 4]) / 255,
+                green: CGFloat(px[i * 4 + 1]) / 255,
+                blue: CGFloat(px[i * 4 + 2]) / 255,
                 alpha: 1
             )
+            var hue: CGFloat = 0, sat: CGFloat = 0, bri: CGFloat = 0, alpha: CGFloat = 0
+            guard color.getHue(&hue, saturation: &sat, brightness: &bri, alpha: &alpha) else { continue }
+            // Weight = saturation × (1 − |brightness − 0.55|):
+            // vivid mid-tones count most, greys and extremes least.
+            let weight = sat * (1 - abs(bri - 0.55))
+            guard weight > 0 else { continue }
+            let angle = hue * 2 * CGFloat.pi
+            sinSum += weight * sin(angle)
+            cosSum += weight * cos(angle)
+            satWeighted += weight * sat
+            briWeighted += weight * bri
+            weightSum += weight
         }
-        // Greyscale cover: no hue to boost — keep its lightness.
-        var white: CGFloat = 0
-        base.getWhite(&white, alpha: &alpha)
-        return UIColor(white: min(0.6, max(0.25, white)), alpha: 1)
+        guard weightSum > 0 else { return nil }
+        var hue = atan2(sinSum, cosSum) / (2 * CGFloat.pi)
+        if hue < 0 { hue += 1 }
+        let sat = min((satWeighted / weightSum) * 1.15, 0.72)
+        let bri = min(0.50, max(0.32, briWeighted / weightSum))
+        let primary = UIColor(hue: hue, saturation: sat, brightness: bri, alpha: 1)
+        let shiftedHue = hue + 0.06 >= 1 ? hue + 0.06 - 1 : hue + 0.06
+        let secondary = UIColor(
+            hue: shiftedHue, saturation: sat,
+            brightness: min(0.26, max(0.12, bri + 0.06)), alpha: 1
+        )
+        return Pair(primary: primary, secondary: secondary)
     }
 }
 
 private extension UIColor {
-    /// Secondary gradient stop (Kumone ArtworkColors rule, see
-    /// the file header above): hue +0.06, brightness half the
-    /// primary's, clamped 0.12–0.26.
+    /// Secondary gradient stop for a tint computed elsewhere
+    /// (same Coda rule: hue +0.06, brightness clamped 0.12–0.26).
     func haoSecondary() -> UIColor {
         var hue: CGFloat = 0, sat: CGFloat = 0, bri: CGFloat = 0, alpha: CGFloat = 0
         if getHue(&hue, saturation: &sat, brightness: &bri, alpha: &alpha) {
             let shiftedHue = hue + 0.06 >= 1 ? hue + 0.06 - 1 : hue + 0.06
             return UIColor(
                 hue: shiftedHue, saturation: sat,
-                brightness: min(0.26, max(0.12, bri * 0.5)), alpha: alpha
+                brightness: min(0.26, max(0.12, bri + 0.06)), alpha: alpha
             )
         }
         var white: CGFloat = 0
         getWhite(&white, alpha: &alpha)
-        return UIColor(white: min(0.26, max(0.12, white * 0.5)), alpha: alpha)
+        return UIColor(white: min(0.26, max(0.12, white + 0.06)), alpha: alpha)
     }
 }

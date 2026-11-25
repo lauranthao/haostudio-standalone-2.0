@@ -2283,6 +2283,20 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     /// the app lifetime, so the closures never go stale.
     var onRemoteNext: (() -> Void)?
     var onRemotePrevious: (() -> Void)?
+    /// Remote-like handler installed by MusicPlayerViewModel
+    /// (b45-a): Control Center's like command toggles the same
+    /// favourite as the in-app heart. Nil falls back to "no such
+    /// content" — the command is only meaningful with a view model.
+    var onRemoteLike: (() -> Void)?
+
+    /// Push the current favourite state to the Control Center like
+    /// command (b45-a, NowPlayingManager.refreshLikeState):
+    /// likeCommand.isActive follows whether the current song is
+    /// liked. A no-op until setupNowPlaying has run.
+    func refreshLikeCommand(isLiked: Bool) {
+        guard nowPlayingActive else { return }
+        MPRemoteCommandCenter.shared().likeCommand.isActive = isLiked
+    }
 
     private func setupNowPlaying() {
         guard !nowPlayingActive else { updateNowPlayingInfo(); return }
@@ -2306,6 +2320,15 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         // are SwiftUI buttons in the player view and are untouched.
         center.nextTrackCommand.addTarget(self, action: #selector(remoteNext))
         center.previousTrackCommand.addTarget(self, action: #selector(remotePrevious))
+        // b45-a (Coda NowPlayingManager, like ~L55-70): the like
+        // command — Control Center long-press likes the current
+        // track, and isActive follows the favourite state (see
+        // refreshLikeCommand, driven by the view model). Only
+        // next/previous are track commands otherwise (b42: no
+        // ±15s skip commands — the skip layout would hide the
+        // track buttons).
+        center.likeCommand.isEnabled = true
+        center.likeCommand.addTarget(self, action: #selector(remoteLike))
         updateNowPlayingInfo()
     }
 
@@ -2321,6 +2344,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         // (see setupNowPlaying) — nothing to remove here.
         center.nextTrackCommand.removeTarget(self)
         center.previousTrackCommand.removeTarget(self)
+        center.likeCommand.removeTarget(self)
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
@@ -2358,15 +2382,16 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         // Shared loader (build 36 item 10 leg 6): the player cover
         // already fetched this URL — the loader checks the memory
         // / disk cache first instead of a third independent
-        // download, and downsamples to 600pt (lock screen /
-        // Control Center never show more). The 3-attempt budget
-        // and backoff below are unchanged; the loader completion
-        // already runs on the main queue, so the old
-        // DispatchQueue.main hop inside the fetch is gone.
+        // download, and downsamples to 1024pt (b45-a, Coda
+        // NowPlayingManager: lock-screen artwork at 1024px, so
+        // opening it from the lock screen never goes blurry). The
+        // 3-attempt budget and backoff below are unchanged; the
+        // loader completion already runs on the main queue, so the
+        // old DispatchQueue.main hop inside the fetch is gone.
         HaoImageLoader.shared.load(
             urlString: coverURL.absoluteString,
-            targetWidthPoints: 600,
-            targetHeightPoints: 600
+            targetWidthPoints: 1024,
+            targetHeightPoints: 1024
         ) { [weak self] image in
             guard let self = self else { return }
             if let image = image {
@@ -2459,6 +2484,18 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
 
     @objc private func remotePrevious() -> MPRemoteCommandHandlerStatus {
         handleRemotePrevious()
+        return .success
+    }
+
+    /// Control Center like (b45-a): toggles the favourite through
+    /// the view model — the same path as the in-app heart — so the
+    /// two stay in sync. Runs on main: the view model's queue is
+    /// main-confined.
+    @objc private func remoteLike() -> MPRemoteCommandHandlerStatus {
+        guard let handler = onRemoteLike else { return .commandFailed }
+        ensureMain {
+            handler()
+        }
         return .success
     }
 
