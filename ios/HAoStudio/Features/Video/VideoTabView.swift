@@ -572,7 +572,7 @@ struct VideoTabView: View {
                     .foregroundStyle(theme.textMuted)
                 Text("搜索影片、剧集")
                     .font(.haoSubhead)
-                    .foregroundStyle(theme.textMuted)
+                    .foregroundStyle(theme.textSecondary)
                 Spacer()
             }
             .padding(.horizontal, 16)
@@ -739,11 +739,11 @@ struct VideoContinueCard: View {
                             .frame(maxWidth: .infinity)
                         Text(videoTimeText(seconds: entry.positionSeconds))
                             .font(.haoCaption2)
-                            .foregroundStyle(theme.textMuted)
+                            .foregroundStyle(theme.textSecondary)
                     } else {
                         Text("上次看到这里")
                             .font(.haoCaption2)
-                            .foregroundStyle(theme.textMuted)
+                            .foregroundStyle(theme.textSecondary)
                     }
                 }
                 Spacer()
@@ -842,7 +842,6 @@ struct VideoDailyListView: View {
                     note: "每日推荐为空，稍后再来看看。"
                 )
                 .padding(.horizontal, HaoLayout.pushedPageMargin)
-                .padding(.top, 32)
             } else {
                 VideoPosterGrid(items: items) { onSelect($0) }
                     .padding(.horizontal, HaoLayout.pushedPageMargin)

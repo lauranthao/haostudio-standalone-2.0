@@ -130,7 +130,7 @@ struct EmbySearchView: View {
     var body: some View {
         VStack(spacing: 0) {
             searchField
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.top, 8)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -152,7 +152,7 @@ struct EmbySearchView: View {
                                 .padding(.vertical, 12)
                                 .background(theme.accent, in: Capsule())
                         }
-                        .padding(.horizontal, 16)
+                        .padding(.horizontal, HaoLayout.pushedPageMargin)
                     } else if viewModel.searched {
                         if viewModel.results.isEmpty {
                             MusicEmptyState(
@@ -160,7 +160,7 @@ struct EmbySearchView: View {
                                 title: "没有找到相关影片",
                                 note: "换个关键词试试。"
                             )
-                            .padding(.horizontal, 16)
+                            .padding(.horizontal, HaoLayout.pushedPageMargin)
                         } else {
                             // b49 sweep #6/#22: a load-more failure
                             // is a banner over the loaded grid, not
@@ -182,11 +182,11 @@ struct EmbySearchView: View {
                                             viewModel.retrySearch()
                                         }
                                     }
-                                        .font(.haoFootnote)
+                                        .font(.haoFootnoteMedium)
                                         .foregroundStyle(theme.accentText)
                                 }
                                 .foregroundStyle(theme.textSecondary)
-                                .padding(.horizontal, 16)
+                                .padding(.horizontal, HaoLayout.pushedPageMargin)
                             }
                             resultSection(items: viewModel.results)
                         }
@@ -194,7 +194,7 @@ struct EmbySearchView: View {
                         Text("在你的 Emby 服务器上搜索电影和剧集。")
                             .font(.haoRowSubtitle)
                             .foregroundStyle(theme.textMuted)
-                            .padding(.horizontal, 16)
+                            .padding(.horizontal, HaoLayout.pushedPageMargin)
                     }
                     Spacer(minLength: 16)
                 }
@@ -207,7 +207,7 @@ struct EmbySearchView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    // Same 40pt rounded search field as VideoSearchView.searchField
+    // Same 48pt rounded search field as VideoSearchView.searchField
     // (magnifyingglass + TextField + xmark clear + 搜索 button, .onSubmit).
     private var searchField: some View {
         HStack(spacing: 8) {
@@ -234,8 +234,8 @@ struct EmbySearchView: View {
                 .foregroundStyle(theme.accentText)
                 .buttonStyle(.plain)
         }
-        .padding(.horizontal, 14)
-        .frame(height: 40)
+        .padding(.horizontal, 16)
+        .frame(height: HaoLayout.searchFieldHeight)
         .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -258,11 +258,11 @@ struct EmbySearchView: View {
                     .font(.haoFootnote)
                     .foregroundStyle(theme.textMuted)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, HaoLayout.pushedPageMargin)
             VideoPosterGrid(items: items, isEmby: true) { item in
                 onSelect(item)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, HaoLayout.pushedPageMargin)
             // b49 sweep #22: explicit load-more — the 51st result
             // used to be unreachable.
             if viewModel.hasMore {

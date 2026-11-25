@@ -306,7 +306,7 @@ struct VideoSearchView: View {
                                     // search (which would blank the
                                     // grid).
                                     Button("重试") { viewModel.retryLoadMoreCMS() }
-                                        .font(.haoFootnote)
+                                        .font(.haoFootnoteMedium)
                                         .foregroundStyle(theme.accentText)
                                 }
                                 .foregroundStyle(theme.textSecondary)
@@ -330,11 +330,12 @@ struct VideoSearchView: View {
                                         .font(.haoFootnote)
                                     Spacer()
                                     Button("重试") { viewModel.retryLoadMoreEmby() }
-                                        .font(.haoFootnote)
+                                        .font(.haoFootnoteMedium)
                                         .foregroundStyle(theme.accentText)
                                 }
                                 .foregroundStyle(theme.textSecondary)
                                 .padding(.horizontal, HaoLayout.pushedPageMargin)
+                                .padding(.top, 12)
                             }
                             // sweep-5 P2-13: Emby is configured but
                             // the search failed — one hint row with a
@@ -348,12 +349,13 @@ struct VideoSearchView: View {
                                     Spacer()
                                     if let openEmbySearch = onOpenEmbySearch {
                                         Button("去 Emby 搜索") { openEmbySearch() }
-                                            .font(.haoFootnote)
+                                            .font(.haoFootnoteMedium)
                                             .foregroundStyle(theme.accentText)
                                     }
                                 }
                                 .foregroundStyle(theme.textSecondary)
                                 .padding(.horizontal, HaoLayout.pushedPageMargin)
+                                .padding(.top, 12)
                             }
                             if !viewModel.embyResults.isEmpty {
                                 resultSection(
@@ -756,7 +758,7 @@ struct VideoCategoryView: View {
                             .font(.haoFootnote)
                         Spacer()
                         Button("重试") { viewModel.reload() }
-                            .font(.haoFootnote)
+                            .font(.haoFootnoteMedium)
                             .foregroundStyle(theme.accentText)
                     }
                     .foregroundStyle(theme.textSecondary)

@@ -140,14 +140,14 @@ struct EmbyCategoryView: View {
                         .padding(.vertical, 12)
                         .background(theme.accent, in: Capsule())
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
             } else if viewModel.items.isEmpty {
                 MusicEmptyState(
                     icon: "film",
                     title: "这个分类下没有内容",
                     note: "Emby 没有返回该分类的影片。"
                 )
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
             } else {
                 // b49 sweep #6: a later-page failure keeps the
                 // loaded grid — the error is a banner, not a
@@ -159,17 +159,17 @@ struct EmbyCategoryView: View {
                             .font(.haoFootnote)
                         Spacer()
                         Button("重试") { viewModel.reload() }
-                            .font(.haoFootnote)
+                            .font(.haoFootnoteMedium)
                             .foregroundStyle(theme.accentText)
                     }
                     .foregroundStyle(theme.textSecondary)
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, HaoLayout.pushedPageMargin)
                     .padding(.top, 12)
                 }
                 VideoPosterGrid(items: viewModel.items, isEmby: true) { item in
                     onSelect(item)
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.top, 12)
                 if viewModel.hasMore {
                     ProgressView()

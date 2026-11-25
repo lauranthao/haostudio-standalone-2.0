@@ -206,7 +206,7 @@ struct EmbyTabView: View {
                     )
                     Spacer()
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pageMargin)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -216,7 +216,7 @@ struct EmbyTabView: View {
                             HaoChromeScrollAnchor()
                                 .id(HaoTabScrollTop.id(for: .movies))
                             searchEntry
-                                .padding(.horizontal, 16)
+                                .padding(.horizontal, HaoLayout.pageMargin)
                                 .padding(.top, 12)
                             if !viewModel.resumeItems.isEmpty {
                                 embyContinueSection
@@ -265,14 +265,14 @@ struct EmbyTabView: View {
                                     }
                                 }
                             }
-                            .padding(.horizontal, 16)
+                            .padding(.horizontal, HaoLayout.pageMargin)
                             } else if viewModel.items.isEmpty {
                                 MusicEmptyState(
                                     icon: "film",
                                     title: "媒体库是空的",
                                     note: "该媒体库下没有影片。"
                                 )
-                                .padding(.horizontal, 16)
+                                .padding(.horizontal, HaoLayout.pageMargin)
                             } else {
                                 // b49 sweep #6: a later-page failure
                                 // keeps the loaded grid — the error
@@ -296,17 +296,17 @@ struct EmbyTabView: View {
                                                 viewModel.reload()
                                             }
                                         }
-                                            .font(.haoFootnote)
+                                            .font(.haoFootnoteMedium)
                                             .foregroundStyle(theme.accentText)
                                     }
                                     .foregroundStyle(theme.textSecondary)
-                                    .padding(.horizontal, 16)
+                                    .padding(.horizontal, HaoLayout.pageMargin)
                                     .padding(.top, 12)
                                 }
                                 VideoPosterGrid(items: viewModel.items, isEmby: true) { item in
                                     onSelect(item)
                                 }
-                                .padding(.horizontal, 16)
+                                .padding(.horizontal, HaoLayout.pageMargin)
                                 .padding(.top, 12)
                                 if viewModel.hasMore {
                                     ProgressView()
@@ -349,7 +349,7 @@ struct EmbyTabView: View {
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, HaoLayout.pageMargin)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(viewModel.resumeItems) { entry in
@@ -358,7 +358,7 @@ struct EmbyTabView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pageMargin)
             }
         }
     }
@@ -389,7 +389,7 @@ struct EmbyTabView: View {
     }
 
     /// Search entry (build 36, item 17): visually identical to
-    /// the CMS `searchEntry` in VideoTabView (40pt,
+    /// the CMS `searchEntry` in VideoTabView (48pt,
     /// RoundedRectangle(cornerRadius: 12), magnifyingglass +
     /// placeholder) so the two modes feel consistent — but it
     /// opens the dedicated Emby search page, never CMS search.
@@ -403,11 +403,11 @@ struct EmbyTabView: View {
                     .foregroundStyle(theme.textMuted)
                 Text("搜索 Emby 影片、剧集")
                     .font(.haoSubhead)
-                    .foregroundStyle(theme.textMuted)
+                    .foregroundStyle(theme.textSecondary)
                 Spacer()
             }
-            .padding(.horizontal, 14)
-            .frame(height: 40)
+            .padding(.horizontal, 16)
+            .frame(height: HaoLayout.searchFieldHeight)
             .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -425,7 +425,7 @@ struct EmbyTabView: View {
                     libraryChip(id: library.id, name: library.name)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, HaoLayout.pageMargin)
         }
         .haoSensoryFeedback(.selection, trigger: viewModel.selectedLibraryId)
     }
@@ -453,7 +453,7 @@ struct EmbyTabView: View {
             Text("分类")
                 .font(.haoSectionTitle)
                 .foregroundStyle(theme.textPrimary)
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pageMargin)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(viewModel.genres, id: \.self) { genre in
@@ -471,7 +471,7 @@ struct EmbyTabView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pageMargin)
             }
         }
     }

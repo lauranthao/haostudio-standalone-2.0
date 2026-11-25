@@ -160,7 +160,7 @@ struct VodSettingsSheet: View {
                     HStack {
                         Text("倍速")
                         Spacer()
-                        Text(String(format: "%.2fx", state.playbackSpeed))
+                        Text(String(format: "%.1fx", state.playbackSpeed))
                             .foregroundColor(theme.textSecondary)
                     }
                     Slider(value: $state.playbackSpeed, in: 0.5...2.0, step: 0.25)
@@ -247,9 +247,6 @@ struct VodSettingsSheet: View {
                                     }
                                 }
                             }
-                            Text("选集")
-                                .font(.haoFootnoteMedium)
-                                .foregroundColor(theme.textSecondary)
                             LazyVGrid(
                                 columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
                                 spacing: 10

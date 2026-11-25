@@ -34,6 +34,13 @@ final class EmbyConfigViewModel: ObservableObject {
     /// Memory only: the fallback credential. Persisted through
     /// EmbyConfigStore.save (Keychain), never written to a file.
     @Published var apiKey: String = ""
+    /// (b49fix4 P1-7) Whether playback progress is reported to
+    /// the user's own Emby server. Default on; the only UI that
+    /// reads or writes `EmbyServerConfig.reportProgress` — before
+    /// this switch the reporter ran with no way to turn it off,
+    /// while the disclaimer claimed reporting happened only
+    /// "after enabling it".
+    @Published var reportProgress: Bool = true
     @Published private(set) var status: EmbyConfigStatus = .unconfigured
 
     /// Test seam: build the client for a config. Production uses
@@ -63,6 +70,7 @@ final class EmbyConfigViewModel: ObservableObject {
             baseUrl = stored.baseUrl
             username = stored.username
             apiKey = stored.apiKey
+            reportProgress = stored.reportProgress
             resolvedConfig = stored
             if stored.isConfigured {
                 status = .configured(serverName: stored.serverName, version: stored.serverVersion)
@@ -73,6 +81,7 @@ final class EmbyConfigViewModel: ObservableObject {
             baseUrl = ""
             username = ""
             apiKey = ""
+            reportProgress = true
             resolvedConfig = nil
             status = .unconfigured
         }
@@ -214,6 +223,7 @@ final class EmbyConfigViewModel: ObservableObject {
             config.deviceId = EmbyServerConfig.newDeviceId()
         }
         config.enabled = true
+        config.reportProgress = reportProgress
         let ok = EmbyConfigStore.save(config)
         if ok {
             resolvedConfig = config
@@ -243,6 +253,7 @@ final class EmbyConfigViewModel: ObservableObject {
         username = ""
         password = ""
         apiKey = ""
+        reportProgress = true
         status = .unconfigured
     }
 
