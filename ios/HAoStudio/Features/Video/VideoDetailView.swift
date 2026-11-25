@@ -646,7 +646,10 @@ struct VideoDetailContentView: View {
                             }
                         }
                     }
-                    Spacer(minLength: 24)
+                    // b49fix9 P2-1 (alignment): 16, like the other
+                    // 17 page-bottom spacers repo-wide — the 24
+                    // here was the last non-16 bottom spacer.
+                    Spacer(minLength: 16)
                 }
                 .padding(.horizontal, HaoLayout.pushedPageMargin)
                 // b49fix6 P2-35: the first section's top spacing
@@ -1185,7 +1188,10 @@ struct VideoDetailContentView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(!episode.isPlayable)
-                    .opacity(episode.isPlayable ? 1 : 0.55)
+                    // b49fix9 P2-4 (alignment): 0.5, the same
+                    // disabled opacity as the big play button and
+                    // the download button on this page.
+                    .opacity(episode.isPlayable ? 1 : 0.5)
                     .accessibilityLabel(episode.isPlayable ? episode.displayName : "\(episode.displayName)，暂无可播地址")
                 }
             }
