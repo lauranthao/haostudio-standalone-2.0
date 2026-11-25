@@ -150,6 +150,17 @@ func liveAvatarURL(for room: LiveRoom) -> URL? {
 enum LiveGridLayout {
     /// Columns in every live room grid.
     static let columns = 2
+    /// Column count for a grid inside a container of the given
+    /// width: phones stay at 2 in portrait, but a landscape
+    /// phone / portrait iPad gets 3 and a wide container 4 —
+    /// the fixed 2 left a landscape grid with tall 16:9 cells
+    /// and the floating chrome eating a third of the height.
+    /// Pure width math (no SwiftUI), so the tests assert it.
+    static func columns(forWidth width: Double) -> Int {
+        if width >= 900 { return 4 }
+        if width >= 600 { return 3 }
+        return 2
+    }
     /// Horizontal page margin the grid sits inside (points).
     static let edgePadding: Double = 24
     /// Gap between the two columns (points).
@@ -166,6 +177,13 @@ enum LiveGridLayout {
     /// margins and the inter-column gap come off first, the rest
     /// splits evenly over the two columns. Never negative.
     static func cellWidth(containerWidth: Double) -> Double {
+        cellWidth(containerWidth: containerWidth, columns: columns)
+    }
+
+    /// Width of one cell with an explicit column count (the
+    /// adaptive grids): same arithmetic, `columns` gaps.
+    static func cellWidth(containerWidth: Double, columns: Int) -> Double {
+        guard columns > 0 else { return 0 }
         let usable = containerWidth - 2 * edgePadding - Double(columns - 1) * interItemSpacing
         return max(0, usable / Double(columns))
     }
@@ -179,7 +197,13 @@ enum LiveGridLayout {
     /// fill the container — i.e. the grid cannot overflow it.
     /// (Floating-point equality with a 0.001 pt tolerance.)
     static func fills(containerWidth: Double) -> Bool {
-        let cell = cellWidth(containerWidth: containerWidth)
+        fills(containerWidth: containerWidth, columns: columns)
+    }
+
+    /// True when `columns` cells, their gaps and the margins
+    /// exactly fill the container.
+    static func fills(containerWidth: Double, columns: Int) -> Bool {
+        let cell = cellWidth(containerWidth: containerWidth, columns: columns)
         guard cell > 0 else { return false }
         let total = 2 * edgePadding + Double(columns) * cell + Double(columns - 1) * interItemSpacing
         return abs(total - containerWidth) < 0.001
