@@ -8,6 +8,14 @@ out — the chain preflight does NOT guard (2026-11-25, b49fix2 P2-67):
   repo version.json  <->  bitrise.yml artifact name (derived, not hardcoded)
   repo version.json  <->  shop's live manifest (--shop-manifest-url)
     (version/build/ipaUrl/size/sha256 AND changelog text)
+    NOTE: the shop manifest is a MERGED manifest — besides the iOS
+    fields above it also carries an apk* group (apkVersion, apkBuild,
+    apkUrl/apkSize per flavor) that comes from the shop/Android side
+    and is NOT in this repo's version.json (2026-11-26, b49-sweep10
+    P2-16). Do NOT copy apk* fields into this repo's version.json,
+    and do NOT expect this gate to check them: it only verifies the
+    iOS fields listed above. If an apk* field ever goes stale live,
+    that is a shop/Android-side problem, not a failure of this gate.
   repo version.json  <->  built IPA file (--ipa: size + md5 vs README)
 
 Usage:
