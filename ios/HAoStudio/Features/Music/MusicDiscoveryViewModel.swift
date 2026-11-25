@@ -255,13 +255,18 @@ final class MusicDiscoveryViewModel: ObservableObject {
     /// ranking was re-pinned as today's pool (b49fix13 P2-2).
     /// The report is computed from the same log, so it is
     /// recomputed from the fresh log too. (recomputeReport()
-    /// also re-reads the log itself, b49fix14 P2-1/P2-2, but
-    /// the refresh here is what feeds reloadDaily() above —
-    /// it is not redundant.)
+    /// also re-reads the log itself for its two bypass call
+    /// sites, b49fix14 P2-1/P2-2, but the refresh here is what
+    /// feeds reloadDaily() above — it is not redundant.
+    /// b49fix15 P2-3: reload() passes its snapshot to
+    /// recomputeReport(using:) instead of re-reading, so the
+    /// daily ranking and the report share one snapshot — an
+    /// import write landing between the two reads used to split
+    /// them.)
     func reload(forceDaily: Bool = false) {
         listenLog = MusicLibraryStore.getListenLog()
         reloadDaily(force: forceDaily)
-        recomputeReport()
+        recomputeReport(using: listenLog)
     }
 
     // MARK: - Daily
@@ -306,14 +311,48 @@ final class MusicDiscoveryViewModel: ObservableObject {
         // key, which correctly names the list on screen. (Saving
         // under the fresh key instead would be worse: it would
         // persist yesterday's ranking as today's cache.)
+        // b49fix15 P2-2: take the CAS result — a refused write
+        // used to publish our own stale picks anyway. The refusal
+        // is unreachable in normal playback (every other hao_daily
+        // writer is main-thread synchronous and reload() has no
+        // suspension point) — the only writer that can land
+        // between the load's baseline read and this save is a
+        // backup import (b49-sweep17 deepread P2-1). On refusal,
+        // re-read the disk table and publish it instead, same
+        // shape as Home (b49fix6/7); an empty re-read falls back
+        // to our picks filtered by the current dislikes.
+        var picksToPublish = result.picks
+        var sparesToPublish = result.spares
         if let saveTracks = result.saveTracks,
            HomeViewModel.shouldPublishDaily(startDayKey: dayKey, publishDayKey: musicDayKey(of: Date())) {
-            MusicLibraryStore.saveDailyTracksIfUnchanged(
+            let saved = MusicLibraryStore.saveDailyTracksIfUnchanged(
                 saveTracks, for: dayKey,
                 expectedKeys: result.expectedDiskKeys, force: force)
+            if !saved {
+                let dislikedNow = MusicLibraryStore.fmDislikedIds()
+                let notDislikedNow: (MusicSong) -> Bool = {
+                    !dislikedNow.contains($0.identityKey)
+                        && !dislikedNow.contains($0.songId)
+                }
+                if let fresh = MusicLibraryStore.dailyTracks(for: dayKey),
+                   let valid = HomeViewModel.validatedDailyTracks(fresh, dayKey: dayKey, todayKey: dayKey),
+                   !valid.isEmpty {
+                    let freshFiltered = HomeViewModel.dedupeDailyTracksBySongId(valid.filter(notDislikedNow))
+                    if !freshFiltered.isEmpty {
+                        picksToPublish = Array(freshFiltered.prefix(20))
+                        sparesToPublish = Array(freshFiltered.dropFirst(20))
+                    } else {
+                        picksToPublish = result.picks.filter(notDislikedNow)
+                        sparesToPublish = result.spares.filter(notDislikedNow)
+                    }
+                } else {
+                    picksToPublish = result.picks.filter(notDislikedNow)
+                    sparesToPublish = result.spares.filter(notDislikedNow)
+                }
+            }
         }
-        dailyTracks = result.picks
-        dailySpares = result.spares
+        dailyTracks = picksToPublish
+        dailySpares = sparesToPublish
     }
 
     /// "不喜欢换一首" (Coda §3.5): replace the song in place
@@ -551,9 +590,24 @@ final class MusicDiscoveryViewModel: ObservableObject {
     /// refresh it before reloadDaily() runs. One extra local
     /// disk read per recompute; this only runs on user action
     /// or a midnight trigger, never a hot path.
+    /// b49fix15 P2-3: reload() calls the snapshot-pinned
+    /// variant below instead of this one, so the daily ranking
+    /// and the report share one snapshot.
     func recomputeReport() {
         listenLog = MusicLibraryStore.getListenLog()
-        report = MusicDiscoveryViewModel.computeReport(events: listenLog, range: reportRange)
+        recomputeReport(using: listenLog)
+    }
+
+    /// Snapshot-pinned recompute (b49fix15 P2-3): the report is
+    /// computed from the given log, not re-read — reload()
+    /// passes the snapshot it already read, so the daily ranking
+    /// and the report agree on one snapshot even if an import
+    /// writes between reload()'s refresh and this recompute.
+    /// The no-arg entry above keeps re-reading for the two
+    /// bypass call sites (.report midnight branch,
+    /// reportRange.didSet).
+    private func recomputeReport(using events: [ListenEvent]) {
+        report = MusicDiscoveryViewModel.computeReport(events: events, range: reportRange)
     }
 
     /// Pure report computation (Flutter ListenReport.compute). `now`
