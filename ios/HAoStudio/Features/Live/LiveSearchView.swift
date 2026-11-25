@@ -110,6 +110,21 @@ final class LiveSearchViewModel: ObservableObject {
         search(query: lastQuery)
     }
 
+    /// Back to the history view (sweep-5 P1-5): the ✕ used to
+    /// clear only the text, leaving hasSearched true and the old
+    /// results on screen — and an empty submit is guarded, so
+    /// there was no way back to history. Same shape as
+    /// MusicSearchViewModel.clear(): reset the state and bump
+    /// the generation so an in-flight search cannot resurrect
+    /// the cleared results.
+    func clear() {
+        results = []
+        hasSearched = false
+        searchFailed = false
+        isSearching = false
+        searchGeneration += 1
+    }
+
     func clearSearchHistory() {
         LiveLibraryStore.clearSearchHistory()
         refreshSearchHistory()
@@ -147,6 +162,13 @@ struct LiveSearchView: View {
 
     @StateObject private var viewModel: LiveSearchViewModel
     @State private var query = ""
+    @State private var showClearHistoryConfirm = false
+    /// (sweep-5 P2-12) This page's own laid-out grid width —
+    /// UIScreen.main.bounds.width is stale in Split View /
+    /// Stage Manager, so the grid reads its real container
+    /// width (same preference-key pattern as HomeView's
+    /// homeLiveGridColumns). 0 until the first measurement.
+    @State private var gridWidth: CGFloat = 0
 
     @Environment(\.haoTheme) private var theme
 
@@ -180,7 +202,13 @@ struct LiveSearchView: View {
                         .padding(.top, 16)
                     Spacer(minLength: 16)
                 }
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: LiveGridWidthKey.self, value: proxy.size.width)
+                    }
+                )
             }
+            .onPreferenceChange(LiveGridWidthKey.self) { gridWidth = $0 }
             .haoBottomChromePadding()
         }
         .background(theme.scaffoldBackground)
@@ -206,7 +234,10 @@ struct LiveSearchView: View {
                     viewModel.search(query: query)
                 }
             if !query.isEmpty {
-                Button(action: { query = "" }) {
+                Button(action: {
+                    query = ""
+                    viewModel.clear()
+                }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.haoSubhead)
                         .foregroundStyle(theme.textMuted)
@@ -214,9 +245,16 @@ struct LiveSearchView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("清除搜索")
             }
+            // (sweep-5 P2-6) A visible search button — onSubmit
+            // alone left keyboard-less users with no way to
+            // submit. Same shape as VideoSearchView.
+            Button("搜索") { viewModel.search(query: query) }
+                .font(.haoSubheadStrong)
+                .foregroundStyle(theme.accentText)
+                .buttonStyle(.plain)
         }
-        .padding(.horizontal, 14)
-        .frame(height: 36)
+        .padding(.horizontal, 16)
+        .frame(height: HaoLayout.searchFieldHeight)
         .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -236,12 +274,12 @@ struct LiveSearchView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("搜索历史")
-                    .font(.haoBodyStrong)
+                    .font(.haoSectionTitle)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 if !viewModel.searchHistory.isEmpty {
                     Button("清空") {
-                        viewModel.clearSearchHistory()
+                        showClearHistoryConfirm = true
                     }
                     .font(.haoDenseBody)
                     .foregroundStyle(theme.accentText)
@@ -249,6 +287,10 @@ struct LiveSearchView: View {
                 }
             }
             .padding(.horizontal, 24)
+            .confirmationDialog("清除搜索历史？", isPresented: $showClearHistoryConfirm, titleVisibility: .visible) {
+                Button("清除", role: .destructive) { viewModel.clearSearchHistory() }
+                Button("取消", role: .cancel) {}
+            }
             if viewModel.searchHistory.isEmpty {
                 Text("还没有搜索记录")
                     .font(.haoRowSubtitle)
@@ -307,7 +349,7 @@ struct LiveSearchView: View {
                     }
                 } else {
                     LazyVGrid(
-                        columns: LiveGridLayout.gridColumns(forWidth: UIScreen.main.bounds.width),
+                        columns: LiveGridLayout.gridColumns(forWidth: gridWidth > 0 ? gridWidth : UIScreen.main.bounds.width),
                         spacing: LiveGridLayout.gridRowSpacing
                     ) {
                         // Identity is the room itself (platform +

@@ -302,3 +302,16 @@ extension LiveGridLayout {
     /// Horizontal page margin the grids sit inside, in points.
     static var gridEdgePadding: CGFloat { CGFloat(edgePadding) }
 }
+
+/// Reports a live grid container's laid-out width up the tree
+/// (sweep-5 P2-12): UIScreen.main.bounds.width is stale in
+/// Split View / Stage Manager, so the tab recommend grid and
+/// the search results grid read their real container width
+/// instead (same pattern as HomeView's HomeLiveGridWidthKey).
+/// One key for both grids — a container reports one width.
+struct LiveGridWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}

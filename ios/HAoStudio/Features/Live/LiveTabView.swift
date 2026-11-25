@@ -338,6 +338,10 @@ final class LiveTabViewModel: ObservableObject {
 struct LiveTabView: View {
     @StateObject private var viewModel: LiveTabViewModel
     @State private var path: [LiveDestination] = []
+    /// (sweep-5 P2-12, sibling of the search grid) This tab's
+    /// own laid-out grid width — same preference-key pattern
+    /// as the search page; 0 until the first measurement.
+    @State private var gridWidth: CGFloat = 0
 
     @Environment(\.haoTheme) private var theme
 
@@ -402,8 +406,14 @@ struct LiveTabView: View {
                             .padding(.top, 16)
                         Spacer(minLength: 16)
                     }
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: LiveGridWidthKey.self, value: proxy.size.width)
+                        }
+                    )
                     .haoBottomChromeContentPadding()
                 }
+                .onPreferenceChange(LiveGridWidthKey.self) { gridWidth = $0 }
                 .haoChromeScrollTracking()
                 .haoReselectScrollToTop(tab: .live, proxy: proxy)
                 .refreshable { viewModel.reload() }
@@ -575,8 +585,8 @@ struct LiveTabView: View {
                     .foregroundStyle(theme.textMuted)
                 Spacer()
             }
-            .padding(.horizontal, 14)
-            .frame(height: 36)
+            .padding(.horizontal, 16)
+            .frame(height: HaoLayout.searchFieldHeight)
             .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -675,7 +685,7 @@ struct LiveTabView: View {
                 }
             } else {
                 LazyVGrid(
-                    columns: LiveGridLayout.gridColumns(forWidth: UIScreen.main.bounds.width),
+                    columns: LiveGridLayout.gridColumns(forWidth: gridWidth > 0 ? gridWidth : UIScreen.main.bounds.width),
                     spacing: LiveGridLayout.gridRowSpacing
                 ) {
                     // Identity is the room itself: LiveRoom's
