@@ -3,9 +3,9 @@
 // Serial fastest-first resolution with fake jobs (no network, no
 // real 8 s waits): the first playable URL returns at once and later
 // jobs never run; per-job and whole-resolve budgets use short
-// injected values; a 3-failure cooldown skips the job; the 1 h
-// cache answers the second resolve without invoking any job; a
-// low-tier URL at a master request is never labelled Master.
+// injected values; a 3-failure cooldown skips the job; play URLs are
+// never cached (b45-F, plan §7.4 — every resolve re-asks the
+// sources); a low-tier URL at a master request is never labelled Master.
 
 import Foundation
 import XCTest
@@ -191,8 +191,8 @@ final class LXResolverTests: XCTestCase {
             cooldown: cooldown)
         // Three failing resolves: the flaky job runs each time.
         // (.standard128 has no lower tier, so one invocation per
-        // resolve; distinct songIds, so the 1 h cache never answers
-        // without invoking a job.)
+        // resolve; distinct songIds, so each resolve re-asks the
+        // sources — there is no play-URL cache any more, b45-F.)
         for i in 0..<3 { _ = resolve(resolver, quality: .standard128, songId: "cool-\(i)") }
         XCTAssertEqual(invocations, 3)
         XCTAssertTrue(cooldown.isCoolingDown("flaky"))
@@ -206,7 +206,7 @@ final class LXResolverTests: XCTestCase {
         XCTAssertTrue(cooldown.isCoolingDown("flaky"))
     }
 
-    func testCacheAnswersSecondResolveWithoutInvokingJobs() {
+    func testSecondResolveReAsksSourcesBecausePlayURLsAreNotCached() {
         var invocations = 0
         let cache = PlayURLCache()
         let resolver = makeResolver(
@@ -221,9 +221,14 @@ final class LXResolverTests: XCTestCase {
             cache: cache)
         XCTAssertEqual(resolve(resolver)?.url, "https://example.com/cached.mp3")
         XCTAssertEqual(invocations, 1)
+        // b45-F (plan §7.4): play URLs are NEVER cached — signatures
+        // are short-lived, so every playback re-resolves. The second
+        // resolve re-asks the sources instead of answering from
+        // cache, even when a PlayURLCache instance is supplied.
         XCTAssertEqual(resolve(resolver)?.url, "https://example.com/cached.mp3")
-        XCTAssertEqual(invocations, 1)
-        XCTAssertEqual(resolve(resolver)?.via, "cache")
+        XCTAssertEqual(invocations, 2)
+        XCTAssertEqual(resolve(resolver)?.via, "good")
+        XCTAssertEqual(invocations, 3)
     }
 
     func testMasterRequestWithLowTierUrlIsLabelledHiResNotMaster() {
@@ -434,8 +439,9 @@ final class LXResolverTests: XCTestCase {
             },
             cache: cache)
         XCTAssertEqual(resolve(resolver)?.url, "https://example.com/first.mp3")
-        // The first URL is cached now: excluding it must bypass the
-        // cache AND skip it when the fastest job returns it again.
+        // Excluding it must skip it when the fastest job returns it
+        // again (there is no play-URL cache any more — b45-F — so
+        // the `excluding` set is the whole mechanism).
         let excluded = URL(string: "https://example.com/first.mp3")!
         XCTAssertEqual(resolve(resolver, excluding: [excluded])?.url,
                        "https://example.com/second.mp3")

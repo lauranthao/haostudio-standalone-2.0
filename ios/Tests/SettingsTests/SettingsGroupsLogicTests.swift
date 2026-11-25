@@ -50,7 +50,7 @@ final class SettingsGroupsLogicTests: XCTestCase {
     func testSectionIDsInOrder() {
         XCTAssertEqual(
             SettingsSection.allCases.map { $0.rawValue },
-            ["my", "appearance", "music", "live", "video", "sources", "data", "about"]
+            ["my", "appearance", "music", "live", "video", "sources", "data", "storage", "about"]
         )
     }
 
@@ -62,6 +62,7 @@ final class SettingsGroupsLogicTests: XCTestCase {
         XCTAssertEqual(SettingsSection.video.title, "影视播放")
         XCTAssertEqual(SettingsSection.sources.title, "源管理")
         XCTAssertEqual(SettingsSection.data.title, "数据")
+        XCTAssertEqual(SettingsSection.storage.title, "存储空间")
         XCTAssertEqual(SettingsSection.about.title, "关于")
     }
 

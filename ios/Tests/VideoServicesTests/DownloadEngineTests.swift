@@ -169,9 +169,9 @@ final class DownloadEngineTests: XCTestCase {
 
     // MARK: - Failure
 
-    func testUnsupportedSchemeFails() {
+    func testUnsupportedSchemeIsNotDownloadable() {
         let key = "t-badscheme-\(UUID().uuidString)"
-        let failed = expectation(description: "unsupported scheme fails")
+        let failed = expectation(description: "unsupported scheme is not downloadable")
         engine.enqueue(request: DownloadRequest(
             key: key,
             title: "bad",
@@ -180,8 +180,10 @@ final class DownloadEngineTests: XCTestCase {
             kind: .music,
             qualityCode: "320k"
         )) { info in
-            XCTAssertEqual(info.state, .failed)
-            XCTAssertNotNil(info.errorMessage)
+            // b45-F 12-state machine: an unsupported scheme is
+            // "暂不可下载", not a failure.
+            XCTAssertEqual(info.state, .notDownloadable)
+            XCTAssertEqual(info.errorMessage, "暂不可下载")
             failed.fulfill()
         }
         keys.append(key)
@@ -312,7 +314,7 @@ final class DownloadEngineTests: XCTestCase {
 
     // MARK: - §2.1 Finding E: restore validation
 
-    func testRestoreDropsCompletedTaskWithMissingFile() {
+    func testRestoreMarksCompletedTaskWithMissingFileFailed() {
         let key = "t-restore-drop-\(UUID().uuidString)"
         let source = makeSourceFile(size: 64 * 1024)
         let fileName = "restore-drop-\(UUID().uuidString).bin"
@@ -323,11 +325,13 @@ final class DownloadEngineTests: XCTestCase {
         // Delete the landed file out from under the index.
         let landed = downloadsDir().appendingPathComponent(fileName)
         try? FileManager.default.removeItem(at: landed)
-        // A fresh engine restores the persisted index — the dangling
-        // completed entry must be dropped, not reported .completed.
+        // A fresh engine restores the persisted index — b45-F (plan
+        // §9.3): a completed entry whose file is gone becomes a
+        // FAILED task with a message, not a silent drop.
         let restored = DownloadEngine()
-        XCTAssertNil(restored.taskInfo(for: key))
-        XCTAssertFalse(restored.allTasks().contains { $0.request.key == key })
+        XCTAssertEqual(restored.taskInfo(for: key)?.state, .failed)
+        XCTAssertEqual(restored.taskInfo(for: key)?.errorMessage, "本地文件缺失，请重新下载")
+        XCTAssertTrue(restored.allTasks().contains { $0.request.key == key })
     }
 
     func testRestoreClampsStaleDownloadedBytes() {
