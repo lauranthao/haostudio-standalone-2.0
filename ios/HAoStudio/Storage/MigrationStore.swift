@@ -103,11 +103,12 @@ struct MigrationReport {
     /// same strings inline for the log line.
     let warnings: [String] = []
 
-    static func empty(_ outcome: MigrationOutcome, detail: String) -> MigrationReport {
+    static func empty(_ outcome: MigrationOutcome, detail: String, warnings: [String] = []) -> MigrationReport {
         MigrationReport(
             outcome: outcome, totalKeys: 0, migratedKeys: 0,
             skippedKeys: 0, unknownKeys: 0, failedKeys: 0,
-            skippedKeyNames: [], unknownKeyNames: [], detail: detail
+            skippedKeyNames: [], unknownKeyNames: [], detail: detail,
+            warnings: warnings
         )
     }
 }
@@ -239,7 +240,15 @@ enum MigrationStore {
              // copy gap, is serialised after it instead of
              // cancelling the merge / rollback.
              "hao_video_hist", "hao_live_hist",
-             "hao_resolver_speed", "downloadTasks":
+             "hao_resolver_speed", "downloadTasks",
+             // b49fix20 D22-2: the video favourite toggle
+             // (toggleFavourite / saveFavourites) and the
+             // video/live search-history writers take this queue
+             // now — their bare read-modify-write used to race
+             // the import's merge and overwrite imported rows
+             // with a stale pre-import list.
+             "hao_video_fav", "hao_video_search_hist",
+             "hao_live_search_hist":
             return collectionWriteQueue
         default:
             return nil
@@ -654,6 +663,10 @@ enum MigrationStore {
         // verify excuses exactly the keys a live eviction
         // removes during THIS import.
         resetCacheEvictionRecord()
+        // b49fix20 D22-7: clear the daily-cap record — the
+        // report counts exactly the incoming songs the cap
+        // dropped during THIS import.
+        resetDailyCapDroppedRecord()
         // 1. Plan: coerce every key now, before touching storage.
         var defaultWrites: [(key: String, value: Any)] = []
         var fileWrites: [String: Any] = [:]
@@ -801,6 +814,19 @@ enum MigrationStore {
             }
         }
 
+        // b49fix20 D22-12: plan-time warnings (history entries
+        // the plan-time normaliser dropped) are built HERE,
+        // before any write — every failure path below passes
+        // them to failReport, so a failed import no longer
+        // hides the dropped entries.
+        var planWarnings: [String] = []
+        if let dropped = historyDropped["hao_video_hist"], dropped > 0 {
+            planWarnings.append("影视历史有 \(dropped) 条记录格式不符，已跳过")
+        }
+        if let dropped = historyDropped["hao_live_hist"], dropped > 0 {
+            planWarnings.append("直播历史有 \(dropped) 条记录格式不符，已跳过")
+        }
+
         // 2. Backup: snapshot file plus every Swift value about to
         // change, copied under migration_backup with a timestamp.
         let backup = MigrationBackup(documentsURL: documentsURL, defaults: defaults)
@@ -829,7 +855,8 @@ enum MigrationStore {
         ) else {
             return failReport(
                 total: data.count, migrated: 0, skipped: skipped,
-                unknown: Array(unknown.keys), detail: "pre-write backup failed"
+                unknown: Array(unknown.keys), detail: "pre-write backup failed",
+                warnings: planWarnings
             )
         }
 
@@ -851,6 +878,14 @@ enum MigrationStore {
         var expectedDicts: [String: [String: Any]] = [:]
         var expectedStringLists: [String: [String]] = [:]
         var expectedWholeFiles: [String: Any] = [:]
+        // b49fix20 D22-5: the queue dicts that landed via the
+        // .queueShapeOnly disposition (musicQueue) — written
+        // files for the rollback, but NOT part of
+        // expectedWholeFiles: verifyFileNow must still see
+        // musicQueue as shape-only (a song switch after the
+        // write legitimately replaced it), and a byte-equality
+        // check there would false-fail the final sweep.
+        var expectedQueueShapeOnly: [String: [String: Any]] = [:]
         var shapeOnlyFiles: Set<String> = []
         // b49fix18 D-1: the merged dicts the mergedFiles loop
         // wrote (hao_daily / haoVodProg) — subset verify, same
@@ -874,17 +909,24 @@ enum MigrationStore {
         // unlimited.
         let liveHistLimit = liveHistoryCap(defaults: defaults)
 
-        // b49fix19 P1-4: per-file immediate verify. Every file
-        // is verified the moment its write lands, not after the
-        // whole apply — the old end-of-apply verify left a gap
-        // of "apply remaining time" (seconds on a big backup)
-        // in which a live write could land and fail the verify,
-        // rolling back an import whose content was fine. The
-        // verify is identity-based (P1-2), so a live writer
-        // that re-reads and round-trips the file still passes:
-        // it includes the imported entries under the same keys.
-        // Captures the expected* values as they stand at call
-        // time; each write block calls it right after its write.
+        // b49fix20 D22-1: per-file verify INSIDE the write's
+        // critical section. The fix19 verifyFileNow ran after
+        // each write returned — a live write landing in the
+        // remaining apply could still replace the file between
+        // the write and its verify, so a merged file's verify
+        // compared against a file that no longer held the merge.
+        // Each merge branch now re-reads and subset-checks
+        // inside its own queue.sync (see applyRouteBFileWrite
+        // and the mergedFiles / listen / recent / resume blocks
+        // below); whole-file files verify inside writeWholeNow.
+        // verifyFileNow survives for the two bare writes (emby
+        // config, unknown keys) and for the final sweep at the
+        // end of the apply (D22-2a), which re-verifies every
+        // applied file after ALL writes landed. The verify is
+        // identity-based (P1-2), so a live writer that re-reads
+        // and round-trips the file still passes: it includes
+        // the imported entries under the same keys. Captures
+        // the expected* values as they stand at call time.
         func verifyFileNow(_ name: String) -> Bool {
             if name == "hao_recent", let expected = expectedRecent {
                 let actual = readJSONList(name: "hao_recent", documentsURL: documentsURL)
@@ -904,6 +946,13 @@ enum MigrationStore {
             }
             if let expected = expectedMergedFiles[name] {
                 let actual = readJSONDictionary(name: name, documentsURL: documentsURL)
+                // b49fix20 D22-7: hao_daily verifies per day by
+                // value, not key-only — a live saveDailyTracks
+                // replacing a whole day's songs must fail loud,
+                // not pass on key presence.
+                if name == "hao_daily" {
+                    return dailyDaysContainAll(actual: actual, expected: expected)
+                }
                 return BackupEngine.dictContainsAll(actual, expected, keyOnly: true, toleratingDeleted: cacheEvictionRecord(for: name))
             }
             if let expected = expectedLists[name] {
@@ -957,6 +1006,13 @@ enum MigrationStore {
             for (name, expected) in expectedWholeFiles {
                 if let data = canonicalJSONData(expected) { map[name] = (.wholeFile, data) }
             }
+            // b49fix20 D22-5: a landed musicQueue is a written
+            // file — restore it as (.wholeFile, bytes), so a
+            // later failure does not skip it as unwritten and
+            // leave the imported queue in place.
+            for (name, expected) in expectedQueueShapeOnly {
+                if let data = canonicalJSONData(expected) { map[name] = (.wholeFile, data) }
+            }
             return map
         }
 
@@ -979,7 +1035,8 @@ enum MigrationStore {
                 return failReport(
                     total: data.count, migrated: appliedDefaults.count + appliedFiles.count,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "write failed for \(write.key)", rollback: rb
+                    detail: "write failed for \(write.key)", rollback: rb,
+                warnings: planWarnings
                 )
             }
             journal.recordDefault(key: write.key, defaults: defaults)
@@ -993,7 +1050,8 @@ enum MigrationStore {
                 return failReport(
                     total: data.count, migrated: appliedDefaults.count + appliedFiles.count,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "verification failed for \(write.key)", rollback: rb
+                    detail: "verification failed for \(write.key)", rollback: rb,
+                warnings: planWarnings
                 )
             }
             appliedDefaults.append(write.key)
@@ -1006,7 +1064,8 @@ enum MigrationStore {
                 return failReport(
                     total: data.count, migrated: appliedDefaults.count + appliedFiles.count,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "write failed for \(name)", rollback: rb
+                    detail: "write failed for \(name)", rollback: rb,
+                warnings: planWarnings
                 )
             }
             journal.recordFile(name: name, documentsURL: documentsURL)
@@ -1028,7 +1087,12 @@ enum MigrationStore {
             case .wholeFile(let written):
                 expectedWholeFiles[name] = written
                 appliedFiles.append(name)
-            case .queueShapeOnly:
+            case .queueShapeOnly(let written):
+                // b49fix20 D22-5: a landed queue IS a written
+                // file — record it for the rollback (as
+                // .wholeFile, see writtenMap) instead of
+                // leaving it out of writtenMap as unwritten.
+                expectedQueueShapeOnly[name] = written
                 shapeOnlyFiles.insert(name)
                 appliedFiles.append(name)
             case .skipped:
@@ -1038,29 +1102,42 @@ enum MigrationStore {
                 return failReport(
                     total: data.count, migrated: appliedDefaults.count + appliedFiles.count,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "write failed for \(name)", rollback: rb
+                    detail: "write failed for \(name)", rollback: rb,
+                warnings: planWarnings
                 )
-            case .verifyFailed:
+            case .verifyFailed(let kind, let value):
+                // b49fix20 D22-1: the write landed but the
+                // in-section verify failed — record what was
+                // written before failing, so the rollback
+                // treats this file as written (otherwise it
+                // would skip it and leave suspect content in
+                // place).
+                switch kind {
+                case .mergeList:
+                    if let list = value as? [[String: Any]] { expectedLists[name] = list }
+                case .mergeDict:
+                    if let dict = value as? [String: Any] { expectedDicts[name] = dict }
+                case .mergeStringList:
+                    if let list = value as? [String] { expectedStringLists[name] = list }
+                case .wholeFile:
+                    expectedWholeFiles[name] = value
+                }
                 let rb = rollbackNow()
                 return failReport(
                     total: data.count, migrated: 0,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "verification failed for \(name)", rollback: rb
+                    detail: "verification failed for \(name)", rollback: rb,
+                warnings: planWarnings
                 )
             }
-            // b49fix19 P1-4: verify this file now (see
-            // verifyFileNow) — a skipped file wrote nothing, so
-            // there is nothing to verify.
-            if appliedFiles.contains(name) {
-                guard verifyFileNow(name) else {
-                    let rb = rollbackNow()
-                    return failReport(
-                        total: data.count, migrated: 0,
-                        skipped: skipped, unknown: Array(unknown.keys),
-                        detail: "verification failed for \(name)", rollback: rb
-                    )
-                }
-            }
+            // b49fix20 D22-1: no outer verify any more — every
+            // branch above verified inside its own critical
+            // section (merged files re-read + subset-check in
+            // their queue.sync, whole-file files in
+            // writeWholeNow, musicQueue by exact re-read). A
+            // skipped file wrote nothing, so there is nothing
+            // to verify. The final sweep at the end of the
+            // apply re-verifies every applied file (D22-2a).
         }
 
         for name in mergedFiles.keys.sorted() {
@@ -1086,6 +1163,11 @@ enum MigrationStore {
             // the two import routes from drifting apart. The
             // write result is captured out of the closure because
             // the failure path returns from this function.
+            // b49fix20 D22-1: the verify runs INSIDE the same
+            // dailyWriteQueue.sync as the write (see
+            // mergeVerified) — the old verifyFileNow ran after
+            // the return, with the remaining apply in between.
+            var mergeVerified = true
             let wroteMerged = dailyWriteQueue.sync { () -> Bool in
                 let existing = readJSONDictionary(name: name, documentsURL: documentsURL)
                 var merged = existing
@@ -1122,29 +1204,42 @@ enum MigrationStore {
                     merged = cappedVodProgEntries(merged, keeping: Set(entries.keys))
                 }
                 // b49fix18 D-1: capture the merged dict for
-                // the subset verify below (the old shape-only
-                // check passed a file a concurrent daily save
-                // had already rewritten).
+                // the in-section verify below and the final
+                // sweep (the old shape-only check passed a file
+                // a concurrent daily save had already rewritten).
                 expectedMergedFiles[name] = merged
-                return writeJSONFile(name: name, value: merged, documentsURL: documentsURL)
+                guard writeJSONFile(name: name, value: merged, documentsURL: documentsURL) else {
+                    return false
+                }
+                // b49fix20 D22-1/D22-7: verify INSIDE the
+                // critical section — hao_daily uses the per-day
+                // value check, the other merged file the
+                // key-only dict check.
+                let reread = readJSONDictionary(name: name, documentsURL: documentsURL)
+                if name == "hao_daily" {
+                    mergeVerified = dailyDaysContainAll(actual: reread, expected: merged)
+                } else {
+                    mergeVerified = BackupEngine.dictContainsAll(reread, merged, keyOnly: true, toleratingDeleted: cacheEvictionRecord(for: name))
+                }
+                return true
             }
             if !wroteMerged {
                 let rb = rollbackNow()
                 return failReport(
                     total: data.count, migrated: appliedDefaults.count + appliedFiles.count,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "write failed for \(name)", rollback: rb
+                    detail: "write failed for \(name)", rollback: rb,
+                warnings: planWarnings
                 )
             }
             appliedFiles.append(name)
-            // b49fix19 P1-4: verify this file now (see
-            // verifyFileNow).
-            guard verifyFileNow(name) else {
+            guard mergeVerified else {
                 let rb = rollbackNow()
                 return failReport(
                     total: data.count, migrated: 0,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "verification failed for \(name)", rollback: rb
+                    detail: "verification failed for \(name)", rollback: rb,
+                warnings: planWarnings
                 )
             }
         }
@@ -1161,6 +1256,7 @@ enum MigrationStore {
             // result is captured out of the closure because the
             // failure path returns from this function.)
             var mergedListen: [[String: Any]] = []
+            var listenVerified = true
             let wroteListen = listenLogWriteQueue.sync { () -> Bool in
                 var existing = readJSONList(name: "hao_listen", documentsURL: documentsURL)
                 // b49fix19 P2-6: the split point is known here
@@ -1178,30 +1274,38 @@ enum MigrationStore {
                     existing = Array(existing.suffix(3000))
                 }
                 // b49fix18 D-1: capture the merged list for the
-                // content-subset verify below (Route A parity —
-                // the old shape-only check passed a listen file
-                // a concurrent completion had already rewritten).
+                // in-section verify below and the final sweep
+                // (Route A parity — the old shape-only check
+                // passed a listen file a concurrent completion
+                // had already rewritten).
                 mergedListen = existing
-                return writeJSONFile(name: "hao_listen", value: existing, documentsURL: documentsURL)
+                guard writeJSONFile(name: "hao_listen", value: existing, documentsURL: documentsURL) else {
+                    return false
+                }
+                // b49fix20 D22-1: verify INSIDE the critical
+                // section (see the mergedFiles block above).
+                let reread = readJSONList(name: "hao_listen", documentsURL: documentsURL)
+                listenVerified = listKeysContainAll(actual: reread, expected: existing, file: "hao_listen")
+                return true
             }
             if !wroteListen {
                 let rb = rollbackNow()
                 return failReport(
                     total: data.count, migrated: appliedDefaults.count + appliedFiles.count,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "write failed for hao_listen", rollback: rb
+                    detail: "write failed for hao_listen", rollback: rb,
+                warnings: planWarnings
                 )
             }
             expectedListen = mergedListen
             appliedFiles.append("hao_listen")
-            // b49fix19 P1-4: verify this file now (see
-            // verifyFileNow).
-            guard verifyFileNow("hao_listen") else {
+            guard listenVerified else {
                 let rb = rollbackNow()
                 return failReport(
                     total: data.count, migrated: 0,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "verification failed for hao_listen", rollback: rb
+                    detail: "verification failed for hao_listen", rollback: rb,
+                warnings: planWarnings
                 )
             }
         }
@@ -1214,29 +1318,41 @@ enum MigrationStore {
         if !recentEntries.isEmpty {
             journal.recordFile(name: "hao_recent", documentsURL: documentsURL)
             var mergedRecent: [[String: Any]] = []
+            var recentVerified = true
             let wroteRecent = recentWriteQueue.sync { () -> Bool in
                 let existing = readJSONList(name: "hao_recent", documentsURL: documentsURL)
                 mergedRecent = mergedRecentEntries(live: existing, incoming: recentEntries)
-                return writeJSONFile(name: "hao_recent", value: mergedRecent, documentsURL: documentsURL)
+                guard writeJSONFile(name: "hao_recent", value: mergedRecent, documentsURL: documentsURL) else {
+                    return false
+                }
+                // b49fix20 D22-1: verify INSIDE the critical
+                // section (tolerant check) — and the
+                // tolerated-missing count for the report is
+                // computed here, from the same re-read, instead
+                // of after the return.
+                let reread = readJSONList(name: "hao_recent", documentsURL: documentsURL)
+                recentVerified = recentContainsAll(actual: reread, expected: mergedRecent)
+                recentToleratedMissing = recentMissingKeys(actual: reread, expected: mergedRecent).count
+                return true
             }
             if !wroteRecent {
                 let rb = rollbackNow()
                 return failReport(
                     total: data.count, migrated: appliedDefaults.count + appliedFiles.count,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "write failed for hao_recent", rollback: rb
+                    detail: "write failed for hao_recent", rollback: rb,
+                warnings: planWarnings
                 )
             }
             expectedRecent = mergedRecent
             appliedFiles.append("hao_recent")
-            // b49fix19 P1-4: verify this file now (see
-            // verifyFileNow).
-            guard verifyFileNow("hao_recent") else {
+            guard recentVerified else {
                 let rb = rollbackNow()
                 return failReport(
                     total: data.count, migrated: 0,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "verification failed for hao_recent", rollback: rb
+                    detail: "verification failed for hao_recent", rollback: rb,
+                warnings: planWarnings
                 )
             }
         }
@@ -1249,32 +1365,40 @@ enum MigrationStore {
         if !resumeEntries.isEmpty {
             journal.recordFile(name: "musicResume", documentsURL: documentsURL)
             var mergedResume: [String: Any] = [:]
+            var resumeVerified = true
             let wroteResume = resumeWriteQueue.sync { () -> Bool in
                 var existing = readJSONDictionary(name: "musicResume", documentsURL: documentsURL)
                 for (key, value) in resumeEntries {
                     existing[key] = value
                 }
                 mergedResume = existing
-                return writeJSONFile(name: "musicResume", value: existing, documentsURL: documentsURL)
+                guard writeJSONFile(name: "musicResume", value: existing, documentsURL: documentsURL) else {
+                    return false
+                }
+                // b49fix20 D22-1: verify INSIDE the critical
+                // section (see the mergedFiles block above).
+                let reread = readJSONDictionary(name: "musicResume", documentsURL: documentsURL)
+                resumeVerified = resumeEntriesPresent(existing, actual: reread, toleratingDeleted: resumeDeletionRecord())
+                return true
             }
             if !wroteResume {
                 let rb = rollbackNow()
                 return failReport(
                     total: data.count, migrated: appliedDefaults.count + appliedFiles.count,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "write failed for musicResume", rollback: rb
+                    detail: "write failed for musicResume", rollback: rb,
+                warnings: planWarnings
                 )
             }
             expectedResume = mergedResume
             appliedFiles.append("musicResume")
-            // b49fix19 P1-4: verify this file now (see
-            // verifyFileNow).
-            guard verifyFileNow("musicResume") else {
+            guard resumeVerified else {
                 let rb = rollbackNow()
                 return failReport(
                     total: data.count, migrated: 0,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "verification failed for musicResume", rollback: rb
+                    detail: "verification failed for musicResume", rollback: rb,
+                warnings: planWarnings
                 )
             }
         }
@@ -1288,7 +1412,8 @@ enum MigrationStore {
                 return failReport(
                     total: data.count, migrated: appliedDefaults.count + appliedFiles.count,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "write failed for hao_emby_config", rollback: rb
+                    detail: "write failed for hao_emby_config", rollback: rb,
+                warnings: planWarnings
                 )
             }
             // b49fix18 D-1: capture the written config for the
@@ -1304,7 +1429,8 @@ enum MigrationStore {
                 return failReport(
                     total: data.count, migrated: 0,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "verification failed for hao_emby_config", rollback: rb
+                    detail: "verification failed for hao_emby_config", rollback: rb,
+                warnings: planWarnings
                 )
             }
             if let apiKey = embyApiKey, !apiKey.isEmpty {
@@ -1325,7 +1451,8 @@ enum MigrationStore {
                 return failReport(
                     total: data.count, migrated: 0,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "verification failed for emby apiKey", rollback: rb
+                    detail: "verification failed for emby apiKey", rollback: rb,
+                warnings: planWarnings
                 )
             }
         }
@@ -1341,7 +1468,8 @@ enum MigrationStore {
                 return failReport(
                     total: data.count, migrated: appliedDefaults.count + appliedFiles.count,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "write failed for \(unknownKeysFileName)", rollback: rb
+                    detail: "write failed for \(unknownKeysFileName)", rollback: rb,
+                warnings: planWarnings
                 )
             }
             // b49fix18 D-1: capture the merged dict for the
@@ -1356,19 +1484,48 @@ enum MigrationStore {
                 return failReport(
                     total: data.count, migrated: 0,
                     skipped: skipped, unknown: Array(unknown.keys),
-                    detail: "verification failed for \(unknownKeysFileName)", rollback: rb
+                    detail: "verification failed for \(unknownKeysFileName)", rollback: rb,
+                warnings: planWarnings
                 )
             }
         }
 
-        // b49fix19 P1-4: there is no step-4 verify any more —
-        // every file and default was verified the moment its
-        // write landed (see verifyFileNow above). The old
-        // end-of-apply verify left a gap of "apply remaining
-        // time" in which a live write could land and fail the
-        // verify, rolling back an import whose content was
-        // fine — and the rollback then wiped the live writes
-        // made during the import too.
+        // b49fix20 D22-2(a): the final sweep — every file was
+        // verified inside its own critical section at write
+        // time (D22-1), but a stale-state writer
+        // (ResolverCooldown.save, DownloadEngine.persistLocked,
+        // saveDailyTracks' day overwrite) can still wipe
+        // imported content AFTER its file verified, because
+        // those writers re-read nothing. Re-verify every
+        // applied collection file now, after ALL writes landed
+        // and before the success report — a failure here is
+        // loud (fail + preserving rollback), never silent.
+        // Defaults are excluded: a live settings change is
+        // legitimate, not import loss. musicQueue verifies by
+        // shape only (a song switch after the write
+        // legitimately replaced it).
+        for name in appliedFiles.sorted() {
+            guard verifyFileNow(name) else {
+                let rb = rollbackNow()
+                return failReport(
+                    total: data.count, migrated: 0,
+                    skipped: skipped, unknown: Array(unknown.keys),
+                    detail: "final verification failed for \(name)", rollback: rb,
+                    warnings: planWarnings
+                )
+            }
+        }
+
+        // b49fix20 D22-8: sweep both unknown-keys files
+        // against the current mapping table and delete keys
+        // that now have a mapping row — the unknown merge only
+        // ever added, so the five P2-1 keys stayed in the old
+        // files forever after they gained a mapping. Runs
+        // AFTER the final sweep above (the sweep verifies the
+        // unknown file against its pre-cleanup expected dict)
+        // and only on success — a failed import rolls back, so
+        // installed keys are not final.
+        sweepUnknownKeysFiles(documentsURL: documentsURL)
 
         if markDone {
             defaults.set(true, forKey: doneKey)
@@ -1377,8 +1534,10 @@ enum MigrationStore {
         // b49fix19 P1-5: warnings a successful import still
         // owes the user — the success message prints them
         // (BackupUpdateViews), and `detail` keeps the same
-        // strings inline for the log line.
-        var warnings: [String] = []
+        // strings inline for the log line. Starts from the
+        // plan-time warnings (b49fix20 D22-12: dropped history
+        // entries), which the failure paths also carry now.
+        var warnings: [String] = planWarnings
         if embyTokenSkipped {
             warnings.append("emby apiKey 未保存到钥匙串")
         }
@@ -1394,14 +1553,11 @@ enum MigrationStore {
         if vodProgOverCap {
             warnings.append("点播续播记录超过 200 条上限（本次导入带入 \(vodProgIncomingCount) 条），已全部保留")
         }
-        // b49fix19 P1-1: history entries the plan-time
-        // normaliser dropped (unusable shape for the live
-        // typed reader).
-        if let dropped = historyDropped["hao_video_hist"], dropped > 0 {
-            warnings.append("影视历史有 \(dropped) 条记录格式不符，已跳过")
-        }
-        if let dropped = historyDropped["hao_live_hist"], dropped > 0 {
-            warnings.append("直播历史有 \(dropped) 条记录格式不符，已跳过")
+        // b49fix20 D22-7: days that exceeded the 20-song cap
+        // dropped incoming songs — counted, never silent.
+        let dailyDropped = dailyCapDroppedDuringImport()
+        if dailyDropped > 0 {
+            warnings.append("每日推薦有 \(dailyDropped) 首匯入歌曲超出每日 20 首上限，已跳過")
         }
         let detailSuffix = warnings.map { "; " + $0 }.joined()
         return MigrationReport(
@@ -1432,8 +1588,12 @@ enum MigrationStore {
         /// Whole-file value — content verify
         /// (fileContentEquals).
         case wholeFile(Any)
-        /// musicQueue landed — shape-only verify.
-        case queueShapeOnly
+        /// musicQueue landed — shape-only verify. Carries the
+        /// written queue dict so writtenMap can record it
+        /// (b49fix20 D22-5): a landed queue is a written file,
+        /// and the rollback must restore it as (.wholeFile,
+        /// bytes) instead of skipping it as unwritten.
+        case queueShapeOnly([String: Any])
         /// Live wins (musicQueue non-empty) or wrong element
         /// shape — counts as skipped, not migrated.
         case skipped
@@ -1441,11 +1601,16 @@ enum MigrationStore {
         case failed
         /// The write landed but the immediate re-read inside
         /// the write's critical section did not match it
-        /// (b49fix19 P1-4): a live writer replaced the file
-        /// between the write and its verify. The caller fails
-        /// the import with a verification failure, not a write
-        /// failure — the write itself succeeded.
-        case verifyFailed
+        /// (b49fix19 P1-4, b49fix20 D22-1): a live writer
+        /// replaced the file between the write and its verify.
+        /// The caller fails the import with a verification
+        /// failure, not a write failure — the write itself
+        /// succeeded. Carries the written value (and its
+        /// restore kind) so the caller can record it in the
+        /// expected* maps before failing: the rollback must
+        /// treat this file as written, or it would skip it and
+        /// leave suspect content in place.
+        case verifyFailed(RestoreKind, Any)
     }
 
     /// Applies one Route B fileWrite (b49fix18 D-1): the
@@ -1567,7 +1732,7 @@ enum MigrationStore {
                       let rereadDict = parsed as? [String: Any],
                       canonicalJSONData(rereadDict) == canonicalJSONData(dict)
                 else { return .failed }
-                return .queueShapeOnly
+                return .queueShapeOnly(dict)
             }
         }
         // List merges (see the table above for keyFor / cap).
@@ -1626,6 +1791,16 @@ enum MigrationStore {
                 guard writeJSONFile(name: name, value: merged, documentsURL: documentsURL) else {
                     return .failed
                 }
+                // b49fix20 D22-1: verify INSIDE the critical
+                // section — the re-read runs in the same
+                // queue.sync as the write, so no queued writer
+                // can land between them (the old outer
+                // verifyFileNow ran after the return, with the
+                // whole remaining apply in between).
+                let reread = readJSONList(name: name, documentsURL: documentsURL)
+                guard listKeysContainAll(actual: reread, expected: merged, file: name) else {
+                    return .verifyFailed(.mergeList, merged)
+                }
                 return .mergedList(merged)
             }
         }
@@ -1651,8 +1826,21 @@ enum MigrationStore {
                         defaults: defaults
                     )
                 }
+                if name == "hao_cover_cache" {
+                    // b49fix20 D22-9: trim the merged cache to
+                    // the live 500 cap (see trimmedCoverCache)
+                    // — the merge used to grow the file past
+                    // the cap the live writer enforces.
+                    existing = trimmedCoverCache(merged: existing, incomingKeys: Set(dict.keys))
+                }
                 guard writeJSONFile(name: name, value: existing, documentsURL: documentsURL) else {
                     return .failed
+                }
+                // b49fix20 D22-1: verify INSIDE the critical
+                // section (see the list branch above).
+                let reread = readJSONDictionary(name: name, documentsURL: documentsURL)
+                guard BackupEngine.dictContainsAll(reread, existing, keyOnly: true, toleratingDeleted: cacheEvictionRecord(for: name)) else {
+                    return .verifyFailed(.mergeDict, existing)
                 }
                 return .mergedDict(existing)
             }
@@ -1671,6 +1859,12 @@ enum MigrationStore {
                 guard writeJSONFile(name: name, value: existing, documentsURL: documentsURL) else {
                     return .failed
                 }
+                // b49fix20 D22-1: verify INSIDE the critical
+                // section (see the list branch above).
+                let reread = readJSONDictionary(name: name, documentsURL: documentsURL)
+                guard BackupEngine.dictContainsAll(reread, existing, keyOnly: true, toleratingDeleted: cacheEvictionRecord(for: name)) else {
+                    return .verifyFailed(.mergeDict, existing)
+                }
                 return .mergedDict(existing)
             }
         }
@@ -1683,6 +1877,12 @@ enum MigrationStore {
                 let merged = mergedStringList(live: existing, incoming: list, cap: cap)
                 guard writeJSONFile(name: name, value: merged, documentsURL: documentsURL) else {
                     return .failed
+                }
+                // b49fix20 D22-1: verify INSIDE the critical
+                // section (see the list branch above).
+                let reread = readJSONStringList(name: name, documentsURL: documentsURL)
+                guard stringListContainsAll(actual: reread, expected: merged) else {
+                    return .verifyFailed(.mergeStringList, merged)
                 }
                 return .mergedStringList(merged)
             }
@@ -1705,7 +1905,7 @@ enum MigrationStore {
                 return .failed
             }
             guard fileContentEquals(name: name, expected: value, documentsURL: documentsURL) else {
-                return .verifyFailed
+                return .verifyFailed(.wholeFile, value)
             }
             return .wholeFile(value)
         }
@@ -2035,12 +2235,21 @@ enum MigrationStore {
     /// Flutter backup may carry the date as an ISO-8601 string
     /// (Dart jsonEncode(DateTime)) or a milliseconds integer.
     /// Accepts all three shapes; nil when unparseable (the
-    /// caller substitutes now). The 1e11 threshold separates
-    /// seconds (~1.8e9) from milliseconds (~1.8e12).
+    /// caller substitutes now). Two-stage threshold (b49fix20
+    /// D22-11): >1e14 is microseconds (/1e6), >1e11 is
+    /// milliseconds (/1000), else seconds — the old single
+    /// threshold divided microseconds (~1.7e15) by 1000 as if
+    /// they were milliseconds, landing in year ~55,000 and
+    /// never sorting right. A pure date ("2026-11-25") fails
+    /// both ISO8601 formatters, so a yyyy-MM-dd fallback
+    /// parses it as midnight GMT instead of the caller
+    /// substituting now.
     static func historyDateSeconds(from value: Any?) -> TimeInterval? {
         if let number = numberValue(value) {
             let seconds = number.doubleValue
-            return seconds > 1e11 ? seconds / 1000 : seconds
+            if seconds > 1e14 { return seconds / 1_000_000 }
+            if seconds > 1e11 { return seconds / 1000 }
+            return seconds
         }
         if let text = value as? String {
             let withFraction = ISO8601DateFormatter()
@@ -2049,6 +2258,11 @@ enum MigrationStore {
             let plain = ISO8601DateFormatter()
             plain.formatOptions = [.withInternetDateTime]
             if let date = plain.date(from: text) { return date.timeIntervalSince1970 }
+            let dayOnly = DateFormatter()
+            dayOnly.locale = Locale(identifier: "en_US_POSIX")
+            dayOnly.timeZone = TimeZone(secondsFromGMT: 0)
+            dayOnly.dateFormat = "yyyy-MM-dd"
+            if let date = dayOnly.date(from: text) { return date.timeIntervalSince1970 }
         }
         return nil
     }
@@ -2218,6 +2432,12 @@ enum MigrationStore {
             key = ((entry["platform"] as? String) ?? "") + "|" + ((entry["roomId"] as? String) ?? "")
         case "hao_fav_albums", "hao_fav_artists":
             key = ((entry["id"] as? String) ?? "") + "|" + ((entry["name"] as? String) ?? "")
+        case "hao_daily":
+            // b49fix20 D22-7: a day's songs identify by the
+            // song identity key, so the per-day value check
+            // (dailyDaysContainAll) tolerates a live typed
+            // round-trip of the same songs.
+            key = songIdentityKey(for: entry)
         default:
             key = ""
         }
@@ -2226,28 +2446,66 @@ enum MigrationStore {
         return "bytes:" + bytes.base64EncodedString()
     }
 
+    /// Secondary identity key of one entry in one merge file
+    /// (b49fix20 D22-6): platform + title + artist, for files
+    /// whose entries carry a song. The merge dedupes by it
+    /// (secondaryKeyFor) but the verify never used it — a live
+    /// rewrite adding a songId changes the primary key, so the
+    /// verify missed the entry and false-failed. hao_listen is
+    /// excluded (its `at` is ms on both sides, so its primary
+    /// key never rewrites) — do not add it here.
+    static func mergeSecondaryKey(for entry: [String: Any], in file: String) -> String {
+        switch file {
+        case "hao_fav":
+            guard let song = entry["song"] as? [String: Any] else { return "" }
+            return songTitleArtistKey(for: song)
+        case "musicDownloads":
+            guard let song = entry["song"] as? [String: Any] else { return "" }
+            return songTitleArtistKey(for: song)
+        default:
+            return ""
+        }
+    }
+
     /// Identity-subset check for merged list files (b49fix19
-    /// P1-2): every expected entry's merge identity key must
-    /// still be in the actual file (multiset counts, so a
-    /// duplicated key still counts twice). Replaces the byte
-    /// multiset subset (listContainsAll) on the verify paths
-    /// — the byte version false-failed whenever a live writer
-    /// round-tripped the file between the import write and its
-    /// verify. listContainsAll stays for the harness's retained
+    /// P1-2, b49fix20 D22-6): every expected entry's merge
+    /// identity key must still be in the actual file (multiset
+    /// counts, so a duplicated key still counts twice) — or
+    /// its secondary key, when the primary misses (a live
+    /// rewrite that added a songId changes the primary key;
+    /// the secondary title+artist key still matches the same
+    /// song). The merged expected list never holds two rows
+    /// sharing one secondary key (the merge dedupes by it),
+    /// so one actual entry cannot satisfy two expected rows
+    /// through the two keys. Replaces the byte multiset subset
+    /// (listContainsAll) on the verify paths — the byte version
+    /// false-failed whenever a live writer round-tripped the
+    /// file between the import write and its verify.
+    /// listContainsAll stays for the harness's retained
     /// behaviour cases; no verify path uses it any more.
     static func listKeysContainAll(
         actual: [[String: Any]], expected: [[String: Any]], file: String
     ) -> Bool {
         var counts: [String: Int] = [:]
+        var secondaryCounts: [String: Int] = [:]
         counts.reserveCapacity(actual.count)
         for entry in actual {
             let key = mergeIdentityKey(for: entry, in: file)
             counts[key, default: 0] += 1
+            let secondary = mergeSecondaryKey(for: entry, in: file)
+            if !secondary.isEmpty { secondaryCounts[secondary, default: 0] += 1 }
         }
         for entry in expected {
             let key = mergeIdentityKey(for: entry, in: file)
-            guard let remaining = counts[key], remaining > 0 else { return false }
-            counts[key] = remaining - 1
+            if let remaining = counts[key], remaining > 0 {
+                counts[key] = remaining - 1
+                continue
+            }
+            let secondary = mergeSecondaryKey(for: entry, in: file)
+            guard !secondary.isEmpty,
+                  let remaining = secondaryCounts[secondary], remaining > 0
+            else { return false }
+            secondaryCounts[secondary] = remaining - 1
         }
         return true
     }
@@ -2327,24 +2585,115 @@ enum MigrationStore {
         defaults.set(order, forKey: orderKey)
     }
 
-    /// Merges one day's song lists per song (b49fix19 P2-7):
-    /// live day first, incoming day after, dedupe by
-    /// identityKey with live winning — the old dict overlay
-    /// replaced the whole day's list with the backup's, so a
-    /// live day was silently replaced by an old backup day,
-    /// against the "import is a merge" wording. No cap: a day
-    /// holds 20 picks live, but dropping imported songs to
-    /// hold the cap would be import data loss; the merged day
-    /// is replaced by a fresh 20-pick list on the next reload
-    /// anyway. Shared by both routes so they cannot drift.
+    /// Trims a merged cover cache to the live 500 cap
+    /// (b49fix20 D22-9): the import merge never trimmed, so
+    /// the file grew past the cap the live writer enforces —
+    /// and saveCover's eviction then removed an arbitrary
+    /// Dictionary-order key. Incoming keys are kept first
+    /// (sorted, deterministic), live keys fill the remaining
+    /// slots (sorted); when the incoming set alone exceeds the
+    /// cap, only its first `cap` sorted keys survive. Dropped
+    /// covers are re-fetchable, same class as an eviction — no
+    /// warning is threaded for the pathological case. Shared
+    /// by both routes so they cannot drift.
+    static func trimmedCoverCache(
+        merged: [String: Any], incomingKeys: Set<String>, cap: Int = 500
+    ) -> [String: Any] {
+        guard merged.count > cap else { return merged }
+        var kept = Set<String>()
+        kept.reserveCapacity(cap)
+        for key in merged.keys.filter({ incomingKeys.contains($0) }).sorted() {
+            guard kept.count < cap else { break }
+            kept.insert(key)
+        }
+        for key in merged.keys.filter({ !incomingKeys.contains($0) }).sorted() {
+            guard kept.count < cap else { break }
+            kept.insert(key)
+        }
+        return merged.filter { kept.contains($0.key) }
+    }
+
+    /// Songs a merged hao_daily day may hold (b49fix20 D22-7):
+    /// the live cap — saveDailyTracks writes at most 20 picks
+    /// per day.
+    static let dailyDayCap = 20
+
+    /// Incoming daily songs the day cap dropped during the
+    /// current import (b49fix20 D22-7): the same record shape
+    /// as resumeDeletionRecord / cacheEvictionRecord — cleared
+    /// at each import's start, read at its report, so exactly
+    /// the songs dropped by THIS import are warned about.
+    private static let dailyCapLock = NSLock()
+    private static var dailyCapDroppedCount = 0
+
+    /// Clears the daily-cap record at an import's start.
+    static func resetDailyCapDroppedRecord() {
+        dailyCapLock.lock()
+        dailyCapDroppedCount = 0
+        dailyCapLock.unlock()
+    }
+
+    /// Records dropped incoming daily songs.
+    static func noteDailyCapDropped(_ count: Int) {
+        guard count > 0 else { return }
+        dailyCapLock.lock()
+        dailyCapDroppedCount += count
+        dailyCapLock.unlock()
+    }
+
+    /// The incoming daily songs dropped by the cap since the
+    /// current import started.
+    static func dailyCapDroppedDuringImport() -> Int {
+        dailyCapLock.lock()
+        defer { dailyCapLock.unlock() }
+        return dailyCapDroppedCount
+    }
+
+    /// Merges one day's song lists per song (b49fix19 P2-7,
+    /// b49fix20 D22-7): live day first, incoming day after,
+    /// dedupe by identityKey with live winning — the old dict
+    /// overlay replaced the whole day's list with the backup's,
+    /// so a live day was silently replaced by an old backup
+    /// day, against the "import is a merge" wording. Capped at
+    /// live's 20 (live first, so the excess is always
+    /// incoming): the old "No cap" day could exceed 20, and
+    /// the next saveDailyTracks overwrote it with 20 fresh
+    /// songs, silently dropping the tail imported songs. The
+    /// excess is counted for the report (see
+    /// dailyCapDroppedDuringImport), never silently lost.
+    /// Shared by both routes so they cannot drift.
     static func mergedDailyDay(
         live: [[String: Any]], incoming: [[String: Any]]
     ) -> [[String: Any]] {
-        mergedListEntries(
+        let merged = mergedListEntries(
             live: live, incoming: incoming,
             keyFor: songIdentityKey,
             secondaryKeyFor: songTitleArtistKey
         )
+        guard merged.count > dailyDayCap else { return merged }
+        noteDailyCapDropped(merged.count - dailyDayCap)
+        return Array(merged.prefix(dailyDayCap))
+    }
+
+    /// Per-day value-subset check for hao_daily (b49fix20
+    /// D22-7): every expected day's songs must still be
+    /// present in the actual day (by song identity key — the
+    /// same identity rule the other list verifies use, so a
+    /// live typed round-trip of the same songs still passes);
+    /// a day whose expected value is not a song list falls
+    /// back to key presence, the old dict rule. The old
+    /// key-only check passed while saveDailyTracks had replaced
+    /// a whole day's songs with fresh picks — that is a loud
+    /// failure now, not a silent pass.
+    static func dailyDaysContainAll(actual: [String: Any], expected: [String: Any]) -> Bool {
+        for (day, expectedValue) in expected {
+            guard let actualValue = actual[day] else { return false }
+            if let expectedDay = expectedValue as? [[String: Any]],
+               let actualDay = actualValue as? [[String: Any]] {
+                guard listKeysContainAll(actual: actualDay, expected: expectedDay, file: "hao_daily") else { return false }
+            }
+        }
+        return true
     }
 
     /// How one file is restored when a rollback must preserve
@@ -2376,18 +2725,39 @@ enum MigrationStore {
         case remove
     }
 
+    /// Canonical equality of two JSON values (b49fix20 D22-4):
+    /// values compare by wrapping them in an array first —
+    /// data(withJSONObject:) on a top-level scalar raises an
+    /// uncatchable NSException, so a bare Double or String must
+    /// never be serialised directly. Unserialisable values
+    /// compare unequal (the live value then wins in the
+    /// restore, the safe direction).
+    static func jsonValuesEqual(_ a: Any, _ b: Any) -> Bool {
+        guard let aData = try? JSONSerialization.data(withJSONObject: [a], options: [.sortedKeys]),
+              let bData = try? JSONSerialization.data(withJSONObject: [b], options: [.sortedKeys])
+        else { return false }
+        return aData == bData
+    }
+
     /// Restores one file preserving live increments (b49fix19
-    /// P1-4): the old rollback wrote the prior bytes back
-    /// whole, wiping every live write that landed during the
-    /// import (a completion, a favourite toggle, a download
-    /// state change) — a loud verify failure turning into
-    /// silent live loss. For merge files the restored value is
-    /// prior + live-added entries (current entries whose
-    /// identity is in neither prior nor the import's written
-    /// value); for whole-file files the prior bytes return
-    /// only when the live file still holds the import's write,
-    /// otherwise the live file is kept. A value that cannot be
-    /// parsed falls back to the plain prior restore.
+    /// P1-4, b49fix20 D22-4): the old rollback wrote the prior
+    /// bytes back whole, wiping every live write that landed
+    /// during the import (a completion, a favourite toggle, a
+    /// download state change) — a loud verify failure turning
+    /// into silent live loss. For merge files the restored
+    /// value is prior + live-added entries (current entries
+    /// whose identity is in neither prior nor the import's
+    /// written value); for whole-file files the prior bytes
+    /// return only when the live file still holds the import's
+    /// write, otherwise the live file is kept. A value that
+    /// cannot be parsed falls back to the plain prior restore.
+    /// D22-4: "prior + live-added" is not enough — a live
+    /// DELETION of a prior entry (its key is in the written
+    /// value but absent from current) must stay deleted, and a
+    /// live CHANGE of a prior entry (same key, different value)
+    /// takes the live value. Only entries the import never
+    /// wrote (dropped by the merge's cap/prune) restore
+    /// unconditionally.
     static func restoredPreservingLive(
         prior: Data?, written: Data?, current: Data?, file: String, kind: RestoreKind
     ) -> RestoredFile {
@@ -2398,11 +2768,36 @@ enum MigrationStore {
             let currentList = parsedList(current)
             let priorKeys = Set(priorList.map { mergeIdentityKey(for: $0, in: file) })
             let writtenKeys = Set(writtenList.map { mergeIdentityKey(for: $0, in: file) })
+            var currentByKey: [String: [String: Any]] = [:]
+            for entry in currentList {
+                let key = mergeIdentityKey(for: entry, in: file)
+                if currentByKey[key] == nil { currentByKey[key] = entry }
+            }
+            // b49fix20 D22-4: a prior entry the import wrote
+            // but live DELETED (in writtenKeys, absent from
+            // current) stays deleted — it must not resurrect.
+            // A prior entry the import never wrote (dropped by
+            // the merge's cap/prune) restores as before. An
+            // entry present in current takes the CURRENT entry:
+            // identical when unchanged, the live value when
+            // live changed it.
+            var restored: [[String: Any]] = []
+            restored.reserveCapacity(priorList.count)
+            for entry in priorList {
+                let key = mergeIdentityKey(for: entry, in: file)
+                if writtenKeys.contains(key) {
+                    if let currentEntry = currentByKey[key] {
+                        restored.append(currentEntry)
+                    }
+                } else {
+                    restored.append(entry)
+                }
+            }
             let liveAdded = currentList.filter { entry in
                 let key = mergeIdentityKey(for: entry, in: file)
                 return !priorKeys.contains(key) && !writtenKeys.contains(key)
             }
-            let restored = priorList + liveAdded
+            restored += liveAdded
             if prior == nil && liveAdded.isEmpty { return .remove }
             guard let bytes = try? JSONSerialization.data(withJSONObject: restored, options: []) else {
                 if let prior = prior { return .data(prior) }
@@ -2414,6 +2809,24 @@ enum MigrationStore {
             let writtenDict = parsedDict(written)
             let currentDict = parsedDict(current)
             var restored = priorDict
+            // b49fix20 D22-4: a key the import wrote but live
+            // DELETED (in writtenDict, absent from currentDict)
+            // stays deleted; a key live CHANGED (present in
+            // current with a canonically different value) takes
+            // the live value. Keys the import never wrote keep
+            // the prior value; when current still equals the
+            // written value, the prior value restores (the
+            // import's overlay is rolled back).
+            for (key, writtenValue) in writtenDict {
+                guard priorDict[key] != nil else { continue }
+                guard let currentValue = currentDict[key] else {
+                    restored.removeValue(forKey: key)
+                    continue
+                }
+                if !jsonValuesEqual(currentValue, writtenValue) {
+                    restored[key] = currentValue
+                }
+            }
             for (key, value) in currentDict where priorDict[key] == nil && writtenDict[key] == nil {
                 restored[key] = value
             }
@@ -2429,7 +2842,14 @@ enum MigrationStore {
             let currentList = parsedStringList(current)
             let priorSet = Set(priorList)
             let writtenSet = Set(writtenList)
-            let restored = priorList + currentList.filter { !priorSet.contains($0) && !writtenSet.contains($0) }
+            let currentSet = Set(currentList)
+            // b49fix20 D22-4: a prior string the import wrote
+            // but live deleted (in writtenSet, absent from
+            // currentSet) stays deleted. A changed string is a
+            // different string (delete + add), already covered
+            // by the sets.
+            let restored = priorList.filter { !(writtenSet.contains($0) && !currentSet.contains($0)) }
+                + currentList.filter { !priorSet.contains($0) && !writtenSet.contains($0) }
             if prior == nil && restored.isEmpty { return .remove }
             guard let bytes = try? JSONSerialization.data(withJSONObject: restored, options: []) else {
                 if let prior = prior { return .data(prior) }
@@ -2835,6 +3255,17 @@ enum MigrationStore {
         _ expected: [String: Any], documentsURL: URL, toleratingDeleted deletedKeys: Set<String>
     ) -> Bool {
         let actual = readJSONDictionary(name: "musicResume", documentsURL: documentsURL)
+        return resumeEntriesPresent(expected, actual: actual, toleratingDeleted: deletedKeys)
+    }
+
+    /// The same check against an already-read dict (b49fix20
+    /// D22-1): the resume merge's in-section verify re-reads
+    /// inside its queue.sync and compares without a second
+    /// file read. The documentsURL form above reads, then
+    /// calls this.
+    static func resumeEntriesPresent(
+        _ expected: [String: Any], actual: [String: Any], toleratingDeleted deletedKeys: Set<String>
+    ) -> Bool {
         for key in expected.keys {
             if deletedKeys.contains(key) { continue }
             guard actual[key] != nil else { return false }
@@ -2942,7 +3373,8 @@ enum MigrationStore {
     static func failReport(
         total: Int, migrated: Int, skipped: [String],
         unknown: [String], detail: String,
-        rollback: (failures: [String], keptLive: [String])? = nil
+        rollback: (failures: [String], keptLive: [String])? = nil,
+        warnings: [String] = []
     ) -> MigrationReport {
         var detail = detail
         if let rollback = rollback {
@@ -2950,7 +3382,11 @@ enum MigrationStore {
                 detail += "，回滚未完成，未恢复：" + rollback.failures.joined(separator: "、")
             }
             if !rollback.keptLive.isEmpty {
-                detail += "；以下文件在导入期间被 live 改写，已保留 live 版本未回滚：" + rollback.keptLive.joined(separator: "、")
+                // b49fix20 D22-4: the kept-live files may hold
+                // live deletions and live value changes, not
+                // just additions — say so, instead of letting
+                // the user believe only additions were kept.
+                detail += "；以下文件在导入期间被 live 改写（新增／删除／改值），已保留 live 版本未回滚：" + rollback.keptLive.joined(separator: "、")
             }
         }
         return MigrationReport(
@@ -2958,8 +3394,31 @@ enum MigrationStore {
             skippedKeys: skipped.count, unknownKeys: unknown.count,
             failedKeys: total - migrated - skipped.count - unknown.count,
             skippedKeyNames: skipped.sorted(),
-            unknownKeyNames: unknown.sorted(), detail: detail
+            unknownKeyNames: unknown.sorted(), detail: detail,
+            warnings: warnings
         )
+    }
+
+    /// Removes keys that now have a mapping row from both
+    /// unknown-keys files (b49fix20 D22-8): the unknown merge
+    /// only ever ADDED, so the five P2-1 keys (downloadTasks,
+    /// hao_fav_playlists, hao_fav_albums, hao_fav_artists,
+    /// hao_daily_pool) stayed in the old files forever after
+    /// they gained a mapping row. Runs after the final sweep
+    /// (the sweep verifies the unknown file against its
+    /// pre-cleanup expected dict) and only on success — a
+    /// failed import rolls back, so installed keys are not
+    /// final. Best-effort: a write failure leaves the old file
+    /// in place (keys staying isolated is the pre-existing
+    /// behaviour, never a reason to fail the import).
+    static func sweepUnknownKeysFiles(documentsURL: URL) {
+        for file in [unknownKeysFileName, BackupEngine.unknownKeysFileName] {
+            var existing = readJSONDictionary(name: file, documentsURL: documentsURL)
+            let known = existing.keys.filter { mapping(for: $0) != nil }
+            guard !known.isEmpty else { continue }
+            for key in known { existing.removeValue(forKey: key) }
+            _ = writeJSONFile(name: file, value: existing, documentsURL: documentsURL)
+        }
     }
 
     /// Rolls the attempt back and reports what it could not
@@ -3036,6 +3495,17 @@ struct MigrationJournal {
         var failures: [String] = []
         var keptLive: [String] = []
         for entry in priorFiles {
+            // b49fix20 D22-5: a file the journal captured but
+            // this attempt never wrote (a live-wins skip, a
+            // fallback skip, or a file the import never reached
+            // before failing) keeps its live content — it is
+            // NOT prior-restored. Restoring it would wipe live
+            // writes made during the import (the sharpest case:
+            // the live musicQueue built by song-switching during
+            // the import). Skipping is not a failure and not a
+            // kept-live file: nothing was restored, nothing was
+            // kept from a restore.
+            guard written[entry.key] != nil else { continue }
             // b49fix17 P2-3: the restore takes the file's queue
             // when it has one — a queued writer (recordListenEvent,
             // saveDailyTracks) landing between this restore's
@@ -3138,6 +3608,14 @@ struct MigrationBackup {
                     // cross-file gap. The snapshot is taken
                     // before any import write, so taking the
                     // queue here cannot deadlock.
+                    // b49fix20 O-2: the queue serialises THIS
+                    // file's copy against THIS file's writes —
+                    // there is no global point across files, so
+                    // a multi-file live operation can still land
+                    // between two files' copies. Design
+                    // limitation, documented, not fixed: the
+                    // snapshot is a per-file point-in-time, not
+                    // a cross-file one.
                     let copyOne = {
                         try fileManager.copyItem(at: source, to: collectionsDir.appendingPathComponent("\(name).json"))
                     }

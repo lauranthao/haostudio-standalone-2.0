@@ -1293,7 +1293,21 @@ final class DownloadEngine: NSObject {
         // import never calls into DownloadEngine, so taking
         // the queue here cannot deadlock.
         MigrationStore.collectionWriteQueue.sync {
-            LocalStore.saveCollection(named: DownloadEngine.tasksCollection, value: infos)
+            // b49fix20 D22-2: merge the disk mirror first — the
+            // mirror used to be written from memory only, so a
+            // persist landing after a backup import wiped the
+            // imported tasks (the import never touches the
+            // primary downloads.json, so the only source of
+            // disk-only tasks is the import itself; a deleted
+            // task is already absent from disk, since every
+            // deletion persists synchronously).
+            var merged = infos
+            let diskTasks: [DownloadTaskInfo] = LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: [DownloadTaskInfo]())
+            let memoryKeys = Set(infos.map { $0.request.key })
+            for task in diskTasks where !memoryKeys.contains(task.request.key) {
+                merged.append(task)
+            }
+            LocalStore.saveCollection(named: DownloadEngine.tasksCollection, value: merged)
         }
         // b49fix2 P2-59: every state mutation re-derives activity
         // (start/stop of the app-root background task).

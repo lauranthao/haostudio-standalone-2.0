@@ -314,8 +314,24 @@ enum LiveLibraryStore {
         // deadlock. The notification stays outside the queue:
         // it is not file state.
         MigrationStore.collectionWriteQueue.sync {
-            LocalStore.saveCollection(named: historyCollection, value: entries)
+            saveHistoryLocked(entries)
         }
+        noteHistorySaved()
+    }
+
+    /// The file write of saveHistory, assuming
+    /// collectionWriteQueue is held. Split out so
+    /// recordHistory / recordHistoryEntry / removeHistory can
+    /// re-read inside the same queue without re-entering it
+    /// (DispatchQueue.sync on a serial queue from inside
+    /// deadlocks).
+    private static func saveHistoryLocked(_ entries: [LiveHistoryEntry]) {
+        LocalStore.saveCollection(named: historyCollection, value: entries)
+    }
+
+    /// The notification epilogue of a history write (not file
+    /// state, so it stays outside the queue).
+    private static func noteHistorySaved() {
         // A2: history changed — home 热门直播 and 我的's 直播历史
         // count reload on this (they used to refresh only on
         // appear / pop-back).
@@ -336,18 +352,36 @@ enum LiveLibraryStore {
             platform: platform, roomId: roomId, title: title,
             nick: nick, cover: cover, watchedAt: Date(),
             playUrlsJSON: playUrlsJSON)
-        saveHistory(mergedHistory(history(), with: entry, limit: historyLimit()))
+        // b49fix20 D22-2: the re-read → merge → write runs
+        // whole under collectionWriteQueue — a history() read
+        // outside the queue used to race the import's merge
+        // and overwrite imported rows with a stale pre-import
+        // list.
+        MigrationStore.collectionWriteQueue.sync {
+            saveHistoryLocked(mergedHistory(history(), with: entry, limit: historyLimit()))
+        }
+        noteHistorySaved()
     }
 
     /// Record a pre-built entry (tests / re-entry from the history
     /// page).
     static func recordHistoryEntry(_ entry: LiveHistoryEntry) {
-        saveHistory(mergedHistory(history(), with: entry, limit: historyLimit()))
+        // b49fix20 D22-2: same re-read-inside-the-queue rule as
+        // recordHistory above.
+        MigrationStore.collectionWriteQueue.sync {
+            saveHistoryLocked(mergedHistory(history(), with: entry, limit: historyLimit()))
+        }
+        noteHistorySaved()
     }
 
     static func removeHistory(platform: String, roomId: String) {
         let key = LiveResumeKey.key(platform: platform, roomId: roomId)
-        saveHistory(history().filter { $0.id != key })
+        // b49fix20 D22-2: same re-read-inside-the-queue rule as
+        // recordHistory above.
+        MigrationStore.collectionWriteQueue.sync {
+            saveHistoryLocked(history().filter { $0.id != key })
+        }
+        noteHistorySaved()
     }
 
     static func clearHistory() {
@@ -378,20 +412,35 @@ enum LiveLibraryStore {
     }
 
     static func saveSearchQuery(_ query: String) {
-        LocalStore.saveCollection(
-            named: searchHistoryCollection,
-            value: mergedSearchHistory(searchHistory(), with: query))
+        // b49fix20 D22-2: read-modify-write under
+        // collectionWriteQueue — the bare searchHistory() read
+        // used to race the import's merge and overwrite
+        // imported terms with a stale pre-import list.
+        MigrationStore.collectionWriteQueue.sync {
+            LocalStore.saveCollection(
+                named: searchHistoryCollection,
+                value: mergedSearchHistory(searchHistory(), with: query))
+        }
     }
 
     static func clearSearchHistory() {
-        LocalStore.saveCollection(named: searchHistoryCollection, value: [String]())
+        // b49fix20 D22-2: the write takes collectionWriteQueue
+        // (same reason as saveSearchQuery above).
+        MigrationStore.collectionWriteQueue.sync {
+            LocalStore.saveCollection(named: searchHistoryCollection, value: [String]())
+        }
     }
 
     /// Delete one search keyword (long-press on a history chip).
     static func removeSearchHistory(term: String) {
-        LocalStore.saveCollection(
-            named: searchHistoryCollection,
-            value: removingSearchHistory(searchHistory(), term: term))
+        // b49fix20 D22-2: read-modify-write under
+        // collectionWriteQueue (same reason as saveSearchQuery
+        // above).
+        MigrationStore.collectionWriteQueue.sync {
+            LocalStore.saveCollection(
+                named: searchHistoryCollection,
+                value: removingSearchHistory(searchHistory(), term: term))
+        }
     }
 }
 

@@ -910,7 +910,20 @@ enum MusicLibraryStore {
             // import's merge — a wipe landing after the merge
             // must not interleave with it.
             MigrationStore.collectionWriteQueue.sync {
+                // b49fix20 D22-9: record every key the wipe
+                // removes — the version-bump wipe used to clear
+                // the cache with no eviction trace, so an
+                // import's verify (which excuses only recorded
+                // evictions) false-failed on a wipe that landed
+                // mid-import. And clear the order file, so the
+                // wiped keys do not linger as order entries for
+                // keys that no longer exist.
+                let wiped = readObject(named: lyricsCacheCollection)
+                for key in wiped.keys {
+                    MigrationStore.noteCacheKeyEvicted(file: lyricsCacheCollection, key: key)
+                }
                 writeObject(named: lyricsCacheCollection, [:])
+                saveLyricsCacheOrder([])
                 UserDefaults.standard.set(lyricsCacheVersion, forKey: lyricsCacheVersionKey)
             }
             return nil

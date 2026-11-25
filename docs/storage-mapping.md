@@ -7,7 +7,7 @@
 `lib/core/theme/appearance_store.dart`，HEAD 2ef902b，1.1.6+31；另有未进
 `HiveKeys` 的字面量键，见各域表内出处）。
 
-**覆盖率（S1，2026-11-23；2026-11-25 b49fix2 P1-3 后更新；2026-11-26 b49fix19 P2-1 后更新）：121 行——117 个具名键 + 4 个键族
+**覆盖率（S1，2026-11-23；2026-11-25 b49fix2 P1-3 后更新；2026-11-26 b49fix19 P2-1 后更新；2026-11-26 b49fix20 D22-15 修正）：122 行——117 个具名键 + 4 个键族 + 1 个 2.0 新增键
 （`haoVodProg:`、`hao_daily_YYYY-MM-DD`、`hao_listen_YYYY-MM`、
 `hao_play_url_cache:`），全部有明确去向，覆盖率 100%。其中迁移 120 行；
 1 个键族（`hao_play_url_cache:`）按设计不迁移：1 小时 TTL 的签名 URL 缓存，
@@ -32,7 +32,7 @@
 （`hao_sa_xh_device` 不是 UserDefaults 键——解析器直接读
 `hao_sa_xh_device.json` 文件，删行不影响功能。）当前映射表为 117 个具名键
 （136 − 25 删 + 1 增 `hao_sa_video_applied` + 5 增 b49fix19 P2-1：`downloadTasks`、
-`hao_fav_playlists`、`hao_fav_albums`、`hao_fav_artists`、`hao_daily_pool`），连同 4 个键族共 121 行。**
+`hao_fav_playlists`、`hao_fav_albums`、`hao_fav_artists`、`hao_daily_pool`），连同 4 个键族 + 1 个 2.0 新增键共 122 行。**
 
 ## 规则（铁律 7）
 
