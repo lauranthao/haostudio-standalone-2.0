@@ -141,8 +141,8 @@ for cj in ["Assets.xcassets/AppIcon.appiconset/Contents.json",
 # --- 4. Info.plist --------------------------------------------------------
 pl = plistlib.load(open(APP_DIR / "Info.plist", "rb"))
 check("4. displayName HAo Studio", pl.get("CFBundleDisplayName") == "HAo Studio")
-check("4b. bundle version 2.1.4 / build 41 (release)",
-      pl.get("CFBundleShortVersionString") == "2.1.4" and pl.get("CFBundleVersion") == "41",
+check("4b. bundle version 2.1.5 / build 42 (release)",
+      pl.get("CFBundleShortVersionString") == "2.1.5" and pl.get("CFBundleVersion") == "42",
       f"{pl.get('CFBundleShortVersionString')} / {pl.get('CFBundleVersion')}")
 check("4c. background audio mode", pl.get("UIBackgroundModes") == ["audio"])
 check("4d. launch storyboard", pl.get("UILaunchStoryboardName") == "LaunchScreen")
@@ -156,8 +156,8 @@ check("4h. entitlements file is intentionally empty",
       plistlib.load(open(APP_DIR / "HAoStudio.entitlements", "rb")) == {})
 # --- 4i. version.json aligned with the bundle (S0) -----------------------
 vj = json.loads((REPO / "version.json").read_text())
-check("4i. version.json aligned (2.1.4 / build 41 / minOs 17.0)",
-      vj.get("version") == "2.1.4" and vj.get("build") == 41 and vj.get("minOs") == "17.0",
+check("4i. version.json aligned (2.1.5 / build 42 / minOs 17.0)",
+      vj.get("version") == "2.1.5" and vj.get("build") == 42 and vj.get("minOs") == "17.0",
       f"{vj.get('version')} / build {vj.get('build')} / minOs {vj.get('minOs')}")
 # --- 4j. project.pbxproj parses: braces/parens balanced ------------------
 # (2026-11-23: Codemagic build #10 failed with "project is damaged, parse
