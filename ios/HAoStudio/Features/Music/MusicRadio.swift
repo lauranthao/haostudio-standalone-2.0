@@ -291,3 +291,55 @@ enum MusicRadio {
         return counts.sorted { $0.value > $1.value }.prefix(limit).map { $0.key }
     }
 }
+
+// MARK: - b45-F: personal FM refill (plan §9.2, Coda PersonalFMRefill)
+//
+// When the FM queue runs empty, refill it: at most 3 attempts,
+// 1 s apart. A refill round is superseded when a newer round
+// starts (new generation) or the user leaves FM — the old round
+// abandons instead of writing into a queue that no longer
+// exists. After the 3rd failure the caller shows a Toast.
+
+enum PersonalFMRefill {
+    /// Max refill attempts per empty-queue event.
+    static let maxAttempts = 3
+    /// Delay between attempts.
+    static let retryInterval: TimeInterval = 1
+    /// Toast shown when every attempt fails.
+    static let failureToastMessage = "私人漫游加载失败，请稍后重试"
+
+    /// Mutable refill state, owned by the FM view model.
+    struct State {
+        /// Generation of the current round (bumped on every new
+        /// refill request and on leaving FM).
+        var generation: Int = 0
+        /// Attempts used in the current round.
+        var attempts: Int = 0
+
+        /// Start a new round (a fresh generation; old attempts
+        /// are forgotten and any in-flight old round abandons).
+        mutating func beginNewRound() -> Int {
+            generation += 1
+            attempts = 0
+            return generation
+        }
+
+        /// Abandon the current round (leaving FM / queue replaced).
+        mutating func abandon() {
+            generation += 1
+            attempts = 0
+        }
+
+        /// Record one failed attempt. Returns true when another
+        /// attempt is allowed (still inside this generation and
+        /// under the cap), false when the caller must Toast.
+        /// `generation` guards the async retry: a retry whose
+        /// generation no longer matches the state's is superseded
+        /// and must abandon.
+        mutating func recordFailure(generation: Int) -> Bool {
+            guard generation == self.generation else { return false }
+            attempts += 1
+            return attempts < PersonalFMRefill.maxAttempts
+        }
+    }
+}

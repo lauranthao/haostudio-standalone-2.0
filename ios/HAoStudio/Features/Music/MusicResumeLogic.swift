@@ -105,3 +105,60 @@ enum MusicResumeLogic {
         return Int(requested)
     }
 }
+
+// MARK: - b45-F: confirmed quality badge (plan §9.2)
+//
+// Session-restore gap check (2026-11-25): the position
+// checkpoint was persisted, but the quality badge was not —
+// after a relaunch the badge was blank until the next resolve
+// reported a tier. The badge is a "last confirmed value":
+// persisted per track, decoupled from the engine and from any
+// play URL (which is never cached). A track re-resolves its URL
+// on play; the badge only fills the UI until the new tier lands.
+
+enum ConfirmedQualityBadge {
+    /// UserDefaults key: `[identityKey: qualityCode]`.
+    static let defaultsKey = "hao_last_confirmed_quality"
+
+    /// Persist the tier actually served for this track (call on
+    /// every successful track start, with the resolver-reported
+    /// tier — never the requested tier).
+    static func save(
+        identityKey: String,
+        quality: AudioQuality,
+        defaults: UserDefaults = .standard
+    ) {
+        guard !identityKey.isEmpty else { return }
+        var map = defaults.dictionary(forKey: defaultsKey) as? [String: String] ?? [:]
+        map[identityKey] = quality.rawValue
+        // Bounded: a stale badge for a track never played again
+        // is harmless, but the map must not grow forever.
+        if map.count > 500 {
+            let sorted = map.keys.sorted()
+            for key in sorted.prefix(map.count - 500) { map.removeValue(forKey: key) }
+        }
+        defaults.set(map, forKey: defaultsKey)
+    }
+
+    /// The last confirmed tier for this track, or nil when none
+    /// was ever confirmed (badge stays blank until the first
+    /// successful resolve).
+    static func confirmedQuality(
+        identityKey: String,
+        defaults: UserDefaults = .standard
+    ) -> AudioQuality? {
+        guard !identityKey.isEmpty else { return nil }
+        let map = defaults.dictionary(forKey: defaultsKey) as? [String: String] ?? [:]
+        guard let code = map[identityKey] else { return nil }
+        return AudioQuality(rawValue: code)
+    }
+
+    /// Gap check for session restore: true when a badge survives
+    /// a relaunch for this track.
+    static func isPersisted(
+        identityKey: String,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        confirmedQuality(identityKey: identityKey, defaults: defaults) != nil
+    }
+}

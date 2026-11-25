@@ -108,7 +108,16 @@ final class LXSourceResolver: SourceResolver {
     private let engine: LXEngine
     private let httpClient: MusicHTTPClient
     private let cooldown: ResolverCooldown
+    /// Retained for source compatibility only. Play URLs are
+    /// NEVER cached (plan §7.4: signatures are short-lived —
+    /// every playback re-resolves). Nothing reads or writes this
+    /// cache any more; `evictPlayUrl` is a no-op for the same
+    /// reason (the `excluding` set already drops failed URLs).
     private let cache: PlayURLCache
+    /// 10-minute per-source+song failure memory (plan §7.4): a
+    /// source that just failed for a song is not re-asked for
+    /// that song until the memory expires. Never deletes a source.
+    private let failureMemory: ResolveFailureMemory
     private let scriptStore: LXScriptStore
     private let documentsDirectory: URL
     private let workQueue = DispatchQueue(label: "com.haostudio.lxresolver")
@@ -148,6 +157,7 @@ final class LXSourceResolver: SourceResolver {
         httpClient: MusicHTTPClient = URLSessionMusicHTTPClient(),
         cooldown: ResolverCooldown? = nil,
         cache: PlayURLCache? = nil,
+        failureMemory: ResolveFailureMemory? = nil,
         scriptStore: LXScriptStore = LXScriptStore(),
         documentsDirectory: URL? = nil,
         perJobTimeout: TimeInterval = ResolverBudget.perJob,
@@ -161,6 +171,7 @@ final class LXSourceResolver: SourceResolver {
         self.documentsDirectory = documentsDirectory ?? LocalStore.documentsDirectory()
         self.cooldown = cooldown ?? ResolverCooldown(documentsDirectory: self.documentsDirectory)
         self.cache = cache ?? PlayURLCache()
+        self.failureMemory = failureMemory ?? ResolveFailureMemory()
         self.scriptStore = scriptStore
         self.perJobTimeout = perJobTimeout
         self.totalBudget = totalBudget
@@ -226,8 +237,12 @@ final class LXSourceResolver: SourceResolver {
 
     /// Drop a cached play URL (e.g. it failed at playback): the next
     /// resolve for this song re-asks the sources.
+    /// b45-F: play URLs are never cached any more (plan §7.4), so
+    /// there is nothing to evict — the `excluding` set on the
+    /// resolve call already drops the failed URL. Kept because the
+    /// `PlayURLEvictingResolver` protocol requires it.
     func evictPlayUrl(songId: String, platform: MusicPlatform, quality: AudioQuality) {
-        cache.evict(PlayURLCache.key(songId: songId, platform: platform.rawValue, quality: quality))
+        // No-op by design: no play-URL cache exists.
     }
 
     // MARK: - Main entry
@@ -255,6 +270,11 @@ final class LXSourceResolver: SourceResolver {
         let excluding: Set<String>
         let totalDeadline: Date
         let background: Bool
+        /// When this resolve started: the failure memory only
+        /// skips sources that failed BEFORE this resolve — a
+        /// source that fails mid-resolve is still tried at the
+        /// lower tiers of the same resolve.
+        let startedAt: Date
 
         init(tiers: [AudioQuality], requestedQuality: AudioQuality, totalDeadline: Date, background: Bool,
              trialOnly: Bool = false, excluding: Set<String> = []) {
@@ -264,6 +284,7 @@ final class LXSourceResolver: SourceResolver {
             self.background = background
             self.trialOnly = trialOnly
             self.excluding = excluding
+            self.startedAt = Date()
         }
     }
 
@@ -284,12 +305,10 @@ final class LXSourceResolver: SourceResolver {
                 return
             }
             let excludedURLs = Set(excluding.map { $0.absoluteString })
-            let cacheKey = PlayURLCache.key(songId: songId, platform: platform.rawValue, quality: quality)
-            if let cached = self.cache.get(cacheKey), !excludedURLs.contains(cached.url) {
-                let result = PlayUrlResult(url: cached.url, quality: cached.tier, via: "cache")
-                self.finishResolve(result: result, truncated: false, completion: completion)
-                return
-            }
+            // b45-F (plan §7.4): play URLs are NEVER cached —
+            // signatures are short-lived, so every playback
+            // re-resolves. (The old 1 h PlayURLCache read lived
+            // here; it is gone, and the put in runTierPasses too.)
             // LX script jobs appear once the engine has loaded; kick
             // off the load on first use (the first resolve after
             // launch may predate them — later resolves include them).
@@ -359,17 +378,13 @@ final class LXSourceResolver: SourceResolver {
         runPass(
             tier: tier, songId: songId, platform: platform, title: title, artist: artist,
             budget: budget, skipTimedOut: state.skipTimedOut, skipPreviewed: state.skipPreviewed,
-            trialOnly: state.trialOnly, excluding: state.excluding, background: state.background
+            trialOnly: state.trialOnly, excluding: state.excluding, background: state.background,
+            failuresBefore: state.startedAt
         ) { [weak self] passResult, incomplete in
             guard let self = self else { return }
             state.truncated = state.truncated || incomplete
             if let result = passResult {
-                // Cached under the REQUESTED tier's key (Flutter
-                // parity): a hires URL found while asking for master
-                // is the answer to a master request next time too.
-                self.cache.put(
-                    PlayURLCache.key(songId: songId, platform: platform.rawValue, quality: state.requestedQuality),
-                    url: result.url, tier: result.quality)
+                // b45-F: the result is NOT cached (plan §7.4).
                 self.finishResolve(result: result, truncated: false, completion: completion)
                 return
             }
@@ -407,9 +422,10 @@ extension LXSourceResolver {
         trialOnly: Bool,
         excluding: Set<String>,
         background: Bool,
+        failuresBefore: Date,
         completion: @escaping (PlayUrlResult?, Bool) -> Void
     ) {
-        let jobs = rankedJobs(platform: platform, tier: tier, songId: songId, title: title, artist: artist)
+        let jobs = rankedJobs(platform: platform, tier: tier, songId: songId, title: title, artist: artist, failuresBefore: failuresBefore)
         guard !jobs.isEmpty else {
             completion(nil, false)
             return
@@ -543,6 +559,10 @@ extension LXSourceResolver {
             if !background {
                 self.cooldown.record(job.key, outcome: .timeout,
                                      milliseconds: Int(timeout * 1000))
+                // b45-F: a timed-out source is remembered as failed
+                // for this song (10 min) — the next resolve skips it
+                // instead of re-asking.
+                self.failureMemory.record(sourceKey: job.key, songId: songId)
             }
             skipTimedOut.add(job.key)
             self.workQueue.async {
@@ -576,6 +596,9 @@ extension LXSourceResolver {
                 case .error:
                     if !background {
                         self.cooldown.record(job.key, outcome: .error, milliseconds: elapsedMs)
+                        // b45-F: remember the failure for this song
+                        // (10 min). The source is not deleted.
+                        self.failureMemory.record(sourceKey: job.key, songId: songId)
                     }
                     self.runJobAt(jobs: jobs, index: index + 1, tier: tier, songId: songId,
                                   platform: platform, title: title, artist: artist,
@@ -641,6 +664,9 @@ extension LXSourceResolver {
                         return
                     }
                     self.cooldown.record(job.key, outcome: .success, milliseconds: elapsedMs)
+                    // b45-F: a success clears the failure memory
+                    // for this source + song.
+                    self.failureMemory.clear(sourceKey: job.key, songId: songId)
                     // A resolver that reports the tier it actually
                     // served is held to it; otherwise the declared label.
                     let tier = servedTier ?? MusicQualityGate.declaredTier(resolverKey: job.key, requested: tier)
@@ -664,7 +690,8 @@ extension LXSourceResolver {
         tier: AudioQuality,
         songId: String,
         title: String,
-        artist: String
+        artist: String,
+        failuresBefore: Date
     ) -> [LXResolverJob] {
         // Test seam: a `jobListProvider` replaces the built-in +
         // script jobs; the ranking rules below still apply.
@@ -701,6 +728,12 @@ extension LXSourceResolver {
         var manualIndex: [String: Int] = [:]
         for (i, id) in manualOrder.enumerated() { manualIndex[id] = i }
         let unlistedScriptIndex = 1 << 30
+        // b45-F: drop jobs whose source failed for THIS song in an
+        // earlier resolve (10-minute failure memory). The source
+        // stays in the list — the memory only expires; a failure
+        // recorded during this resolve (at >= failuresBefore) does
+        // not skip the lower tiers of the same resolve.
+        jobs.removeAll { failureMemory.isFailed(sourceKey: $0.key, songId: songId, before: failuresBefore) }
         jobs.sort { a, b in
             let aCool = cooldown.isCoolingDown(a.key)
             let bCool = cooldown.isCoolingDown(b.key)

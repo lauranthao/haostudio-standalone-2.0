@@ -322,3 +322,317 @@ struct MusicQueue {
         return MusicQueue(tracks: data.songs, index: data.songs.isEmpty ? 0 : clamped)
     }
 }
+
+// MARK: - b45-F: queue plan (plan §9.2, Coda PlaybackQueuePlan)
+//
+// Next order = 插队 → 队列 → (looping) queue head. FM is
+// separate (its own queue). Previous ALWAYS changes track
+// (never a "restart because you just started" rule): at the
+// head in a looping mode it wraps to the tail; at the head in a
+// non-looping mode there is no previous (the player keeps its
+// b41 restart-there behaviour for that case). Drag-reordering
+// the upcoming list merges the priority items into the ordinary
+// queue.
+
+struct PlaybackQueuePlan {
+    /// Play-next items, in order (highest priority).
+    var priority: [MusicSong]
+    /// The ordinary queue (current track included).
+    var queue: [MusicSong]
+    /// Index of the current track in `queue`.
+    var currentIndex: Int
+    /// True when the queue loops (list loop / single loop /
+    /// shuffle wrap).
+    var isLooping: Bool
+    /// True when this is an FM queue (no priority, no loop).
+    var isFM: Bool = false
+
+    /// The upcoming tracks in play order: priority first, then
+    /// the rest of the queue, then (when looping) the head.
+    var upcoming: [MusicSong] {
+        guard !queue.isEmpty, currentIndex >= 0, currentIndex < queue.count else {
+            return priority + queue
+        }
+        var rest: [MusicSong] = priority
+        if currentIndex + 1 < queue.count {
+            rest.append(contentsOf: queue[(currentIndex + 1)...])
+        }
+        if isLooping, !isFM {
+            rest.append(contentsOf: queue[0...currentIndex])
+        }
+        return rest
+    }
+
+    /// Index of the next track to play (into a combined
+    /// priority+queue view), or nil when playback must stop.
+    /// Returns `.priority(Int)` / `.queue(Int)` so the caller
+    /// knows which list to advance.
+    enum NextTarget: Equatable {
+        case priority(Int)
+        case queue(Int)
+    }
+
+    func nextTarget() -> NextTarget? {
+        if !priority.isEmpty { return .priority(0) }
+        guard !queue.isEmpty, currentIndex >= 0, currentIndex < queue.count else { return nil }
+        if currentIndex + 1 < queue.count { return .queue(currentIndex + 1) }
+        if isLooping, !isFM { return .queue(0) }
+        return nil
+    }
+
+    /// Previous-track index into `queue`, or nil when there is
+    /// none (head of a non-looping queue). Never returns the
+    /// current index: previous always changes track.
+    func previousIndex() -> Int? {
+        guard !queue.isEmpty, currentIndex >= 0, currentIndex < queue.count else { return nil }
+        if currentIndex > 0 { return currentIndex - 1 }
+        if isLooping, !isFM { return queue.count - 1 }
+        return nil
+    }
+
+    /// Drag-reordering the upcoming list merges the priority
+    /// items into the ordinary queue: the new order is
+    /// current-track-first + the reordered upcoming songs.
+    /// Returns the rebuilt (priority, queue, currentIndex).
+    func reorderingUpcoming(_ newOrder: [MusicSong]) -> PlaybackQueuePlan {
+        guard !queue.isEmpty, currentIndex >= 0, currentIndex < queue.count else {
+            return PlaybackQueuePlan(priority: [], queue: newOrder, currentIndex: 0, isLooping: isLooping, isFM: isFM)
+        }
+        var rebuilt = Array(queue[0...currentIndex])
+        var seen = Set(rebuilt.map { $0.identityKey })
+        for song in newOrder where seen.insert(song.identityKey).inserted {
+            rebuilt.append(song)
+        }
+        return PlaybackQueuePlan(priority: [], queue: rebuilt, currentIndex: currentIndex, isLooping: isLooping, isFM: isFM)
+    }
+}
+
+// MARK: - b45-F: offline queue selector (plan §9.2/§9.3)
+//
+// Offline, playback jumps to the first locally available track
+// (download or audio cache) and counts how many were skipped.
+// No local track at all → the caller shows the offline alert.
+
+enum OfflineQueueSelector {
+    /// Index-based core (shared by the MusicSong plan below and
+    /// by the player, which holds PlaybackItems): walk the queue
+    /// tail from `currentIndex + 1`, then — when looping — the
+    /// head. Returns the first available index + skipped count.
+    static func firstAvailableIndex(
+        itemCount: Int,
+        currentIndex: Int,
+        isLooping: Bool,
+        isFM: Bool,
+        isAvailable: (Int) -> Bool
+    ) -> (index: Int, skipped: Int)? {
+        guard itemCount > 0, currentIndex >= 0, currentIndex < itemCount else { return nil }
+        var skipped = 0
+        for index in (currentIndex + 1)..<itemCount {
+            if isAvailable(index) { return (index, skipped) }
+            skipped += 1
+        }
+        if isLooping, !isFM {
+            for index in 0...currentIndex {
+                if isAvailable(index) { return (index, skipped) }
+                skipped += 1
+            }
+        }
+        return nil
+    }
+
+    /// First locally available upcoming track (searching the
+    /// plan's upcoming order: priority → queue tail → loop head),
+    /// plus the skipped count. Nil when nothing is available
+    /// offline.
+    static func firstAvailable(
+        plan: PlaybackQueuePlan,
+        isAvailable: (MusicSong) -> Bool
+    ) -> (target: PlaybackQueuePlan.NextTarget, skipped: Int)? {
+        var skipped = 0
+        for (index, song) in plan.priority.enumerated() {
+            if isAvailable(song) { return (.priority(index), skipped) }
+            skipped += 1
+        }
+        guard let found = firstAvailableIndex(
+            itemCount: plan.queue.count, currentIndex: plan.currentIndex,
+            isLooping: plan.isLooping, isFM: plan.isFM,
+            isAvailable: { isAvailable(plan.queue[$0]) })
+        else { return nil }
+        return (.queue(found.index), skipped + found.skipped)
+    }
+}
+
+// MARK: - b45-F: play source / context (plan §9.2, Coda PlaySource)
+//
+// A playlist / album / artist / daily / recent / heartbeat / FM
+// list is a reloadable "place". Identity is kind + id ONLY: a
+// rename never changes the identity, so a renamed playlist
+// still resumes the same context. The recent-contexts list can
+// be replayed with one tap.
+
+enum PlaySourceKind: String, Codable, CaseIterable {
+    case playlist
+    case album
+    case artist
+    case daily
+    case recent
+    case heartbeat
+    case fm
+}
+
+struct PlaySource: Codable, Hashable {
+    let kind: PlaySourceKind
+    let id: String
+
+    // Identity is kind + id only — the display name is not part
+    // of equality (a rename must not change the identity).
+    static func == (lhs: PlaySource, rhs: PlaySource) -> Bool {
+        lhs.kind == rhs.kind && lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(kind)
+        hasher.combine(id)
+    }
+}
+
+struct PlayContext: Codable {
+    let source: PlaySource
+    /// Display name (renameable — not part of identity).
+    var displayName: String
+    /// Song identity keys, in play order.
+    var songKeys: [String]
+    /// When this context was last played (epoch seconds).
+    var lastPlayedAt: TimeInterval
+
+    /// Two contexts are the same place when their sources match
+    /// — even after a rename.
+    func isSamePlace(as other: PlayContext) -> Bool {
+        source == other.source
+    }
+}
+
+/// A most-recent-first list of play contexts, capped, with
+/// one-tap replay (the newest context replays its song list).
+enum RecentPlayContexts {
+    static let maxContexts = 20
+
+    static func replayed(_ contexts: [PlayContext], _ context: PlayContext) -> [PlayContext] {
+        var rest = contexts.filter { $0.source != context.source }
+        var updated = context
+        updated.lastPlayedAt = Date().timeIntervalSince1970
+        rest.insert(updated, at: 0)
+        return Array(rest.prefix(maxContexts))
+    }
+}
+
+// MARK: - b45-F: offline context resolution (plan §9.3)
+//
+// Offline-first: read local (playlist snapshot / downloads)
+// first, then ask the network; a network failure falls back to
+// local. Snapshots let a playlist be browsed offline.
+
+/// One song inside a playlist snapshot. `MusicSong` itself is
+/// not Codable (it round-trips through `toJSON()` / `init(json:)`),
+/// so the snapshot stores this flat Codable record and rebuilds
+/// `MusicSong` on load.
+struct SnapshotSong: Codable, Equatable {
+    let songId: String
+    let title: String
+    let artist: String
+    let album: String
+    let cover: String
+    let platform: String
+    let dur: Int
+
+    init(_ song: MusicSong) {
+        songId = song.songId
+        title = song.title
+        artist = song.artist
+        album = song.album
+        cover = song.cover
+        platform = song.platform.rawValue
+        dur = song.dur
+    }
+
+    func toMusicSong() -> MusicSong {
+        MusicSong(songId: songId, title: title, artist: artist, album: album,
+                  cover: cover, platform: MusicPlatform(code: platform) ?? .wy, dur: dur)
+    }
+}
+
+struct PlaylistSnapshot: Codable, Equatable {
+    let source: PlaySource
+    let displayName: String
+    let songs: [SnapshotSong]
+    let savedAt: Date
+
+    init(source: PlaySource, displayName: String, songs: [MusicSong], savedAt: Date = Date()) {
+        self.source = source
+        self.displayName = displayName
+        self.songs = songs.map(SnapshotSong.init)
+        self.savedAt = savedAt
+    }
+
+    /// The snapshot's songs as playable `MusicSong` values.
+    var musicSongs: [MusicSong] { songs.map { $0.toMusicSong() } }
+}
+
+enum OfflineContextResolver {
+    /// Resolve a playlist's songs: local snapshot first (returned
+    /// immediately when present), then the network fetch; a
+    /// network failure falls back to the snapshot, and with no
+    /// snapshot at all the result is nil (offline empty state).
+    static func resolve(
+        snapshot: PlaylistSnapshot?,
+        fetchRemote: (@escaping ([MusicSong]?) -> Void) -> Void,
+        completion: @escaping ([MusicSong]?) -> Void
+    ) {
+        if let snapshot = snapshot, !snapshot.songs.isEmpty {
+            completion(snapshot.musicSongs)
+            return
+        }
+        fetchRemote { remote in
+            completion(remote ?? snapshot?.musicSongs)
+        }
+    }
+}
+
+enum PlaylistSnapshotStore {
+    static let subdir = "hao_playlist_snapshots"
+
+    static func fileURL(source: PlaySource, documentsURL: URL? = nil) -> URL {
+        let docs = documentsURL ?? LocalStore.documentsDirectory()
+        let dir = docs.appendingPathComponent(subdir)
+        let safeID = source.id.replacingOccurrences(of: "/", with: "_")
+        return dir.appendingPathComponent("\(source.kind.rawValue)-\(safeID).json")
+    }
+
+    static func save(_ snapshot: PlaylistSnapshot, documentsURL: URL? = nil) {
+        let url = fileURL(source: snapshot.source, documentsURL: documentsURL)
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        try? data.write(to: url, options: [.atomic])
+    }
+
+    static func load(source: PlaySource, documentsURL: URL? = nil) -> PlaylistSnapshot? {
+        guard let data = try? Data(contentsOf: fileURL(source: source, documentsURL: documentsURL)) else { return nil }
+        return try? JSONDecoder().decode(PlaylistSnapshot.self, from: data)
+    }
+
+    /// All snapshots, newest first (offline browsing).
+    static func all(documentsURL: URL? = nil) -> [PlaylistSnapshot] {
+        let docs = documentsURL ?? LocalStore.documentsDirectory()
+        let dir = docs.appendingPathComponent(subdir)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        var out: [PlaylistSnapshot] = []
+        for name in names where name.hasSuffix(".json") {
+            guard let data = try? Data(contentsOf: dir.appendingPathComponent(name)),
+                  let snap = try? JSONDecoder().decode(PlaylistSnapshot.self, from: data)
+            else { continue }
+            out.append(snap)
+        }
+        return out.sorted { $0.savedAt > $1.savedAt }
+    }
+}

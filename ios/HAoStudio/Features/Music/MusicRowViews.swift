@@ -122,6 +122,13 @@ struct MusicSongRow: View {
     /// subscribes to the player's 0.5 s position tick.
     var onPlayNext: ((MusicSong) -> Void)? = nil
     var onDownload: ((MusicSong) -> Void)? = nil
+    /// b45-F: show the inline download button / progress ring
+    /// (plan §9.3). Off by default — callers opt in. Removal of
+    /// an already-downloaded file goes through this callback
+    /// (engine delete + library-store removal, owned by the view
+    /// model); nil means the downloaded state is display-only.
+    var showDownloadButton: Bool = false
+    var onRemoveDownload: ((MusicSong) -> Void)? = nil
 
     @Environment(\.haoTheme) private var theme
 
@@ -178,6 +185,11 @@ struct MusicSongRow: View {
                 }
                 .buttonStyle(.plain)
                 MusicSongMenuButton(handle: menu)
+                if showDownloadButton {
+                    TrackDownloadButton(
+                        song: song, onDownload: onDownload,
+                        onRemoveDownload: onRemoveDownload)
+                }
             }
             .contextMenu { menu.menuContent() }
         }
@@ -571,5 +583,164 @@ struct MusicCapsuleButton: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+    }
+}
+
+// MARK: - b45-F: inline download button + progress ring (plan §9.3)
+//
+// Fixed 24pt — it never pushes the title / duration around.
+// While a download runs it becomes a progress ring; a long
+// press offers pause / resume / stop; a downloaded song asks
+// for confirmation before it is removed. Progress isolation:
+// each row subscribes ONLY to its own task (via its own
+// TrackDownloadObserver), and the byte counter ticks at 4/s —
+// only that row's ring redraws.
+
+/// Per-row download observer: polls its own task at 4/s, only
+/// while the task is non-terminal. One observer per row, so a
+/// progress tick never redraws another row.
+final class TrackDownloadObserver: ObservableObject {
+    /// 4 ticks per second (plan §9.3).
+    static let pollInterval: TimeInterval = 0.25
+
+    let key: String
+    @Published private(set) var info: DownloadTaskInfo?
+    private var timer: Timer?
+
+    init(key: String) {
+        self.key = key
+        refresh()
+    }
+
+    deinit { timer?.invalidate() }
+
+    /// Start polling (called from .onAppear). A terminal task
+    /// never starts the timer.
+    func start() {
+        refresh()
+        guard timer == nil, let state = info?.state, !state.isTerminal else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
+            self?.refresh()
+        }
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func refresh() {
+        info = DownloadEngine.shared.taskInfo(for: key)
+        if let state = info?.state, state.isTerminal {
+            timer?.invalidate()
+            timer = nil
+        }
+    }
+}
+
+struct TrackDownloadButton: View {
+    var song: MusicSong
+    var onDownload: ((MusicSong) -> Void)?
+    var onRemoveDownload: ((MusicSong) -> Void)?
+
+    @StateObject private var observer: TrackDownloadObserver
+    @State private var showRemoveConfirm = false
+
+    @Environment(\.haoTheme) private var theme
+
+    init(song: MusicSong, onDownload: ((MusicSong) -> Void)? = nil,
+         onRemoveDownload: ((MusicSong) -> Void)? = nil) {
+        self.song = song
+        self.onDownload = onDownload
+        self.onRemoveDownload = onRemoveDownload
+        _observer = StateObject(wrappedValue: TrackDownloadObserver(key: song.identityKey))
+    }
+
+    private var progressFraction: Double {
+        guard let info = observer.info, info.totalBytes > 0 else { return 0 }
+        return min(1, max(0, Double(info.downloadedBytes) / Double(info.totalBytes)))
+    }
+
+    var body: some View {
+        Group {
+            switch observer.info?.state {
+            case .completed:
+                Button {
+                    if onRemoveDownload != nil { showRemoveConfirm = true }
+                } label: {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(theme.accentText)
+                }
+            case .downloading, .queued, .fetchingURL, .validating, .waitingNetwork:
+                // Progress ring (fixed 24pt, never resizes the row).
+                ZStack {
+                    Circle()
+                        .stroke(theme.hairline, lineWidth: 2)
+                    Circle()
+                        .trim(from: 0, to: CGFloat(progressFraction))
+                        .stroke(theme.accentText, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                }
+                .frame(width: 20, height: 20)
+                .contextMenu {
+                    Button("暂停") { DownloadEngine.shared.pause(key: song.identityKey) }
+                    Button("继续") { DownloadEngine.shared.resume(key: song.identityKey) }
+                    Button("停止", role: .destructive) {
+                        DownloadEngine.shared.cancel(key: song.identityKey)
+                    }
+                }
+            case .paused:
+                Button {
+                    DownloadEngine.shared.resume(key: song.identityKey)
+                } label: {
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: 18))
+                        .foregroundStyle(theme.textSecondary)
+                }
+                .contextMenu {
+                    Button("继续") { DownloadEngine.shared.resume(key: song.identityKey) }
+                    Button("停止", role: .destructive) {
+                        DownloadEngine.shared.cancel(key: song.identityKey)
+                    }
+                }
+            case .failed:
+                Button {
+                    DownloadEngine.shared.resume(key: song.identityKey)
+                } label: {
+                    Image(systemName: "exclamationmark.circle")
+                        .font(.system(size: 18))
+                        .foregroundStyle(theme.textSecondary)
+                }
+                .contextMenu {
+                    Button("重试") { DownloadEngine.shared.resume(key: song.identityKey) }
+                    Button("停止", role: .destructive) {
+                        DownloadEngine.shared.cancel(key: song.identityKey)
+                    }
+                }
+            default:
+                Button {
+                    onDownload?(song)
+                } label: {
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: 18))
+                        .foregroundStyle(theme.textSecondary)
+                }
+            }
+        }
+        .frame(width: 24, height: 24)
+        .buttonStyle(.plain)
+        .onAppear { observer.start() }
+        .onDisappear { observer.stop() }
+        .confirmationDialog(
+            "移除已下载？",
+            isPresented: $showRemoveConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("移除", role: .destructive) { onRemoveDownload?(song) }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将删除本机上的音频文件。")
+        }
     }
 }
