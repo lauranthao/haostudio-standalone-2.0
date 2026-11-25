@@ -10,8 +10,10 @@
 // category pre-selected and loading immediately — never an empty
 // "pick a type first" dead end. CMS has no all-types endpoint, so
 // there is no merged all-types grid; per-row "全部" opens the page
-// pre-selected to that row's type, and the "每日推荐" row opens it
-// with no type (first category). No fake "每日推荐" type is invented.
+// pre-selected to that row's type, and the "每日推荐" row opens its
+// own list view (VideoDailyListView, sweep-3 A16) instead of this
+// page — daily picks have no single type, and no fake "daily" type
+// is invented.
 //
 // The view-model copies the EmbyCategoryViewModel generation guard
 // (stale-page drop + re-issue); VideoCategoryViewModel has none, so
