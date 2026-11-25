@@ -935,11 +935,11 @@ private struct MyRecentPlaysView: View {
             }
         }
         .padding(.horizontal, 16)
-        .frame(height: 44)
+        .frame(height: HaoLayout.detailSearchHeight)
         // b49fix5 P2-31: in-page capsule search uses the same
         // surface + hairline as the page-top entries (the old
         // 0.06 fill had no border); capsule shape and 44pt
-        // height are kept.
+        // height (HaoLayout.detailSearchHeight) are kept.
         .background(theme.surface, in: Capsule())
         .overlay {
             Capsule()

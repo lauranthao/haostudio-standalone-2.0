@@ -1286,11 +1286,14 @@ extension BackupEngineCore {
     // MARK: - Snapshot management (b49fix3 P1-6 / P2-17)
 
     /// Lists the import snapshots under
-    /// `Documents/backup_snapshots/`, newest first (the folder
-    /// name starts with a yyyyMMdd-HHmmss stamp). Empty when no
-    /// import ever ran. b49fix4 P1-4: a snapshot is now
-    /// user-restorable — the settings row offers restore per
-    /// snapshot (restoreSnapshot below), on top of list + delete.
+    /// `Documents/backup_snapshots/`, newest first (by file
+    /// creation date — the folder name starts with a
+    /// yyyyMMdd-HHmmss stamp, but two snapshots in the same
+    /// second only differ by a random UUID suffix, so the name
+    /// alone cannot order them). Empty when no import ever ran.
+    /// b49fix4 P1-4: a snapshot is now user-restorable — the
+    /// settings row offers restore per snapshot (restoreSnapshot
+    /// below), on top of list + delete.
     static func listSnapshots(documentsURL: URL? = nil) -> [URL] {
         let docs = documentsURL ?? LocalStore.documentsDirectory()
         let dir = docs.appendingPathComponent(snapshotDirectoryName)
@@ -1298,7 +1301,21 @@ extension BackupEngineCore {
         return names
             .map { dir.appendingPathComponent($0) }
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+            .sorted { lhs, rhs in
+                // b49fix7 P2-8: creation date orders same-second
+                // snapshots (the UUID suffix in the name is
+                // random — the old name sort could put a just
+                // taken safety net below an older snapshot, and
+                // the prune then deleted the undo). The name is
+                // only the tie-break when a creation date is
+                // unreadable (or two folders share one).
+                let lhsDate = (try? lhs.resourceValues(forKeys: [.creationDateKey]))?.creationDate
+                let rhsDate = (try? rhs.resourceValues(forKeys: [.creationDateKey]))?.creationDate
+                if let lhsDate, let rhsDate, lhsDate != rhsDate {
+                    return lhsDate > rhsDate
+                }
+                return lhs.lastPathComponent > rhs.lastPathComponent
+            }
     }
 
     /// Deletes one snapshot folder. Only removes the safety net
@@ -1378,9 +1395,11 @@ extension BackupEngineCore {
     /// oldest snapshot — the safety net makes 6 folders, the
     /// prune drops the oldest, and the restore then reported a
     /// "corrupt manifest" for a snapshot its own safety net
-    /// had just deleted. The caller prunes AFTER a successful
-    /// restore instead (performRestore); a failed restore
-    /// prunes nothing, so the target stays retryable.
+    /// had just deleted. b49fix7 P1-1/P2-7: the caller prunes
+    /// after EVERY restore (performRestore) and always excludes
+    /// the target — pruning only after success still deleted a
+    /// snapshot on every successful restore, and pruning nothing
+    /// on failure let safety nets pile up to 6, 7, 8 folders.
     static func createSafetyNetSnapshot(
         for snapshotDir: URL,
         documentsURL: URL,
@@ -1407,10 +1426,12 @@ extension BackupEngineCore {
     /// key kind — Data from base64, section-expanded keys as
     /// bool, the rest from the export catalogue), file bytes
     /// from the folder. The snapshot folder is kept, so the same
-    /// snapshot can be restored again. Posts
-    /// `.haoBackupImported` when anything was restored, so the
-    /// app layer re-reads. Runs synchronously; the caller puts
-    /// it on a background queue.
+    /// snapshot can be restored again — and pruning after a
+    /// restore excludes this folder (see
+    /// pruneSnapshots(excluding:)), so a restore never deletes
+    /// its own target. Posts `.haoBackupImported` when anything
+    /// was restored, so the app layer re-reads. Runs
+    /// synchronously; the caller puts it on a background queue.
     static func restoreSnapshot(
         at snapshotDir: URL,
         documentsURL: URL,
@@ -1490,9 +1511,19 @@ extension BackupEngineCore {
 
     /// Keeps only the newest `keeping` snapshots. Called on
     /// every successful import; the settings row also offers
-    /// per-snapshot delete.
-    static func pruneSnapshots(keeping: Int = 5, documentsURL: URL? = nil) {
-        let snapshots = listSnapshots(documentsURL: documentsURL)
+    /// per-snapshot delete. b49fix7 P1-1: `excluding` keeps one
+    /// folder out of the count — a restore must never prune the
+    /// snapshot it just restored (the target is kept, so the
+    /// same snapshot can be restored again), so the restore path
+    /// passes its target here; the safety net is the newest
+    /// folder and always survives. Compared by folder name:
+    /// the excluded URL may be built from a different path
+    /// prefix than the listed one (symlinked tmp dirs).
+    static func pruneSnapshots(keeping: Int = 5, excluding: URL? = nil, documentsURL: URL? = nil) {
+        var snapshots = listSnapshots(documentsURL: documentsURL)
+        if let excluding {
+            snapshots.removeAll { $0.lastPathComponent == excluding.lastPathComponent }
+        }
         guard snapshots.count > keeping else { return }
         for url in snapshots.dropFirst(keeping) {
             deleteSnapshot(at: url)

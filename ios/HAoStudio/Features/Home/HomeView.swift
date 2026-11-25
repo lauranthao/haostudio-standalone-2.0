@@ -1,8 +1,9 @@
 // HAo Studio 2.0 — home tab aggregation (home leg A).
 //
-// Replaces HomePlaceholderView. Five sections, top to bottom:
+// Replaces HomePlaceholderView. Four sections, top to bottom:
 // continue watching / continue listening / hot live / daily
-// picks / recent plays. Every section reads ONLY the five
+// picks. Recent plays is not its own section — it lives in
+// the continue-listening queue and its "全部" page. Every section reads ONLY the five
 // arrays on HomeViewModel (B leg) plus reload() — this view
 // never touches a store directly.
 //
