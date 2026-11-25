@@ -25,7 +25,8 @@ import SwiftUI
 /// daily, no login. VStack spacing 16 (phone); header =
 /// PlaylistHeader (cover = first song's album, title = daily
 /// title, subtitle = platform/local, metadata "N 首歌曲 · 每天
-/// 6:00 更新"); actions have NO save button; "不喜欢换一首"
+/// 更新" — regeneration is on first load of a new calendar day,
+/// not at 6:00, so the copy no longer claims a time); actions have NO save button; "不喜欢换一首"
 /// replaces the song in place; title inline; empty state
 /// calendar.badge.clock "暂无推荐歌曲", min height 300; cache
 /// 24h per day key (hao_daily, see MusicDiscoveryViewModel).
@@ -103,14 +104,15 @@ struct MusicDailyView: View {
 
     /// PlaylistHeader: cover = first song's album cover, title
     /// = daily title, subtitle = local source, metadata
-    /// "N 首歌曲 · 每天 6:00 更新".
+    /// "N 首歌曲 · 每天更新" (not 6:00 — the list regenerates on
+    /// first load of a new calendar day; no 6:00 rollover exists).
     private var dailyHeader: some View {
         let first = discoveryVM.dailyTracks.first
         return MusicDetailHero(
             coverURL: first?.cover ?? "",
             title: "每日推荐",
             subtitle: "本地推荐",
-            metadata: "\(discoveryVM.dailyTracks.count) 首歌曲 · 每天 6:00 更新"
+            metadata: "\(discoveryVM.dailyTracks.count) 首歌曲 · 每天更新"
         )
     }
 
@@ -149,8 +151,12 @@ struct MusicDailyView: View {
 
 // MARK: - Explore (Coda §3.9, b45-b)
 
-/// Explore = search empty state + ExploreShelves. 26 category
-/// chips (排行榜 excluded — it already lives on home/charts);
+/// Explore = search empty state + ExploreShelves. Category chips
+/// (排行榜 excluded — it already lives on home/charts) render
+/// only categories with a non-empty result from the loaded plaza
+/// data (discoveryVM.exploreAvailableCategories) — the full 26
+/// used to render unconditionally while most keyword filters
+/// matched nothing, so most shelves were empty by construction;
 /// each category snapshot caches 15 minutes, so switching
 /// categories answers instantly; each category is one two-row
 /// playlist shelf with its own loading state; the header arrow
@@ -169,7 +175,7 @@ struct MusicExploreView: View {
                 categoryChips
                     .padding(.top, 12)
                     .padding(.bottom, 16)
-                ForEach(MusicDiscoveryViewModel.exploreCategories, id: \.self) { category in
+                ForEach(discoveryVM.exploreAvailableCategories, id: \.self) { category in
                     exploreShelf(category: category)
                         .padding(.top, 32)
                 }
@@ -186,7 +192,7 @@ struct MusicExploreView: View {
             // One hidden link for every shelf header's arrow:
             // the header sets selectedCategory, then flips this.
             NavigationLink(
-                destination: MusicExploreCategoryView(category: selectedCategory),
+                destination: MusicExploreCategoryView(category: selectedCategory, discoveryVM: discoveryVM),
                 isActive: $showCategoryFull
             ) { EmptyView() }
             .hidden()
@@ -200,7 +206,7 @@ struct MusicExploreView: View {
     private var categoryChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(MusicDiscoveryViewModel.exploreCategories, id: \.self) { category in
+                ForEach(discoveryVM.exploreAvailableCategories, id: \.self) { category in
                     Button(action: {
                         selectedCategory = category
                         discoveryVM.loadExploreCategory(category)
@@ -284,10 +290,15 @@ struct MusicExploreView: View {
 
 /// One category's full page: all of its snapshot, client-side
 /// paging (20 per page, "加载更多" appends the next page).
+/// Shares the explore page's view model (observed, not owned):
+/// the old build created its own MusicDiscoveryViewModel, which
+/// discarded the explore page's already-loaded snapshots and
+/// refetched all 4 platforms for one category. With the shared
+/// model the snapshot is usually already there and onAppear is a
+/// cache hit.
 struct MusicExploreCategoryView: View {
     var category: String
-
-    @StateObject private var discoveryVM = MusicDiscoveryViewModel()
+    @ObservedObject var discoveryVM: MusicDiscoveryViewModel
     @State private var shownCount = 20
 
     @Environment(\.haoTheme) private var theme

@@ -62,8 +62,18 @@ struct HomeLiveItem: Equatable, Identifiable {
     /// check never ran / failed. A confirmed-true value survives a
     /// reload until a later check positively reports the room off
     /// air (see HomeLiveStatus), so the badge does not flicker off
-    /// on every reload while the check is still in flight.
+    /// on every reload while the check is still in flight. A badge
+    /// confirmed more than 30 min ago is dropped instead of carried
+    /// (liveStatusBadgeTTLSeconds) and forces a fresh check —
+    /// without the TTL a room that went off air kept its badge
+    /// for hours.
     var isLive: Bool
+    /// Last confirmed watching count (room-info `online`). 0 =
+    /// unknown / never confirmed — the card hides the count then,
+    /// exactly like a room that reports no audience. Carried
+    /// across rebuilds with the badge (see carryLiveInfo), never
+    /// invented: only a room-info answer writes it.
+    var onlineCount: Int
 
     init(
         platform: String,
@@ -71,7 +81,8 @@ struct HomeLiveItem: Equatable, Identifiable {
         title: String,
         nick: String,
         cover: String,
-        isLive: Bool = false
+        isLive: Bool = false,
+        onlineCount: Int = 0
     ) {
         self.id = LiveResumeKey.key(platform: platform, roomId: roomId)
         self.platform = platform
@@ -80,6 +91,7 @@ struct HomeLiveItem: Equatable, Identifiable {
         self.nick = nick
         self.cover = cover
         self.isLive = isLive
+        self.onlineCount = onlineCount
     }
 
     init(follow: LiveFollowedRoom) {
@@ -101,9 +113,16 @@ struct HomeLiveItem: Equatable, Identifiable {
 /// looked identical — the view model could only ever clear the
 /// badge by rebuilding the list, which flickered every reload.
 /// Tri-state now: `.live` sets the badge, `.offline` clears it,
-/// `.unknown` keeps whatever the UI already shows.
+/// `.unknown` keeps whatever the UI already shows. `.liveDetail`
+/// is the same confirmed-live answer plus the fresh room detail
+/// (watching count / title / cover) the room-info call returned —
+/// the badge alone never carried those, so home cards showed the
+/// stale follow-time title/cover and a zero count. `.live` stays
+/// for checkers that confirm liveness without detail (stubs,
+/// tests); the default checker always answers `.liveDetail`.
 enum HomeLiveStatus {
     case live
+    case liveDetail(onlineCount: Int, title: String, cover: String)
     case offline
     case unknown
 }
@@ -141,6 +160,15 @@ final class HomeViewModel: ObservableObject {
     @Published private(set) var continueListeningResumeSeconds: Int?
     @Published private(set) var hotLive: [HomeLiveItem] = []
     @Published private(set) var daily: [MusicSong] = []
+    /// The full daily list (up to 20, MusicRadio.dailyPicks
+    /// total) behind the section's first 10 — the "全部" page
+    /// plays / replaces from this, not from the capped section.
+    @Published private(set) var allDailyPicks: [MusicSong] = []
+    /// Spare picks behind today's daily list (the same ranked
+    /// pool past the first 20), so "换一首" on home replaces a
+    /// song in place exactly like the discovery daily page.
+    /// Empty = no replacement left (the button hides).
+    @Published private(set) var dailySpares: [MusicSong] = []
     @Published private(set) var recentPlays: [MusicSong] = []
     /// The full recent list (up to MusicLibraryStore.maxRecent),
     /// for the "全部" page. `recentPlays` stays capped at the
@@ -166,6 +194,24 @@ final class HomeViewModel: ObservableObject {
     static let liveStatusThrottleSeconds = 120.0
     private var liveStatusLastCheckAt: Date?
     private var liveStatusLastCheckedRoomIDs: Set<String> = []
+    /// When each live badge was last confirmed (room id ->
+    /// answer time). A confirmed-live badge is only carried
+    /// across rebuilds while it is younger than
+    /// `liveStatusBadgeTTLSeconds` — without this a badge
+    /// confirmed hours ago survived every rebuild and the 120 s
+    /// throttle kept re-checks away, so a room that went off air
+    /// kept its LIVE badge until the room set changed. An expired
+    /// badge is dropped and forces a fresh check (see
+    /// liveStatusRecheckNeeded).
+    static let liveStatusBadgeTTLSeconds: TimeInterval = 1800
+    private var liveStatusConfirmedAt: [String: Date] = [:]
+    /// A badge expired (or pull-to-refresh asked for a re-check)
+    /// since the last status round: the next refreshLiveStatus
+    /// bypasses the 120 s throttle once, then clears.
+    private var liveStatusRecheckNeeded = false
+    /// Pull-to-refresh asked for a live re-check: same bypass as
+    /// an expired badge, consumed by the next status round.
+    private var forceLiveRecheck = false
     /// Room ids with a check currently in flight. A reload
     /// while a round is still out never fires a duplicate
     /// request for the same room; the in-flight answer still
@@ -185,6 +231,14 @@ final class HomeViewModel: ObservableObject {
     /// throttle / coalescing windows. Defaults to the wall
     /// clock; the app never passes one.
     private let now: () -> Date
+    /// Background-reload generation: the no-arg reload() reads
+    /// the stores off the main thread, so a newer reload that
+    /// starts while an older read is still out drops the older
+    /// result when it lands instead of publishing stale data.
+    private var backgroundReloadGeneration = 0
+    /// Pending debounced notification reload (see
+    /// reloadForNotification): at most one is ever scheduled.
+    private var notificationReloadWork: DispatchWorkItem?
 
     /// `liveStatusChecker` nil = never confirm live status (all
     /// rooms stay isLive false). Tests pass nil or a stub; the app
@@ -211,25 +265,74 @@ final class HomeViewModel: ObservableObject {
         reload()
     }
 
-    /// Synchronous local reads for all five sections. Live-status
-    /// confirmation runs after, through the injected checker: a
-    /// confirmed-live room keeps its badge across the rebuild, a
-    /// positively-offline answer clears it, and a failed / timed-out
-    /// check leaves the previous value alone.
-    func reload() {
-        let videoHistory = VideoLibraryStore.history()
-        let recent = MusicLibraryStore.getRecent()
-        let listenLog = MusicLibraryStore.getListenLog()
-        let resumeMap = MusicLibraryStore.resumeMap()
-        let dailyPicks = Self.loadDailyPicks(listenLog: listenLog)
-        reload(
-            videoHistory: videoHistory,
-            recent: recent,
-            listenLog: listenLog,
-            resumeMap: resumeMap,
-            follows: LiveLibraryStore.follows(),
-            liveHistory: LiveLibraryStore.history(),
-            dailyPicks: dailyPicks)
+    /// Reload for the store-change notifications (music recent /
+    /// video history / live history). The data really changed, so
+    /// this must not be coalesced away — but three notifications
+    /// can fire in one burst (one user action posts several), and
+    /// each used to pay for a full synchronous reload. Debounced
+    /// 0.3 s: a burst collapses into one reload, a lone change
+    /// still lands promptly (well inside the "最近播放实时更新"
+    /// expectation — 0.3 s is not visible).
+    static let notificationReloadDebounceSeconds: TimeInterval = 0.3
+
+    func reloadForNotification() {
+        notificationReloadWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.reload() }
+        notificationReloadWork = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.notificationReloadDebounceSeconds, execute: work)
+    }
+
+    /// Synchronous local reads for all five sections — but not on
+    /// the main thread: every appearance / notification used to
+    /// read video history, recent, listen log, resume map, daily
+    /// (incl. favourites + all playlist tracks) and the live
+    /// stores synchronously on main, so a tab switch paid for six
+    /// disk reads before the first frame. The reads run on a
+    /// background queue now; only the published assignment (the
+    /// overload below) runs on main. Live-status confirmation
+    /// runs after, through the injected checker: a confirmed-live
+    /// room keeps its badge across the rebuild, a positively-
+    /// offline answer clears it, and a failed / timed-out check
+    /// leaves the previous value alone.
+    /// `forceLiveRecheck` (pull-to-refresh) bypasses the 120 s
+    /// live-status throttle once — a refresh the throttle used
+    /// to swallow silently now really re-checks.
+    func reload(forceLiveRecheck: Bool = false) {
+        // Every reload — local or appearance — resets the
+        // coalescing clock here, synchronously, so a second
+        // appearance trigger right after it is recognised as
+        // the same event even while the background read is
+        // still out (the overload sets it again on publish).
+        lastReloadAt = now()
+        if forceLiveRecheck { self.forceLiveRecheck = true }
+        backgroundReloadGeneration += 1
+        let generation = backgroundReloadGeneration
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let videoHistory = VideoLibraryStore.history()
+            let recent = MusicLibraryStore.getRecent()
+            let listenLog = MusicLibraryStore.getListenLog()
+            let resumeMap = MusicLibraryStore.resumeMap()
+            let dailyPicks = Self.loadDailyPicks(listenLog: listenLog)
+            let spares = Self.computeDailySpares(
+                listenLog: listenLog, recent: recent,
+                dayKey: musicDayKey(of: Date()), current: dailyPicks)
+            let follows = LiveLibraryStore.follows()
+            let liveHistory = LiveLibraryStore.history()
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self,
+                      generation == self.backgroundReloadGeneration else { return }
+                self.reload(
+                    videoHistory: videoHistory,
+                    recent: recent,
+                    listenLog: listenLog,
+                    resumeMap: resumeMap,
+                    follows: follows,
+                    liveHistory: liveHistory,
+                    dailyPicks: dailyPicks,
+                    dailySpares: spares)
+            }
+        }
     }
 
     /// reload() with the inputs supplied (same composition, no
@@ -241,7 +344,8 @@ final class HomeViewModel: ObservableObject {
         resumeMap: [String: Int],
         follows: [LiveFollowedRoom],
         liveHistory: [LiveHistoryEntry],
-        dailyPicks: [MusicSong]
+        dailyPicks: [MusicSong],
+        dailySpares: [MusicSong] = []
     ) {
         // Every reload — local or appearance — resets the
         // coalescing clock, so a second appearance trigger
@@ -260,20 +364,50 @@ final class HomeViewModel: ObservableObject {
             continueListening = Array(recent.prefix(1))
             continueListeningResumeSeconds = nil
         }
-        // Carry a confirmed-live badge across the rebuild: the
-        // merged list is rebuilt fresh on every reload, and
-        // resetting isLive to false here made every LIVE badge
-        // blink off until the room-info answers came back (up to
-        // 8 s per room — visible on every tab switch and every
-        // favourite tap). A room that went off air loses the badge
-        // when its fresh check answers `.offline` below, not here.
-        let previouslyLive = Set(hotLive.filter { $0.isLive }.map { $0.id })
+        // Carry the confirmed-live state across the rebuild (see
+        // carryLiveInfo): a fresh badge + watching count + fresh
+        // title/cover ride along, an expired badge is dropped and
+        // forces a fresh check instead of lingering for hours.
+        let previousLive = hotLive
         hotLive = Self.hotLiveItems(follows: follows, history: liveHistory)
-        for index in hotLive.indices where previouslyLive.contains(hotLive[index].id) {
-            hotLive[index].isLive = true
-        }
+        let badgeExpired = carryLiveInfo(from: previousLive, into: &hotLive)
         daily = Array(dailyPicks.prefix(Self.sectionLimit))
-        refreshLiveStatus()
+        allDailyPicks = dailyPicks
+        self.dailySpares = dailySpares
+        let forceRecheck = badgeExpired || liveStatusRecheckNeeded || forceLiveRecheck
+        liveStatusRecheckNeeded = false
+        forceLiveRecheck = false
+        refreshLiveStatus(forceRecheck: forceRecheck)
+    }
+
+    /// Carry the last confirmed live state from the previous hot
+    /// list into a freshly rebuilt one. A badge is carried only
+    /// while its confirmation is younger than the TTL — and the
+    /// watching count + fresh title/cover ride along with it, so
+    /// a rebuild never reverts a card to the stale follow-time
+    /// title/cover or a zero count. Returns true when a badge
+    /// expired and was dropped: the caller must force a fresh
+    /// status check for that room instead of waiting out the
+    /// throttle. Confirmations for rooms that dropped out of the
+    /// list are pruned.
+    private func carryLiveInfo(from old: [HomeLiveItem], into new: inout [HomeLiveItem]) -> Bool {
+        var expired = false
+        let oldById = Dictionary(uniqueKeysWithValues: old.map { ($0.id, $0) })
+        let newIDs = Set(new.map { $0.id })
+        liveStatusConfirmedAt = liveStatusConfirmedAt.filter { newIDs.contains($0.key) }
+        for index in new.indices {
+            guard let previous = oldById[new[index].id], previous.isLive else { continue }
+            if let confirmedAt = liveStatusConfirmedAt[previous.id],
+               now().timeIntervalSince(confirmedAt) <= Self.liveStatusBadgeTTLSeconds {
+                new[index].isLive = true
+                new[index].onlineCount = previous.onlineCount
+                if !previous.title.isEmpty { new[index].title = previous.title }
+                if !previous.cover.isEmpty { new[index].cover = previous.cover }
+            } else {
+                expired = true
+            }
+        }
+        return expired
     }
 
     // MARK: - Follow-list change (haoLiveFollowChanged)
@@ -304,10 +438,14 @@ final class HomeViewModel: ObservableObject {
         follows: [LiveFollowedRoom],
         liveHistory: [LiveHistoryEntry]
     ) {
-        let previouslyLive = Set(hotLive.filter { $0.isLive }.map { $0.id })
         var rebuilt = Self.hotLiveItems(follows: follows, history: liveHistory)
-        for index in rebuilt.indices where previouslyLive.contains(rebuilt[index].id) {
-            rebuilt[index].isLive = true
+        // Same carry as reload: a fresh badge + count + fresh
+        // title/cover survive the toggle rebuild, an expired
+        // badge is dropped — and the drop is remembered so the
+        // next reload forces a fresh check instead of waiting
+        // out the throttle. No network is spent here.
+        if carryLiveInfo(from: hotLive, into: &rebuilt) {
+            liveStatusRecheckNeeded = true
         }
         guard rebuilt != hotLive else { return }
         hotLive = rebuilt
@@ -321,7 +459,7 @@ final class HomeViewModel: ObservableObject {
     /// like the video tab. The store's history() is already
     /// newest-first, but a migrated file is not guaranteed
     /// ordered, so sort here.
-    static func continueWatchingEntries(
+    nonisolated static func continueWatchingEntries(
         from history: [VideoHistoryEntry],
         limit: Int = sectionLimit
     ) -> [VideoHistoryEntry] {
@@ -332,7 +470,7 @@ final class HomeViewModel: ObservableObject {
     /// Whether a music resume point is real: the same rule as
     /// video shouldResume (over 10 s in, at least 30 s from the
     /// end; unknown duration counts as resumable).
-    static func isValidMusicResume(seconds: Int, durationSeconds: Int) -> Bool {
+    nonisolated static func isValidMusicResume(seconds: Int, durationSeconds: Int) -> Bool {
         guard seconds > Int(VideoLibraryStore.minResumeSeconds) else { return false }
         guard durationSeconds > 0 else { return true }
         return seconds < durationSeconds - Int(VideoLibraryStore.finishMarginSeconds)
@@ -343,7 +481,7 @@ final class HomeViewModel: ObservableObject {
     /// that fell out of recent (cap 100) are then found through
     /// the listen log, newest-first. Nil when no stored resume
     /// point is valid.
-    static func resumeSong(
+    nonisolated static func resumeSong(
         recent: [MusicSong],
         listenLog: [ListenEvent],
         resumeMap: [String: Int]
@@ -372,7 +510,7 @@ final class HomeViewModel: ObservableObject {
     /// platform|roomId, newest first (follow time vs watch time),
     /// capped. When a room is both followed and watched, the newer
     /// record's title / cover wins.
-    static func hotLiveItems(
+    nonisolated static func hotLiveItems(
         follows: [LiveFollowedRoom],
         history: [LiveHistoryEntry],
         limit: Int = sectionLimit
@@ -402,8 +540,9 @@ final class HomeViewModel: ObservableObject {
     /// (MusicRadio.dailyPicks), no shuffle, no seeded random.
     /// The same data always yields the same list; the per-day
     /// cache in loadDailyPicks keeps one day stable even as
-    /// the user keeps listening.
-    static func computeDailyPicks(
+    /// the user keeps listening. Nonisolated (pure, store reads
+    /// only): the background reload calls it off the main thread.
+    nonisolated static func computeDailyPicks(
         listenLog: [ListenEvent],
         favourites: [MusicSong],
         recent: [MusicSong],
@@ -422,14 +561,21 @@ final class HomeViewModel: ObservableObject {
 
     /// Daily picks with the per-day cache (hao_daily), exactly
     /// like MusicDiscoveryViewModel.reloadDaily: a cached day is
-    /// returned as-is; a missing day is computed and saved when
-    /// non-empty.
-    static func loadDailyPicks(
+    /// returned as-is when it validates; a missing or invalid day
+    /// is computed and saved when non-empty. Validation (see
+    /// validatedDailyTracks): the cached day must be today, the
+    /// list must be non-empty, and every track must have a real
+    /// song id — a stale day, an empty cache, or identity-less
+    /// rows are recomputed instead of shown. Nonisolated: the
+    /// background reload calls it off the main thread.
+    nonisolated static func loadDailyPicks(
         listenLog: [ListenEvent],
         dayKey: String = musicDayKey(of: Date())
     ) -> [MusicSong] {
-        if let cached = MusicLibraryStore.dailyTracks(for: dayKey) {
-            return cached
+        if let valid = validatedDailyTracks(
+            MusicLibraryStore.dailyTracks(for: dayKey), dayKey: dayKey
+        ) {
+            return valid
         }
         let picks = computeDailyPicks(
             listenLog: listenLog,
@@ -444,6 +590,67 @@ final class HomeViewModel: ObservableObject {
         return picks
     }
 
+    /// Load-side validation for a hao_daily entry. Returns the
+    /// usable tracks, or nil when the entry must be recomputed:
+    /// a day key that is not today (only today's key is ever
+    /// valid on load — older keys are pruned on save by
+    /// MusicLibraryStore), a missing / empty list, or a list
+    /// whose usable tracks are empty after dropping rows with
+    /// no song id (an identity-less row can never play). Shared
+    /// with MusicDiscoveryViewModel.reloadDaily — one rule for
+    /// both readers of the same cache. Nonisolated (pure).
+    nonisolated static func validatedDailyTracks(
+        _ cached: [MusicSong]?,
+        dayKey: String,
+        todayKey: String = musicDayKey(of: Date())
+    ) -> [MusicSong]? {
+        guard dayKey == todayKey else { return nil }
+        guard let cached = cached, !cached.isEmpty else { return nil }
+        let valid = cached.filter { !$0.songId.isEmpty }
+        guard !valid.isEmpty else { return nil }
+        return valid
+    }
+
+    /// Spare picks behind today's daily list: the same ranked
+    /// pool past the first 20 (total 40), minus the songs
+    /// already in the list — so a replacement is always a real
+    /// next-ranked song, never a random one. Mirrors
+    /// MusicDiscoveryViewModel.rebuildDailySpares. Nonisolated:
+    /// the background reload calls it off the main thread.
+    nonisolated static func computeDailySpares(
+        listenLog: [ListenEvent],
+        recent: [MusicSong],
+        dayKey: String,
+        current: [MusicSong]
+    ) -> [MusicSong] {
+        let picks = MusicRadio.dailyPicks(
+            listenLog: listenLog,
+            favourites: MusicLibraryStore.favSongs(),
+            recent: recent,
+            playlistTracks: MusicLibraryStore.getLists().flatMap { $0.tracks },
+            dislikedIds: MusicLibraryStore.fmDislikedIds(),
+            dayKey: dayKey,
+            total: 40
+        )
+        let currentKeys = Set(current.map { $0.identityKey })
+        return picks.filter { !currentKeys.contains($0.identityKey) }
+    }
+
+    /// "不喜欢换一首" on home (same as the discovery daily
+    /// page): replace the song in place with the next spare,
+    /// record the dislike so it never comes back, and persist
+    /// the full day's list. The section (first 10) is re-derived
+    /// from the full list, so the row and the "全部" page can
+    /// never disagree.
+    func replaceDailySong(_ song: MusicSong) {
+        guard let index = allDailyPicks.firstIndex(where: { $0.identityKey == song.identityKey }) else { return }
+        guard !dailySpares.isEmpty else { return }
+        MusicLibraryStore.addFMDisliked(key: song.identityKey)
+        allDailyPicks[index] = dailySpares.removeFirst()
+        daily = Array(allDailyPicks.prefix(Self.sectionLimit))
+        MusicLibraryStore.saveDailyTracks(allDailyPicks, for: musicDayKey(of: Date()))
+    }
+
     // MARK: - Live status
 
     /// Confirm live status for the rooms in hotLive (at most 10),
@@ -453,15 +660,19 @@ final class HomeViewModel: ObservableObject {
     /// (older reload) is dropped; `.unknown` (failed / timed out)
     /// changes nothing, so a transient network failure never
     /// blinks a good badge off — only a successful `.offline`
-    /// clears one.
-    private func refreshLiveStatus() {
+    /// clears one. `forceRecheck` (expired badge / pull-to-
+    /// refresh) bypasses the throttle once: without it a badge
+    /// confirmed hours ago and a throttle that never expired
+    /// left the section stale with no way to refresh it.
+    private func refreshLiveStatus(forceRecheck: Bool = false) {
         guard let checker = liveStatusChecker, !hotLive.isEmpty else { return }
         let roomIDs = Set(hotLive.map { $0.id })
         // Same room set, checked inside the window — reuse the
         // last answers (badges were carried across the rebuild
-        // above). A changed set, or an expired window, re-checks
-        // — minus rooms already in flight.
-        if roomIDs == liveStatusLastCheckedRoomIDs,
+        // above). A changed set, an expired window, or a forced
+        // re-check re-checks — minus rooms already in flight.
+        if !forceRecheck,
+           roomIDs == liveStatusLastCheckedRoomIDs,
            let lastCheckAt = liveStatusLastCheckAt,
            now().timeIntervalSince(lastCheckAt) < Self.liveStatusThrottleSeconds {
             return
@@ -478,10 +689,24 @@ final class HomeViewModel: ObservableObject {
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
                     self.liveStatusInFlightIDs.remove(item.id)
-                    guard status != .unknown else { return }
                     guard self.liveStatusGeneration == generation else { return }
-                    if let index = self.hotLive.firstIndex(where: { $0.id == item.id }) {
-                        self.hotLive[index].isLive = (status == .live)
+                    guard let index = self.hotLive.firstIndex(where: { $0.id == item.id }) else { return }
+                    switch status {
+                    case .unknown:
+                        return
+                    case .offline:
+                        self.hotLive[index].isLive = false
+                        self.hotLive[index].onlineCount = 0
+                        self.liveStatusConfirmedAt.removeValue(forKey: item.id)
+                    case .live:
+                        self.hotLive[index].isLive = true
+                        self.liveStatusConfirmedAt[item.id] = self.now()
+                    case .liveDetail(let onlineCount, let title, let cover):
+                        self.hotLive[index].isLive = true
+                        self.hotLive[index].onlineCount = onlineCount
+                        if !title.isEmpty { self.hotLive[index].title = title }
+                        if !cover.isEmpty { self.hotLive[index].cover = cover }
+                        self.liveStatusConfirmedAt[item.id] = self.now()
                     }
                 }
             }
@@ -493,7 +718,8 @@ final class HomeViewModel: ObservableObject {
     /// 8 s timeout. Unknown platform strings never hit the
     /// network; failures and timeouts answer `.unknown`. A
     /// successful room-info answer reports the room's real state
-    /// (`.live` / `.offline`) — only that positively clears a
+    /// (`.liveDetail` with the fresh watching count / title /
+    /// cover, or `.offline`) — only that positively clears a
     /// badge, never a failed check.
     static func defaultLiveStatusChecker(
         item: HomeLiveItem,
@@ -515,7 +741,12 @@ final class HomeViewModel: ObservableObject {
             guard gate.claim() else { return }
             switch result {
             case .success(let room):
-                completion(room.isLive ? .live : .offline)
+                if room.isLive {
+                    completion(.liveDetail(
+                        onlineCount: room.onlineCount, title: room.title, cover: room.cover))
+                } else {
+                    completion(.offline)
+                }
             case .failure:
                 completion(.unknown)
             }

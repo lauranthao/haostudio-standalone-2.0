@@ -23,9 +23,12 @@
 //
 // Finality: the LX contract's completion handler is called once per
 // settled leg batch and carries no "done" flag (see the C-leg
-// report). The "searching" footer therefore settles by quiet: no
-// batch for 10 s (the per-platform timeout Flutter used) means the
-// search is done. A new batch re-arms it.
+// report). The "searching" footer therefore settles by quiet (3 s
+// after the last batch — each leg is capped at 5 s, so 10 s was far
+// past complete) or at once when a batch adds no new songs after
+// two batches landed (shouldSettleSearch). A new batch re-arms the
+// quiet timer unless the footer already settled, in which case
+// late results still stream in without resurrecting the spinner.
 
 import Combine
 import SwiftUI
@@ -147,8 +150,41 @@ final class MusicSearchViewModel: ObservableObject {
     private var lastSuggestionText = ""
 
     /// Seconds of quiet after the last batch before the search is
-    /// considered settled (Flutter's per-platform search timeout).
-    static let settleQuietSeconds: TimeInterval = 10
+    /// considered settled. The streaming API calls its completion
+    /// once per settled leg batch and carries no "done" flag, so
+    /// the footer cannot know from the API alone when the last
+    /// leg has landed — but each platform leg is capped at 5 s,
+    /// so 10 s of quiet was far past the point where results
+    /// were complete, and the "搜索中…" footer + skeletons
+    /// outlived the actual search by up to 10 s. 3 s now, plus
+    /// the settled-legs rule below (shouldSettleSearch): a batch
+    /// that adds nothing new once two batches have landed means
+    /// the remaining legs are only returning duplicates or
+    /// failures, so the footer settles at once. The search itself
+    /// is untouched — late legs still append their results; only
+    /// the spinner state settles early.
+    static let settleQuietSeconds: TimeInterval = 3
+
+    /// Streamed song batches seen for the current query (one per
+    /// settled leg batch). Together with the merge's added count
+    /// this is the settled-legs signal the API does not provide.
+    private var settledBatchCount = 0
+    /// The footer has settled (quiet timeout or the no-new-songs
+    /// rule): later batches still append results but never
+    /// resurrect the spinner.
+    private var searchSettled = false
+
+    /// Pure settle decision for one streamed batch: settle when
+    /// the batch added no new songs, at least two batches have
+    /// landed, and results already exist. The first batch can
+    /// legitimately add nothing (a failed fastest leg), and an
+    /// empty result list must keep the skeletons — so both guards
+    /// matter. A true done flag would need a MusicSearchAPI
+    /// change (outside this file); this is the most the view
+    /// model can know from the stream.
+    static func shouldSettleSearch(addedCount: Int, settledBatches: Int, hasResults: Bool) -> Bool {
+        addedCount == 0 && settledBatches >= 2 && hasResults
+    }
 
     private var merge = MusicSearchMerge()
     private var artistMerge = MusicSearchViewModel.freshArtistMerge()
@@ -216,6 +252,8 @@ final class MusicSearchViewModel: ObservableObject {
         cardErrors = [:]
         hasSearched = true
         isSearching = true
+        settledBatchCount = 0
+        searchSettled = false
         armSettleTimer()
         MusicLibraryStore.saveSearchQuery(trimmed)
         history = MusicLibraryStore.getSearchHistory()
@@ -224,10 +262,25 @@ final class MusicSearchViewModel: ObservableObject {
             // Stale leg from an older query: drop it, never mix.
             guard trimmed == self.currentQuery else { return }
             let songs = batch.map(MusicSong.init(from:))
-            self.merge.appendBatch(songs)
+            let added = self.merge.appendBatch(songs)
             self.results = self.merge.tracks
-            self.isSearching = true
-            self.armSettleTimer()
+            self.settledBatchCount += 1
+            if self.searchSettled {
+                // Late leg after the footer settled: its results
+                // still stream in, the spinner stays settled.
+            } else if Self.shouldSettleSearch(
+                addedCount: added.count,
+                settledBatches: self.settledBatchCount,
+                hasResults: !self.results.isEmpty
+            ) {
+                self.searchSettled = true
+                self.isSearching = false
+                self.settleTimer?.invalidate()
+                self.settleTimer = nil
+            } else {
+                self.isSearching = true
+                self.armSettleTimer()
+            }
         }
         // Card kinds stream in after the songs — each kind fails
         // independently (empty + in-section retry, others unaffected).
@@ -266,6 +319,8 @@ final class MusicSearchViewModel: ObservableObject {
         suggestionTask = nil
         hasSearched = false
         isSearching = false
+        settledBatchCount = 0
+        searchSettled = false
         settleTimer?.invalidate()
         settleTimer = nil
     }
@@ -283,7 +338,14 @@ final class MusicSearchViewModel: ObservableObject {
     private func armSettleTimer() {
         settleTimer?.invalidate()
         settleTimer = Timer.scheduledTimer(withTimeInterval: Self.settleQuietSeconds, repeats: false) { [weak self] _ in
-            self?.isSearching = false
+            // Explicit main-actor hop: the Timer block is @Sendable
+            // on some toolchains, so the mutation cannot happen
+            // inside it directly (and the timer fires on the main
+            // runloop anyway, so the hop is immediate).
+            Task { @MainActor [weak self] in
+                self?.isSearching = false
+                self?.searchSettled = true
+            }
         }
     }
 
