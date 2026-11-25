@@ -101,10 +101,22 @@ final class MusicSearchViewModel: ObservableObject {
         var cardPages: [MusicSearchAPI.MusicSearchCategoryKind: Int] = [:]
         var cardHasMore: [MusicSearchAPI.MusicSearchCategoryKind: Bool] = [:]
         var cardErrors: [MusicSearchAPI.MusicSearchCategoryKind: Bool] = [:]
+        /// The limit each kind's last successful page used (10 on
+        /// 综合, 50 on a single-kind tab) — retryCategory needs it
+        /// to tell a real next page from a limit change (P2-34).
+        var cardLimits: [MusicSearchAPI.MusicSearchCategoryKind: Int] = [:]
     }
 
     private var snapshots: [MusicSearchTab: SearchSnapshot] = [:]
     private var loadedTabs: Set<MusicSearchTab> = []
+    /// Tabs the user visited while their kind was still in flight
+    /// under another tab, so the first fetch never started (P1-3).
+    /// A tab leaves this set only when its first fetch really
+    /// starts (or it turns out to already have data / an error);
+    /// the flush in beginCategoryFinish / finishCategory retries
+    /// it when the blocking fetch settles. Cleared on search() /
+    /// clear() with everything else.
+    private var pendingTabFetch: Set<MusicSearchTab> = []
 
     /// Generation guard (Coda §5.2): a new UUID on every search;
     /// every category / page completion checks it and drops stale
@@ -202,6 +214,11 @@ final class MusicSearchViewModel: ObservableObject {
     /// (otherwise switching back would restore the stale empty
     /// snapshot over the fresh data).
     private var categoryFetchTab: [MusicSearchAPI.MusicSearchCategoryKind: MusicSearchTab] = [:]
+    /// The limit each kind's last successful page used, for the
+    /// live tab (mirrors SearchSnapshot.cardLimits for restored
+    /// tabs). Written in finishCategory, read by retryCategory
+    /// through retryPlan (P2-34).
+    private var cardLimits: [MusicSearchAPI.MusicSearchCategoryKind: Int] = [:]
 
     static func freshArtistMerge() -> MusicSearchCategoryMerge<ArtistSummary> {
         MusicSearchCategoryMerge(
@@ -246,6 +263,7 @@ final class MusicSearchViewModel: ObservableObject {
         tab = .all
         snapshots = [:]
         loadedTabs = []
+        pendingTabFetch = []
         categoryFetchTab = [:]
         songPage = 0
         hasMoreSongs = true
@@ -254,6 +272,7 @@ final class MusicSearchViewModel: ObservableObject {
         songsFailed = false
         cardPages = [:]
         cardHasMore = [:]
+        cardLimits = [:]
         loadingCards = []
         cardErrors = [:]
         hasSearched = true
@@ -293,7 +312,14 @@ final class MusicSearchViewModel: ObservableObject {
         }
         // Card kinds stream in after the songs — each kind fails
         // independently (empty + in-section retry, others unaffected).
-        loadTabCategories(.all, limit: Self.allTabCardLimit)
+        // Nothing is in flight right after the reset, so all three
+        // issue and .all is loaded; the else is unreachable today
+        // but keeps the pending rule uniform (see selectTab).
+        if loadTabCategories(.all, limit: Self.allTabCardLimit) {
+            loadedTabs.insert(.all)
+        } else {
+            pendingTabFetch.insert(.all)
+        }
     }
 
     /// A new query cancels the old one: results clear immediately and
@@ -313,6 +339,7 @@ final class MusicSearchViewModel: ObservableObject {
         tab = .all
         snapshots = [:]
         loadedTabs = []
+        pendingTabFetch = []
         categoryFetchTab = [:]
         songPage = 0
         hasMoreSongs = true
@@ -321,6 +348,7 @@ final class MusicSearchViewModel: ObservableObject {
         songsFailed = false
         cardPages = [:]
         cardHasMore = [:]
+        cardLimits = [:]
         loadingCards = []
         cardErrors = [:]
         suggestions = []
@@ -363,7 +391,14 @@ final class MusicSearchViewModel: ObservableObject {
 
     /// Switch tabs. A snapshotted tab restores without re-fetching;
     /// a never-loaded tab fetches its first page (songs need no
-    /// fetch — the stream already fills them).
+    /// fetch — the stream already fills them). b49fix4 P1-3: a tab
+    /// is marked loaded ONLY when its first fetch really starts.
+    /// The old code inserted into loadedTabs before fetching, so a
+    /// tab switched to while its kind was in flight under 综合 was
+    /// marked loaded with an empty array — and the empty snapshot
+    /// saved on the next switch locked the fake empty state in.
+    /// A blocked tab goes into pendingTabFetch instead; the flush
+    /// retries it when the blocking fetch settles.
     func selectTab(_ newTab: MusicSearchTab) {
         guard newTab != tab, supportedTabs.contains(newTab) else { return }
         saveSnapshot()
@@ -373,15 +408,32 @@ final class MusicSearchViewModel: ObservableObject {
             return
         }
         guard !loadedTabs.contains(newTab) else { return }
-        loadedTabs.insert(newTab)
+        fetchFirstPage(for: newTab)
+    }
+
+    /// Issue a tab's first fetch (or queue it as pending when its
+    /// kind is in flight under another tab — P1-3). Shared by
+    /// selectTab and retrySongs: a tab is marked loaded ONLY when
+    /// its first fetch really starts; a blocked tab goes into
+    /// pendingTabFetch and the flush retries it when the blocking
+    /// fetch settles.
+    private func fetchFirstPage(for newTab: MusicSearchTab) {
         switch newTab {
         case .all:
-            loadTabCategories(.all, limit: Self.allTabCardLimit)
+            if loadTabCategories(.all, limit: Self.allTabCardLimit) {
+                loadedTabs.insert(.all)
+            } else {
+                pendingTabFetch.insert(.all)
+            }
         case .songs:
-            break
+            loadedTabs.insert(.songs)
         case .artists, .albums, .playlists:
             if let kind = newTab.categoryKind {
-                loadCategory(kind, limit: Self.singleTabCardLimit, offset: 0, isFirstPage: true)
+                if loadCategory(kind, limit: Self.singleTabCardLimit, offset: 0, isFirstPage: true) {
+                    loadedTabs.insert(newTab)
+                } else {
+                    pendingTabFetch.insert(newTab)
+                }
             }
         }
     }
@@ -400,6 +452,7 @@ final class MusicSearchViewModel: ObservableObject {
         snapshot.cardPages = cardPages
         snapshot.cardHasMore = cardHasMore
         snapshot.cardErrors = cardErrors
+        snapshot.cardLimits = cardLimits
         snapshots[tab] = snapshot
     }
 
@@ -415,27 +468,41 @@ final class MusicSearchViewModel: ObservableObject {
         cardPages = snapshot.cardPages
         cardHasMore = snapshot.cardHasMore
         cardErrors = snapshot.cardErrors
+        cardLimits = snapshot.cardLimits
     }
 
     /// Fetch all three card kinds for the 综合 tab (first page).
-    private func loadTabCategories(_ tab: MusicSearchTab, limit: Int) {
-        guard tab == .all else { return }
-        loadedTabs.insert(.all)
+    /// Returns true iff all three kinds really started — a kind
+    /// already in flight under another tab blocks its own fetch,
+    /// and the caller must not mark .all loaded then (P1-3).
+    /// It no longer inserts .all itself; the caller inserts only
+    /// on true.
+    @discardableResult
+    private func loadTabCategories(_ tab: MusicSearchTab, limit: Int) -> Bool {
+        guard tab == .all else { return false }
+        var issued = true
         for kind in MusicSearchAPI.MusicSearchCategoryKind.allCases {
-            loadCategory(kind, limit: limit, offset: 0, isFirstPage: true)
+            issued = loadCategory(kind, limit: limit, offset: 0, isFirstPage: true) && issued
         }
+        return issued
     }
 
     /// Fetch one page of one kind. First page replaces, later pages
     /// append (deduped). `hasMore` follows Coda §5.3: the page was
     /// full AND (when a total is known) the cumulative count is
     /// still below it; with no total, a full page means "more".
-    private func loadCategory(_ kind: MusicSearchAPI.MusicSearchCategoryKind, limit: Int, offset: Int, isFirstPage: Bool) {
-        guard hasSearched, !loadingCards.contains(kind) else { return }
+    /// Returns false when nothing was issued (no search yet, or the
+    /// kind is already in flight) — the caller must not treat the
+    /// kind as loaded then (P1-3). `owner` attributes the fetch to
+    /// a tab other than the current one (the flush re-issues a
+    /// pending tab's first page); nil means the current tab.
+    @discardableResult
+    private func loadCategory(_ kind: MusicSearchAPI.MusicSearchCategoryKind, limit: Int, offset: Int, isFirstPage: Bool, owner: MusicSearchTab? = nil) -> Bool {
+        guard hasSearched, !loadingCards.contains(kind) else { return false }
         let query = currentQuery
-        guard !query.isEmpty else { return }
+        guard !query.isEmpty else { return false }
         let gen = generation
-        categoryFetchTab[kind] = tab
+        categoryFetchTab[kind] = owner ?? tab
         loadingCards.insert(kind)
         cardErrors[kind] = false
         switch kind {
@@ -452,6 +519,7 @@ final class MusicSearchViewModel: ObservableObject {
                 self?.finishCategory(kind, items: items, total: total, ok: ok, limit: limit, offset: offset, isFirstPage: isFirstPage, gen: gen)
             }
         }
+        return true
     }
 
     /// Shared guard for a category completion: stale fetch from an
@@ -460,7 +528,10 @@ final class MusicSearchViewModel: ObservableObject {
     /// contributes empty and records its error — on the live state
     /// when the owner is on screen, in the owner's snapshot when
     /// the user has since switched away (so switching back still
-    /// offers the retry instead of a false empty state).
+    /// offers the retry instead of a false empty state). On a
+    /// failure the pending-tab flush runs here (no data lands, so
+    /// it is safe to run before the write); on success it runs at
+    /// the end of finishCategory, after the data lands (P1-3).
     private func beginCategoryFinish(_ kind: MusicSearchAPI.MusicSearchCategoryKind, ok: Bool, gen: UUID) -> MusicSearchTab? {
         guard gen == generation, hasSearched else { return nil }
         let owner = categoryFetchTab[kind] ?? tab
@@ -475,6 +546,7 @@ final class MusicSearchViewModel: ObservableObject {
                 snap.cardHasMore[kind] = false
                 snapshots[owner] = snap
             }
+            flushPendingTabFetches()
             return nil
         }
         if owner == tab {
@@ -489,6 +561,7 @@ final class MusicSearchViewModel: ObservableObject {
     private func finishCategory(_ kind: MusicSearchAPI.MusicSearchCategoryKind, items: [ArtistSummary], total: Int?, ok: Bool, limit: Int, offset: Int, isFirstPage: Bool, gen: UUID) {
         guard let owner = beginCategoryFinish(kind, ok: ok, gen: gen) else { return }
         if owner == tab {
+            cardLimits[kind] = limit
             if isFirstPage {
                 artistMerge.reset()
                 cardPages[kind] = 0
@@ -509,13 +582,16 @@ final class MusicSearchViewModel: ObservableObject {
             snap.cardPages[kind] = isFirstPage ? 0 : offset / max(limit, 1)
             snap.cardHasMore[kind] = items.count == limit && (total.map { merge.count < $0 } ?? true)
             snap.cardErrors[kind] = false
+            snap.cardLimits[kind] = limit
             snapshots[owner] = snap
         }
+        flushPendingTabFetches()
     }
 
     private func finishCategory(_ kind: MusicSearchAPI.MusicSearchCategoryKind, items: [AlbumSummary], total: Int?, ok: Bool, limit: Int, offset: Int, isFirstPage: Bool, gen: UUID) {
         guard let owner = beginCategoryFinish(kind, ok: ok, gen: gen) else { return }
         if owner == tab {
+            cardLimits[kind] = limit
             if isFirstPage {
                 albumMerge.reset()
                 cardPages[kind] = 0
@@ -536,13 +612,16 @@ final class MusicSearchViewModel: ObservableObject {
             snap.cardPages[kind] = isFirstPage ? 0 : offset / max(limit, 1)
             snap.cardHasMore[kind] = items.count == limit && (total.map { merge.count < $0 } ?? true)
             snap.cardErrors[kind] = false
+            snap.cardLimits[kind] = limit
             snapshots[owner] = snap
         }
+        flushPendingTabFetches()
     }
 
     private func finishCategory(_ kind: MusicSearchAPI.MusicSearchCategoryKind, items: [PlaylistSummary], total: Int?, ok: Bool, limit: Int, offset: Int, isFirstPage: Bool, gen: UUID) {
         guard let owner = beginCategoryFinish(kind, ok: ok, gen: gen) else { return }
         if owner == tab {
+            cardLimits[kind] = limit
             if isFirstPage {
                 playlistMerge.reset()
                 cardPages[kind] = 0
@@ -563,8 +642,10 @@ final class MusicSearchViewModel: ObservableObject {
             snap.cardPages[kind] = isFirstPage ? 0 : offset / max(limit, 1)
             snap.cardHasMore[kind] = items.count == limit && (total.map { merge.count < $0 } ?? true)
             snap.cardErrors[kind] = false
+            snap.cardLimits[kind] = limit
             snapshots[owner] = snap
         }
+        flushPendingTabFetches()
     }
 
     // MARK: - Load more (b45-d)
@@ -635,18 +716,111 @@ final class MusicSearchViewModel: ObservableObject {
     }
 
     /// Retry one failed kind from inside its own section.
+    /// The offset comes from retryPlan (P2-34): a retry after a
+    /// 综合 first fetch (limit 10) that lands on a single-kind tab
+    /// (limit 50) is a fresh first page at offset 0 — the recorded
+    /// page (0 under limit 10) is not a page under limit 50.
     func retryCategory(_ kind: MusicSearchAPI.MusicSearchCategoryKind) {
         guard hasSearched, !loadingCards.contains(kind) else { return }
         let limit = tab == .all ? Self.allTabCardLimit : Self.singleTabCardLimit
-        let offset = (cardPages[kind] ?? 0) * limit
-        let isFirst = (cardPages[kind] ?? 0) == 0 && {
+        let isEmpty: Bool = {
             switch kind {
             case .artists: return artists.isEmpty
             case .albums: return albums.isEmpty
             case .playlists: return playlists.isEmpty
             }
         }()
-        loadCategory(kind, limit: limit, offset: offset, isFirstPage: isFirst)
+        let plan = Self.retryPlan(
+            cardPages: cardPages[kind], cardLimits: cardLimits[kind],
+            limit: limit, isEmpty: isEmpty)
+        loadCategory(kind, limit: limit, offset: plan.offset, isFirstPage: plan.isFirstPage)
+    }
+
+    /// Pure retry plan for one kind (P2-34, unit-tested): a retry
+    /// is a fresh first page at offset 0 when nothing is loaded
+    /// yet, when no page was ever recorded at any limit, or when
+    /// the last successful page used a DIFFERENT limit than the
+    /// current tab (a 综合 page-0 under limit 10 is not a page
+    /// under limit 50 — retrying it as a next page would append
+    /// 50 items starting at 0, the first 10 duplicated). Only
+    /// when the last page used the SAME limit and something is
+    /// loaded does the retry re-request the failed next page —
+    /// retrying that as a first page would clobber the pages
+    /// already loaded.
+    static func retryPlan(cardPages: Int?, cardLimits: Int?, limit: Int, isEmpty: Bool) -> (offset: Int, isFirstPage: Bool) {
+        if isEmpty || cardLimits == nil || cardLimits != limit {
+            return (0, true)
+        }
+        return (((cardPages ?? 0) + 1) * limit, false)
+    }
+
+    /// Kinds a pending tab still lacks: no items, no error, and
+    /// not currently in flight. For the current tab the live
+    /// arrays are the source; for any other tab its snapshot is
+    /// (its live arrays belong to whichever tab is on screen).
+    /// An errored kind is NOT missing — its retry button owns it.
+    private func missingKinds(for pending: MusicSearchTab) -> [MusicSearchAPI.MusicSearchCategoryKind] {
+        let snap = snapshots[pending]
+        let kinds: [MusicSearchAPI.MusicSearchCategoryKind] = pending == .all
+            ? MusicSearchAPI.MusicSearchCategoryKind.allCases
+            : (pending.categoryKind.map { [$0] } ?? [])
+        return kinds.filter { kind in
+            guard !loadingCards.contains(kind) else { return false }
+            let hasItems: Bool
+            let hasError: Bool
+            if pending == tab {
+                switch kind {
+                case .artists: hasItems = !artists.isEmpty
+                case .albums: hasItems = !albums.isEmpty
+                case .playlists: hasItems = !playlists.isEmpty
+                }
+                hasError = cardErrors[kind] == true
+            } else {
+                switch kind {
+                case .artists: hasItems = !(snap?.artists.isEmpty ?? true)
+                case .albums: hasItems = !(snap?.albums.isEmpty ?? true)
+                case .playlists: hasItems = !(snap?.playlists.isEmpty ?? true)
+                }
+                hasError = snap?.cardErrors[kind] == true
+            }
+            return !hasItems && !hasError
+        }
+    }
+
+    /// Retry the first fetch for tabs that visited while their
+    /// kind was in flight (P1-3). Runs after every category
+    /// completion (see beginCategoryFinish / finishCategory), so
+    /// a tab switched to mid-fetch fills in once the blocking
+    /// fetch settles instead of sitting on a fake empty state. A
+    /// tab leaves pending only when nothing is missing any more —
+    /// issuing one kind while another is still in flight must NOT
+    /// mark the tab loaded, or the in-flight kind would never be
+    /// retried for it. Pending 综合 only retries when no kind is
+    /// in flight (its three kinds share one first page — a
+    /// partial re-issue while others are still landing could
+    /// reset the kinds that already landed).
+    private func flushPendingTabFetches() {
+        guard hasSearched else { return }
+        for pending in Array(pendingTabFetch) {
+            if pending == .all && !loadingCards.isEmpty { continue }
+            let missing = missingKinds(for: pending)
+            guard !missing.isEmpty else {
+                pendingTabFetch.remove(pending)
+                loadedTabs.insert(pending)
+                continue
+            }
+            let limit = pending == .all ? Self.allTabCardLimit : Self.singleTabCardLimit
+            var allIssued = true
+            for kind in missing {
+                if !loadCategory(kind, limit: limit, offset: 0, isFirstPage: true, owner: pending) {
+                    allIssued = false
+                }
+            }
+            if allIssued {
+                pendingTabFetch.remove(pending)
+                loadedTabs.insert(pending)
+            }
+        }
     }
 
     /// Re-run the current query from scratch — the songs-stream
@@ -659,6 +833,15 @@ final class MusicSearchViewModel: ObservableObject {
         let currentTab = tab
         search(currentQuery)
         tab = currentTab
+        // b49fix4 P1-3: search() reset the tab state to .all, so
+        // the restored tab has no fetch of its own — without this
+        // it would sit on the .all fetch's 10 items (or a fake
+        // empty) until the user tapped load-more. Issue its first
+        // page now (or queue it pending — the .all fetch is in
+        // flight, so it usually waits for the flush).
+        if currentTab != .all {
+            fetchFirstPage(for: currentTab)
+        }
     }
 
     // MARK: - Suggestions + hot keywords (b45-d)

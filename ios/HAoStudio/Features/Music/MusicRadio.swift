@@ -76,8 +76,13 @@ enum MusicRadio {
     /// identityKey — a total order, so the same data always
     /// yields the same list.
     ///
-    /// Composition (total = 20 by default):
-    ///   - first half: the top-ranked songs overall;
+    /// Composition (total = 20 by default, 40 live):
+    ///   - first half: the top-ranked songs overall, with the
+    ///     same per-artist cap (4) as the second half — b49fix4
+    ///     P1-2: without it one artist could take all 20/20 of
+    ///     the first half under a total-40 run. The first-half
+    ///     fill comes from beyond the half (next-ranked, other
+    ///     artists first), never from the capped songs in it;
     ///   - second half: more from the same artists/albums —
     ///     first songs by the 5 most-listened artists not
     ///     already picked, then songs sharing an album with a
@@ -198,12 +203,48 @@ enum MusicRadio {
             if $0.lastAt != $1.lastAt { return $0.lastAt > $1.lastAt }
             return $0.song.identityKey < $1.song.identityKey
         }
-        // 4. First half: the top-ranked songs overall.
+        // 4. First half: the top-ranked songs overall, with the
+        // same per-artist cap as the second half (max 4 per artist)
+        // — b49fix4 P1-2: without it one artist could take all
+        // 20/20 of the first half under a total-40 run. The fill
+        // comes from BEYOND the half (next-ranked, other artists
+        // first): filling from the same prefix would just re-add
+        // the capped songs and the cap would do nothing. A final
+        // pass ignores the cap, so a one-artist library still
+        // fills the list.
         let half = total / 2
+        let maxPerArtist = 4
+        var artistCounts: [String: Int] = [:]
+        func underCap(_ song: MusicSong) -> Bool {
+            guard !song.artist.isEmpty else { return true }
+            return (artistCounts[song.artist] ?? 0) < maxPerArtist
+        }
         var picked: [MusicSong] = []
         var seen = Set<String>()
         for entry in ranked.prefix(half) {
-            if seen.insert(entry.song.identityKey).inserted { picked.append(entry.song) }
+            guard underCap(entry.song) else { continue }
+            if seen.insert(entry.song.identityKey).inserted {
+                picked.append(entry.song)
+                if !entry.song.artist.isEmpty {
+                    artistCounts[entry.song.artist, default: 0] += 1
+                }
+            }
+        }
+        for entry in ranked.dropFirst(half) {
+            if picked.count >= half { break }
+            guard underCap(entry.song) else { continue }
+            if seen.insert(entry.song.identityKey).inserted {
+                picked.append(entry.song)
+                if !entry.song.artist.isEmpty {
+                    artistCounts[entry.song.artist, default: 0] += 1
+                }
+            }
+        }
+        if picked.count < half {
+            for entry in ranked.dropFirst(half) {
+                if picked.count >= half { break }
+                if seen.insert(entry.song.identityKey).inserted { picked.append(entry.song) }
+            }
         }
         // 5. Second half: same artists, then same albums, then
         //    the next-ranked songs — with a per-artist cap so one
@@ -224,15 +265,6 @@ enum MusicRadio {
             } else {
                 restPool.append(entry)
             }
-        }
-        let maxPerArtist = 4
-        var artistCounts: [String: Int] = [:]
-        for song in picked where !song.artist.isEmpty {
-            artistCounts[song.artist, default: 0] += 1
-        }
-        func underCap(_ song: MusicSong) -> Bool {
-            guard !song.artist.isEmpty else { return true }
-            return (artistCounts[song.artist] ?? 0) < maxPerArtist
         }
         for entry in artistPool + albumPool + restPool {
             if picked.count >= total { break }

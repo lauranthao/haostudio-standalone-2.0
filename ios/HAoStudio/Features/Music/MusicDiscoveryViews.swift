@@ -151,6 +151,20 @@ struct MusicDailyView: View {
 
 // MARK: - Explore (Coda §3.9, b45-b)
 
+/// Shelf frames in the explore scroll view's coordinate space
+/// (b49fix4 P2-33): the sticky chips' highlight follows manual
+/// scrolling, and the last shelf's height sizes the bottom
+/// padding so it can scroll to the top. Only the derived values
+/// (the selected shelf, the last shelf's height) become state —
+/// the raw frames are never stored, so scrolling does not
+/// re-render the page on every frame.
+private struct ExploreShelfFrameKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
 /// Explore = search empty state + ExploreShelves. Category chips
 /// (排行榜 excluded — it already lives on home/charts) render
 /// only categories with a non-empty result from the loaded plaza
@@ -166,8 +180,35 @@ struct MusicExploreView: View {
     @StateObject private var discoveryVM = MusicDiscoveryViewModel()
     @State private var selectedCategory = "全部"
     @State private var showCategoryFull = false
+    /// Height of the explore scroll viewport (P2-33), measured by
+    /// the GeometryReader around the ScrollView — the bottom
+    /// padding needs it. 0 until the first measurement lands.
+    @State private var exploreScrollHeight: CGFloat = 0
+    /// Height of the last shelf (P2-33), reported by its frame
+    /// preference — the bottom padding needs it. 0 until reported.
+    @State private var lastShelfHeight: CGFloat = 0
 
     @Environment(\.haoTheme) private var theme
+    /// The chrome clearance under this page's scroll content
+    /// (P2-33 — same rule as haoBottomChromeContentPadding,
+    /// which already reads these objects on this view): the
+    /// bottom padding is what remains after it.
+    @EnvironmentObject private var coordinator: PlaybackCoordinator
+    @EnvironmentObject private var musicPlayer: MusicPlayerViewModel
+
+    /// Bottom padding for the scroll content (b49fix4 P2-33):
+    /// enough for the last shelf to scroll to the top — the
+    /// viewport height minus the last shelf's height minus the
+    /// chrome clearance already under the content. Never below
+    /// the old 12 (and 12 while either measurement is missing,
+    /// so the page never jumps on first paint).
+    private var exploreBottomPadding: CGFloat {
+        guard exploreScrollHeight > 0, lastShelfHeight > 0 else { return 12 }
+        let chrome = HaoLayout.floatingStackClearance(
+            miniPlayerVisible: coordinator.currentItem != nil
+                || musicPlayer.miniFallbackSong != nil)
+        return max(12, exploreScrollHeight - lastShelfHeight - chrome)
+    }
 
     var body: some View {
         // b49fix3 P1-4: the chips are section navigation, not a
@@ -175,31 +216,71 @@ struct MusicExploreView: View {
         // renders every shelf; a highlight-only chip was a dead
         // control). ScrollViewReader owns the proxy; the chips
         // take it as a parameter.
+        // b49fix4 P2-33: the chips are a sticky header ABOVE the
+        // scroll view now, not rows inside it — they used to scroll
+        // away after one tap, so navigation worked exactly once.
+        // The highlight follows manual scrolling too (each shelf
+        // reports its frame; the selected shelf is the last one
+        // whose top has reached the visible top).
         ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    categoryChips(proxy: proxy)
-                        .padding(.top, 12)
-                        .padding(.bottom, 16)
-                    if discoveryVM.exploreRefreshFailed {
-                        refreshFailedBanner
+            VStack(spacing: 0) {
+                categoryChips(proxy: proxy)
+                    // b49fix4 P2-10: the chips' old bottom 16 is
+                    // gone — the first shelf's own top 32 is the
+                    // gap now (and the refresh banner, when shown,
+                    // carries its own top 16).
+                    .padding(.top, 12)
+                    .padding(.horizontal, HaoLayout.pushedPageMargin)
+                GeometryReader { geo in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            if discoveryVM.exploreRefreshFailed {
+                                refreshFailedBanner
+                            }
+                            ForEach(discoveryVM.exploreAvailableCategories, id: \.self) { category in
+                                exploreShelf(category: category)
+                                    .id(category)
+                                    // b49fix3 P1-21: true discovery shelves
+                                    // keep the 32pt section gap, as a token.
+                                    .padding(.top, HaoLayout.discoverySectionTopSpacing)
+                                    .background(
+                                        GeometryReader { shelfGeo in
+                                            Color.clear.preference(
+                                                key: ExploreShelfFrameKey.self,
+                                                value: [category: shelfGeo.frame(in: .named("exploreScroll"))]
+                                            )
+                                        }
+                                    )
+                            }
+                        }
+                        .padding(.horizontal, HaoLayout.pushedPageMargin)
+                        .padding(.bottom, exploreBottomPadding)
+                        .haoBottomChromeContentPadding()
                     }
-                    ForEach(discoveryVM.exploreAvailableCategories, id: \.self) { category in
-                        exploreShelf(category: category)
-                            .id(category)
-                            // b49fix3 P1-21: true discovery shelves
-                            // keep the 32pt section gap, as a token.
-                            .padding(.top, HaoLayout.discoverySectionTopSpacing)
+                    .coordinateSpace(name: "exploreScroll")
+                    .onPreferenceChange(ExploreShelfFrameKey.self) { frames in
+                        // Only derived values become state (see the
+                        // key): the highlight and the last shelf's
+                        // height change on data load, not on scroll.
+                        let current = discoveryVM.exploreAvailableCategories.last(where: { category in
+                            (frames[category]?.minY ?? .infinity) <= 80
+                        })
+                        if let current = current, current != selectedCategory {
+                            selectedCategory = current
+                        }
+                        if let last = discoveryVM.exploreAvailableCategories.last,
+                           let height = frames[last]?.height, height > 0, height != lastShelfHeight {
+                            lastShelfHeight = height
+                        }
                     }
-                    Spacer(minLength: 12)
+                    // b45-g (Coda §8.2): pull-to-refresh re-fetches the plaza
+                    // once and re-filters every loaded category (900s snapshots
+                    // are bypassed, not waited out).
+                    .refreshable { discoveryVM.refreshExplore() }
+                    .onAppear { exploreScrollHeight = geo.size.height }
+                    .onChange(of: geo.size.height) { _, height in exploreScrollHeight = height }
                 }
-                .padding(.horizontal, HaoLayout.pushedPageMargin)
-                .haoBottomChromeContentPadding()
             }
-            // b45-g (Coda §8.2): pull-to-refresh re-fetches the plaza
-            // once and re-filters every loaded category (900s snapshots
-            // are bypassed, not waited out).
-            .refreshable { discoveryVM.refreshExplore() }
         }
         .background(
             // One hidden link for every shelf header's arrow:
@@ -219,6 +300,11 @@ struct MusicExploreView: View {
     /// b49fix3 P2-10: a failed pull-to-refresh used to be silent
     /// (old snapshots kept, no feedback, no retry). The banner
     /// says the data is stale and offers one-tap retry.
+    /// b49fix4 P2-7: a bare row, like the video search CMS/Emby
+    /// banners — the old card (surface bg, radius 12) was the
+    /// second of two banner systems. P2-10: the top 16 is the gap
+    /// to the sticky chips above (the first shelf's own top 32
+    /// separates the banner from it).
     private var refreshFailedBanner: some View {
         HStack(spacing: 8) {
             Image(systemName: "wifi.exclamationmark")
@@ -226,14 +312,11 @@ struct MusicExploreView: View {
                 .font(.haoFootnote)
             Spacer()
             Button("重试") { discoveryVM.refreshExplore() }
-                .font(.haoFootnoteStrong)
+                .font(.haoFootnoteMedium)
                 .foregroundStyle(theme.accentText)
         }
         .foregroundStyle(theme.textSecondary)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .padding(.bottom, 8)
+        .padding(.top, 16)
     }
 
     private func categoryChips(proxy: ScrollViewProxy) -> some View {
@@ -253,8 +336,17 @@ struct MusicExploreView: View {
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
                             .background(
-                                selectedCategory == category ? theme.accent : Color.primary.opacity(0.06),
+                                // b49fix4 P2-20: unselected chips are
+                                // surface + hairline, like the Emby /
+                                // FlowChips chips — the old 0.06 fill
+                                // with no border was a third chip
+                                // system. Selected states are
+                                // identical in all three, untouched.
+                                selectedCategory == category ? theme.accent : theme.surface,
                                 in: Capsule()
+                            )
+                            .overlay(
+                                selectedCategory == category ? nil : Capsule().strokeBorder(theme.hairline, lineWidth: 0.5)
                             )
                     }
                     .buttonStyle(.plain)
@@ -346,7 +438,10 @@ struct MusicExploreCategoryView: View {
     var body: some View {
         Group {
             if discoveryVM.exploreLoading.contains(category) && playlists.isEmpty {
-                VStack(spacing: 16) {
+                // b49fix4 P2-24: the skeleton rows use the same 24pt
+                // spacing as the loaded LazyVGrid below, so the page
+                // does not reflow when the data lands.
+                VStack(spacing: 24) {
                     ForEach(0..<6, id: \.self) { _ in MusicSkeletonCard() }
                 }
                 .padding(.horizontal, HaoLayout.pushedPageMargin)
@@ -384,10 +479,14 @@ struct MusicExploreCategoryView: View {
                         .padding(.horizontal, HaoLayout.pushedPageMargin)
                         .padding(.vertical, 12)
                         if shownCount < playlists.count {
+                            // b49fix4 P2-25: load-more is 15 semibold
+                            // with 12pt vertical padding, site-wide
+                            // (the old 13 + 44pt min-height was a
+                            // second load-more system).
                             Button("加载更多") { shownCount += 20 }
-                                .font(.haoFootnoteStrong)
+                                .font(.haoSubheadStrong)
                                 .foregroundStyle(theme.accentText)
-                                .frame(minHeight: 44)
+                                .padding(.vertical, 12)
                                 .frame(maxWidth: .infinity)
                         }
                         Spacer(minLength: 12)
@@ -675,7 +774,10 @@ struct MusicListenReportView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            // b49fix4 P2-12: the outer spacing is the 16pt token,
+            // not a third value (20) — the sections are separated
+            // by the same 16 as every other page.
+            VStack(alignment: .leading, spacing: 16) {
                 Picker("范围", selection: $discoveryVM.reportRange) {
                     ForEach(ListenReportRange.allCases, id: \.rawValue) { range in
                         Text(range.label).tag(range)
@@ -818,8 +920,11 @@ struct MusicListenReportView: View {
 
     private var perDaySection: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // b49fix4 P2-11: the section title is 20 semibold, like
+            // the other three sections on this page (the old 22 bold
+            // made this one section read as a page title).
             Text(discoveryVM.reportRange == .all ? "按月" : "按天")
-                .font(.haoDetailTitle)
+                .font(.haoSectionTitle)
                 .foregroundStyle(theme.textPrimary)
             if discoveryVM.report.perDay.isEmpty {
                 Text("这段时间还没有收听记录。")

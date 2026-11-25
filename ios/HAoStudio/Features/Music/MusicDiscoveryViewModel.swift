@@ -153,57 +153,38 @@ final class MusicDiscoveryViewModel: ObservableObject {
     /// today's key, non-empty, every track with a real song id) —
     /// a stale / empty / identity-less entry is recomputed instead
     /// of shown, same rule as the home reader of this cache.
+    /// b49fix4 P1-2 / P2-30: this reads through
+    /// HomeViewModel.loadDailyPicksAndSpares — the SAME total-40
+    /// composition and the SAME cache as home. The old code ran
+    /// its own total-20 ranking plus a second total-40 run for
+    /// spares, so whichever page loaded first decided the other
+    /// page's content for the day.
     func reloadDaily(force: Bool = false) {
         let dayKey = musicDayKey(of: Date())
         dailyDayKey = dayKey
-        if !force, let cached = HomeViewModel.validatedDailyTracks(
-            MusicLibraryStore.dailyTracks(for: dayKey), dayKey: dayKey
-        ) {
-            dailyTracks = cached
-            rebuildDailySpares()
-            return
-        }
-        let picks = MusicRadio.dailyPicks(
+        let (picks, spares) = HomeViewModel.loadDailyPicksAndSpares(
             listenLog: listenLog,
-            favourites: MusicLibraryStore.favSongs(),
             recent: MusicLibraryStore.getRecent(),
-            playlistTracks: MusicLibraryStore.getLists().flatMap { $0.tracks },
-            dislikedIds: MusicLibraryStore.fmDislikedIds(),
-            dayKey: dayKey
-        )
+            dayKey: dayKey,
+            force: force)
         dailyTracks = picks
-        if !picks.isEmpty {
-            MusicLibraryStore.saveDailyTracks(picks, for: dayKey)
-        }
-        rebuildDailySpares()
-    }
-
-    /// Spares = the same ranked pool, past the first 20, so a
-    /// replacement is always a real next-ranked song, never a
-    /// random one.
-    private func rebuildDailySpares() {
-        let picks = MusicRadio.dailyPicks(
-            listenLog: listenLog,
-            favourites: MusicLibraryStore.favSongs(),
-            recent: MusicLibraryStore.getRecent(),
-            playlistTracks: MusicLibraryStore.getLists().flatMap { $0.tracks },
-            dislikedIds: MusicLibraryStore.fmDislikedIds(),
-            dayKey: dailyDayKey,
-            total: 40
-        )
-        let current = Set(dailyTracks.map { $0.identityKey })
-        dailySpares = picks.filter { !current.contains($0.identityKey) }
+        dailySpares = spares
     }
 
     /// "不喜欢换一首" (Coda §3.5): replace the song in place
     /// with the next spare, and persist the day's list. The
     /// disliked song is also recorded so it never comes back.
+    /// b49fix4 P2-31: the dislike is recorded BEFORE the
+    /// spares-empty guard (the old order silently dropped it
+    /// when the spares ran out at that instant), and the save
+    /// writes the full 40 (picks + spares) — saving only the
+    /// picks shrank the cache back to 20 and lost the spares.
     func replaceDailySong(_ song: MusicSong) {
         guard let index = dailyTracks.firstIndex(where: { $0.identityKey == song.identityKey }) else { return }
-        guard !dailySpares.isEmpty else { return }
         MusicLibraryStore.addFMDisliked(key: song.identityKey)
+        guard !dailySpares.isEmpty else { return }
         dailyTracks[index] = dailySpares.removeFirst()
-        MusicLibraryStore.saveDailyTracks(dailyTracks, for: dailyDayKey)
+        MusicLibraryStore.saveDailyTracks(dailyTracks + dailySpares, for: dailyDayKey)
     }
 
     // MARK: - Explore (b45-b, Coda §3.9)
