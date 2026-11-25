@@ -745,7 +745,11 @@ struct MusicRecommendView: View {
                     onRetry: { homeVM.loadCharts() }
                 )
             } else {
-                VStack(spacing: 24) {
+                // b49fix10 (对齐 P2-1): the three chart blocks
+                // stack at the site section spacing — the 24 here
+                // was an unregistered third value (since b45-b),
+                // not the card-grid 24 and not sectionTopSpacing.
+                VStack(spacing: HaoLayout.sectionTopSpacing) {
                     ForEach(homeVM.charts.prefix(3), id: \.id) { chart in
                         chartBlock(chart: chart)
                     }

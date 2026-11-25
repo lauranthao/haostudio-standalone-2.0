@@ -168,6 +168,14 @@ final class MusicSearchViewModel: ObservableObject {
     /// Kinds whose last fetch failed (empty results, retry offered
     /// inside that section — never a whole-page error).
     @Published private(set) var cardErrors: [MusicSearchAPI.MusicSearchCategoryKind: Bool] = [:]
+
+    /// b49fix10 P2-2: any card kind failed — the .all page is
+    /// not empty even when every array is. A failed kind's
+    /// error row (with its in-section retry) only renders in
+    /// the non-empty branch, so without this the whole-page
+    /// empty state swallows the failure as "没有找到相关结果"
+    /// and the page offers no retry at all.
+    var hasCardError: Bool { cardErrors.values.contains(true) }
     /// Kinds the zero-growth guard closed (b49fix7 P2-6): the
     /// source answered two consecutive next-page requests with
     /// the same page, so load-more is off — but that must be a
@@ -223,6 +231,21 @@ final class MusicSearchViewModel: ObservableObject {
     /// model can know from the stream.
     static func shouldSettleSearch(addedCount: Int, settledBatches: Int, hasResults: Bool) -> Bool {
         addedCount == 0 && settledBatches >= 2 && hasResults
+    }
+
+    /// Whether a song-stream batch belongs to the live round
+    /// (b49fix10 P2-1): the query string alone cannot tell an
+    /// old batch from the new round's — a resend of the SAME
+    /// query (history row, suggestion chip, double-tap search)
+    /// bumps the generation while the string stays identical,
+    /// so the old round's batches all pass the string check and
+    /// merge into the new round (inflating settledBatchCount
+    /// with all-duplicate batches so the "搜索中…" footer ends
+    /// early, and an old allFailed batch can flip songsFailed
+    /// on). Both must match; the decision is pure so XCTest can
+    /// pin it (the stream itself has no stub seam).
+    nonisolated static func shouldAcceptStreamBatch(query: String, currentQuery: String, gen: UUID, generation: UUID) -> Bool {
+        query == currentQuery && gen == generation
     }
 
     private var merge = MusicSearchMerge()
@@ -351,10 +374,17 @@ final class MusicSearchViewModel: ObservableObject {
         armSettleTimer()
         MusicLibraryStore.saveSearchQuery(trimmed)
         history = MusicLibraryStore.getSearchHistory()
+        // b49fix10 P2-1: capture this round's generation for the
+        // stream callback — the callback below checks it, so a
+        // resend's old batches are dropped (see
+        // shouldAcceptStreamBatch).
+        let gen = generation
         MusicSearchAPI.shared.search(keyword: trimmed) { [weak self] batch, allFailed in
             guard let self = self else { return }
-            // Stale leg from an older query: drop it, never mix.
-            guard trimmed == self.currentQuery else { return }
+            // Stale leg from an older query — or from an earlier
+            // send of the SAME query (b49fix10 P2-1): drop it,
+            // never mix.
+            guard Self.shouldAcceptStreamBatch(query: trimmed, currentQuery: self.currentQuery, gen: gen, generation: self.generation) else { return }
             let songs = batch.map(MusicSong.init(from:))
             let added = self.merge.appendBatch(songs)
             self.results = self.merge.tracks

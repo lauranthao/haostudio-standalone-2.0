@@ -184,6 +184,10 @@ struct MusicSearchView: View {
 
     /// Everything empty + nothing loading = the whole-tab empty
     /// state (Coda §5.3: 综合 requires songs AND artists empty).
+    /// b49fix10 P2-2: a failed card kind is not empty — its
+    /// error row (with retry) lives in the sections branch, so
+    /// allIsEmpty must also require no card error, or a kind
+    /// failure is swallowed as "没有找到相关结果" with no retry.
     private var allIsEmpty: Bool {
         !searchVM.isSearching
             && searchVM.results.isEmpty
@@ -191,6 +195,7 @@ struct MusicSearchView: View {
             && searchVM.albums.isEmpty
             && searchVM.playlists.isEmpty
             && searchVM.loadingCards.isEmpty
+            && !searchVM.hasCardError
     }
 
     private var allTabView: some View {
@@ -715,6 +720,13 @@ struct MusicSearchView: View {
 
     /// Grid footer: loading spinner while a next page is in flight,
     /// retry button when the last page failed with rows kept.
+    /// b49fix10 P2-4: all three states carry the SAME vertical
+    /// metrics (top 12, bottom from the container — the site
+    /// standard for inline text retries, b49fix5 P2-23), so a
+    /// state switch cannot jump the footer: the loading branch
+    /// used to take vertical 16 (top 16 + bottom 16) while the
+    /// error / closed branches took top 12 only, a 20pt jump on
+    /// every next-page start and failure.
     @ViewBuilder
     private func cardFooter(kind: MusicSearchAPI.MusicSearchCategoryKind) -> some View {
         if searchVM.loadingCards.contains(kind) {
@@ -725,7 +737,7 @@ struct MusicSearchView: View {
                     .foregroundStyle(theme.textSecondary)
             }
             .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.vertical, 16)
+            .padding(.top, 12)
         } else if searchVM.cardErrors[kind] == true {
             Button("加载失败，点击重试") {
                 searchVM.retryCategory(kind)

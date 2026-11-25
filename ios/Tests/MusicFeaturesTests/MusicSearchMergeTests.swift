@@ -346,4 +346,47 @@ final class MusicSearchRestoreTests: XCTestCase {
         XCTAssertFalse(decision.fire)
         XCTAssertEqual(decision.streak, 2)
     }
+
+    func testStreamBatchGenerationGuard() {
+        // b49fix10 P2-1: a resend of the SAME query bumps the
+        // generation while the string stays identical, so the
+        // string check alone cannot tell the old round's batches
+        // from the new round's. The old batches must be dropped
+        // (they inflated settledBatchCount with all-duplicate
+        // batches and could flip songsFailed on), and only a
+        // batch matching BOTH the query and the generation is
+        // accepted.
+        let gen = UUID()
+        let otherGen = UUID()
+        XCTAssertTrue(MusicSearchViewModel.shouldAcceptStreamBatch(
+            query: "周杰伦", currentQuery: "周杰伦", gen: gen, generation: gen))
+        XCTAssertFalse(MusicSearchViewModel.shouldAcceptStreamBatch(
+            query: "周杰伦", currentQuery: "周杰伦", gen: otherGen, generation: gen))
+        XCTAssertFalse(MusicSearchViewModel.shouldAcceptStreamBatch(
+            query: "周杰伦", currentQuery: "林俊杰", gen: gen, generation: gen))
+        XCTAssertFalse(MusicSearchViewModel.shouldAcceptStreamBatch(
+            query: "周杰伦", currentQuery: "林俊杰", gen: otherGen, generation: gen))
+    }
+
+    func testCardErrorKeepsAllTabNonEmpty() {
+        // b49fix10 P2-2: a failed card kind is not an empty page
+        // — hasCardError is true when any kind failed, so the
+        // view renders the sections (with the failed shelf's
+        // error row + retry) instead of the whole-page "没有找到
+        // 相关结果". Staged through a snapshot restore, the same
+        // path the tab switch takes (saveSnapshot would wipe a
+        // staged .all snapshot, so the .artists tab carries it).
+        let vm = MusicSearchViewModel()
+        var snapshot = MusicSearchViewModel.SearchSnapshot()
+        snapshot.cardErrors[.artists] = true
+        vm.snapshots[.artists] = snapshot
+        vm.selectTab(.artists)
+        XCTAssertTrue(vm.hasCardError)
+        // And a clean restore clears it again.
+        var clean = MusicSearchViewModel.SearchSnapshot()
+        clean.cardErrors = [:]
+        vm.snapshots[.albums] = clean
+        vm.selectTab(.albums)
+        XCTAssertFalse(vm.hasCardError)
+    }
 }
