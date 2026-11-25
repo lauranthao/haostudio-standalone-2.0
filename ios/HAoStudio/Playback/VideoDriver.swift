@@ -877,7 +877,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             // P5 in MKV has no detection and no transcode server).
             if !self.transcodeAttemptedForRequest,
                let facts = VideoStreamFacts.parse(url: url),
-               facts.dolbyVision, facts.dvProfile != 7, facts.dvProfile != 8,
+               facts.hasNoHdr10BaseLayer,
                !PlayerKernel.candidatesFor(url: url, dvDowngradeToHdr: self.dvP8Downgrade).contains(.avplayer),
                let transcodeURL = EmbyClient.transcodedHlsUrl(fromStreamUrl: url.absoluteString) {
                 self.transcodeAttemptedForRequest = true
@@ -1668,6 +1668,61 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         }
         startPosition = max(0, position)
         ensureMain { self.startNewPlayback(item: item) }
+        return true
+    }
+
+    /// Whether the current stream can be switched to the system
+    /// player (AVPlayer) to escape wrong Dolby Vision colours
+    /// (sweep-4 P1-16): a known DV-no-base-layer stream (profile 5,
+    /// or unknown profile) playing on an ffmpeg kernel, with an
+    /// AVPlayer candidate remaining once MPV + IJK are excluded.
+    /// Pure guard, no side effects — the player view keys the
+    /// switch button on this so it never renders a dead control:
+    /// an MKV whose Emby transcode failed has no AVPlayer
+    /// candidate, so the notice stands alone there.
+    func canSwitchToSystemPlayerForDolbyVision() -> Bool {
+        guard let url = currentURL,
+              let engine = currentEngine, engine != .avplayer,
+              let facts = currentURLFacts(), facts.hasNoHdr10BaseLayer else {
+            return false
+        }
+        return PlayerKernel.candidatesFor(
+            url: url,
+            hasAssSubtitles: facts.hasAssSubtitles,
+            hasMultipleAudioTracks: facts.hasMultipleAudioTracks,
+            hasExternalSubtitles: facts.hasExternalSubtitles,
+            dvDowngradeToHdr: dvP8Downgrade,
+            excluding: [.mpv, .ijk]).contains(.avplayer)
+    }
+
+    /// User-triggered escape from a Dolby Vision profile 5 stream
+    /// playing green/pink on an ffmpeg kernel (sweep-4 P1-16): P5
+    /// has no HDR10 base layer, so MPV/IJK cannot render it —
+    /// only AVPlayer decodes it correctly. Re-opens the same URL
+    /// at the current position with MPV + IJK excluded, so the
+    /// ladder lands on AVPlayer — the same mechanism as the
+    /// mid-play engine fallback above, but user-triggered instead
+    /// of failure-triggered (it does not consume
+    /// `midPlayFallbackUsed`: a later real failure still deserves
+    /// its automatic fallback). Returns false when nothing can
+    /// change; a failed switch reports through the open's own
+    /// failure path. ASS-subtitled P5 trades subtitles for correct
+    /// colours on the switch (only MPV renders ASS) — the user's
+    /// tap, not an automatic choice.
+    @discardableResult
+    func switchToSystemPlayerForDolbyVision() -> Bool {
+        guard let item = currentEpisode, let url = currentURL,
+              canSwitchToSystemPlayerForDolbyVision() else {
+            return false
+        }
+        startPosition = max(0, position)
+        open(item: item, url: url, excludingEngines: [.mpv, .ijk]) { [weak self] result in
+            guard let self = self else { return }
+            if case .failure(let error) = result {
+                self.recordFailure(error: error, hadURL: true)
+                self.onEpisodeFailed?(item, error)
+            }
+        }
         return true
     }
 

@@ -226,6 +226,34 @@ final class VideoPlayerViewModel: ObservableObject {
     var currentEngine: VideoEngine? { engine?.currentEngine }
     var diagnostics: VideoPlaybackDiagnostics { engine?.diagnostics ?? .empty }
 
+    /// Dolby Vision P5 (or unknown profile) playing on an ffmpeg
+    /// kernel (sweep-4 P1-16): the picture is green/pink — only
+    /// the system player (AVPlayer) decodes P5 correctly. Facts
+    /// ride the URL (Emby `hao_*`); CMS URLs carry no markers, so
+    /// this never fires for CMS — the honest limit, documented on
+    /// VideoDriver's transcode branch. State-driven: the pill stays
+    /// while the condition holds, no timer. Re-evaluated on every
+    /// body pass; the position timer ticks while playing, so the
+    /// pill appears at latest on the next tick after the open.
+    var dolbyVisionColorWarning: Bool {
+        guard let facts = diagnostics.facts, facts.hasNoHdr10BaseLayer else { return false }
+        return diagnostics.engine == .mpv || diagnostics.engine == .ijk
+    }
+
+    /// Whether the one-tap switch to the system player is
+    /// available for the current DV P5 stream (false when no
+    /// AVPlayer candidate remains — an MKV whose Emby transcode
+    /// failed — so the view never renders a dead button).
+    var canSwitchToSystemPlayerForDolbyVision: Bool {
+        (coordinator.vodDriver as? VideoDriver)?.canSwitchToSystemPlayerForDolbyVision() ?? false
+    }
+
+    /// Switch the current DV P5 stream to the system player, at
+    /// the current position. No-op when the driver cannot switch.
+    func switchToSystemPlayerForDolbyVision() {
+        _ = (coordinator.vodDriver as? VideoDriver)?.switchToSystemPlayerForDolbyVision()
+    }
+
     /// Push the settings to the engine + danmaku layer and persist
     /// them. Called on engine attach and on every settings change.
     /// Audio / subtitle track picks are pushed to the driver,
@@ -1276,6 +1304,35 @@ struct VideoPlayerView: View {
                     .padding(.vertical, 10)
                     .haoDarkGlassCapsule(darkness: 0.7)
                     .allowsHitTesting(false)
+                }
+                // sweep-4 P1-16: known Dolby Vision P5 (or unknown
+                // profile) on an ffmpeg kernel renders green/pink —
+                // only the system player decodes P5 correctly.
+                // State-driven, no timer: the pill stays while the
+                // condition holds. The button only renders when the
+                // driver can actually switch (an MKV whose Emby
+                // transcode failed has no AVPlayer candidate — then
+                // the notice stands alone, never a dead button).
+                // Tappable like the skip buttons below, not a toast.
+                if videoPlayer.dolbyVisionColorWarning, !videoPlayer.loadFailed {
+                    HStack(spacing: 10) {
+                        Text("杜比视界 P5 · 当前播放器色彩异常")
+                            .font(.haoFootnoteMedium)
+                            .foregroundStyle(.white)
+                        if videoPlayer.canSwitchToSystemPlayerForDolbyVision {
+                            Rectangle()
+                                .fill(.white.opacity(0.4))
+                                .frame(width: 1, height: 14)
+                            Button("改用系统播放器") { videoPlayer.switchToSystemPlayerForDolbyVision() }
+                                .font(.haoFootnoteMedium)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(.white)
+                                .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .haoDarkGlassCapsule(darkness: 0.7)
                 }
                 // S7 wiring: skip-intro / skip-credits pills. Shown
                 // regardless of controlsVisible — the auto3s countdown

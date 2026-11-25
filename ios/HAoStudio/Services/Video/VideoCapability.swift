@@ -198,6 +198,18 @@ struct VideoStreamFacts: Equatable {
         (width != nil && width! >= 3840) || (height != nil && height! >= 2160)
     }
 
+    /// True when this stream's Dolby Vision profile has no HDR10
+    /// base layer — profile 5, or a DV stream whose profile the
+    /// server did not report: every bundled ffmpeg kernel (MPV /
+    /// IJK) renders it green/pink, and only AVPlayer decodes it
+    /// correctly. Profiles 7 and 8 keep an HDR10 base layer and
+    /// play correctly on the ffmpeg kernels. (sweep-4 P1-16: the
+    /// notice pill, the switch-to-system-player, and the driver's
+    /// Emby transcode redirect all key on this one predicate.)
+    var hasNoHdr10BaseLayer: Bool {
+        dolbyVision && dvProfile != 7 && dvProfile != 8
+    }
+
     var isEmpty: Bool {
         container == nil && videoCodec == nil && audioCodec == nil &&
         !dolbyVision && dvProfile == nil && width == nil &&
