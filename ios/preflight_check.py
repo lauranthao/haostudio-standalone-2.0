@@ -154,8 +154,8 @@ for cj in ["Assets.xcassets/AppIcon.appiconset/Contents.json",
 # --- 4. Info.plist --------------------------------------------------------
 pl = plistlib.load(open(APP_DIR / "Info.plist", "rb"))
 check("4. displayName HAo Studio", pl.get("CFBundleDisplayName") == "HAo Studio")
-check("4b. bundle version 0.0.2 / build 48 (release)",
-      pl.get("CFBundleShortVersionString") == "0.0.2" and pl.get("CFBundleVersion") == "48",
+check("4b. bundle version 0.0.3 / build 49 (release)",
+      pl.get("CFBundleShortVersionString") == "0.0.3" and pl.get("CFBundleVersion") == "49",
       f"{pl.get('CFBundleShortVersionString')} / {pl.get('CFBundleVersion')}")
 check("4c. background audio mode", pl.get("UIBackgroundModes") == ["audio"])
 check("4d. launch storyboard", pl.get("UILaunchStoryboardName") == "LaunchScreen")
@@ -169,8 +169,8 @@ check("4h. entitlements file is intentionally empty",
       plistlib.load(open(APP_DIR / "HAoStudio.entitlements", "rb")) == {})
 # --- 4i. version.json aligned with the bundle (S0) -----------------------
 vj = json.loads((REPO / "version.json").read_text())
-check("4i. version.json aligned (0.0.2 / build 48 / minOs 17.0)",
-      vj.get("version") == "0.0.2" and vj.get("build") == 48 and vj.get("minOs") == "17.0",
+check("4i. version.json aligned (0.0.3 / build 49 / minOs 17.0)",
+      vj.get("version") == "0.0.3" and vj.get("build") == 49 and vj.get("minOs") == "17.0",
       f"{vj.get('version')} / build {vj.get('build')} / minOs {vj.get('minOs')}")
 # (2026-11-25, b49fix2 P2-65): 4i used to check only version/build/
 # minOs — a typo'd ipaUrl passed and the app offered an update that
