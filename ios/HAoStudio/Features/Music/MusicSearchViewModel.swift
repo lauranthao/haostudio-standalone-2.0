@@ -149,6 +149,10 @@ final class MusicSearchViewModel: ObservableObject {
     static let singleTabCardLimit = 50
 
     /// Pages loaded per kind (0 = first page not yet loaded).
+    /// b49fix5 P1-2: recorded for the snapshot only — offsets no
+    /// longer derive from it (a page recorded under limit 10 is
+    /// not a page under limit 50; loadMoreCards / retryCategory
+    /// offset from the live array count instead).
     @Published private(set) var cardPages: [MusicSearchAPI.MusicSearchCategoryKind: Int] = [:]
     @Published private(set) var cardHasMore: [MusicSearchAPI.MusicSearchCategoryKind: Bool] = [:]
     /// Kinds currently fetching (one at a time per kind).
@@ -239,9 +243,25 @@ final class MusicSearchViewModel: ObservableObject {
     }
     private var settleTimer: Timer?
     private var currentQuery = ""
+    /// b49fix5 P2-11: backup-import observer (reload the search
+    /// history after a restore changes it). Token pattern, same
+    /// as MusicPlayerViewModel — removed in deinit (b49fix2 P1-30:
+    /// a discarded token kills the observer on arrival).
+    private var backupImportedObserver: NSObjectProtocol?
 
     init() {
         history = MusicLibraryStore.getSearchHistory()
+        backupImportedObserver = NotificationCenter.default.addObserver(
+            forName: .haoBackupImported, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.history = MusicLibraryStore.getSearchHistory()
+        }
+    }
+
+    deinit {
+        if let token = backupImportedObserver {
+            NotificationCenter.default.removeObserver(token)
+        }
     }
 
     // MARK: - Search
@@ -705,14 +725,41 @@ final class MusicSearchViewModel: ObservableObject {
     /// Next card page for one kind (shelf / grid scrolled to the
     /// end). Guards: the kind's tab (or 综合) is active, the kind
     /// is loaded, more is expected, no fetch in flight for it.
+    /// b49fix5 P1-2: the offset comes from the LIVE array count,
+    /// never from cardPages × limit — the recorded page was
+    /// written under the OLD tab's limit (综合 10 vs single-kind
+    /// 50), so a limit change made the next fetch skip a whole
+    /// range (20 loaded, page 1 under limit 10, then limit 50
+    /// asked for offset 100 and items 20–99 were never requested
+    /// again, hasMore going false on a short page). The count is
+    /// the truth the merge already holds; a duplicate overlap
+    /// (dedupe dropped some rows) can only re-request a few rows,
+    /// which the merge dedupes.
     func loadMoreCards(_ kind: MusicSearchAPI.MusicSearchCategoryKind) {
         guard hasSearched, !loadingCards.contains(kind) else { return }
         guard tab == .all || tab.categoryKind == kind else { return }
         guard cardHasMore[kind] == true else { return }
-        let page = (cardPages[kind] ?? 0) + 1
         // Single-kind tabs page at 50; the 综合 shelves page at 10.
         let limit = tab == .all ? Self.allTabCardLimit : Self.singleTabCardLimit
-        loadCategory(kind, limit: limit, offset: page * limit, isFirstPage: false)
+        loadCategory(kind, limit: limit, offset: Self.nextCardOffset(loadedCount: liveCardCount(for: kind)), isFirstPage: false)
+    }
+
+    /// Live row count for one kind on the current tab — the source
+    /// loadMoreCards / retryCategory offset from. The live arrays
+    /// belong to the current tab (the guard in both callers
+    /// guarantees tab == .all or tab.categoryKind == kind).
+    private func liveCardCount(for kind: MusicSearchAPI.MusicSearchCategoryKind) -> Int {
+        switch kind {
+        case .artists: return artists.count
+        case .albums: return albums.count
+        case .playlists: return playlists.count
+        }
+    }
+
+    /// Pure next-page offset (b49fix5 P1-2, unit-tested): the next
+    /// page starts where the loaded rows end.
+    static func nextCardOffset(loadedCount: Int) -> Int {
+        max(loadedCount, 0)
     }
 
     /// Retry one failed kind from inside its own section.
@@ -731,7 +778,7 @@ final class MusicSearchViewModel: ObservableObject {
             }
         }()
         let plan = Self.retryPlan(
-            cardPages: cardPages[kind], cardLimits: cardLimits[kind],
+            loadedCount: liveCardCount(for: kind), cardLimits: cardLimits[kind],
             limit: limit, isEmpty: isEmpty)
         loadCategory(kind, limit: limit, offset: plan.offset, isFirstPage: plan.isFirstPage)
     }
@@ -747,11 +794,18 @@ final class MusicSearchViewModel: ObservableObject {
     /// loaded does the retry re-request the failed next page —
     /// retrying that as a first page would clobber the pages
     /// already loaded.
-    static func retryPlan(cardPages: Int?, cardLimits: Int?, limit: Int, isEmpty: Bool) -> (offset: Int, isFirstPage: Bool) {
+    /// b49fix5 P1-2: the same-limit branch is count-based too —
+    /// it re-requests from the live row count, not from
+    /// (cardPages + 1) × limit. The old form had the same
+    /// cross-limit hole as loadMoreCards: 70 rows loaded, then a
+    /// retry under a new limit asked for offset 100 and rows
+    /// 70–99 were skipped for good (the merge only self-heals
+    /// overlaps, never gaps).
+    static func retryPlan(loadedCount: Int, cardLimits: Int?, limit: Int, isEmpty: Bool) -> (offset: Int, isFirstPage: Bool) {
         if isEmpty || cardLimits == nil || cardLimits != limit {
             return (0, true)
         }
-        return (((cardPages ?? 0) + 1) * limit, false)
+        return (max(loadedCount, 0), false)
     }
 
     /// Kinds a pending tab still lacks: no items, no error, and

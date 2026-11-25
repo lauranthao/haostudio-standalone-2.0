@@ -263,7 +263,7 @@ struct MusicPlayerView: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 9)
-                            .haoDarkGlassRoundedRect(cornerRadius: 10, darkness: 0.7)
+                            .haoDarkGlassRoundedRect(cornerRadius: HaoLayout.chipCornerRadius, darkness: 0.7)
                             .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
                             // b47-player: the root is full-screen now,
                             // so the toast keeps its old distance from
@@ -587,8 +587,14 @@ struct MusicPlayerView: View {
     // MARK: - Portrait body (Apple Music Now Playing, top to bottom)
 
     private func portraitBody(geo: GeometryProxy) -> some View {
+        // b49fix5 P2-6: the cover absorbs the load-failed banner —
+        // coverSize shrinks the slot by the banner's 52pt (42 +
+        // top 10) when it shows, so the column total is the same
+        // as the no-banner state. Lyrics mode ignores the slot
+        // (its area is flexible and absorbs the banner itself).
         let slotSize = MusicPlayerLayout.coverSize(
-            screenWidth: geo.size.width, screenHeight: geo.size.height)
+            screenWidth: geo.size.width, screenHeight: geo.size.height,
+            loadFailed: playerVM.loadFailed)
         // b38, item 1: in cover mode the slack is shared across
         // the column (one Spacer per gap, minLength 0) instead of
         // a single Spacer above the bottom row — the old layout
@@ -726,6 +732,20 @@ struct MusicPlayerView: View {
         return HStack(alignment: .top, spacing: 24) {
             VStack(spacing: 0) {
                 coverOrLyrics(size: cover)
+                // b49fix5 P1-1: the load-failed banner lives in the
+                // LEFT column, under the cover — it used to sit in
+                // the right column between titleRow and
+                // progressSection, where its ~50pt pushed the right
+                // column past the safe height on the shortest
+                // landscape phones (SE 1st gen: 41–51pt over).
+                // Left column: cover 224 + gap 8 + banner 42 = 274
+                // ≤ 320; the right column is back to its 303
+                // budget. landscapeFitsOneScreen + the layout tests
+                // carry a loadFailed branch so this state is pinned.
+                if playerVM.loadFailed {
+                    loadFailedBanner
+                        .padding(.top, 8)
+                }
             }
             .frame(width: cover)
             VStack(spacing: 0) {
@@ -736,10 +756,6 @@ struct MusicPlayerView: View {
                     .padding(.top, 8)
                     .frame(maxWidth: .infinity)
                     .chromeFade(hidden: chromeHidden)
-                if playerVM.loadFailed {
-                    loadFailedBanner
-                        .padding(.top, 8)
-                }
                 progressSection(isLandscape: true)
                     .padding(.top, 8)
                     .frame(maxWidth: .infinity)
@@ -871,7 +887,7 @@ struct MusicPlayerView: View {
     /// no top scrim, and the 0.55 -> 0 black gradient read as a
     /// black band across the top on light covers (build 48).
     /// The row keeps its 40pt height — the layout budget in
-    /// MusicPlayerLayout (fixedChromeHeight 346, top bar 40)
+    /// MusicPlayerLayout (fixedChromeHeight 371, top bar 40)
     /// counts it, so the player still fits one screen with no
     /// scrolling.
     private var topBar: some View {
@@ -1478,7 +1494,7 @@ struct MusicPlayerView: View {
             MusicCoverView(
                 urlString: playerVM.currentSong?.cover ?? "",
                 size: 64,
-                cornerRadius: 10
+                cornerRadius: HaoLayout.chipCornerRadius
             )
             titleTextBlock
             Spacer()
@@ -1789,6 +1805,13 @@ struct MusicPlayerView: View {
                 .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(isSelected ? .white : .white.opacity(0.65))
                 .frame(width: 44, height: 44)
+                // b49fix5 P2-39(b): the selected-state highlight
+                // borrows selectionCellCornerRadius's VALUE (10) —
+                // it is a highlight, not a selection cell, and the
+                // token's name must not be read as the semantics
+                // here. A separate highlight token would be the
+                // cleaner name, but the value is identical and the
+                // token lives in Glass.swift (another lane's file).
                 .background(
                     isSelected ? Color.white.opacity(0.16) : Color.clear,
                     in: RoundedRectangle(cornerRadius: HaoLayout.selectionCellCornerRadius, style: .continuous)
@@ -2154,11 +2177,11 @@ struct MusicOutputDeviceButton: View {
 #if targetEnvironment(simulator)
                     Text("模拟器上没有可用的输出设备。")
                         .font(.haoFootnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(theme.textSecondary)
 #endif
                     Text("当前输出：\(outputName)")
                         .font(.haoFootnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(theme.textSecondary)
                 }
                 // b49fix4 P2-22: sheet standard (horizontal 24,
                 // top 16) — the old bare .padding() was 16 all
@@ -2219,33 +2242,66 @@ enum MusicPlayerLayout {
     /// b49fix4 P2-16: one value, not two — this references the
     /// token instead of restating 24 (HaoLayout.playerHorizontalMargin).
     static let sidePadding: CGFloat = HaoLayout.playerHorizontalMargin
-    /// Fixed chrome below the cover slot. b47-player: the quality
-    /// badge moved out of its own row into the time row (bar → time
-    /// row with the badge centred in it), so the honest budget
-    /// shrinks 314 → 292 (the badge row's 24 + 6 gap is gone; the
-    /// time row grows 16 → 24 because the badge drives it, net
-    /// −22) and the cover's height term 418 → 396. b47-player
-    /// Coda check (ControlMetrics): the control gaps are 24
-    /// (progress → transport) and 36 (transport → utility), not
-    /// 6 and 0 — the budget grows back 292 → 346 (+54) and the
-    /// cover's height term 396 → 450.
-    /// MusicPlayerLayoutTests pins coverSize(375, 667) == 217 on
-    /// the new budget. Lyrics mode needs no budget term: its area
-    /// is flexible and takes whatever height is left. The
-    /// pre-existing ~15pt slack risk on the shortest (667pt)
-    /// screens that the old comment carried is unchanged.
-    static let fixedChromeHeight: CGFloat = 346
+    /// Fixed chrome around the cover slot (everything except the
+    /// cover itself and the load-failed banner, which is counted
+    /// separately — see loadFailedBannerHeight). b47-player: the
+    /// quality badge moved out of its own row into the time row
+    /// (bar → time row with the badge centred in it), so the
+    /// honest budget shrinks 314 → 292 (the badge row's 24 + 6
+    /// gap is gone; the time row grows 16 → 24 because the badge
+    /// drives it, net −22) and the cover's height term 418 → 396.
+    /// b47-player Coda check (ControlMetrics): the control gaps
+    /// are 24 (progress → transport) and 36 (transport →
+    /// utility), not 6 and 0 — the budget grows back 292 → 346
+    /// (+54) and the cover's height term 396 → 450.
+    /// b49fix5 P2-6: 346 was 16pt short of the measured rows —
+    /// the sweep's 362 counted topBar 40 + title top 10 + title
+    /// 50 + progress top 14 + progress 48 + transport top 24 +
+    /// transport 82 + toolbar top 36 + toolbar 50 + bottom 8,
+    /// but missed the cover's own top 8 (portraitBody puts
+    /// .padding(.top, 8) on the slot) and the progress row is 49,
+    /// not 48 (28pt hit area + 6 spacing + ~15pt time row — the
+    /// same 49 the landscape comment already uses). The honest
+    /// base is 40 + 8 + 10 + 50 + 14 + 49 + 24 + 82 + 36 + 50 +
+    /// 8 = 371, and the cover's height term is 371 + 93 safe +
+    /// 11 slack = 475. MusicPlayerLayoutTests pins
+    /// coverSize(375, 667) == 192 on the new budget.
+    /// Variable states are NOT in this number: the sleep pill
+    /// adds 8 (topBar 40 → 48) and the quality badge adds 9
+    /// (time row 15 → 24) — each fits inside the 11pt slack on
+    /// 667, and both together still fit on a real 667 phone
+    /// (home button: safe areas 20, not the 93 this check
+    /// assumes for notched phones). Lyrics mode needs no budget
+    /// term: its area is flexible and takes whatever height is
+    /// left.
+    static let fixedChromeHeight: CGFloat = 371
 
     static func contentWidth(screenWidth: CGFloat) -> CGFloat {
         screenWidth - sidePadding * 2
     }
 
+    /// Height of the load-failed banner row itself (standard retry
+    /// capsule: 15pt semibold + 24pt vertical padding ≈ 42pt).
+    /// The gap above it stays at the call site (portrait 10,
+    /// landscape 8) — the two call sites do not share a gap.
+    static let loadFailedBannerHeight: CGFloat = 42
+
     /// Cover / lyrics slot size: bounded by width AND by the height
     /// left after the fixed chrome, so the whole player fits on one
     /// screen with no scrolling on any phone height. Tall phones
-    /// still get the 340 cap.
-    static func coverSize(screenWidth: CGFloat, screenHeight: CGFloat) -> CGFloat {
-        min(screenWidth - sidePadding * 2, 340, max(180, screenHeight - 450))
+    /// still get the 340 cap. b49fix5 P2-6: when the load-failed
+    /// banner shows in portrait, the slot shrinks by the banner's
+    /// 52pt (42 + top 10) — the column total is then identical to
+    /// the no-banner state, so the banner cannot overflow the
+    /// screen; in lyrics mode the slot is unused and the flexible
+    /// lyrics area absorbs the banner instead. The 180 floor still
+    /// binds on the shortest phone (667): the slot cannot shrink
+    /// below it, so the banner state there relies on the real
+    /// home-button safe areas (20pt, not the 93 this check
+    /// assumes) — see fitsOneScreen.
+    static func coverSize(screenWidth: CGFloat, screenHeight: CGFloat, loadFailed: Bool = false) -> CGFloat {
+        let reserved = screenHeight - 475 - (loadFailed ? loadFailedBannerHeight + 10 : 0)
+        return min(screenWidth - sidePadding * 2, 340, max(180, reserved))
     }
 
     /// The whole player fits on one screen iff cover + chrome +
@@ -2253,10 +2309,17 @@ enum MusicPlayerLayout {
     /// (status bar 59 + home indicator 34). The 568pt-tall iPhone
     /// SE (1st gen) is below the floor even at the 180 minimum —
     /// a pre-existing limit, not a build-35 regression — so the
-    /// test table starts at 667pt.
-    static func fitsOneScreen(screenWidth: CGFloat, screenHeight: CGFloat) -> Bool {
-        coverSize(screenWidth: screenWidth, screenHeight: screenHeight)
-            + fixedChromeHeight + 59 + 34 <= screenHeight
+    /// test table starts at 667pt. b49fix5 P2-6: with loadFailed
+    /// the banner's 52pt is added back — the cover already shrank
+    /// by it, so the sum equals the no-banner total wherever the
+    /// slot is not floored. On 667 the slot floors at 180 and the
+    /// fiction fails by 29pt; the real 667 phone is a home-button
+    /// phone (safe areas 20, not 93), so it fits at 623pt — the
+    /// test pins the floored cover instead of claiming the
+    /// fiction fits.
+    static func fitsOneScreen(screenWidth: CGFloat, screenHeight: CGFloat, loadFailed: Bool = false) -> Bool {
+        coverSize(screenWidth: screenWidth, screenHeight: screenHeight, loadFailed: loadFailed)
+            + fixedChromeHeight + (loadFailed ? loadFailedBannerHeight + 10 : 0) + 59 + 34 <= screenHeight
     }
 
     // MARK: - Transport row (5 equal buttons, b45-a)
@@ -2323,9 +2386,15 @@ enum MusicPlayerLayout {
     /// check's +12 is the left column's slack term, not the body
     /// padding (the body padding is landscapeVerticalPadding,
     /// counted ×2 in the right-column check).
-    static func landscapeFitsOneScreen(safeWidth: CGFloat, safeHeight: CGFloat) -> Bool {
+    /// b49fix5 P1-1: with loadFailed the banner sits in the left
+    /// column under the cover (42 + top 8 = 50) instead of the
+    /// badge slack (35 + 12 = 47) — the left column is then
+    /// cover + 50. SE 1st gen: 224 + 50 = 274 ≤ 320. The right
+    /// column is unchanged (the banner left it), so its check
+    /// has no loadFailed term.
+    static func landscapeFitsOneScreen(safeWidth: CGFloat, safeHeight: CGFloat, loadFailed: Bool = false) -> Bool {
         landscapeCoverSize(safeWidth: safeWidth, safeHeight: safeHeight)
-            + landscapeBadgeHeight + 12 <= safeHeight
+            + (loadFailed ? loadFailedBannerHeight + 8 : landscapeBadgeHeight + 12) <= safeHeight
             && landscapeRightColumnHeight + 2 * landscapeVerticalPadding <= safeHeight
     }
 }

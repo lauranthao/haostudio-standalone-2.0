@@ -215,9 +215,23 @@ enum MusicRadio {
         let half = total / 2
         let maxPerArtist = 4
         var artistCounts: [String: Int] = [:]
+        /// b49fix5 P2-5: the cap counts each artist on a collab
+        /// separately — "A / B" counts toward A AND toward B, so
+        /// one artist cannot dodge the cap through collabs. An
+        /// empty artist string counts toward nothing (splitArtists
+        /// returns [] for it).
+        func capArtists(of song: MusicSong) -> [String] {
+            MusicLyrics.splitArtists(song.artist)
+        }
         func underCap(_ song: MusicSong) -> Bool {
-            guard !song.artist.isEmpty else { return true }
-            return (artistCounts[song.artist] ?? 0) < maxPerArtist
+            let parts = capArtists(of: song)
+            guard !parts.isEmpty else { return true }
+            return parts.allSatisfy { (artistCounts[$0] ?? 0) < maxPerArtist }
+        }
+        func countCap(_ song: MusicSong) {
+            for part in capArtists(of: song) {
+                artistCounts[part, default: 0] += 1
+            }
         }
         var picked: [MusicSong] = []
         var seen = Set<String>()
@@ -225,9 +239,7 @@ enum MusicRadio {
             guard underCap(entry.song) else { continue }
             if seen.insert(entry.song.identityKey).inserted {
                 picked.append(entry.song)
-                if !entry.song.artist.isEmpty {
-                    artistCounts[entry.song.artist, default: 0] += 1
-                }
+                countCap(entry.song)
             }
         }
         for entry in ranked.dropFirst(half) {
@@ -235,9 +247,7 @@ enum MusicRadio {
             guard underCap(entry.song) else { continue }
             if seen.insert(entry.song.identityKey).inserted {
                 picked.append(entry.song)
-                if !entry.song.artist.isEmpty {
-                    artistCounts[entry.song.artist, default: 0] += 1
-                }
+                countCap(entry.song)
             }
         }
         if picked.count < half {
@@ -259,7 +269,11 @@ enum MusicRadio {
         var restPool: [Scored] = []
         for entry in ranked {
             if seen.contains(entry.song.identityKey) { continue }
-            if artistSet.contains(entry.song.artist) { artistPool.append(entry) }
+            // b49fix5 P2-5: the set now holds SPLIT names (see
+            // topArtists) — a collab "A / B" matches when EITHER
+            // party is a top artist; the old whole-string contains
+            // would never match a split set.
+            if !Set(capArtists(of: entry.song)).isDisjoint(with: artistSet) { artistPool.append(entry) }
             else if !entry.song.album.isEmpty && firstHalfAlbums.contains(entry.song.album) {
                 albumPool.append(entry)
             } else {
@@ -271,9 +285,7 @@ enum MusicRadio {
             guard underCap(entry.song) else { continue }
             if seen.insert(entry.song.identityKey).inserted {
                 picked.append(entry.song)
-                if !entry.song.artist.isEmpty {
-                    artistCounts[entry.song.artist, default: 0] += 1
-                }
+                countCap(entry.song)
             }
         }
         if picked.count < total {
@@ -327,8 +339,16 @@ enum MusicRadio {
     static func topArtists(from events: [ListenEvent], limit: Int) -> [String] {
         var counts: [String: Int] = [:]
         for event in events {
-            let artist = event.artist.isEmpty ? "—" : event.artist
-            counts[artist] = (counts[artist] ?? 0) + 1
+            // b49fix5 P2-5: a collab counts toward each party
+            // (same split as the daily-picks cap) — otherwise
+            // "A / B" never surfaces A or B in the top artists,
+            // and the same artist could dodge the cap through
+            // collabs. An empty artist still counts once as "—".
+            let parts = MusicLyrics.splitArtists(event.artist)
+            let names = parts.isEmpty ? ["—"] : parts
+            for name in names {
+                counts[name] = (counts[name] ?? 0) + 1
+            }
         }
         return counts.sorted { $0.value > $1.value }.prefix(limit).map { $0.key }
     }
@@ -536,7 +556,7 @@ struct MusicFMView: View {
                 .foregroundStyle(theme.textSecondary)
             Button(action: startPlayback) {
                 Text(mode == .fm ? "开始漫游" : "开始心动模式")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.haoBodyStrong)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 24)
                     .padding(.vertical, 12)
@@ -570,7 +590,7 @@ struct MusicFMView: View {
                 playerVM.next()
             }) {
                 Image(systemName: "trash")
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.haoBodyMedium)
                     .foregroundStyle(theme.textSecondary)
                     .frame(width: 48, height: 48)
                     .background(Color.primary.opacity(0.06), in: Circle())
@@ -581,7 +601,7 @@ struct MusicFMView: View {
                 isFavCurrent = MusicLibraryStore.toggleFav(song)
             }) {
                 Image(systemName: isFavCurrent ? "heart.fill" : "heart")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.haoCalloutStrong)
                     .foregroundStyle(isFavCurrent ? theme.liveRed : theme.textSecondary)
                     .frame(width: 48, height: 48)
                     .background(Color.primary.opacity(0.06), in: Circle())
@@ -606,7 +626,7 @@ struct MusicFMView: View {
             .accessibilityLabel(playerVM.isPlaying ? "暂停" : "播放")
             Button(action: { playerVM.next() }) {
                 Image(systemName: "forward.fill")
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.haoBodyMedium)
                     .foregroundStyle(theme.textSecondary)
                     .frame(width: 48, height: 48)
                     .background(Color.primary.opacity(0.06), in: Circle())

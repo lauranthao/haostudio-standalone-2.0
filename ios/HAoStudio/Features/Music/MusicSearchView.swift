@@ -141,7 +141,7 @@ struct MusicSearchView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.top, 12)
             }
             .accessibilityLabel(query.isEmpty ? "热搜" : "搜索建议")
@@ -160,7 +160,7 @@ struct MusicSearchView: View {
             }
         }
         .pickerStyle(.segmented)
-        .padding(.horizontal, 20)
+        .padding(.horizontal, HaoLayout.pushedPageMargin)
         .padding(.top, 12)
     }
 
@@ -203,11 +203,9 @@ struct MusicSearchView: View {
                 if searchVM.songsFailed {
                     MusicEmptyState(icon: "wifi.exclamationmark", title: "搜索失败", note: "网络似乎出了问题，检查后重试。", onRetry: { searchVM.retrySongs() })
                         .frame(minHeight: 300)
-                        .padding(.top, 12)
                 } else {
                     MusicEmptyState(icon: "magnifyingglass", title: "没有找到相关结果", note: "换个关键词试试。")
                         .frame(minHeight: 300)
-                        .padding(.top, 12)
                 }
             } else {
                 LazyVStack(alignment: .leading, spacing: 24) {
@@ -216,7 +214,7 @@ struct MusicSearchView: View {
                     albumShelf
                     playlistShelf
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.top, 12)
             }
         }
@@ -237,9 +235,9 @@ struct MusicSearchView: View {
                 Button("搜索失败，点按重试") {
                     searchVM.retrySongs()
                 }
-                .font(.haoFootnoteStrong)
+                .font(.haoFootnoteMedium)
                 .foregroundStyle(theme.accentText)
-                .padding(.vertical, 4)
+                .padding(.top, 12)
             } else {
                 Text("没有找到相关歌曲")
                     .font(.haoFootnote)
@@ -278,7 +276,7 @@ struct MusicSearchView: View {
         VStack(spacing: 0) {
             ForEach(0..<7, id: \.self) { _ in
                 HStack(spacing: 12) {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    RoundedRectangle(cornerRadius: HaoLayout.chipCornerRadius, style: .continuous)
                         .fill(theme.surfaceStrong)
                         .frame(width: 56, height: 56)
                     VStack(alignment: .leading, spacing: 6) {
@@ -306,10 +304,16 @@ struct MusicSearchView: View {
         } else if searchVM.cardErrors[.artists] == true && searchVM.artists.isEmpty {
             categoryErrorRow(kind: .artists)
         } else if searchVM.artists.isEmpty {
-            Text("没有找到相关歌手")
-                .font(.haoFootnote)
-                .foregroundStyle(theme.textSecondary)
-                .padding(.vertical, 4)
+            // b49fix5 P2-28: the true-empty shelf also offers a
+            // retry (re-issues the kind's first page) — the user
+            // re-checking this kind no longer has to leave for the
+            // single-kind tab or re-search.
+            Button("没有找到相关歌手，点击重试") {
+                searchVM.retryCategory(.artists)
+            }
+            .font(.haoFootnoteMedium)
+            .foregroundStyle(theme.accentText)
+            .padding(.top, 12)
         } else {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 16) {
@@ -336,10 +340,13 @@ struct MusicSearchView: View {
         } else if searchVM.cardErrors[.albums] == true && searchVM.albums.isEmpty {
             categoryErrorRow(kind: .albums)
         } else if searchVM.albums.isEmpty {
-            Text("没有找到相关专辑")
-                .font(.haoFootnote)
-                .foregroundStyle(theme.textSecondary)
-                .padding(.vertical, 4)
+            // b49fix5 P2-28: same retry entry as the artists shelf.
+            Button("没有找到相关专辑，点击重试") {
+                searchVM.retryCategory(.albums)
+            }
+            .font(.haoFootnoteMedium)
+            .foregroundStyle(theme.accentText)
+            .padding(.top, 12)
         } else {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 16) {
@@ -366,10 +373,13 @@ struct MusicSearchView: View {
         } else if searchVM.cardErrors[.playlists] == true && searchVM.playlists.isEmpty {
             categoryErrorRow(kind: .playlists)
         } else if searchVM.playlists.isEmpty {
-            Text("没有找到相关歌单")
-                .font(.haoFootnote)
-                .foregroundStyle(theme.textSecondary)
-                .padding(.vertical, 4)
+            // b49fix5 P2-28: same retry entry as the artists shelf.
+            Button("没有找到相关歌单，点击重试") {
+                searchVM.retryCategory(.playlists)
+            }
+            .font(.haoFootnoteMedium)
+            .foregroundStyle(theme.accentText)
+            .padding(.top, 12)
         } else {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 16) {
@@ -437,7 +447,7 @@ struct MusicSearchView: View {
                 .foregroundStyle(theme.textSecondary)
             Spacer()
             Button("重试") { searchVM.retryCategory(kind) }
-                .font(.haoFootnote)
+                .font(.haoFootnoteMedium)
                 .foregroundStyle(theme.accentText)
                 .buttonStyle(.plain)
         }
@@ -558,6 +568,9 @@ struct MusicSearchView: View {
                 // site-wide (was 13 regular here).
                 .font(.haoFootnoteMedium)
                 .foregroundStyle(theme.accentText)
+                // b49fix5 P2-23: List rows carry their own top 12
+                // (the standard top spacing for inline retries).
+                .padding(.top, 12)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .listRowBackground(theme.scaffoldBackground)
                 .listRowSeparator(.hidden)
@@ -608,7 +621,7 @@ struct MusicSearchView: View {
                             }
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.top, 12)
                 cardFooter(kind: .artists)
             }
@@ -645,7 +658,7 @@ struct MusicSearchView: View {
                             }
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.top, 12)
                 cardFooter(kind: .albums)
             }
@@ -680,7 +693,7 @@ struct MusicSearchView: View {
                             }
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.top, 12)
                 cardFooter(kind: .playlists)
             }
@@ -710,7 +723,9 @@ struct MusicSearchView: View {
             .font(.haoFootnoteMedium)
             .foregroundStyle(theme.accentText)
             .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.vertical, 16)
+            // b49fix5 P2-23: inline text retries carry top 12
+            // (was vertical 16 — the bottom is the container's).
+            .padding(.top, 12)
         }
     }
 
@@ -730,8 +745,10 @@ struct MusicSearchView: View {
                             .foregroundStyle(theme.accentText)
                             .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 20)
+                    .padding(.horizontal, HaoLayout.pushedPageMargin)
+                    // b49fix5 P2-29: history top spacing is 12
+                    // site-wide (was 20 here; live 16, video 12).
+                    .padding(.top, 12)
                     ForEach(searchVM.history, id: \.self) { item in
                         // Sibling buttons, NOT a Button inside a
                         // Button (fix 2026-11-24, build 35): a
@@ -769,7 +786,7 @@ struct MusicSearchView: View {
                             // not say which one.
                             .accessibilityLabel("删除搜索记录：\(item)")
                         }
-                        .padding(.horizontal, 20)
+                        .padding(.horizontal, HaoLayout.pushedPageMargin)
                         .padding(.vertical, 12)
                     }
                 } else {

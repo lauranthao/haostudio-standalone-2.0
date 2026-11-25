@@ -95,7 +95,7 @@ struct MiniPlayerBar: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 9)
-                .haoDarkGlassRoundedRect(cornerRadius: 10, darkness: 0.7)
+                .haoDarkGlassRoundedRect(cornerRadius: HaoLayout.chipCornerRadius, darkness: 0.7)
                 .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .allowsHitTesting(false)
@@ -158,6 +158,23 @@ struct MiniPlayerBar: View {
                     morphCover(
                         urlString: item.coverURL?.absoluteString ?? "",
                         size: HaoLayout.miniCoverSize, cornerRadius: 6)
+                    // b49fix5 P2-43: sleep-timer indication — the
+                    // timer used to show only on the full player's
+                    // topBar, so a collapse made a timed stop look
+                    // causeless. A small moon badge on the cover
+                    // (music only) marks it; the strip's VoiceOver
+                    // label carries the remaining time (same
+                    // sleepRemainingText as the topBar).
+                    .overlay(alignment: .topTrailing) {
+                        if item.kind == .music && musicPlayer.sleepActive {
+                            Image(systemName: "moon.fill")
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .padding(3)
+                                .background(.black.opacity(0.55), in: Circle())
+                                .offset(x: 3, y: -3)
+                        }
+                    }
                     VStack(alignment: .leading, spacing: 1) {
                         // Coda §2.10: title subheadline 15 semibold
                         // primary, artist caption 12 secondary.
@@ -282,12 +299,23 @@ struct MiniPlayerBar: View {
                         }
                     }
             )
-            .accessibilityLabel("迷你播放器：\(item.title)，点按打开全屏播放器")
+            .accessibilityLabel(miniAccessibilityLabel(item: item))
             // b49fix2 B11: fixed chrome — cap Dynamic Type at
             // .accessibility1 so a huge text size cannot blow the
             // 52pt strip apart.
             .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         }
+
+    /// VoiceOver label for the strip: the sleep timer's remaining
+    /// time rides along when active (same text as the full
+    /// player's topBar pill) so the timed stop is announced, not
+    /// silent (b49fix5 P2-43).
+    private func miniAccessibilityLabel(item: PlaybackItem) -> String {
+        let sleep = item.kind == .music && musicPlayer.sleepActive
+            ? "，睡眠定时\(musicPlayer.sleepRemainingText.isEmpty ? "已开启" : musicPlayer.sleepRemainingText)"
+            : ""
+        return "迷你播放器：\(item.title)\(sleep)，点按打开全屏播放器"
+    }
 
     /// Whether the VOD / live item is playing right now (b49fix2
     /// A6). Reads the shared view model for the kind.
@@ -348,6 +376,12 @@ struct FullPlayerPlaceholderView: View {
                     .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textMuted)
                 VStack(spacing: 12) {
+                    // b49fix5 P2-26: this retry is the sheet-primary
+                    // ACTION exception to the standard retry capsule
+                    // (15 semibold, 24/12, filled accent): a sheet's
+                    // primary action is a full-width prominent
+                    // button (17 bold, 44 high), not a capsule.
+                    // The form is deliberate, not a fourth system.
                     Button(action: onRetry) {
                         Text("重试")
                             .font(.haoBodyStrong)

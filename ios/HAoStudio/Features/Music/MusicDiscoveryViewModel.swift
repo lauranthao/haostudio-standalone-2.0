@@ -162,13 +162,23 @@ final class MusicDiscoveryViewModel: ObservableObject {
     func reloadDaily(force: Bool = false) {
         let dayKey = musicDayKey(of: Date())
         dailyDayKey = dayKey
-        let (picks, spares) = HomeViewModel.loadDailyPicksAndSpares(
+        let result = HomeViewModel.loadDailyPicksAndSpares(
             listenLog: listenLog,
             recent: MusicLibraryStore.getRecent(),
             dayKey: dayKey,
             force: force)
-        dailyTracks = picks
-        dailySpares = spares
+        // b49fix5 P2-4: this runs synchronously on the main thread,
+        // so the save is already serialised against Home's publish
+        // and replaceDailySong; the compare-and-swap still guards
+        // against a Home reload that published in between. force
+        // (explicit refresh) writes unconditionally.
+        if let saveTracks = result.saveTracks {
+            MusicLibraryStore.saveDailyTracksIfUnchanged(
+                saveTracks, for: dayKey,
+                expectedKeys: result.expectedDiskKeys, force: force)
+        }
+        dailyTracks = result.picks
+        dailySpares = result.spares
     }
 
     /// "不喜欢换一首" (Coda §3.5): replace the song in place

@@ -1048,6 +1048,11 @@ struct MusicSectionHeader: View {
 /// action, so "稍后再试" is never a dead end the user can only
 /// escape by leaving the page and coming back. Honest empties
 /// (no favourites yet, empty queue, …) leave it nil.
+/// b49fix5 P2-30: the empty-state top-offset standard is "call
+/// sites add NO top offset — the component carries its own
+/// vertical 24" (.padding(.vertical, 24) below). The old "offset
+/// = 0" wording was literally false while the component kept its
+/// 24; container spacing decides nothing here.
 struct MusicEmptyState: View {
     var icon: String
     var title: String

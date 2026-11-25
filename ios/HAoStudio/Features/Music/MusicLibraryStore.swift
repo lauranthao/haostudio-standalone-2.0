@@ -929,6 +929,32 @@ enum MusicLibraryStore {
         writeObject(named: dailyCollection, dict)
     }
 
+    /// Pure compare-and-swap decision for the daily cache
+    /// (b49fix5 P2-4, unit-tested): a background reload's save
+    /// writes only when the on-disk list is still the one the
+    /// load read (a replaceDailySong — or a concurrent reload —
+    /// that landed in between already left a complete newer list
+    /// on disk, so overwriting it with this stale computation
+    /// would undo the replacement). `force` (explicit refresh)
+    /// always writes.
+    static func shouldSaveDailyTracks(currentDiskKeys: [String], expectedKeys: [String], force: Bool) -> Bool {
+        force || currentDiskKeys == expectedKeys
+    }
+
+    /// Compare-and-swap daily save (b49fix5 P2-4): writes
+    /// `tracks` only when the on-disk list for `dayKey` is still
+    /// the one the caller read (`expectedKeys`, identityKey
+    /// order). Returns true when the write happened. Callers
+    /// save on the main thread, so the read-compare-write is
+    /// atomic against replaceDailySong's save (also main).
+    @discardableResult
+    static func saveDailyTracksIfUnchanged(_ tracks: [MusicSong], for dayKey: String, expectedKeys: [String], force: Bool = false) -> Bool {
+        let current = dailyTracks(for: dayKey)?.map { $0.identityKey } ?? []
+        guard shouldSaveDailyTracks(currentDiskKeys: current, expectedKeys: expectedKeys, force: force) else { return false }
+        saveDailyTracks(tracks, for: dayKey)
+        return true
+    }
+
     // MARK: - FM disliked ids
 
     static func fmDislikedIds() -> Set<String> {

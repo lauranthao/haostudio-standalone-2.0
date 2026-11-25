@@ -316,7 +316,10 @@ struct MusicExploreView: View {
                 .foregroundStyle(theme.accentText)
         }
         .foregroundStyle(theme.textSecondary)
-        .padding(.top, 16)
+        // b49fix5 P2-17: the banner carries its own top 12 (was
+        // 16 — the gap to the sticky chips); the container adds
+        // nothing.
+        .padding(.top, 12)
     }
 
     private func categoryChips(proxy: ScrollViewProxy) -> some View {
@@ -598,7 +601,7 @@ struct MusicPlazaView: View {
 
     private func plazaRow(_ summary: PlaylistSummary) -> some View {
         HStack(spacing: 12) {
-            MusicCoverView(urlString: summary.cover, size: 56, cornerRadius: 10)
+            MusicCoverView(urlString: summary.cover, size: 56, cornerRadius: HaoLayout.chipCornerRadius)
             VStack(alignment: .leading, spacing: 2) {
                 Text(summary.name)
                     .font(.haoCalloutStrong)

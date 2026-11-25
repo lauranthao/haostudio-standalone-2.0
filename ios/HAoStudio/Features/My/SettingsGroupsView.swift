@@ -232,6 +232,13 @@ struct SettingsGroupsView: View {
                 expandDeepLinkRow(row)
             }
         }
+        // b49fix5 P2-11: after a backup restore the Emby config
+        // may have changed — reload this row's subtitle (the
+        // view model otherwise only loads on init and when the
+        // Emby page disappears).
+        .onReceive(NotificationCenter.default.publisher(for: .haoBackupImported)) { _ in
+            embyViewModel.reload()
+        }
         // b45-coda 包 C: sheets hang on the Form (this Group),
         // never on a Section / row — iOS dismisses a sheet
         // attached to a Section when the List re-renders.
