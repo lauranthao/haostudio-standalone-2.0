@@ -1199,7 +1199,7 @@ enum MusicLibraryStore {
     /// Save the day's pinned ranking pool. Same 7-day prune
     /// as saveDailyTracks (keys are YYYY-MM-DD dates; an
     /// unparseable key is kept, never deleted on a guess).
-    /// b49fix17 P2-3/P2-6: the pool write runs under
+    /// b49fix17 P2-4/P2-6: the pool write runs under
     /// MigrationStore.dailyWriteQueue now, not its own
     /// dailyPoolQueue (b49fix8 P2-4) — the import's pool merge
     /// and the pool save must share ONE queue, or a pin

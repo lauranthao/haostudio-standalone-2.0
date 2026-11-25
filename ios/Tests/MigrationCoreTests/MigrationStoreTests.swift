@@ -4,7 +4,7 @@
 // with per-key verification, corrupt snapshot skipped, bad type
 // skips only the bad key, write failure rolls back in full, repeat
 // migration is idempotent, backup JSON imports as a merge, and the
-// mapping table keeps its shape (136 named keys, 3 prefix families).
+// mapping table keeps its shape (112 named keys, 3 prefix families).
 // Keychain round-trip lives in KeychainStoreTests; the Emby token
 // split (file without the key, key in the Keychain) is covered there
 // too, because a CI runner without keychain access must skip it
@@ -270,8 +270,8 @@ final class MigrationStoreTests: XCTestCase {
     // MARK: - Mapping table shape
 
     func testMappingTableShape() {
-        XCTAssertEqual(MigrationStore.mappings.count, 136)
-        XCTAssertEqual(Set(MigrationStore.mappings.map { $0.key }).count, 136)
+        XCTAssertEqual(MigrationStore.mappings.count, 112)
+        XCTAssertEqual(Set(MigrationStore.mappings.map { $0.key }).count, 112)
         XCTAssertEqual(MigrationStore.prefixRules.count, 3)
         XCTAssertEqual(MigrationStore.ignoredPrefixes, ["hao_play_url_cache:"])
         XCTAssertNotNil(MigrationStore.mapping(for: "hao_emby_config"))

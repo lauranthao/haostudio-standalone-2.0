@@ -7,9 +7,9 @@
 `lib/core/theme/appearance_store.dart`，HEAD 2ef902b，1.1.6+31；另有未进
 `HiveKeys` 的字面量键，见各域表内出处）。
 
-**覆盖率（S1，2026-11-23）：140 行——136 个具名键 + 4 个键族
+**覆盖率（S1，2026-11-23；2026-11-25 b49fix2 P1-3 后更新）：116 行——112 个具名键 + 4 个键族
 （`haoVodProg:`、`hao_daily_YYYY-MM-DD`、`hao_listen_YYYY-MM`、
-`hao_play_url_cache:`），全部有明确去向，覆盖率 100%。其中迁移 139 行；
+`hao_play_url_cache:`），全部有明确去向，覆盖率 100%。其中迁移 115 行；
 1 个键族（`hao_play_url_cache:`）按设计不迁移：1 小时 TTL 的签名 URL 缓存，
 2.0 首次启动时已过期。未知键（不在表里）不丢弃，隔离进
 `Documents/migration_unknown_keys.json`。可执行版见
@@ -27,10 +27,11 @@
 `hao_vod_sleep_episode_count`、`hao_vod_subtitle_delay`、
 `hao_vod_metadata_overrides`、`hao_emby_home`、`hao_live_hist_retention_days`、
 `hao_live_hidden_platforms`、`hao_live_clock_corner`、`hao_live_volume_boost_pct`。
-本表下方涉及这 25 个键的行现为历史记录，不再对应映射表；快照里带这些键时数据
+本表下方涉及这 25 个键的行已随 b49fix18 D-2 删除，本段所列即历史记录；快照里带这些键时数据
 不丢，隔离进 `migration_unknown_keys.json`，以后有真实读取方时可重新加回映射。
 （`hao_sa_xh_device` 不是 UserDefaults 键——解析器直接读
-`hao_sa_xh_device.json` 文件，删行不影响功能。）当前映射表为 115 行（140 − 25）。**
+`hao_sa_xh_device.json` 文件，删行不影响功能。）当前映射表为 112 个具名键
+（136 − 25 删 + 1 增 `hao_sa_video_applied`），连同 4 个键族共 116 行。**
 
 ## 规则（铁律 7）
 
@@ -54,13 +55,9 @@
 | `hapticsEnabled` | bool，`true` | UserDefaults 同名键 | 触感反馈总开关 |
 | `audioMixWithOthers` | bool，`false` | UserDefaults 同名键 | 与其他音频同时播放 |
 | `autoResumeLastPlayback` | bool，`false` | UserDefaults 同名键 | 启动自动续播，只读杀后台时存的进度 |
-| `preferResolution` | String，`原画` | UserDefaults 同名键 | 直播首选清晰度 |
-| `liveCrashStage` | String，`''` | UserDefaults 同名键 | 直播崩溃分段遥测 |
 | `skippedVersion` | String，`''` | UserDefaults 同名键 | 在线更新已跳过的版本 |
 | `lastUpdateCheckAt` | int，`0` | UserDefaults 同名键 | 上次更新检查时间戳 |
 | `autoUpdateCheck` | bool，`true` | UserDefaults 同名键 | 启动时自动检查更新 |
-| `engineSectionExpanded` | bool，`false` | UserDefaults 同名键 | 设置页播放器区展开状态；build 31 代码中无读写，疑似旧键，保留迁移 |
-| `playbackSectionExpanded` | bool，`false` | UserDefaults 同名键 | 设置页播放设置区展开状态；build 31 代码中无读写，疑似旧键，保留迁移 |
 
 ### 主题 / 外观
 
@@ -71,14 +68,9 @@
 | `hao_wallpaper_enabled` | bool，`false` | UserDefaults 同名键 | 壁纸开关 |
 | `hao_wallpaper_paths` | JSON 字符串，相对名列表 | `Documents/hao_wallpaper_paths.json` | 壁纸文件在 `wallpapers/`，按相对名重扫重建索引 |
 | `hao_wallpaper_current` | String，`''` | UserDefaults 同名键 | 当前壁纸相对名 |
-| `hao_wallpaper_v115_off_once` | bool，`false` | UserDefaults 同名键 | v1.1.5 一次性关闭标志；已消费过的标志照常迁移，不再触发 |
 | `hao_bgcolor_enabled` | bool，`false` | UserDefaults 同名键 | 自定义背景色开关 |
 | `hao_bgcolor_hex` | String，`''` | UserDefaults 同名键 | `#RRGGBB`，空即无 |
 | `hao_tabbar_accent` | int ARGB，无默认值 | UserDefaults 同名键 | 底栏选中色；缺失即用主题自带强调色 |
-| `hao_tabbar_accent_presets` | `List<int>` ARGB | UserDefaults 同名键 | 用户自加的强调色预设；5 个内置默认不存 |
-| `hao_custom_font_family` | String，`''` | UserDefaults 同名键 | `''` = 系统字体 |
-| `hao_custom_font_name` | String，`''` | UserDefaults 同名键 | 已装字体显示名 |
-| `hao_custom_font_path` | String，`''` | UserDefaults 同名键 | 字体相对名，`fonts/<file>` |
 
 ### 音乐
 
@@ -99,7 +91,6 @@
 | `hao_music_lyric_offset_ms` | int，`0` | UserDefaults 同名键 | 歌词偏移毫秒，±5000；字面量键 |
 | `hao_music_lyric_show_translation` | bool，`true` | UserDefaults 同名键 | 歌词显示译文；字面量键 |
 | `hao_music_playback_cache_enabled` | bool，`true` | UserDefaults 同名键 | 边播边缓存开关；字面量键（`playback_cache.dart:31`） |
-| `hao_sa_xh_device` | String，`''` | UserDefaults 同名键 | 解析器设备 id，首次使用时生成；非凭证 |
 | `hao_lists` | JSON 字符串，歌单列表 | `Documents/hao_lists.json` |  |
 | `hao_fav` | JSON 字符串，收藏歌曲 | `Documents/hao_fav.json` | 每条含完整歌曲 JSON；旧版仅 key 的条目仍可读 |
 | `hao_recent` | JSON 字符串，上限 100 | `Documents/hao_recent.json` | 最近播放 |
@@ -111,13 +102,8 @@
 | `musicDownloads` | JSON 字符串 | `Documents/musicDownloads.json` | 已下载歌曲；文件在 `music_downloads/` |
 | `musicResume` | JSON 字符串 | `Documents/musicResume.json` | 断点续播 `{identityKey: 秒}`，只在杀后台时写。b49fix17 P1-4：此为 dict 形狀——舊的遷移 fixture 曾誤以 list `[{"id":"x"}]` 抽樣它（見 `simulate_upgrade.py`／`CrossGenerationMigrationTests.swift` 的修正），2.0 的 `resumeMap()` 也只認 dict；Route B 匯入時按 dict overlay 合併。 |
 | `fmDislikedIds` | JSON 字符串 | `Documents/fmDislikedIds.json` | 私人 FM 不喜欢的歌曲 id |
-| `hao_feature_cover_plaza` | JSON 字符串 | `Documents/hao_feature_cover_plaza.json` | 音乐首页广场卡片首封 |
-| `hao_feature_cover_charts` | JSON 字符串 | `Documents/hao_feature_cover_charts.json` | 音乐首页榜单卡片首封 |
-| `hao_music_bookmarks` | JSON 字符串 | `Documents/hao_music_bookmarks.json` | 歌曲书签 `{identityKey: [{position, label, createdAt}]}` |
 | `hao_music_loudness_cache` | JSON 字符串，上限 200 | `Documents/hao_music_loudness_cache.json` | 响度缓存 `{identityKey: LUFS}`，丢了只影响第二遍起归一化冷启动 |
-| `hao_music_sources` | JSON 字符串 | `Documents/hao_music_sources.json` | 启用的音乐搜索平台，至少保留一个 |
 | `hao_local_music` | JSON 字符串 | `Documents/hao_local_music.json` | 本地音乐索引；文件在 `local_music/` |
-| `hao_music_queue_memory` | JSON 字符串 | `Documents/hao_music_queue_memory.json` | 多队列记忆，最多 10 源 × 200 首；字面量键 |
 | `hao_resolver_speed` | JSON 字符串 | `Documents/hao_resolver_speed.json` | 解析器测速 `{源: {avg, fails, cooled}}`；字面量键 |
 
 ### 影视 / 视频
@@ -125,20 +111,16 @@
 | Flutter Hive 键 | 类型 / 默认 | Swift 位置 | 备注 |
 |---|---|---|---|
 | `hao_video_auto_next` | bool，`true` | UserDefaults 同名键 | 自动连播下一集 |
-| `hao_vod_playback_rate` | double，`1.0` | UserDefaults 同名键 | VOD 倍速记忆 |
 | `hao_vod_double_tap_seconds` | int，`10` | UserDefaults 同名键 | 双击快进秒数，5/10/15/30/60 |
 | `hao_vod_dialogue_boost` | bool，`false` | UserDefaults 同名键 | 对白增强，仅 MPV |
 | `hao_vod_spoiler_hide_synopsis` | bool，`false` | UserDefaults 同名键 | 防剧透：隐藏简介 |
 | `hao_vod_spoiler_blur_unwatched` | bool，`false` | UserDefaults 同名键 | 防剧透：模糊未看海报 |
 | `hao_vod_audio_only` | bool，`false` | UserDefaults 同名键 | 纯音频后台模式 |
-| `hao_vod_sleep_custom_minutes` | int，`30` | UserDefaults 同名键 | VOD 睡眠定时自定义分钟，1–720 |
-| `hao_vod_sleep_episode_count` | int，`3` | UserDefaults 同名键 | VOD 睡眠定时“播完 N 集”，1–10 |
 | `hao_vod_video_fit` | String，`auto` | UserDefaults 同名键 | 画面比例，`auto` / `fill` / `cover` |
 | `hao_vod_super_resolution` | bool，`false` | UserDefaults 同名键 | Anime4K 超分，仅 MPV，仅 VOD |
 | `hao_vod_skip_intro_mode` | String，`off` | UserDefaults 同名键 | 跳过片头，`off` / `manual` / `auto3s` / `autoNow` |
 | `hao_vod_interpolation` | bool，`false` | UserDefaults 同名键 | 插帧，仅 MPV，仅 VOD；与超分、SDR→HDR 互斥 |
 | `hao_vod_sdr_to_hdr` | bool，`false` | UserDefaults 同名键 | SDR 转 HDR，仅 MPV，仅 VOD；与超分、插帧互斥 |
-| `hao_vod_subtitle_delay` | double，`0.0` | UserDefaults 同名键 | 字幕时间偏移秒，±10 |
 | `hao_vod_subtitle_font_size` | String，`medium` | UserDefaults 同名键 | 字幕字号，`small` / `medium` / `large` |
 | `hao_vod_subtitle_color` | String，`white` | UserDefaults 同名键 | 字幕颜色，`white` / `yellow` / `cyan` |
 | `hao_vod_subtitle_position` | String，`bottom` | UserDefaults 同名键 | 字幕位置，`bottom` / `middle` / `top` |
@@ -147,8 +129,8 @@
 | `hao_low_memory_mode` | String，`auto` | UserDefaults 同名键 | 低内存模式，`auto` / `always` / `never`；旧 bool 键无代码迁移，只认 String，其余回 `auto` |
 | `hao_douban_no_suggest` | bool，`false` | UserDefaults 同名键 | 豆瓣联想禁用标志（连续失败 3 次后置位） |
 | `hao_sa_video_rev` | int，`0` | UserDefaults 同名键 | CMS 默认源修订号；用户删掉的源永不复活 |
+| `hao_sa_video_applied` | JSON 字符串，字符串数组 | UserDefaults 同名键 | CMS 默认源已应用集合（URL 字符串数组）；`CmsClient.appliedKey`，用于区分用户删除与上游删除的默认源；b49fix2 新增的唯一映射行 |
 | `hao_video_tab_mode` | String，`cms` | UserDefaults 同名键 | 影视 tab 当前页，`cms` / `emby` |
-| `hao_vod_metadata_overrides` | JSON 字符串 | `Documents/hao_vod_metadata_overrides.json` | 元数据手动纠错 `{source\|vodId: {title?, year?, poster?}}` |
 | `hao_video_category_prefs` | JSON 字符串 | `Documents/hao_video_category_prefs.json` | 影视分类显示/隐藏/重排 `{hidden, order}` |
 | `hao_vod_skip_intro_durations` | JSON 字符串 | `Documents/hao_vod_skip_intro_durations.json` | 每集跳过片头秒数 `{标题\|集名: 秒}` |
 | `hao_video_home` | JSON 字符串 | `Documents/hao_video_home.json` | 影视首页缓存 |
@@ -159,7 +141,6 @@
 | `hao_douban_idmap` | JSON 字符串，上限 200 | `Documents/hao_douban_idmap.json` | 豆瓣标题→id 映射缓存 |
 | `hao_sa_video` | JSON 字符串 | `Documents/hao_sa_video.json` | CMS 影视源列表；至少保留一个源 |
 | `hao_emby_config` | JSON 字符串 | `Documents/hao_emby_config.json`（去 apiKey）+ Keychain `emby-api-key` | Emby 配置 `{baseUrl, apiKey, userId, enabled, movieLibraryId, tvLibraryId}`；apiKey 只进 Keychain，文件里不留 |
-| `hao_emby_home` | JSON 字符串 | `Documents/hao_emby_home.json` | Emby 首页缓存，不与 CMS 缓存混用 |
 | `haoVodProg:<source>:<vodId>` | 键族，double 秒数 | `Documents/haoVodProg.json`（合并文件） | 每集断点续播，上限 200 条；只计 >10 秒且距片尾 ≥30 秒的位置 |
 
 ### 直播
@@ -169,13 +150,9 @@
 | `hao_live_sources` | JSON 字符串 | `Documents/hao_live_sources.json` | 启用的直播平台，5 个中至少保留一个 |
 | `hao_live_hist` | JSON 字符串 | `Documents/hao_live_hist.json` | 直播观看历史，默认上限 50 |
 | `hao_live_hist_limit` | int，`50` | UserDefaults 同名键 | 直播历史上限，0 = 不限 |
-| `hao_live_hist_retention_days` | int，`0` | UserDefaults 同名键 | 直播历史保留天数，0 = 永久；字面量键 |
 | `hao_live_follows` | JSON 字符串 | `Documents/hao_live_follows.json` | 直播关注 |
 | `hao_live_search_hist` | JSON 字符串，上限 20 | `Documents/hao_live_search_hist.json` | 直播搜索历史 |
-| `hao_live_hidden_platforms` | JSON 字符串 | `Documents/hao_live_hidden_platforms.json` | 关注页隐藏的平台 id 列表；字面量键 |
 | `hao_live_cellular_downgrade` | bool，`true` | UserDefaults 同名键 | 移动网自动降档；字面量键 |
-| `hao_live_clock_corner` | String，`topRight` | UserDefaults 同名键 | 全屏时钟位置；字面量键 |
-| `hao_live_volume_boost_pct` | int，`100` | UserDefaults 同名键 | 直播音量增益百分比，100–300；字面量键 |
 
 ### 弹幕
 
@@ -285,7 +262,7 @@ Flutter 侧这些集合原来存在 Hive box 里、值是相对名（`local_path
   "appVersion": "1.1.6",
   "appBuild": 31,
   "exportedAt": "2026-11-23T00:00:00.000Z",
-  "entries": 140,
+  "entries": 126,
   "data": { "<Flutter Hive 键>": <值> },
   "types": { "<Flutter Hive 键>": "string|int|double|bool|json|intList|doubleList" }
 }

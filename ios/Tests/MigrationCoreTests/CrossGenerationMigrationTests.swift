@@ -57,16 +57,15 @@ final class CrossGenerationMigrationTests: XCTestCase {
         "hao_lists", "hao_fav", "hao_recent", "hao_listen",
         "hao_music_search_hist", "hao_cover_cache", "hao_lyrics",
         "musicQueue", "musicDownloads", "fmDislikedIds",
-        "hao_feature_cover_plaza", "hao_feature_cover_charts",
-        "hao_music_bookmarks", "hao_music_loudness_cache",
-        "hao_music_sources", "hao_local_music", "hao_music_queue_memory",
-        "hao_resolver_speed", "hao_vod_metadata_overrides",
+        "hao_music_loudness_cache",
+        "hao_local_music",
+        "hao_resolver_speed",
         "hao_video_category_prefs", "hao_vod_skip_intro_durations",
         "hao_video_home", "hao_video_hist", "hao_video_fav",
         "hao_video_search_hist", "hao_douban_detail", "hao_douban_idmap",
-        "hao_sa_video", "hao_emby_home", "hao_live_sources",
+        "hao_sa_video", "hao_live_sources",
         "hao_live_hist", "hao_live_follows", "hao_live_search_hist",
-        "hao_live_hidden_platforms", "hao_danmaku_enabled", "hao_dm_block",
+        "hao_danmaku_enabled", "hao_dm_block",
         "hao_lx_disabled", "hao_lx_explicit_enabled", "hao_lx_custom",
         "hao_lx_deleted_bundled", "hao_lx_order", "hao_eq_custom_presets",
         "hao_wallpaper_paths",
@@ -143,9 +142,6 @@ final class CrossGenerationMigrationTests: XCTestCase {
         if mapping.key == "hao_lists" {
             return jsonString([["id": "pl1", "name": "收藏"]])
         }
-        if mapping.key == "hao_tabbar_accent_presets" {
-            return [4294967295, 4278190335]
-        }
         if mapping.key == "hao_eq_band_gains" {
             return [0.5, -1.0, 0, 0, 0, 0, 0, 0, 0, 0]
         }
@@ -170,8 +166,8 @@ final class CrossGenerationMigrationTests: XCTestCase {
         }
     }
 
-    /// Builds the full 1.1.6 build 32 snapshot: 136 named keys + 9
-    /// family members + 2 ignored cache keys + 3 unknown keys = 150.
+    /// Builds the full 1.1.6 build 32 snapshot: 112 named keys + 9
+    /// family members + 2 ignored cache keys + 3 unknown keys = 126.
     /// expectedFiles holds what each collection file must contain
     /// after migration, including the merged prefix families.
     private func buildFixture() -> Fixture {
@@ -318,7 +314,18 @@ final class CrossGenerationMigrationTests: XCTestCase {
         case .doubleList:
             XCTAssertEqual(stored as? [Double], expected as? [Double], "key \(key)", file: file, line: line)
         case .json:
-            XCTFail("json kind \(key) must not live in UserDefaults", file: file, line: line)
+            // b49fix18 D-2: hao_sa_video_applied is the table's
+            // only .json kind in UserDefaults (a [String] of
+            // applied CMS source URLs, CmsClient.appliedKey).
+            // coerce() stores the parsed JSON object, so compare
+            // canonical JSON of the stored value against the
+            // parsed expected value.
+            guard let actualData = canonicalJSONData(stored),
+                  let expectedData = canonicalJSONData(parsedJSON(expected)) else {
+                XCTFail("key \(key) is not JSON", file: file, line: line)
+                return
+            }
+            XCTAssertEqual(actualData, expectedData, "key \(key)", file: file, line: line)
         }
     }
 
@@ -334,9 +341,9 @@ final class CrossGenerationMigrationTests: XCTestCase {
     // MARK: - Full snapshot
 
     func testFullSnapshotMigratesEveryKey() {
-        XCTAssertEqual(MigrationStore.mappings.count, 136, "the mapping table is the contract; a new row belongs in the table first")
+        XCTAssertEqual(MigrationStore.mappings.count, 112, "the mapping table is the contract; a new row belongs in the table first")
         let fixture = buildFixture()
-        XCTAssertEqual(fixture.data.count, 150, "136 named + 9 family + 2 ignored + 3 unknown")
+        XCTAssertEqual(fixture.data.count, 126, "112 named + 9 family + 2 ignored + 3 unknown")
         buildFakeFlutterDocuments()
         writeSnapshot(fixture.data)
         let snapshotURL = docs.appendingPathComponent("migration_snapshot.json")
@@ -347,18 +354,20 @@ final class CrossGenerationMigrationTests: XCTestCase {
         let report = MigrationStore.runIfNeeded(documentsURL: docs, defaults: defaults)
 
         XCTAssertEqual(report.outcome, .migrated)
-        XCTAssertEqual(report.totalKeys, 150)
-        // 139, not 145: family keys merge into one file per family
+        XCTAssertEqual(report.totalKeys, 126)
+        // 115, not 121: family keys merge into one file per family
         // (9 keys -> haoVodProg, hao_daily, hao_listen), and the 3
-        // unknown keys land in one unknown-keys file: 91 defaults +
-        // 43 collection files + 1 emby config + 3 family files +
-        // 1 unknown-keys file = 139. The collection count is 43,
-        // not 44: the bare hao_listen key merges via the listen
-        // family instead of a whole-file write (b49fix16 P2-1),
+        // unknown keys land in one unknown-keys file: 75 defaults +
+        // 35 collection files + 1 emby config + 3 family files +
+        // 1 unknown-keys file = 115. The 35 is 33 whole-file writes
+        // + 2 merged family files (hao_daily, haoVodProg); the 3
+        // family files are the merged singles hao_listen, hao_recent
+        // and musicResume — the bare hao_listen key merges via the
+        // listen family instead of a whole-file write (b49fix16 P2-1),
         // so it is counted once, not once per write path — the
-        // accounting is now exact (139 + 2 skipped + 3 unknown
-        // = 144 = 150 total - 6 family-key reduction).
-        XCTAssertEqual(report.migratedKeys, 139)
+        // accounting is now exact (115 + 2 skipped + 3 unknown
+        // = 120 = 126 total - 6 family-key reduction).
+        XCTAssertEqual(report.migratedKeys, 115)
         XCTAssertEqual(report.skippedKeys, 2)
         XCTAssertEqual(report.unknownKeys, 3)
         XCTAssertEqual(report.failedKeys, 0)
