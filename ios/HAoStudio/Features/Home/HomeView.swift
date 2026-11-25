@@ -52,6 +52,7 @@ struct HomeView: View {
                         // O1): a reselect scrolls the proxy to it.
                         HaoChromeScrollAnchor()
                             .id(HaoTabScrollTop.id(for: .home))
+                        homeHeader
                         continueWatchingSection
                             .padding(.top, 12)
                         continueListeningSection
@@ -70,22 +71,20 @@ struct HomeView: View {
                 .haoReselectScrollToTop(tab: .home, proxy: proxy)
                 .refreshable { viewModel.reload() }
                 .background(theme.scaffoldBackground)
-                .navigationTitle("首页")
-                .navigationBarTitleDisplayMode(.large)
-                // Opaque nav-bar background (fix 2026-11-24, build
-                // 35): the bar is translucent by default, so a cover
-                // scrolling underneath it shows through as a blurred
-                // grey block with no readable content — the grey smear
-                // at the top of the build-34 screenshot is the
-                // "继续听" cover seen through the bar (HomeView has no
-                // banner / hero / header image to delete). A solid
-                // scaffold-coloured bar removes the artifact at every
-                // scroll position. Theme-owned, so all 4 themes x
-                // light/dark keep working; toolbarBackground is
-                // iOS 16+, deploy target is 17, no gating needed.
-                // The bottom glass tab bar is untouched.
-                .toolbarBackground(theme.scaffoldBackground, for: .navigationBar)
-                .toolbarBackground(.visible, for: .navigationBar)
+                // b39: no system nav bar on this root. The large
+                // title "首页" did not render on chen's iPhone Air
+                // (build 38 screenshot: zero dark pixels in the
+                // title zone, nav bar present but empty — mechanism
+                // unproven from code, no appearance customisation
+                // exists anywhere), leaving a ~100pt blank above
+                // 继续观看. The title now lives in the content
+                // (homeHeader) so it can never vanish; pushed pages
+                // (detail, history, recent plays, hot live, room)
+                // keep their own bars and back buttons. This also
+                // retires the b35 opaque-bar fix above: with no bar
+                // there is nothing for scrolling covers to smear
+                // through.
+                .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(for: HomeDestination.self) { destination in
                     switch destination {
                     case .detail(let item):
@@ -189,6 +188,20 @@ struct HomeView: View {
     }
 
     // MARK: - Continue watching
+
+    /// In-content page title (34pt bold = the system large
+    /// title's size), at the same 24pt horizontal padding as the
+    /// section headers. b39: the system large title did not
+    /// render on chen's phone, so the title lives in the content
+    /// now — it is always painted, never dependent on the
+    /// navigation bar.
+    private var homeHeader: some View {
+        Text("首页")
+            .font(.system(size: 34, weight: .bold))
+            .foregroundStyle(theme.textPrimary)
+            .padding(.horizontal, 24)
+            .padding(.top, 12)
+    }
 
     private var continueWatchingSection: some View {
         VStack(alignment: .leading, spacing: 10) {

@@ -189,6 +189,9 @@ enum MusicPlayerError: Error, Equatable {
     case noPlayableURL
     case loadFailed
     case seekFailed
+    /// The room is not live (the platform said so). Shown as
+    /// "房间未开播", not "没有可播放的地址" (b39).
+    case offline
 }
 
 extension MusicPlayerError: LocalizedError {
@@ -207,6 +210,8 @@ extension MusicPlayerError: LocalizedError {
             return "播放失败，请检查网络后重试"
         case .seekFailed:
             return "跳转失败"
+        case .offline:
+            return "房间未开播"
         }
     }
 }

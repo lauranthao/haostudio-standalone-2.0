@@ -497,12 +497,22 @@ struct MusicPlayerView: View {
     /// the player simply appears — the close path is unaffected.
     @ViewBuilder
     private func morphCover(size: CGFloat) -> some View {
+        // b39 (Sonar): the cover crossfades on track change —
+        // the old art fades out as the new art fades in, the way
+        // Sonar's player crossfades artwork + background colour.
+        // The identity + transition live on the INNER cover only:
+        // the outer view keeps matchedGeometryEffect for the mini
+        // morph, and a song never changes mid-presentation, so
+        // the fade runs only on track change while open.
         let cover = MusicCoverView(
             urlString: playerVM.currentSong?.cover ?? "",
             size: size,
             // Muzify (MIT, MobileNowPlaying L20-25): radius 8.
             cornerRadius: 8
         )
+        .id(playerVM.currentSong?.identityKey ?? "")
+        .transition(.opacity)
+        .animation(.easeInOut(duration: 0.35), value: playerVM.currentSong?.identityKey ?? "")
         if let namespace = coverMorphNamespace {
             cover.matchedGeometryEffect(id: HaoLayout.playerCoverMorphID, in: namespace)
         } else {

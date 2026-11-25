@@ -42,6 +42,9 @@ final class LiveDriverFakeTransport: LiveDanmakuTransport {
 final class LiveDriverFakeResolver: LiveSiteResolver {
     var platform: LivePlatform { .huya }
     var resolutionsToReturn: [LivePlayUrlResolution?] = []
+    /// Failures to return instead of resolutions (b39: the offline
+    /// test fails the resolve with LiveError.offline).
+    var failuresToReturn: [Error] = []
     var resolveCount = 0
     /// Hold resolve completions instead of answering them (b36
     /// item 5: the stale-resolve test leaves the first resolve
@@ -59,6 +62,10 @@ final class LiveDriverFakeResolver: LiveSiteResolver {
         resolveCount += 1
         if deferResolve {
             deferredResolveCompletions.append(completion)
+            return
+        }
+        if !failuresToReturn.isEmpty {
+            completion(.failure(failuresToReturn.removeFirst()))
             return
         }
         let resolution = resolutionsToReturn.isEmpty ? nil : resolutionsToReturn.removeFirst()
@@ -214,6 +221,29 @@ final class LiveDriverTests: XCTestCase {
         driver.play(item: LiveDriver.playbackItem(room: makeRoom()))
         waitForExpectations(timeout: 2)
         XCTAssertEqual(failure, .noPlayableURL)
+        XCTAssertNil(driver.currentRoom)
+    }
+
+    /// b39: a room that is not live (the resolver fails with
+    /// LiveError.offline — cxy0714 was off air when chen tested
+    /// it) must report .offline ("房间未开播"), not the generic
+    /// .noPlayableURL. The retry button stays: the room may go live.
+    func testOfflineRoomReportsOfflineNotNoPlayableURL() {
+        let factory = FakeBackendFactory()
+        let resolver = LiveDriverFakeResolver()
+        resolver.failuresToReturn = [LiveError.offline]
+        let driver = makeDriver(factory: factory, resolver: resolver)
+        let failed = expectation(description: "room failed offline")
+        var failure: MusicPlayerError?
+        driver.onRoomFailed = { _, error in
+            failure = error
+            failed.fulfill()
+        }
+        driver.play(item: LiveDriver.playbackItem(room: makeRoom()))
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(failure, .offline)
+        XCTAssertEqual(failure?.localizedDescription, "房间未开播")
+        XCTAssertEqual(driver.openFailure, .offline)
         XCTAssertNil(driver.currentRoom)
     }
 
