@@ -289,12 +289,43 @@ enum VideoLibraryStore {
 
     // MARK: - Home cache
 
+    /// UserDefaults key for when the home cache was last saved
+    /// (b49 sweep #18): the rows file itself carries no
+    /// timestamp, so a failed refresh used to show stale rows
+    /// forever with no error and no staleness indication.
+    static let homeCacheSavedAtKey = "hao_video_home_saved_at"
+
     static func cachedHome() -> [VideoHomeRow] {
         LocalStore.loadCollection(named: homeCacheCollection, default: [VideoHomeRow]())
     }
 
     static func saveHomeCache(_ rows: [VideoHomeRow]) {
         LocalStore.saveCollection(named: homeCacheCollection, value: rows)
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: homeCacheSavedAtKey)
+    }
+
+    /// When the cached home rows were last saved, or nil when the
+    /// cache predates timestamps (pre-b49 installs).
+    static func homeCacheSavedAt() -> Date? {
+        let raw = UserDefaults.standard.double(forKey: homeCacheSavedAtKey)
+        guard raw > 0 else { return nil }
+        return Date(timeIntervalSince1970: raw)
+    }
+
+    /// Age of the cached home rows in seconds, or nil when unknown.
+    static func homeCacheAge() -> TimeInterval? {
+        guard let savedAt = homeCacheSavedAt() else { return nil }
+        return max(0, Date().timeIntervalSince(savedAt))
+    }
+
+    /// Human age of the cached home rows for the stale banner
+    /// ("3 小时前"); "旧缓存" when the cache predates timestamps.
+    static func homeCacheAgeText() -> String {
+        guard let age = homeCacheAge() else { return "旧缓存" }
+        if age < 60 { return "刚刚" }
+        if age < 3600 { return "\(Int(age / 60)) 分钟前" }
+        if age < 86400 { return "\(Int(age / 3600)) 小时前" }
+        return "\(Int(age / 86400)) 天前"
     }
 
     // MARK: - Category prefs

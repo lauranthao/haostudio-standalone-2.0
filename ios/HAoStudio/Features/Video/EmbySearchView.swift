@@ -22,9 +22,15 @@ final class EmbySearchViewModel: ObservableObject {
     @Published private(set) var searched = false
     /// Human error text (EmbyError.message — never contains the URL or key).
     @Published private(set) var errorMessage: String?
+    /// Load-more paging (b49 sweep #22): the server page is 50;
+    /// a full page means there may be more.
+    @Published private(set) var hasMore = false
 
     private let gateway: VideoDataGateway
     private var searchGeneration = 0
+    private var lastQuery = ""
+    private var startIndex = 0
+    private var loadingMore = false
 
     init(gateway: VideoDataGateway = VideoServices.makeGateway()) {
         self.gateway = gateway
@@ -37,15 +43,51 @@ final class EmbySearchViewModel: ObservableObject {
         searched = true
         errorMessage = nil
         results = []
+        hasMore = false
+        lastQuery = query
+        startIndex = 0
         searchGeneration += 1
         let generation = searchGeneration
-        gateway.searchEmby(keyword: query) { [weak self] result in
+        gateway.searchEmby(keyword: query, startIndex: 0) { [weak self] result in
             guard let self = self, self.searchGeneration == generation else { return }
             self.isSearching = false
             switch result {
             case .success(let items):
                 self.results = items
+                self.hasMore = items.count >= 50
             case .failure(let error):
+                self.errorMessage = error.message
+            }
+        }
+    }
+
+    /// Retry the last query after a failure (error-card button).
+    func retrySearch() {
+        guard !lastQuery.isEmpty else { return }
+        search(lastQuery)
+    }
+
+    /// Next server page, appended (b49 sweep #22). A failure
+    /// keeps the loaded results and surfaces as a banner over
+    /// them; paging ends either way for this query.
+    func loadMore() {
+        guard !loadingMore, hasMore, !lastQuery.isEmpty else { return }
+        loadingMore = true
+        let generation = searchGeneration
+        let nextStart = startIndex + 50
+        gateway.searchEmby(keyword: lastQuery, startIndex: nextStart) { [weak self] result in
+            guard let self = self, self.searchGeneration == generation else { return }
+            self.loadingMore = false
+            switch result {
+            case .success(let items):
+                self.startIndex = nextStart
+                var seen = Set(self.results.map { "\($0.sourceId ?? -1)|\($0.id)" })
+                for item in items where seen.insert("\(item.sourceId ?? -1)|\(item.id)").inserted {
+                    self.results.append(item)
+                }
+                self.hasMore = items.count >= 50
+            case .failure(let error):
+                self.hasMore = false
                 self.errorMessage = error.message
             }
         }
@@ -71,12 +113,20 @@ struct EmbySearchView: View {
                         ProgressView()
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 32)
-                    } else if let error = viewModel.errorMessage {
-                        MusicEmptyState(
-                            icon: "wifi.exclamationmark",
-                            title: "搜不了 Emby",
-                            note: error
-                        )
+                    } else if let error = viewModel.errorMessage, viewModel.results.isEmpty {
+                        VStack(spacing: 12) {
+                            MusicEmptyState(
+                                icon: "wifi.exclamationmark",
+                                title: "搜不了 Emby",
+                                note: error
+                            )
+                            Button("重试") { viewModel.retrySearch() }
+                                .font(.haoSubheadStrong)
+                                .foregroundStyle(theme.onAccent)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 12)
+                                .background(theme.accent, in: Capsule())
+                        }
                         .padding(.horizontal, 16)
                     } else if viewModel.searched {
                         if viewModel.results.isEmpty {
@@ -87,6 +137,22 @@ struct EmbySearchView: View {
                             )
                             .padding(.horizontal, 16)
                         } else {
+                            // b49 sweep #6/#22: a load-more failure
+                            // is a banner over the loaded grid, not
+                            // a full-page error card.
+                            if let error = viewModel.errorMessage {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "wifi.exclamationmark")
+                                    Text(error)
+                                        .font(.haoFootnote)
+                                    Spacer()
+                                    Button("重试") { viewModel.retrySearch() }
+                                        .font(.haoFootnote)
+                                        .foregroundStyle(theme.accentText)
+                                }
+                                .foregroundStyle(theme.textSecondary)
+                                .padding(.horizontal, 16)
+                            }
                             resultSection(items: viewModel.results)
                         }
                     } else {
@@ -149,11 +215,11 @@ struct EmbySearchView: View {
                     .font(.haoSectionTitle)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
-                // VidHub-style count ("共 N 部"): the number comes
-                // from the results themselves, never invented.
-                // The first page is capped at 50: "共 50 部" would
-                // claim the whole library. Say "前 50 部" at the cap.
-                Text(items.count == 50 ? "前 50 部" : "共 \(items.count) 部")
+                // VidHub-style count: the number comes from the
+                // loaded results, never invented — "共 N 部" only
+                // once everything is loaded; while more pages
+                // remain it is "已加载 N 部".
+                Text(viewModel.hasMore ? "已加载 \(items.count) 部" : "共 \(items.count) 部")
                     .font(.haoFootnote)
                     .foregroundStyle(theme.textMuted)
             }
@@ -162,6 +228,15 @@ struct EmbySearchView: View {
                 onSelect(item)
             }
             .padding(.horizontal, 16)
+            // b49 sweep #22: explicit load-more — the 51st result
+            // used to be unreachable.
+            if viewModel.hasMore {
+                Button("加载更多") { viewModel.loadMore() }
+                    .font(.haoSubheadStrong)
+                    .foregroundStyle(theme.accentText)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
         }
     }
 }

@@ -216,6 +216,11 @@ final class VideoBrowseViewModel: ObservableObject {
             if items.isEmpty { loadMore() }
             return
         }
+        // b49 sweep #21: a partial Emby page carries the failed
+        // side's line as a note — banner over the grid, never a
+        // page error. CMS pages never set it (nil clears a stale
+        // error on a successful page).
+        errorMessage = result.note
         // The items on screen belong to this query once a page-0
         // answer lands: reload() snapshots it as the restore key
         // (a filter change makes the key mismatch, so old-query
