@@ -16,6 +16,22 @@
 `ios/HAoStudio/Storage/MigrationStore.swift` 的 `mappings` /
 `prefixRules` / `ignoredPrefixes`，与本表逐行一致。**
 
+**更新（2026-11-25，b49fix2 P1-3）：以下 25 个键已从 `MigrationStore.mappings`
+删除——app 只迁移它们、没有任何代码读取它们（只迁不读）：`preferResolution`、
+`liveCrashStage`、`engineSectionExpanded`、`playbackSectionExpanded`、
+`hao_feature_cover_plaza`、`hao_feature_cover_charts`、`hao_music_bookmarks`、
+`hao_music_sources`、`hao_music_queue_memory`、`hao_sa_xh_device`、
+`hao_wallpaper_v115_off_once`、`hao_tabbar_accent_presets`、
+`hao_custom_font_family`、`hao_custom_font_name`、`hao_custom_font_path`、
+`hao_vod_playback_rate`、`hao_vod_sleep_custom_minutes`、
+`hao_vod_sleep_episode_count`、`hao_vod_subtitle_delay`、
+`hao_vod_metadata_overrides`、`hao_emby_home`、`hao_live_hist_retention_days`、
+`hao_live_hidden_platforms`、`hao_live_clock_corner`、`hao_live_volume_boost_pct`。
+本表下方涉及这 25 个键的行现为历史记录，不再对应映射表；快照里带这些键时数据
+不丢，隔离进 `migration_unknown_keys.json`，以后有真实读取方时可重新加回映射。
+（`hao_sa_xh_device` 不是 UserDefaults 键——解析器直接读
+`hao_sa_xh_device.json` 文件，删行不影响功能。）当前映射表为 115 行（140 − 25）。**
+
 ## 规则（铁律 7）
 
 - 只存相对名：文件索引里存 `<subdir>/<file>`，绝不存绝对路径。iOS 每次重装都
