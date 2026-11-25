@@ -118,7 +118,7 @@ struct MusicDailyView: View {
     /// (theme accent, headline) + a refresh-today menu.
     private var dailyActions: some View {
         HStack(spacing: 12) {
-            Button(action: { playerVM.playAll(discoveryVM.dailyTracks) }) {
+            Button(action: { playerVM.playAll(discoveryVM.dailyTracks, source: PlaySource(kind: .daily, id: "daily"), sourceDisplayName: "每日推荐") }) {
                 HStack(spacing: 8) {
                     Image(systemName: "play.fill")
                     Text("播放")
@@ -698,7 +698,8 @@ struct MusicListenReportView: View {
                             onTap: {
                                 let songs = discoveryVM.report.topSongs.map { $0.song }
                                 if let index = songs.firstIndex(where: { $0.identityKey == top.song.identityKey }) {
-                                    playerVM.play(song: top.song, in: songs, startAt: index)
+                                    // b46: most-played list is a reloadable place.
+                                    playerVM.play(song: top.song, in: songs, startAt: index, source: PlaySource(kind: .discover, id: "report-top"), sourceDisplayName: "最常听")
                                 }
                             }
                         )

@@ -213,7 +213,10 @@ struct MusicSearchView: View {
                     song: song,
                     isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
                     onTap: {
-                        playerVM.play(song: song, in: searchVM.results, startAt: index)
+                        // b46: search results are a reloadable place
+                        // now — switching tracks after a search play
+                        // can reload the list instead of losing it.
+                        playerVM.play(song: song, in: searchVM.results, startAt: index, source: PlaySource(kind: .search, id: "search"), sourceDisplayName: "搜索")
                     }
                 )
             }
@@ -468,7 +471,8 @@ struct MusicSearchView: View {
                     song: song,
                     isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
                     onTap: {
-                        playerVM.play(song: song, in: searchVM.results, startAt: index)
+                        // b46: same search context as the merged list.
+                        playerVM.play(song: song, in: searchVM.results, startAt: index, source: PlaySource(kind: .search, id: "search"), sourceDisplayName: "搜索")
                     }
                 )
                 .listRowBackground(theme.scaffoldBackground)

@@ -176,6 +176,21 @@ protocol PlayURLEvictingResolver {
 // can use it without knowing the concrete resolver class.
 extension LXSourceResolver: PlayURLEvictingResolver {}
 
+// b46: the failure-memory clear lives on LXSourceResolver itself.
+extension LXSourceResolver: FailureMemoryClearingResolver {}
+
+/// A resolver that remembers per-source+song failures (b45-F).
+/// A manual play clears the memory for one song so a transient
+/// failure never makes it unplayable for 10 minutes (b46).
+/// Resolvers without a memory are unaffected (default no-op).
+protocol FailureMemoryClearingResolver {
+    func clearFailureMemory(forSongId songId: String)
+}
+
+extension FailureMemoryClearingResolver {
+    func clearFailureMemory(forSongId songId: String) {}
+}
+
 // MARK: - Player errors and driver contract (moved from
 // NativeMusicPlayer.swift at the S2 merge: the MusicLX SwiftPM test
 // target compiles this file without the iOS-only player file, so the
@@ -499,6 +514,14 @@ final class PlaybackCoordinator: ObservableObject {
     /// is set by the driver's onTrackStarted callback, only once the
     /// track really starts. Tapping the song that is already playing
     /// does not restart it.
+    /// b46: clear the resolver's failure memory for one song, so
+    /// a manual play re-asks every source for it. Automatic skips
+    /// do not call this — the memory is what makes skipping past
+    /// a dead song instant there.
+    func clearResolveFailureMemory(forSongId songId: String) {
+        (resolver as? FailureMemoryClearingResolver)?.clearFailureMemory(forSongId: songId)
+    }
+
     func requestPlay(_ item: PlaybackItem) {
         guard let driver = musicDriver else {
             guard resolver != nil else { return }

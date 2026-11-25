@@ -161,6 +161,23 @@ final class LXResolverPolicyTests: XCTestCase {
         let b = PlayURLCache.key(songId: "1", platform: "wy", quality: .hiRes)
         XCTAssertNotEqual(a, b)
     }
+
+    // MARK: - Failure memory (b46)
+
+    /// b46: a manual play clears one song's failures so the next
+    /// resolve re-asks every source; other songs stay remembered.
+    func testFailureMemoryClearSong() {
+        let memory = ResolveFailureMemory()
+        memory.record(sourceKey: "lx:netease", songId: "111")
+        memory.record(sourceKey: "lx:qq", songId: "111")
+        memory.record(sourceKey: "lx:netease", songId: "222")
+        XCTAssertTrue(memory.isFailed(sourceKey: "lx:netease", songId: "111"))
+        XCTAssertTrue(memory.isFailed(sourceKey: "lx:qq", songId: "111"))
+        memory.clear(songId: "111")
+        XCTAssertFalse(memory.isFailed(sourceKey: "lx:netease", songId: "111"))
+        XCTAssertFalse(memory.isFailed(sourceKey: "lx:qq", songId: "111"))
+        XCTAssertTrue(memory.isFailed(sourceKey: "lx:netease", songId: "222"))
+    }
 }
 
 /// Mutable clock for tests that inject `now`.

@@ -250,6 +250,10 @@ final class MusicPlayerViewModel: ObservableObject {
                 loadLyrics(for: song, fetchIfMissing: false)
             }
         }
+        // b46: restore the persisted play context alongside the
+        // queue, so track switching can still reload the playlist
+        // after a relaunch.
+        restorePersistedPlayContext()
         // Auto-resume (wiring leg B; Flutter
         // music_player_controller onInit): when the "启动时自动播放
         // 上次歌曲" switch is on, start the restored queue at its
@@ -594,6 +598,17 @@ final class MusicPlayerViewModel: ObservableObject {
     /// remote lists), so a later 切歌 can reload the list when
     /// the in-memory queue is gone. Nil = one-off play, no
     /// place to reload from; the context is cleared then.
+    /// b46: a manual play re-asks every source for that song.
+    /// A failure remembered from an earlier attempt (a slow
+    /// network timeout, a transient error) must not make the
+    /// song unplayable for 10 minutes when the user explicitly
+    /// asks for it now. Automatic skips (handleCurrentSongFailed)
+    /// do NOT call this: a dead song is skipped past quickly
+    /// there, and the memory is what makes that skip instant.
+    private func clearResolveFailure(for song: MusicSong) {
+        coordinator.clearResolveFailureMemory(forSongId: song.songId)
+    }
+
     func play(song: MusicSong, in tracks: [MusicSong]? = nil, startAt: Int? = nil, resumeFrom: Double? = nil, source: PlaySource? = nil, sourceDisplayName: String? = nil) {
         if queue.isCurrentTrack(song),
            let track = player.currentTrack,
@@ -616,6 +631,7 @@ final class MusicPlayerViewModel: ObservableObject {
         } else {
             queue = MusicQueue(tracks: [song], index: 0)
             currentPlayContext = nil
+            persistPlayContext()
         }
         expectedItemId = song.identityKey
         // H1: arm the resume seek (if any) BEFORE startPlayback.
@@ -630,6 +646,7 @@ final class MusicPlayerViewModel: ObservableObject {
         } else if pendingResume?.key != song.identityKey {
             pendingResume = nil
         }
+        clearResolveFailure(for: song)
         startPlayback()
         hapticTick()
     }
@@ -650,7 +667,12 @@ final class MusicPlayerViewModel: ObservableObject {
     /// the song); it is stored on the queued copy's localPath so the
     /// playback item carries a file URL and the resolver is bypassed.
     /// Local-library songs already carry localPath.
-    func playLocal(song: MusicSong, fileURL: URL? = nil) {
+    /// b46: `tracks` + `source` keep the list reloadable for
+    /// track switching, exactly like play(song:in:source:). The
+    /// tapped song's localPath-carrying copy replaces its slot
+    /// in the queued list, so the file (not a network resolve)
+    /// is what plays for it.
+    func playLocal(song: MusicSong, fileURL: URL? = nil, in tracks: [MusicSong]? = nil, startAt: Int? = nil, source: PlaySource? = nil, sourceDisplayName: String? = nil) {
         var song = song
         if let fileURL = fileURL { song.localPath = fileURL.path }
         // B8: the same song is currently playing from a remote
@@ -665,7 +687,14 @@ final class MusicPlayerViewModel: ObservableObject {
             player.stop()
             coordinator.stop()
         }
-        play(song: song, in: [song], startAt: 0)
+        if let tracks = tracks {
+            let start = startAt ?? tracks.firstIndex(where: { $0.identityKey == song.identityKey }) ?? 0
+            var queueTracks = tracks
+            if start >= 0 && start < queueTracks.count { queueTracks[start] = song }
+            play(song: song, in: queueTracks, startAt: start, source: source, sourceDisplayName: sourceDisplayName)
+        } else {
+            play(song: song, in: [song], startAt: 0)
+        }
     }
 
     private func startPlayback() {
@@ -785,6 +814,8 @@ final class MusicPlayerViewModel: ObservableObject {
             return
         }
         guard let song = currentSong else { return }
+        // b46: manual retry — re-ask every source for this song.
+        clearResolveFailure(for: song)
         if queue.isCurrentTrack(song) {
             expectedItemId = song.identityKey
             startPlayback()
@@ -831,6 +862,8 @@ final class MusicPlayerViewModel: ObservableObject {
     func retryCurrentSong() {
         guard let song = currentSong else { return }
         loadFailed = false
+        // b46: manual retry — re-ask every source for this song.
+        clearResolveFailure(for: song)
         if queue.isCurrentTrack(song) {
             expectedItemId = song.identityKey
             startPlayback()
@@ -864,6 +897,9 @@ final class MusicPlayerViewModel: ObservableObject {
         }
         switch queue.nextStep(mode: playMode) {
         case .play(let index):
+            // b46: manual switch — re-ask every source for the
+            // target song (see clearResolveFailure).
+            clearResolveFailure(for: queue.tracks[index])
             playFromQueue(at: index)
         case .restartCurrent:
             restartCurrentSong()
@@ -882,6 +918,9 @@ final class MusicPlayerViewModel: ObservableObject {
         }
         switch queue.prevStep(mode: playMode) {
         case .play(let index):
+            // b46: manual switch — re-ask every source for the
+            // target song (see clearResolveFailure).
+            clearResolveFailure(for: queue.tracks[index])
             playFromQueue(at: index)
         case .restartCurrent:
             restartCurrentSong()
@@ -1366,9 +1405,32 @@ final class MusicPlayerViewModel: ObservableObject {
     /// copy — without the snapshot the reload would have nothing
     /// to read once the owning view is gone. A nil source clears
     /// the context: a one-off play has no place.
+    /// b46: the play context is persisted to disk (b45 kept it
+    /// in memory only, so a relaunch lost the playlist and the
+    /// next tap could only restart the same song). The snapshot
+    /// already lives on disk; only the context itself was missing.
+    private static let persistedContextKey = "hao.currentPlayContext"
+
+    private func persistPlayContext() {
+        guard let context = currentPlayContext,
+              let data = try? JSONEncoder().encode(context) else {
+            UserDefaults.standard.removeObject(forKey: Self.persistedContextKey)
+            return
+        }
+        UserDefaults.standard.set(data, forKey: Self.persistedContextKey)
+    }
+
+    private func restorePersistedPlayContext() {
+        guard let data = UserDefaults.standard.data(forKey: Self.persistedContextKey),
+              let context = try? JSONDecoder().decode(PlayContext.self, from: data),
+              !context.songKeys.isEmpty else { return }
+        currentPlayContext = context
+    }
+
     private func recordPlayContext(source: PlaySource?, displayName: String?, tracks: [MusicSong]) {
         guard let source = source else {
             currentPlayContext = nil
+            persistPlayContext()
             return
         }
         currentPlayContext = PlayContext(
@@ -1378,6 +1440,7 @@ final class MusicPlayerViewModel: ObservableObject {
             lastPlayedAt: Date().timeIntervalSince1970)
         PlaylistSnapshotStore.save(PlaylistSnapshot(
             source: source, displayName: displayName ?? source.id, songs: tracks))
+        persistPlayContext()
     }
 
     /// The current context's songs, re-read from wherever that
@@ -1400,7 +1463,16 @@ final class MusicPlayerViewModel: ObservableObject {
         case .favourites:
             let favs = MusicLibraryStore.favSongs()
             return favs.isEmpty ? nil : favs
-        case .album, .artist, .chart, .daily, .heartbeat, .fm:
+        case .local:
+            // b46: local files are read live from the store — a
+            // deleted file must not come back from the snapshot.
+            let local = MusicLibraryStore.localSongs()
+            return local.isEmpty ? nil : local
+        case .downloads:
+            // b46: explicit downloads, read live from the store.
+            let downloaded = MusicLibraryStore.getDownloads().map { $0.song }
+            return downloaded.isEmpty ? nil : downloaded
+        case .album, .artist, .chart, .daily, .heartbeat, .fm, .search, .discover:
             return PlaylistSnapshotStore.load(source: context.source)?.musicSongs
         }
     }

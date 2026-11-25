@@ -309,7 +309,8 @@ struct MusicChartDetailView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 MusicCapsuleButton(icon: "play.fill", label: "播放全部", enabled: !viewModel.tracks.isEmpty) {
-                    playerVM.playAll(viewModel.tracks)
+                    // b46: chart list is a reloadable place.
+                    playerVM.playAll(viewModel.tracks, source: PlaySource(kind: .chart, id: chart.id), sourceDisplayName: chart.name)
                 }
             }
         }

@@ -69,7 +69,8 @@ struct MusicFavouritesView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 MusicCapsuleButton(icon: "play.fill", label: "播放全部", enabled: !libraryVM.favSongs.isEmpty) {
-                    playerVM.playAll(libraryVM.favSongs)
+                    // b46: favourites list is a reloadable place.
+                    playerVM.playAll(libraryVM.favSongs, source: PlaySource(kind: .favourites, id: "favourites"), sourceDisplayName: "音乐收藏")
                 }
             }
         }
@@ -643,7 +644,10 @@ struct MusicDownloadsView: View {
                 HStack(spacing: 8) {
                     Button(action: {
                         if fileExists {
-                            playerVM.playLocal(song: download.song, fileURL: libraryVM.downloadedFileURL(for: download))
+                            // b46: downloads are a reloadable place.
+                            let songs = filteredDownloads.map { $0.song }
+                            let at = songs.firstIndex(where: { $0.identityKey == download.song.identityKey }) ?? 0
+                            playerVM.playLocal(song: download.song, fileURL: libraryVM.downloadedFileURL(for: download), in: songs, startAt: at, source: PlaySource(kind: .downloads, id: "downloads"), sourceDisplayName: "下载")
                         }
                     }) {
                         HStack(spacing: 12) {
@@ -827,7 +831,10 @@ struct MusicLocalMusicView: View {
                             showPlatformBadge: false,
                             isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
                             onTap: {
-                                playerVM.playLocal(song: song)
+                                // b46: local library is a reloadable place.
+                                let songs = libraryVM.localSongs
+                                let at = songs.firstIndex(where: { $0.identityKey == song.identityKey }) ?? 0
+                                playerVM.playLocal(song: song, in: songs, startAt: at, source: PlaySource(kind: .local, id: "local"), sourceDisplayName: "本地音乐")
                             }
                         )
                         .listRowBackground(theme.scaffoldBackground)
@@ -853,7 +860,8 @@ struct MusicLocalMusicView: View {
             ToolbarItem(placement: .primaryAction) {
                 MusicCapsuleButton(icon: "play.fill", label: "播放全部", enabled: !libraryVM.localSongs.isEmpty) {
                     if let first = libraryVM.localSongs.first {
-                        playerVM.play(song: first, in: libraryVM.localSongs, startAt: 0)
+                        // b46: local library is a reloadable place.
+                        playerVM.play(song: first, in: libraryVM.localSongs, startAt: 0, source: PlaySource(kind: .local, id: "local"), sourceDisplayName: "本地音乐")
                     }
                 }
             }

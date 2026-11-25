@@ -177,7 +177,7 @@ struct MusicAlbumDetailView: View {
                                 onToggleFavourite: {
                                     isFavAlbum = MusicLibraryStore.toggleFavAlbum(album)
                                 },
-                                onPlay: { playerVM.playAll(viewModel.songs) },
+                                onPlay: { playerVM.playAll(viewModel.songs, source: PlaySource(kind: .album, id: album.id), sourceDisplayName: album.name) },
                                 playEnabled: !viewModel.songs.isEmpty
                             ) {
                                 ShareLink(item: "《\(album.name)》 - \(album.artist)") {

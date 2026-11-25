@@ -450,7 +450,8 @@ struct MusicFMView: View {
         .onAppear {
             fmVM.buildQueue()
             if !fmVM.queue.isEmpty, playerVM.currentSong == nil {
-                playerVM.playAll(fmVM.queue)
+                // b46: FM queue is a reloadable place.
+                playerVM.playAll(fmVM.queue, source: PlaySource(kind: .fm, id: "fm"), sourceDisplayName: fmVM.title)
             }
             refreshFav()
             fmVM.refillIfEmpty()
@@ -504,7 +505,8 @@ struct MusicFMView: View {
             fmVM.refillIfEmpty()
             return
         }
-        playerVM.playAll(fmVM.queue)
+        // b46: FM queue is a reloadable place.
+        playerVM.playAll(fmVM.queue, source: PlaySource(kind: .fm, id: "fm"), sourceDisplayName: fmVM.title)
     }
 
     private func controlsRow(song: MusicSong) -> some View {

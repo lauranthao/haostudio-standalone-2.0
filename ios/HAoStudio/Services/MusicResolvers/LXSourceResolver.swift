@@ -245,6 +245,12 @@ final class LXSourceResolver: SourceResolver {
         // No-op by design: no play-URL cache exists.
     }
 
+    /// b46: manual-play bypass — forget every failure recorded
+    /// for one song, so the next resolve re-asks every source.
+    func clearFailureMemory(forSongId songId: String) {
+        failureMemory.clear(songId: songId)
+    }
+
     // MARK: - Main entry
 
     /// Per-resolve mutable state, owned by the work queue.
@@ -557,12 +563,13 @@ extension LXSourceResolver {
             finished = true
             token.cancel()
             if !background {
+                // b46: a timeout is "slow", not "dead" — it only
+                // cools the source down (deprioritised). It must
+                // NOT enter the 10-minute failure memory, or one
+                // slow attempt makes the song unplayable for
+                // 10 minutes even when the user taps it again.
                 self.cooldown.record(job.key, outcome: .timeout,
                                      milliseconds: Int(timeout * 1000))
-                // b45-F: a timed-out source is remembered as failed
-                // for this song (10 min) — the next resolve skips it
-                // instead of re-asking.
-                self.failureMemory.record(sourceKey: job.key, songId: songId)
             }
             skipTimedOut.add(job.key)
             self.workQueue.async {

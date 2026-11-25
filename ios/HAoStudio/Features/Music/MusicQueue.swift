@@ -484,6 +484,15 @@ enum PlaySourceKind: String, Codable, CaseIterable {
     /// snapshots simply never contain them.
     case favourites
     case chart
+    /// b46: search results and transient home/discovery lists
+    /// are reloadable places too — their snapshot (saved at play
+    /// time) is the reload source. Local files are a stable
+    /// place, read live from the store.
+    case search
+    case discover
+    case local
+    /// b46: explicit downloads, read live from the store.
+    case downloads
 }
 
 struct PlaySource: Codable, Hashable {

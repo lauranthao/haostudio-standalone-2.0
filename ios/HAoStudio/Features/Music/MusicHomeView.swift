@@ -361,7 +361,8 @@ struct MusicHomeView: View {
                                         play: {
                                             let songs = homeVM.discoveredSongs
                                             if let at = songs.firstIndex(where: { $0.identityKey == song.identityKey }) {
-                                                playerVM.play(song: song, in: songs, startAt: at)
+                                                // b46: discovered list is a reloadable place.
+                                                playerVM.play(song: song, in: songs, startAt: at, source: PlaySource(kind: .discover, id: "discovered"), sourceDisplayName: "发现歌曲")
                                             }
                                         }
                                     )
@@ -469,7 +470,8 @@ struct MusicHomeView: View {
                     VStack(spacing: 1) {
                         ForEach(Array(tracks.prefix(10).enumerated()), id: \.element.id) { index, song in
                             Button(action: {
-                                playerVM.play(song: song, in: tracks, startAt: index)
+                                // b46: chart list is a reloadable place.
+                                playerVM.play(song: song, in: tracks, startAt: index, source: PlaySource(kind: .chart, id: chart.id), sourceDisplayName: chart.name)
                             }) {
                                 HStack(spacing: 12) {
                                     Text("\(index + 1)")
@@ -528,7 +530,8 @@ struct MusicHomeView: View {
                                     discoverSongCell(song: song) {
                                         let songs = homeVM.regionalHotSongs
                                         if let at = songs.firstIndex(where: { $0.identityKey == song.identityKey }) {
-                                            playerVM.play(song: song, in: songs, startAt: at)
+                                            // b46: regional-hot list is a reloadable place.
+                                            playerVM.play(song: song, in: songs, startAt: at, source: PlaySource(kind: .discover, id: "regional-hot"), sourceDisplayName: "地区热门")
                                         }
                                     }
                                     .frame(width: columnWidth, alignment: .leading)
@@ -738,7 +741,8 @@ struct MusicHomeView: View {
                             icon: "play.fill", label: "播放全部",
                             enabled: !homeVM.recent.isEmpty
                         ) {
-                            playerVM.playAll(homeVM.recent)
+                            // b46: recent plays are a reloadable place.
+                            playerVM.playAll(homeVM.recent, source: PlaySource(kind: .recent, id: "recent"), sourceDisplayName: "最近播放")
                         }
                     })
                 },

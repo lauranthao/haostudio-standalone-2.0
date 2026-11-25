@@ -252,9 +252,11 @@ struct HomeView: View {
                         HomeSongCard(song: song, resumeSeconds: viewModel.continueListeningResumeSeconds) {
                             // H1: the tap resumes from the stored
                             // checkpoint (nil = recent fallback, from 0).
+                            // b46: continue-listening is the recent place.
                             playerVM.play(
                                 song: song, in: continueListeningQueue(for: song), startAt: 0,
-                                resumeFrom: viewModel.continueListeningResumeSeconds.map { Double($0) })
+                                resumeFrom: viewModel.continueListeningResumeSeconds.map { Double($0) },
+                                source: PlaySource(kind: .recent, id: "recent"), sourceDisplayName: "最近播放")
                         }
                     }
                 }
@@ -319,7 +321,7 @@ struct HomeView: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(viewModel.daily.enumerated()), id: \.element.id) { index, song in
-                        songRow(song: song, tracks: viewModel.daily, index: index)
+                        songRow(song: song, tracks: viewModel.daily, index: index, source: PlaySource(kind: .daily, id: "daily"), sourceDisplayName: "每日推荐")
                     }
                 }
                 .padding(.horizontal, 24)
@@ -342,7 +344,7 @@ struct HomeView: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(viewModel.recentPlays.prefix(10).enumerated()), id: \.element.id) { index, song in
-                        songRow(song: song, tracks: viewModel.recentPlays, index: index)
+                        songRow(song: song, tracks: viewModel.recentPlays, index: index, source: PlaySource(kind: .recent, id: "recent"), sourceDisplayName: "最近播放")
                     }
                 }
                 .padding(.horizontal, 24)
@@ -364,12 +366,14 @@ struct HomeView: View {
     /// nothing else: daily is per-day cached and stable, recent
     /// / continue-listening do not depend on favourites.
     /// (Build 36, item 10.)
-    private func songRow(song: MusicSong, tracks: [MusicSong], index: Int) -> some View {
+    /// b46: `source` is the row's reloadable place — without it
+    /// a tap loses the playlist for track switching.
+    private func songRow(song: MusicSong, tracks: [MusicSong], index: Int, source: PlaySource? = nil, sourceDisplayName: String? = nil) -> some View {
         MusicSongRow(
             song: song,
             isPlaying: isPlaying(song),
             onTap: {
-                playerVM.play(song: song, in: tracks, startAt: index)
+                playerVM.play(song: song, in: tracks, startAt: index, source: source, sourceDisplayName: sourceDisplayName)
             }
         )
         .padding(.vertical, 6)
@@ -502,7 +506,8 @@ private struct HomeRecentPlaysView: View {
                             song: song,
                             isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
                             onTap: {
-                                playerVM.play(song: song, in: viewModel.allRecentPlays, startAt: index)
+                                // b46: recent plays are a reloadable place.
+                                playerVM.play(song: song, in: viewModel.allRecentPlays, startAt: index, source: PlaySource(kind: .recent, id: "recent"), sourceDisplayName: "最近播放")
                             }
                             // No onToggleFav: same as the home
                             // songRow — the row flips its own

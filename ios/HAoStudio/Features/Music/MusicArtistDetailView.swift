@@ -150,7 +150,7 @@ struct MusicArtistDetailView: View {
                         onToggleFavourite: {
                             isFavArtist = MusicLibraryStore.toggleFavArtist(artist)
                         },
-                        onPlay: { playerVM.playAll(viewModel.songs) },
+                        onPlay: { playerVM.playAll(viewModel.songs, source: PlaySource(kind: .artist, id: artist.id), sourceDisplayName: artist.name) },
                         playEnabled: !viewModel.songs.isEmpty
                     ) {
                         ShareLink(item: artist.name) {

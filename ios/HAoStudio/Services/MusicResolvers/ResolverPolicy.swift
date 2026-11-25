@@ -281,6 +281,17 @@ final class ResolveFailureMemory {
         }
     }
 
+    /// b46: forget every failure recorded for one song (manual
+    /// play: the user asked for this song now, so all sources
+    /// are re-asked). Keys are `sourceKey|songId`.
+    func clear(songId: String) {
+        purgeExpired()
+        let suffix = "|\(songId)"
+        for key in failedAt.keys where key.hasSuffix(suffix) {
+            failedAt.removeValue(forKey: key)
+        }
+    }
+
     /// True when this source failed for this song within the TTL.
     /// `before` bounds the memory to failures recorded before a
     /// resolve started: a source that fails mid-resolve must still

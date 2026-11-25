@@ -808,7 +808,9 @@ private struct MyRecentPlaysView: View {
                     MusicCapsuleButton(icon: "play.fill", label: "播放全部", enabled: !recent.isEmpty) {
                         // One-tap replay of the recent context
                         // (PlaySource .recent, kind + id).
-                        playerVM.playAll(recent)
+                        // b46: the source was missing — the context
+                        // was never recorded, so switching lost it.
+                        playerVM.playAll(recent, source: PlaySource(kind: .recent, id: "recent"), sourceDisplayName: "最近播放")
                     }
                 }
             }
