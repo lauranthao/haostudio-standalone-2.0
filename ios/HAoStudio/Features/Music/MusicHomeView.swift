@@ -159,6 +159,10 @@ struct MusicHomeView: View {
         Button(action: { path.append(.search) }) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
+                    // b49fix5 P2-31: magnifiers are 15 semibold
+                    // (.haoSubheadStrong) site-wide — this had no
+                    // .font (default 17).
+                    .font(.haoSubheadStrong)
                     .foregroundStyle(theme.textSecondary)
                 Text("搜索歌曲、歌手、专辑、歌单")
                     .font(.haoSubhead)
@@ -605,7 +609,7 @@ struct MusicRecommendView: View {
             MusicCoverView(urlString: summary.cover, size: 56, cornerRadius: HaoLayout.cornerSmall)
             VStack(alignment: .leading, spacing: 2) {
                 Text(summary.name)
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.haoBodyMedium)
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1)
                 Text(plazaMiniSubtitle(summary))
@@ -691,7 +695,7 @@ struct MusicRecommendView: View {
                 MusicCoverView(urlString: song.cover, size: 48, cornerRadius: 6)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(song.title.isEmpty ? "未知歌曲" : song.title)
-                        .font(.system(size: 17, weight: .medium))
+                        .font(.haoBodyMedium)
                         .foregroundStyle(theme.textPrimary)
                         .lineLimit(1)
                     Text(song.artist.isEmpty ? "未知艺人" : song.artist)
@@ -808,7 +812,7 @@ struct MusicRecommendView: View {
                                             .foregroundStyle(index < 3 ? theme.accentText : theme.textSecondary)
                                             .frame(width: 28, alignment: .center)
                                         Text(song.title.isEmpty ? "未知歌曲" : song.title)
-                                            .font(.system(size: 17, weight: .medium))
+                                            .font(.haoBodyMedium)
                                             .foregroundStyle(theme.textPrimary)
                                             .lineLimit(1)
                                             .truncationMode(.tail)
@@ -997,7 +1001,7 @@ struct MusicRecommendView: View {
                                 VStack(spacing: 8) {
                                     MusicCoverView(urlString: artist.cover, size: 128, cornerRadius: 64)
                                     Text(artist.name)
-                                        .font(.system(size: 17, weight: .medium))
+                                        .font(.haoBodyMedium)
                                         .foregroundStyle(theme.textPrimary)
                                         .lineLimit(1)
                                         .frame(width: 140, alignment: .center)
@@ -1086,7 +1090,7 @@ struct MusicFeatureCollageCard: View {
                             .font(.system(size: 20, weight: .bold))
                             .foregroundStyle(.white)
                             .frame(width: 40, height: 40)
-                            .background(Color.white.opacity(0.28), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .background(Color.white.opacity(0.28), in: RoundedRectangle(cornerRadius: HaoLayout.chipCornerRadius, style: .continuous))
                     }
                 }
                 .padding(12)
@@ -1098,7 +1102,7 @@ struct MusicFeatureCollageCard: View {
                         .foregroundStyle(.white)
                         .lineLimit(1)
                     Text(subtitle)
-                        .font(.system(size: 17))
+                        .font(.haoBody)
                         .foregroundStyle(Color.white.opacity(0.85))
                         .lineLimit(1)
                 }

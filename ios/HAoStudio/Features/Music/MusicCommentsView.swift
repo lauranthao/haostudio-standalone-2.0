@@ -183,8 +183,13 @@ struct MusicCommentsView: View {
                                         Button("加载失败，点按重试") {
                                             viewModel.loadMore()
                                         }
-                                        .font(.haoFootnoteStrong)
+                                        .font(.haoFootnoteMedium)
                                         .foregroundStyle(theme.accentText)
+                                        // b49fix5 P2-23: List rows carry
+                                        // their own top 12 (the
+                                        // standard top spacing for
+                                        // inline retries).
+                                        .padding(.top, 12)
                                         .frame(maxWidth: .infinity, alignment: .center)
                                         .listRowBackground(theme.scaffoldBackground)
                                     } else if viewModel.hasMore {

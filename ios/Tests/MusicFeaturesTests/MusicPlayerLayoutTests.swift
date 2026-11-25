@@ -42,7 +42,11 @@ final class MusicPlayerLayoutTests: XCTestCase {
         // grows back 249 → 271. b47-player Coda check: the control
         // gaps are Coda's 24/36, not 6/0 (budget 396 → 450), so
         // the shortest phone's cover shrinks back 271 → 217.
-        XCTAssertEqual(MusicPlayerLayout.coverSize(screenWidth: 375, screenHeight: 667), 217)
+        // b49fix5 P2-6: the 346 budget was 16pt short of the
+        // measured rows (the cover's top 8 + progress 49, not 48)
+        // — honest chrome 371, height term 475, so the shortest
+        // phone's cover shrinks again 217 → 192.
+        XCTAssertEqual(MusicPlayerLayout.coverSize(screenWidth: 375, screenHeight: 667), 192)
     }
 
     func testWholePlayerFitsOneScreen() {
@@ -51,6 +55,45 @@ final class MusicPlayerLayoutTests: XCTestCase {
                 MusicPlayerLayout.fitsOneScreen(screenWidth: w, screenHeight: h),
                 "\(w)x\(h)")
         }
+    }
+
+    // MARK: - Portrait load-failed banner (b49fix5 P1-1 / P2-6)
+
+    func testCoverSizeShrinksByBannerWhenLoadFailed() {
+        // The banner costs 52pt (42 + top 10) and the cover
+        // absorbs it: where the height term binds in both states
+        // the slot shrinks by exactly 52 (360x780: 305 → 253).
+        XCTAssertEqual(
+            MusicPlayerLayout.coverSize(screenWidth: 360, screenHeight: 780, loadFailed: true), 253)
+        XCTAssertEqual(
+            MusicPlayerLayout.coverSize(screenWidth: 360, screenHeight: 780), 305)
+        // Width/cap-bound screens shrink less (the base was not
+        // height-bound): 375x812 is width-bound at 327, so the
+        // failed slot is 285.
+        XCTAssertEqual(
+            MusicPlayerLayout.coverSize(screenWidth: 375, screenHeight: 812, loadFailed: true), 285)
+        // Shortest phone: the slot floors at 180 and cannot absorb
+        // the banner — see testWholePlayerFitsOneScreenWhenLoadFailed.
+        XCTAssertEqual(
+            MusicPlayerLayout.coverSize(screenWidth: 375, screenHeight: 667, loadFailed: true), 180)
+    }
+
+    func testWholePlayerFitsOneScreenWhenLoadFailed() {
+        // The banner state fits wherever the slot is not floored:
+        // the cover shrank by the banner, so the column total is
+        // the no-banner total. The 667 fiction fails (the slot
+        // floors at 180: 180 + 371 + 52 + 93 = 696 > 667) — but a
+        // real 667 phone is a home-button phone (safe areas 20,
+        // not 93), so it fits at 623pt; the test pins the floored
+        // cover above instead of claiming the fiction fits.
+        for (w, h) in screens where h > 667 {
+            XCTAssertTrue(
+                MusicPlayerLayout.fitsOneScreen(screenWidth: w, screenHeight: h, loadFailed: true),
+                "\(w)x\(h) loadFailed")
+        }
+        XCTAssertFalse(
+            MusicPlayerLayout.fitsOneScreen(screenWidth: 375, screenHeight: 667, loadFailed: true),
+            "667 loadFailed: fiction only — real device safe areas are 20, not 93")
     }
 
     func testTransportButtonsStayInsideTheScreen() {
@@ -112,6 +155,22 @@ final class MusicPlayerLayoutTests: XCTestCase {
                 MusicPlayerLayout.landscapeFitsOneScreen(safeWidth: w, safeHeight: h),
                 "\(w)x\(h)")
         }
+    }
+
+    func testLandscapePlayerFitsOneScreenWhenLoadFailed() {
+        // b49fix5 P1-1: the banner moved to the LEFT column under
+        // the cover — the right column is unchanged, so only the
+        // left-column check gains a term (cover + 42 + top 8).
+        // SE 1st gen is the tightest: 224 + 50 = 274 ≤ 320.
+        for (w, h) in landscapeScreens {
+            XCTAssertTrue(
+                MusicPlayerLayout.landscapeFitsOneScreen(safeWidth: w, safeHeight: h, loadFailed: true),
+                "\(w)x\(h) loadFailed")
+        }
+        let seCover = MusicPlayerLayout.landscapeCoverSize(safeWidth: 568, safeHeight: 320)
+        XCTAssertEqual(seCover, 224)
+        XCTAssertEqual(seCover + MusicPlayerLayout.loadFailedBannerHeight + 8, 274)
+        XCTAssertLessThanOrEqual(seCover + MusicPlayerLayout.loadFailedBannerHeight + 8, 320)
     }
 
     func testLandscapeRightColumnLeavesRoomForTransport() {

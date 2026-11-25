@@ -410,7 +410,13 @@ struct MusicPlaylistDetailView: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 17, weight: .semibold))
+                // b49fix5 P2-31: magnifiers are 15 semibold
+                // (.haoSubheadStrong) site-wide, like every other
+                // search box — this was a literal 17 semibold
+                // (P2-36's mechanical mapping would say
+                // .haoBodyStrong, but the magnifier unification
+                // governs here).
+                .font(.haoSubheadStrong)
                 .foregroundStyle(theme.textSecondary)
             TextField("搜索歌名、歌手或专辑", text: $searchText)
                 .font(.haoSubhead)
@@ -426,7 +432,15 @@ struct MusicPlaylistDetailView: View {
         }
         .padding(.horizontal, 16)
         .frame(height: HaoLayout.detailSearchHeight)
-        .background(Color.primary.opacity(0.06), in: Capsule())
+        // b49fix5 P2-31: page-top entry grammar — theme.surface +
+        // hairline (was a 0.06 fill with no hairline). Capsule
+        // shape and 44pt height stay (this is an in-page capsule
+        // search, not a page-top entry).
+        .background(theme.surface, in: Capsule())
+        .overlay {
+            Capsule()
+                .strokeBorder(theme.hairline, lineWidth: 0.5)
+        }
     }
 
     private var playlistIntroSheet: some View {
