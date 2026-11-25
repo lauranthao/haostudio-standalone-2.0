@@ -2,7 +2,7 @@
 
 ![iOS 17.0+](https://img.shields.io/badge/iOS-17.0%2B-black)
 ![Swift 5.0](https://img.shields.io/badge/Swift-5.0-orange)
-![License AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue)
+![License MIT](https://img.shields.io/badge/License-MIT-green)
 
 **音乐、影视、直播，三合一的原生 iOS 播放器。**
 
@@ -155,9 +155,7 @@ version.json                # 当前版本、更新日志、IPA 地址
 
 ## 许可证
 
-[GNU AGPL-3.0](LICENSE) © 2026 HAo Studio
-
-2026-11-25 由 MIT 改为 GNU AGPL-3.0：与 Coda 同许可证，本项目可以直接复用 Coda 的代码（保留其版权与许可证声明）。改用 AGPL 后，任何人分发或联网提供修改版都必须同样开源。
+[MIT](LICENSE) © 2026 HAo Studio
 
 ## 免责声明
 
