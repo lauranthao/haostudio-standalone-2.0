@@ -473,11 +473,15 @@ struct MusicPressScaleStyle: ButtonStyle {
 
 /// Collapsible section header (Flutter CollapsibleSection): 22
 /// semibold title, chevron, optional trailing control.
+/// b40: `titleFont` lets one page ask for the visibly larger
+/// header (MusicHomeView passes 28 bold, vibrdrome's section
+/// size) without changing the shared default everywhere else.
 struct MusicSectionHeader: View {
     var title: String
     var expanded: Bool
     var onToggle: () -> Void
     var trailing: (() -> AnyView)? = nil
+    var titleFont: Font = .haoDetailTitle
 
     @Environment(\.haoTheme) private var theme
 
@@ -486,7 +490,7 @@ struct MusicSectionHeader: View {
             Button(action: { withAnimation(HaoLayout.settleSpring) { onToggle() } }) {
                 HStack(spacing: 6) {
                     Text(title)
-                        .font(.haoDetailTitle)
+                        .font(titleFont)
                         .foregroundStyle(theme.textPrimary)
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
                         .font(.haoDenseTitle)
