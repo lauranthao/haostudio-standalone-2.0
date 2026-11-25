@@ -709,7 +709,7 @@ extension BackupEngineCore {
 
         // 1. Plan: classify every data key and every zip entry
         // BEFORE touching storage. Nothing is written in this step.
-        let plan = planImport(data: data, entries: entries, zipURL: zipURL, documentsURL: docs)
+        let plan = planImport(data: data, entries: entries, zipURL: zipURL)
         switch plan {
         case .failure(let reason):
             // b49fix4 P2-36: the plan runs before any write, so
@@ -785,8 +785,7 @@ extension BackupEngineCore {
     private static func planImport(
         data: [String: Any],
         entries: [ZipEntryInfo],
-        zipURL: URL,
-        documentsURL: URL
+        zipURL: URL
     ) -> ImportPlan {
         var planned = PlannedImport()
         let kinds = userDefaultsKeyKinds()
@@ -946,6 +945,249 @@ extension BackupEngineCore {
 extension BackupEngineCore {
     // MARK: - Import: snapshot, apply, verify, roll back
 
+    // MARK: - Collection writes (b49fix16 P1-1/P1-2/P2-5/P2-6)
+
+    /// Outcome of one collection write, distinguishing the two
+    /// failure kinds (b49fix16 P2-5): a serialisation failure
+    /// is NOT a write failure — reporting it as one sends the
+    /// diagnosis to the disk when the bytes were never formable.
+    private enum CollectionWriteOutcome {
+        case written(Data)
+        case serializationFailed
+        case writeFailed
+    }
+
+    /// Collections a concurrent writer can change while an
+    /// import runs (b49fix16 P1-2): a resume checkpoint
+    /// (musicResume, at most once per 10 s of playback), a song
+    /// switch (hao_recent), a pool pin (hao_daily_pool), a
+    /// listen completion (hao_listen), a daily replace
+    /// (hao_daily). Byte-equality verify would fail the whole
+    /// import whenever one of them lands between the write and
+    /// the verify — an import over 10 s while music plays would
+    /// almost certainly fail — so these verify by subset
+    /// instead: every imported entry must still be present, but
+    /// a concurrent writer's later additions do not fail the
+    /// import. haoVodProg has no live writer in 2.0; it is
+    /// listed because it merges like the others and subset is
+    /// equivalent to byte equality when nothing else writes it.
+    private static let concurrentlyWrittenCollections: Set<String> = [
+        "hao_listen", "hao_daily", "haoVodProg",
+        "musicResume", "hao_recent", "hao_daily_pool",
+    ]
+
+    /// Writes one planned collection (b49fix16 P1-1): the three
+    /// merge files (hao_listen, hao_daily, haoVodProg) do NOT
+    /// take the whole-file overwrite — a listen completion /
+    /// daily replace landing before this write would be
+    /// overwritten by the backup's bytes. They merge at apply
+    /// time instead (same helpers the merged-files loop uses,
+    /// so the two paths cannot drift apart). An unparseable
+    /// backup file cannot merge; it falls back to the
+    /// whole-file write (the old behaviour — the on-disk file
+    /// was already unreadable, and the backup's bytes are the
+    /// best available repair).
+    private static func writeCollection(
+        _ collection: PlannedCollection,
+        documentsURL: URL
+    ) -> CollectionWriteOutcome {
+        switch collection.name {
+        case "hao_listen":
+            guard let parsed = try? JSONSerialization.jsonObject(with: collection.bytes, options: []),
+                  let list = parsed as? [[String: Any]]
+            else { return writeWholeCollection(collection, documentsURL: documentsURL) }
+            return mergeListenEntries(list, documentsURL: documentsURL)
+        case "hao_daily", "haoVodProg":
+            guard let parsed = try? JSONSerialization.jsonObject(with: collection.bytes, options: []),
+                  let dict = parsed as? [String: Any]
+            else { return writeWholeCollection(collection, documentsURL: documentsURL) }
+            return mergeDictEntries(dict, into: collection.name, documentsURL: documentsURL)
+        default:
+            return writeWholeCollection(collection, documentsURL: documentsURL)
+        }
+    }
+
+    /// The pre-fix16 collections write: whole-file, atomic.
+    /// Kept for every collection that does not merge, and as
+    /// the fallback for an unparseable merge file.
+    private static func writeWholeCollection(
+        _ collection: PlannedCollection,
+        documentsURL: URL
+    ) -> CollectionWriteOutcome {
+        let url = documentsURL.appendingPathComponent(collection.name + ".json")
+        do {
+            try collection.bytes.write(to: url, options: [.atomic])
+        } catch {
+            return .writeFailed
+        }
+        return .written(collection.bytes)
+    }
+
+    /// Merges incoming listen entries into the live hao_listen
+    /// file: re-read → append → dedupe → cap 3000 → write,
+    /// whole under MigrationStore.listenLogWriteQueue, the same
+    /// queue recordListenEvent uses. Shared by the collections
+    /// loop (b49fix16 P1-1) and the merged-files loop (b49fix15
+    /// P2-1) — one rule for both import paths. Returns the
+    /// merged bytes so the caller can verify them (subset,
+    /// b49fix16 P1-2).
+    private static func mergeListenEntries(
+        _ incoming: [[String: Any]],
+        documentsURL: URL
+    ) -> CollectionWriteOutcome {
+        MigrationStore.listenLogWriteQueue.sync { () -> CollectionWriteOutcome in
+            var existing = MigrationStore.readJSONList(name: "hao_listen", documentsURL: documentsURL)
+            existing.append(contentsOf: incoming)
+            // b49fix2 P2-11: a re-import of the same backup used
+            // to double the history (append with no dedupe).
+            // Same song at the same second is the same listen,
+            // not two.
+            existing = MigrationStore.dedupedListenEntries(existing)
+            if existing.count > 3000 {
+                existing = Array(existing.suffix(3000))
+            }
+            guard let merged = try? JSONSerialization.data(withJSONObject: existing, options: []) else {
+                return .serializationFailed
+            }
+            do {
+                try merged.write(to: documentsURL.appendingPathComponent("hao_listen.json"), options: [.atomic])
+            } catch {
+                return .writeFailed
+            }
+            return .written(merged)
+        }
+    }
+
+    /// Merges incoming dict entries into the live file:
+    /// re-read → overlay → cap → write, whole under
+    /// MigrationStore.dailyWriteQueue, the same queue
+    /// saveDailyTracks / saveDailyTracksIfUnchanged use — a
+    /// replace landing between the re-read and the write is
+    /// serialised after this write instead of being
+    /// overwritten by it. Shared by the collections loop
+    /// (b49fix16 P1-1) and the merged-files loop. haoVodProg's
+    /// cap is deterministic (b49fix16 P2-6).
+    private static func mergeDictEntries(
+        _ incoming: [String: Any],
+        into name: String,
+        documentsURL: URL
+    ) -> CollectionWriteOutcome {
+        MigrationStore.dailyWriteQueue.sync { () -> CollectionWriteOutcome in
+            var existing = MigrationStore.readJSONDictionary(name: name, documentsURL: documentsURL)
+            for (key, value) in incoming {
+                existing[key] = value
+            }
+            if name == "haoVodProg" {
+                existing = MigrationStore.cappedVodProgEntries(existing)
+            }
+            guard let merged = try? JSONSerialization.data(withJSONObject: existing, options: []) else {
+                return .serializationFailed
+            }
+            do {
+                try merged.write(to: documentsURL.appendingPathComponent("\(name).json"), options: [.atomic])
+            } catch {
+                return .writeFailed
+            }
+            return .written(merged)
+        }
+    }
+
+    /// Verifies one written collection (b49fix16 P1-2): byte
+    /// equality for ordinary collections; subset for the
+    /// concurrently-written set (see
+    /// concurrentlyWrittenCollections) — a resume checkpoint, a
+    /// song switch, a pool pin, a listen completion or a daily
+    /// replace landing between the write and this check must not
+    /// fail the whole import. An expected value that does not
+    /// parse as a list/dict (the unparseable-bytes fallback)
+    /// falls back to byte equality: subset has nothing to
+    /// compare.
+    private static func collectionVerifies(
+        relativePath: String, expectedBytes: Data, documentsURL: URL
+    ) -> Bool {
+        guard let actualData = try? Data(contentsOf: documentsURL.appendingPathComponent(relativePath)) else {
+            return false
+        }
+        let base = String(relativePath.dropLast(".json".count))
+        guard concurrentlyWrittenCollections.contains(base),
+              let expected = try? JSONSerialization.jsonObject(with: expectedBytes, options: []),
+              let actual = try? JSONSerialization.jsonObject(with: actualData, options: [])
+        else {
+            // Ordinary collection, or unparseable expected bytes
+            // (the whole-file fallback): byte equality.
+            return actualData == expectedBytes
+        }
+        if let expectedList = expected as? [[String: Any]],
+           let actualList = actual as? [[String: Any]] {
+            return listContainsAll(actualList, expectedList)
+        }
+        if let expectedDict = expected as? [String: Any],
+           let actualDict = actual as? [String: Any] {
+            // musicResume and hao_daily_pool verify by key only:
+            // resume seconds are progress markers a checkpoint
+            // legitimately advances (a checkpoint firing for the
+            // currently playing song during a >10 s import would
+            // otherwise fail value-equality subset — the exact
+            // trigger P1-2 reports), and the pool is a pure
+            // derived cache whose value is recomputable, so key
+            // presence is enough. hao_daily and haoVodProg keep
+            // value equality: their values are user data, and a
+            // different value means the imported content was
+            // replaced.
+            let keyOnly = base == "musicResume" || base == "hao_daily_pool"
+            return dictContainsAll(actualDict, expectedDict, keyOnly: keyOnly)
+        }
+        // Expected parses but is neither a list nor a dict (a
+        // scalar): nothing to subset-compare — byte equality.
+        return actualData == expectedBytes
+    }
+
+    /// Multiset subset: every expected entry must still be in
+    /// the actual file, compared by canonical JSON bytes
+    /// (sorted keys) so key order does not matter. A concurrent
+    /// append cannot break it. Edge, accepted: at exactly 3000
+    /// entries a concurrent append can push the oldest imported
+    /// entry out of the cap — extremely unlikely, and the
+    /// failure mode is the same loud failure + rollback as
+    /// today, just far rarer.
+    private static func listContainsAll(
+        _ actual: [[String: Any]], _ expected: [[String: Any]]
+    ) -> Bool {
+        var counts: [Data: Int] = [:]
+        counts.reserveCapacity(actual.count)
+        for entry in actual {
+            guard let bytes = try? JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys]) else { continue }
+            counts[bytes, default: 0] += 1
+        }
+        for entry in expected {
+            guard let bytes = try? JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys]),
+                  let remaining = counts[bytes], remaining > 0
+            else { return false }
+            counts[bytes] = remaining - 1
+        }
+        return true
+    }
+
+    /// Dict subset: every expected key must be present; unless
+    /// keyOnly, with a canonically-equal value. Values compare
+    /// by wrapping them in an array first — data(withJSONObject:)
+    /// on a top-level scalar raises an uncatchable NSException,
+    /// so a bare Double (haoVodProg values) must never be
+    /// serialised directly.
+    private static func dictContainsAll(
+        _ actual: [String: Any], _ expected: [String: Any], keyOnly: Bool
+    ) -> Bool {
+        for (key, expectedValue) in expected {
+            guard let actualValue = actual[key] else { return false }
+            if keyOnly { continue }
+            guard let expectedData = try? JSONSerialization.data(withJSONObject: [expectedValue], options: [.sortedKeys]),
+                  let actualData = try? JSONSerialization.data(withJSONObject: [actualValue], options: [.sortedKeys]),
+                  expectedData == actualData
+            else { return false }
+        }
+        return true
+    }
+
     /// Applies a planned import. Snapshot first — when the
     /// snapshot cannot be created, nothing is written at all.
     /// Every write is synchronous and finishes before this
@@ -973,6 +1215,14 @@ extension BackupEngineCore {
         for file in planned.payloadFiles {
             touchedFiles.append(file.relativePath)
         }
+        // b49fix16 P2-4: dedupe — a foreign backup can carry
+        // both collections/X.json and the matching merge/unknown
+        // input, and createSnapshot copyItem throws on the second
+        // copy of the same path, failing the whole import before
+        // anything is written. Order-preserving dedupe (first
+        // occurrence wins); the snapshot only needs each path once.
+        var seenTouched = Set<String>()
+        touchedFiles = touchedFiles.filter { seenTouched.insert($0).inserted }
         let defaultKeys = planned.defaultWrites.map { $0.key }
 
         guard let snapshotDir = createSnapshot(
@@ -1008,7 +1258,13 @@ extension BackupEngineCore {
             appliedKeys += 1
         }
 
-        // Collections (including merged prefix files).
+        // Collections (b49fix16 P1-1): the three merge files
+        // (hao_listen, hao_daily, haoVodProg) do NOT take the
+        // whole-file overwrite — they merge at apply time via
+        // writeCollection, under the file's serial queue, so a
+        // concurrent writer landing before this write is merged
+        // in, not overwritten by the backup's bytes. The other
+        // collections keep the whole-file write.
         if failureReason == nil {
             for collection in planned.collections.sorted(by: { $0.name < $1.name }) {
                 let relativePath = collection.name + ".json"
@@ -1016,33 +1272,37 @@ extension BackupEngineCore {
                     failureReason = "写入失败：\(relativePath)"
                     break
                 }
-                let url = documentsURL.appendingPathComponent(relativePath)
-                do {
-                    try collection.bytes.write(to: url, options: [.atomic])
-                } catch {
+                switch writeCollection(collection, documentsURL: documentsURL) {
+                case .written(let bytes):
+                    expectedCollectionBytes[relativePath] = bytes
+                    appliedCollections += 1
+                case .serializationFailed:
+                    // b49fix16 P2-5: a serialisation failure is
+                    // reported as one, not as a write failure.
+                    failureReason = "序列化失败：\(relativePath)"
+                case .writeFailed:
                     failureReason = "写入失败：\(relativePath)"
-                    break
                 }
-                expectedCollectionBytes[relativePath] = collection.bytes
-                appliedCollections += 1
+                if failureReason != nil { break }
             }
         }
-        // Merged files (b49fix15 P2-1): the merge happens HERE,
-        // at apply time — the plan only accumulated the incoming
-        // values, so this re-reads the LIVE file first. A listen
-        // event recorded while the import was running is in the
-        // file this merge reads, not overwritten by plan-time
-        // bytes. The listen merge's re-read → merge → write runs
-        // whole under MigrationStore.listenLogWriteQueue, the
-        // same queue recordListenEvent uses — the write must be
-        // in the same critical section as the re-read, or a
-        // completion landing between merge and write is lost.
-        // The dict merges have no concurrent read-modify-write
-        // writer (hao_daily is CAS-guarded, haoVodProg has none)
-        // and need no queue. A serialisation failure here is a
-        // write failure (the old plan-time code silently dropped
-        // the file instead — inputs are JSON-parsed, so this
-        // cannot trigger in practice).
+        // Merged files (b49fix15 P2-1, b49fix16 P1-1/P2-2/P2-5):
+        // the merge happens HERE, at apply time — the plan only
+        // accumulated the incoming values, so this re-reads the
+        // LIVE file first. A listen event recorded while the
+        // import was running is in the file this merge reads,
+        // not overwritten by plan-time bytes. The listen merge's
+        // re-read → merge → write runs whole under
+        // MigrationStore.listenLogWriteQueue, the same queue
+        // recordListenEvent uses; the dict merges run whole
+        // under MigrationStore.dailyWriteQueue, the same queue
+        // saveDailyTracks / saveDailyTracksIfUnchanged use — the
+        // write must be in the same critical section as the
+        // re-read, or a completion / replace landing between
+        // merge and write is lost. A serialisation failure is
+        // reported as one, not as a write failure (b49fix16
+        // P2-5): the bytes were never formable, and sending the
+        // diagnosis to the disk would mislead.
         if failureReason == nil {
             for name in planned.mergedFileNames.sorted() {
                 let relativePath = name + ".json"
@@ -1050,52 +1310,26 @@ extension BackupEngineCore {
                     failureReason = "写入失败：\(relativePath)"
                     break
                 }
-                let url = documentsURL.appendingPathComponent(relativePath)
-                var didWrite = false
-                let bytes: Data?
+                let outcome: CollectionWriteOutcome
                 if name == "hao_listen" {
-                    bytes = MigrationStore.listenLogWriteQueue.sync { () -> Data? in
-                        var existing = MigrationStore.readJSONList(name: name, documentsURL: documentsURL)
-                        existing.append(contentsOf: planned.mergedListInputs[name] ?? [])
-                        // b49fix2 P2-11: same dedupe as MigrationStore's own
-                        // import — a re-import must not double the history.
-                        existing = MigrationStore.dedupedListenEntries(existing)
-                        if existing.count > 3000 {
-                            existing = Array(existing.suffix(3000))
-                        }
-                        guard let merged = try? JSONSerialization.data(withJSONObject: existing, options: []) else { return nil }
-                        do {
-                            try merged.write(to: url, options: [.atomic])
-                        } catch {
-                            return nil
-                        }
-                        didWrite = true
-                        return merged
-                    }
+                    outcome = mergeListenEntries(
+                        planned.mergedListInputs[name] ?? [],
+                        documentsURL: documentsURL)
                 } else {
-                    var existing = MigrationStore.readJSONDictionary(name: name, documentsURL: documentsURL)
-                    for (key, value) in planned.mergedDictInputs[name] ?? [:] {
-                        existing[key] = value
-                    }
-                    if name == "haoVodProg", existing.count > 200 {
-                        existing = Dictionary(uniqueKeysWithValues: Array(existing.prefix(200)))
-                    }
-                    bytes = try? JSONSerialization.data(withJSONObject: existing, options: [])
+                    outcome = mergeDictEntries(
+                        planned.mergedDictInputs[name] ?? [:],
+                        into: name, documentsURL: documentsURL)
                 }
-                guard let bytes else {
+                switch outcome {
+                case .written(let bytes):
+                    expectedCollectionBytes[relativePath] = bytes
+                    appliedCollections += 1
+                case .serializationFailed:
+                    failureReason = "序列化失败：\(relativePath)"
+                case .writeFailed:
                     failureReason = "写入失败：\(relativePath)"
-                    break
                 }
-                if !didWrite {
-                    do {
-                        try bytes.write(to: url, options: [.atomic])
-                    } catch {
-                        failureReason = "写入失败：\(relativePath)"
-                        break
-                    }
-                }
-                expectedCollectionBytes[relativePath] = bytes
-                appliedCollections += 1
+                if failureReason != nil { break }
             }
         }
 
@@ -1157,9 +1391,15 @@ extension BackupEngineCore {
             }
         }
         if failureReason == nil {
-            for entry in expectedCollectionBytes {
-                guard let actual = try? Data(contentsOf: documentsURL.appendingPathComponent(entry.key)),
-                      actual == entry.value
+            // b49fix16 P1-2 + O-3: subset verify for the
+            // concurrently-written files (see collectionVerifies),
+            // byte equality for the rest; sorted so the first
+            // reported file is deterministic — the old Dictionary
+            // iteration reported whichever file hashed first.
+            for entry in expectedCollectionBytes.sorted(by: { $0.key < $1.key }) {
+                guard collectionVerifies(
+                    relativePath: entry.key, expectedBytes: entry.value,
+                    documentsURL: documentsURL)
                 else {
                     failureReason = "校验失败：\(entry.key)"
                     break

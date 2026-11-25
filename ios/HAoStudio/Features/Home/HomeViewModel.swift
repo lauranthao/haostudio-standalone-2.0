@@ -642,19 +642,9 @@ final class HomeViewModel: ObservableObject {
                 // drop a pick mid-reload — backfill the picks
                 // from the (already filtered) spares so the day's
                 // list is not short one until the next reload.
-                // The spares are songId-deduped and disjoint from
-                // the picks, and the moved songs leave the spare
-                // tail, so the 20/20 boundary is preserved. The
-                // total stays short by the disliked count for the
-                // round (the disliked song is gone); the next
-                // reload's <40 branch re-fills the list to 40
-                // from the pinned pool and re-saves. A thin
-                // library (spares empty) stays short, as before.
-                if picksToPublish.count < 20 {
-                    let need = 20 - picksToPublish.count
-                    picksToPublish += sparesToPublish.prefix(need)
-                    sparesToPublish = Array(sparesToPublish.dropFirst(need))
-                }
+                // Shared with Discovery (b49fix16 P2-3).
+                (picksToPublish, sparesToPublish) = Self.backfilledDailyPicks(
+                    picks: picksToPublish, spares: sparesToPublish)
                 self.reload(
                     videoHistory: videoHistory,
                     recent: recent,
@@ -1166,6 +1156,32 @@ final class HomeViewModel: ObservableObject {
             out.append(song)
         }
         return out
+    }
+
+    /// Backfills the publish list from the spares (b49fix9
+    /// P2-4, shared by Home and Discovery since b49fix16
+    /// P2-3): the publish-time dislike filter can drop a pick
+    /// mid-reload — backfill so the day's list is not short one
+    /// until the next reload. The spares are songId-deduped and
+    /// disjoint from the picks, and the moved songs leave the
+    /// spare tail, so the 20/20 boundary is preserved. The
+    /// total stays short by the disliked count for the round
+    /// (the disliked song is gone); the next reload's <40
+    /// branch re-fills the list to 40 from the pinned pool and
+    /// re-saves. A thin library (spares empty) stays short, as
+    /// before. One helper for both call sites so the two publish
+    /// paths cannot drift apart again. Nonisolated (pure).
+    nonisolated static func backfilledDailyPicks(
+        picks: [MusicSong], spares: [MusicSong]
+    ) -> (picks: [MusicSong], spares: [MusicSong]) {
+        var picks = picks
+        var spares = spares
+        if picks.count < 20 {
+            let need = 20 - picks.count
+            picks += spares.prefix(need)
+            spares = Array(spares.dropFirst(need))
+        }
+        return (picks, spares)
     }
 
     /// The day's pinned ranking pool (b49fix7 P2-3): the

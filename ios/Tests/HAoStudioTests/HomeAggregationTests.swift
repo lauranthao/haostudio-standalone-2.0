@@ -425,6 +425,47 @@ final class HomeAggregationTests: XCTestCase {
         XCTAssertNotEqual(before, after)
     }
 
+    // MARK: - Daily backfill (b49fix16 P2-3)
+
+    func testBackfillShortPicksFromSpares() {
+        // A dislike landing mid-reload cuts the picks to 19 —
+        // the first spare fills the gap and leaves the tail.
+        let picks = (1...19).map { song(songId: "p\($0)") }
+        let spares = (1...5).map { song(songId: "s\($0)") }
+        let filled = HomeViewModel.backfilledDailyPicks(picks: picks, spares: spares)
+        XCTAssertEqual(filled.picks.count, 20)
+        XCTAssertEqual(filled.picks.last?.songId, "s1")
+        XCTAssertEqual(filled.spares.map { $0.songId }, ["s2", "s3", "s4", "s5"])
+    }
+
+    func testBackfillLeavesFullPicksAlone() {
+        // 20 by construction: no-op, spares untouched.
+        let picks = (1...20).map { song(songId: "p\($0)") }
+        let spares = (1...5).map { song(songId: "s\($0)") }
+        let filled = HomeViewModel.backfilledDailyPicks(picks: picks, spares: spares)
+        XCTAssertEqual(filled.picks.map { $0.songId }, picks.map { $0.songId })
+        XCTAssertEqual(filled.spares.map { $0.songId }, spares.map { $0.songId })
+    }
+
+    func testBackfillThinLibraryStaysShort() {
+        // Spares empty: nothing to draw from — stays short, as before.
+        let picks = (1...19).map { song(songId: "p\($0)") }
+        let filled = HomeViewModel.backfilledDailyPicks(picks: picks, spares: [])
+        XCTAssertEqual(filled.picks.count, 19)
+        XCTAssertTrue(filled.spares.isEmpty)
+    }
+
+    func testBackfillTakesOnlyWhatSparesHold() {
+        // Spares thinner than the gap: takes all of them, list
+        // still short by the remainder.
+        let picks = (1...18).map { song(songId: "p\($0)") }
+        let spares = [song(songId: "s1")]
+        let filled = HomeViewModel.backfilledDailyPicks(picks: picks, spares: spares)
+        XCTAssertEqual(filled.picks.count, 19)
+        XCTAssertEqual(filled.picks.last?.songId, "s1")
+        XCTAssertTrue(filled.spares.isEmpty)
+    }
+
     func testDailyPicksLikesOutrankFewPlays() {
         // Liked (30) beats a single full play (10 + 5 heard) and a
         // newest-recent bonus (15); the 1-play song beats the
