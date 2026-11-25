@@ -1154,10 +1154,17 @@ final class CmsClient: VideoPlayURLResolver {
     /// `timeout` is the overall cap (default 6 s); home() passes
     /// 3 s (sweep-4 P2-7) so its 9 s row budget is not mostly
     /// eaten by the map fetch.
-    func typeMap(timeout: TimeInterval = 6, completion: @escaping ([String: CmsTypeEntry]) -> Void) {
+    /// The type map: type_name → entry, from every play source's
+    /// `?ac=list` class table (sweep-2 P1-10: the Bool is `anyOk`
+    /// — true when at least one source answered at all. A dead
+    /// CMS used to collapse to an empty map with no failure
+    /// signal, so the browse page read it as "this category has
+    /// no content". An empty map with anyOk means the sources
+    /// answered but list no types — genuinely empty.)
+    func typeMap(timeout: TimeInterval = 6, completion: @escaping ([String: CmsTypeEntry], Bool) -> Void) {
         if let cached = typeMapCache, let at = typeMapAt,
            Date().timeIntervalSince(at) < 600 {
-            completion(cached)
+            completion(cached, true)
             return
         }
         typeMapLock.lock()
@@ -1227,8 +1234,12 @@ final class CmsClient: VideoPlayURLResolver {
             typeMapCache = map
             typeMapAt = Date()
         }
+        // sweep-2 P1-10: anyOk is "a source answered", not "the
+        // map is non-empty" — a source can answer with no class
+        // table, and that is genuinely empty, not a dead source.
+        let anyOk = !tables.isEmpty
         DispatchQueue.main.async {
-            for completion in pending { completion(map) }
+            for completion in pending { completion(map, anyOk) }
         }
     }
 
@@ -1435,7 +1446,7 @@ final class CmsClient: VideoPlayURLResolver {
             return
         }
         let started = Date()
-        typeMap(timeout: 3) { map in
+        typeMap(timeout: 3) { map, _ in
             var names = Array(map.keys)
             names.sort { a, b in
                 let ia = kVideoTypePriority.firstIndex(of: a) ?? -1

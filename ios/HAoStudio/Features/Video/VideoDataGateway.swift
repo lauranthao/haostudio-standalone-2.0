@@ -78,6 +78,12 @@ protocol VideoDataGateway {
     func fetchHome(completion: @escaping ([VideoHomeRow]) -> Void)
     /// Category names for the tab's category strip.
     func fetchTypeNames(completion: @escaping ([String]) -> Void)
+    /// Category names with a failure signal (sweep-2 P1-10): the
+    /// old fetchTypeNames collapses a dead CMS to [], which the
+    /// browse page read as "this category has no content".
+    /// Failure = no source answered at all; an empty success =
+    /// the sources answered but list no types.
+    func fetchTypeNamesResult(completion: @escaping (Result<[String], VideoFetchError>) -> Void)
     /// One category page (0-based). Empty page = end of list.
     /// `area` / `year` / `by` are the CmsClient filter values
     /// ("all" / "all" / "" = unfiltered, exactly what the old
@@ -192,6 +198,14 @@ extension VideoDataGateway {
         completion(.failure(.unreachable()))
     }
 
+    /// Default for fetchTypeNamesResult (sweep-2 P1-10): stubs
+    /// that predate it answer success with whatever the old
+    /// fetchTypeNames returns. The real gateway overrides it
+    /// below with the anyOk signal.
+    func fetchTypeNamesResult(completion: @escaping (Result<[String], VideoFetchError>) -> Void) {
+        fetchTypeNames { completion(.success($0)) }
+    }
+
     /// Default for checkDownloadable (b49 sweep #8): stubs that
     /// predate it answer "not downloadable". The real gateway
     /// overrides it below.
@@ -278,19 +292,36 @@ final class RealVideoDataGateway: VideoDataGateway {
     func fetchTypeNames(completion: @escaping ([String]) -> Void) {
         // Same priority order as CmsClient.home: kVideoTypePriority
         // first, then the rest alphabetically.
-        cms.typeMap { map in
-            var names = Array(map.keys)
-            names.sort { a, b in
-                let ia = kVideoTypePriority.firstIndex(of: a) ?? -1
-                let ib = kVideoTypePriority.firstIndex(of: b) ?? -1
-                if ia >= 0 && ib >= 0 { return ia < ib }
-                if ia >= 0 { return true }
-                if ib >= 0 { return false }
-                return a < b
-            }
-            let sorted = names
-            DispatchQueue.main.async { completion(sorted) }
+        cms.typeMap { map, _ in
+            DispatchQueue.main.async { completion(Self.sortedTypeNames(map)) }
         }
+    }
+
+    /// Category names with the dead-source signal (sweep-2 P1-10):
+    /// failure when no source answered at all — the old
+    /// fetchTypeNames collapses that to [], which the browse page
+    /// read as "this category has no content".
+    func fetchTypeNamesResult(completion: @escaping (Result<[String], VideoFetchError>) -> Void) {
+        cms.typeMap { map, anyOk in
+            DispatchQueue.main.async {
+                completion(anyOk ? .success(Self.sortedTypeNames(map)) : .failure(.unreachable))
+            }
+        }
+    }
+
+    /// Shared sort for both type-name entry points (priority order
+    /// first, then alphabetical).
+    private static func sortedTypeNames(_ map: [String: CmsTypeEntry]) -> [String] {
+        var names = Array(map.keys)
+        names.sort { a, b in
+            let ia = kVideoTypePriority.firstIndex(of: a) ?? -1
+            let ib = kVideoTypePriority.firstIndex(of: b) ?? -1
+            if ia >= 0 && ib >= 0 { return ia < ib }
+            if ia >= 0 { return true }
+            if ib >= 0 { return false }
+            return a < b
+        }
+        return names
     }
 
     func fetchByType(_ type: String, page: Int, area: String, year: String, by: String, completion: @escaping (Result<VideoItemPage, VideoFetchError>) -> Void) {
