@@ -210,3 +210,78 @@ final class MusicSearchOffsetTests: XCTestCase {
         XCTAssertEqual(stale.streak, 2)
     }
 }
+
+/// Snapshot-restore zero-growth tests (b49fix8 P2-5). These drive
+/// the REAL view model (no network: selectTab only restores a
+/// staged snapshot, and the assertions read synchronous state).
+@MainActor
+final class MusicSearchRestoreTests: XCTestCase {
+    func testRestoreClearsZeroGrowthStateForRestoredTabKinds() {
+        // b49fix8 P2-5 repro (same numbers as the ninth-round
+        // P2-5 scenario): the 综合 tab's load-more fired twice
+        // with zero growth — the first records (20, 20), the
+        // second is the forgiven identical repeat (streak 1) —
+        // then the user switches to the artists single tab, whose
+        // snapshot restores 20 rows. The restore must clear the
+        // kind's baseline: the next load-more under the new limit
+        // 50 has never fired, so it must FIRE instead of closing
+        // on the stale (20, 20) baseline. Before the fix the
+        // restore never touched the global per-kind state, so the
+        // identical request closed the kind without ever trying
+        // the limit-50 second page.
+        let vm = MusicSearchViewModel()
+        vm.lastNextPageRequest[.artists] = (offset: 20, loadedCount: 20)
+        vm.zeroGrowthStreak[.artists] = 1
+        // A kind from another tab keeps its baseline — the reset
+        // is scoped to the restored tab's kinds.
+        vm.lastNextPageRequest[.albums] = (offset: 20, loadedCount: 20)
+        vm.zeroGrowthStreak[.albums] = 1
+        var snapshot = MusicSearchViewModel.SearchSnapshot()
+        snapshot.cardHasMore[.artists] = true
+        vm.snapshots[.artists] = snapshot
+        vm.selectTab(.artists)
+        XCTAssertNil(vm.lastNextPageRequest[.artists])
+        XCTAssertNil(vm.zeroGrowthStreak[.artists])
+        XCTAssertEqual(vm.lastNextPageRequest[.albums]?.offset, 20)
+        XCTAssertEqual(vm.zeroGrowthStreak[.albums], 1)
+        // With the baseline gone, the next (20, 20) load-more
+        // under the new limit fires (streak 0) — the pure
+        // decision on the post-restore state.
+        let decision = MusicSearchViewModel.loadMoreStreakDecision(
+            lastOffset: vm.lastNextPageRequest[.artists]?.offset,
+            lastLoadedCount: vm.lastNextPageRequest[.artists]?.loadedCount,
+            streak: vm.zeroGrowthStreak[.artists] ?? 0,
+            offset: 20, loadedCount: 20)
+        XCTAssertTrue(decision.fire)
+        XCTAssertEqual(decision.streak, 0)
+        // And the stale state, had it survived, WOULD have closed
+        // it — the guard against a regression in the reset itself.
+        let stale = MusicSearchViewModel.loadMoreStreakDecision(
+            lastOffset: 20, lastLoadedCount: 20, streak: 1,
+            offset: 20, loadedCount: 20)
+        XCTAssertFalse(stale.fire)
+        XCTAssertEqual(stale.streak, 2)
+    }
+
+    func testRestoreAllTabClearsAllKinds() {
+        // Restoring 综合 clears all three kinds: streaks recorded
+        // under the single tabs' limit 50 do not apply to the
+        // 综合 limit-10 paging either.
+        let vm = MusicSearchViewModel()
+        vm.lastNextPageRequest[.artists] = (offset: 50, loadedCount: 50)
+        vm.zeroGrowthStreak[.artists] = 1
+        vm.lastNextPageRequest[.playlists] = (offset: 50, loadedCount: 50)
+        vm.zeroGrowthStreak[.playlists] = 2
+        var snapshot = MusicSearchViewModel.SearchSnapshot()
+        snapshot.cardHasMore[.artists] = true
+        vm.snapshots[.all] = snapshot
+        // tab starts at .all, so switch away and back to restore.
+        // .songs needs no fetch (the stream already fills it).
+        vm.selectTab(.songs)
+        vm.selectTab(.all)
+        XCTAssertNil(vm.lastNextPageRequest[.artists])
+        XCTAssertNil(vm.zeroGrowthStreak[.artists])
+        XCTAssertNil(vm.lastNextPageRequest[.playlists])
+        XCTAssertNil(vm.zeroGrowthStreak[.playlists])
+    }
+}

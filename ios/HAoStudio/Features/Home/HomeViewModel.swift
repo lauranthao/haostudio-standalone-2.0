@@ -394,6 +394,36 @@ final class HomeViewModel: ObservableObject {
                 // empty and the next reload recomputes (the
                 // all-disliked cache falls through to a fresh
                 // ranking in the load).
+                // Residual (b49fix8, disclosed): the fallback can
+                // only see dislikes — if the disk list was
+                // rewritten by a NON-dislike write (e.g. a
+                // concurrent force-refresh recompute ranked a song
+                // out) and the re-read filters empty, the old
+                // picks' non-disliked survivor still publishes
+                // for one round; the next reload recomputes. This
+                // is NOT the swapped-out-song case: both
+                // replaceDailySong paths record the dislike
+                // first, so a just-replaced song is filtered here
+                // and cannot revive through this path.
+                // b49fix8 P2-1: the CAS only compares the DISK
+                // list — a dislike recorded after the background
+                // load read fmDislikedIds (FM 不喜欢, a
+                // spares-empty replaceDailySong, or a midnight
+                // dayKey slip writing under yesterday's key) is
+                // NOT in the comparison, so a CAS success would
+                // still publish the disliked song for one round.
+                // Re-filter at publish time with the ids as of
+                // now, on EVERY path (CAS success, CAS refuse,
+                // and no save at all) — the filter is idempotent,
+                // so the !saved re-read path below (which already
+                // filters) is unaffected. A dislike that lands
+                // mid-reload and empties the picks leaves the
+                // section honestly empty until the next reload.
+                let dislikedNow = MusicLibraryStore.fmDislikedIds()
+                let notDislikedNow: (MusicSong) -> Bool = {
+                    !dislikedNow.contains($0.identityKey)
+                        && !dislikedNow.contains($0.songId)
+                }
                 var picksToPublish = dailyResult.picks
                 var sparesToPublish = dailyResult.spares
                 if let saveTracks = dailyResult.saveTracks {
@@ -401,11 +431,6 @@ final class HomeViewModel: ObservableObject {
                         saveTracks, for: dayKey,
                         expectedKeys: dailyResult.expectedDiskKeys)
                     if !saved {
-                        let dislikedNow = MusicLibraryStore.fmDislikedIds()
-                        let notDislikedNow: (MusicSong) -> Bool = {
-                            !dislikedNow.contains($0.identityKey)
-                                && !dislikedNow.contains($0.songId)
-                        }
                         if let fresh = MusicLibraryStore.dailyTracks(for: dayKey),
                            let valid = Self.validatedDailyTracks(fresh, dayKey: dayKey, todayKey: dayKey),
                            !valid.isEmpty {
@@ -423,6 +448,8 @@ final class HomeViewModel: ObservableObject {
                         }
                     }
                 }
+                picksToPublish = picksToPublish.filter(notDislikedNow)
+                sparesToPublish = sparesToPublish.filter(notDislikedNow)
                 self.reload(
                     videoHistory: videoHistory,
                     recent: recent,
@@ -804,7 +831,11 @@ final class HomeViewModel: ObservableObject {
                 // the next load reads them back as surviving and
                 // never re-draws them. A song favourited / heard
                 // at noon enters tomorrow's pool (or a force
-                // refresh), never today's list mid-day.
+                // refresh), never today's list mid-day — unless
+                // the pool is still thin (b49fix8 P2-3): a pool
+                // under 40 re-pins on every load, so a thin
+                // first-day library still fills up as songs
+                // arrive instead of staying short all day.
                 // Structural note (b49fix7 P2-3): the old "fills
                 // prefer the OLD cached spares" was vacuous for
                 // picks — surviving is filtered.prefix(20), so
@@ -928,16 +959,20 @@ final class HomeViewModel: ObservableObject {
 
     /// The day's pinned ranking pool (b49fix7 P2-3): the
     /// total-100 ranking for the day, computed once and fixed
-    /// to disk. Later loads read it back instead of re-ranking,
-    /// so the fills / spares — and therefore the picks — cannot
-    /// drift as the listen log grows during the day. The pool is
-    /// computed with the dislikes as of pin time excluded and
-    /// filtered again by the CURRENT disliked ids at use time,
-    /// so a song disliked after pinning still drops out. The
-    /// pool is deeper than the 40-list on purpose: the list
-    /// holds 40, so a 40-deep pool would have almost no song
-    /// the list does not already hold, and the fills would have
-    /// nowhere to draw from once dislikes eat into it.
+    /// to disk once it reaches `pinnedPoolMinDepth` — a pool
+    /// thinner than that re-pins on every load (b49fix8 P2-3),
+    /// so a thin first-day library still fills up as songs
+    /// arrive instead of staying short all day. Later loads read
+    /// the pinned pool back instead of re-ranking, so the fills /
+    /// spares — and therefore the picks — cannot drift as the
+    /// listen log grows during the day. The pool is computed with
+    /// the dislikes as of pin time excluded and filtered again by
+    /// the CURRENT disliked ids at use time, so a song disliked
+    /// after pinning still drops out. The pool is deeper than the
+    /// 40-list on purpose: the list holds 40, so a 40-deep pool
+    /// would have almost no song the list does not already hold,
+    /// and the fills would have nowhere to draw from once
+    /// dislikes eat into it.
     /// `force` recomputes and re-pins (explicit refresh).
     /// Saving the pool inside the load is a deliberate exception
     /// to the b49fix5 P2-4 "the load never saves" rule: the pool
@@ -946,9 +981,20 @@ final class HomeViewModel: ObservableObject {
     /// undo a replace; the worst case is two valid day rankings
     /// racing, and the last write still pins a valid one. The
     /// atomic file write makes a concurrent read see either the
-    /// old or the new pool, both valid.
+    /// old or the new pool, both valid; the pool writes
+    /// themselves are serialised on
+    /// MusicLibraryStore.dailyPoolQueue (b49fix8 P2-4), so two
+    /// writers cannot lose each other's day key.
     /// Nonisolated: the background reload calls it off the main
     /// thread.
+    /// Minimum pool depth that pins for the day (b49fix8 P2-3):
+    /// the list itself is 40 deep, so a pool under 40 cannot
+    /// fill it — pinning it would lock the day short. Below 40
+    /// the drift the pin exists to stop is unavoidable anyway
+    /// (a thin library has nothing stable to pin to), and the
+    /// harm of re-ranking is smaller than a whole day of short
+    /// picks.
+    nonisolated static let pinnedPoolMinDepth = 40
     nonisolated static func pinnedRankingPool(
         listenLog: [ListenEvent],
         favourites: [MusicSong],
@@ -961,7 +1007,8 @@ final class HomeViewModel: ObservableObject {
         if !force,
            let pool = MusicLibraryStore.dailyPool(for: dayKey),
            let valid = validatedDailyTracks(pool, dayKey: dayKey, todayKey: dayKey),
-           !valid.isEmpty {
+           !valid.isEmpty,
+           valid.count >= pinnedPoolMinDepth {
             return valid
         }
         let pool = MusicRadio.dailyPicks(

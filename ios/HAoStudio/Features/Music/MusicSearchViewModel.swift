@@ -110,7 +110,12 @@ final class MusicSearchViewModel: ObservableObject {
         var cardLimits: [MusicSearchAPI.MusicSearchCategoryKind: Int] = [:]
     }
 
-    private var snapshots: [MusicSearchTab: SearchSnapshot] = [:]
+    // Internal (not private) so XCTest can stage the restore
+    // scenario — b49fix8 P2-5: a snapshot for a tab plus a stale
+    // zero-growth baseline, then selectTab, then assert the
+    // baseline is gone. No production code outside this file
+    // touches them.
+    var snapshots: [MusicSearchTab: SearchSnapshot] = [:]
     private var loadedTabs: Set<MusicSearchTab> = []
     /// Tabs the user visited while their kind was still in flight
     /// under another tab, so the first fetch never started (P1-3).
@@ -243,8 +248,10 @@ final class MusicSearchViewModel: ObservableObject {
     /// identical (offset, count) — i.e. the previous request
     /// produced zero growth because the source ignores the
     /// offset and answers every page with the same rows.
-    private var lastNextPageRequest: [MusicSearchAPI.MusicSearchCategoryKind: (offset: Int, loadedCount: Int)] = [:]
-    private var zeroGrowthStreak: [MusicSearchAPI.MusicSearchCategoryKind: Int] = [:]
+    /// Internal (not private) so XCTest can stage the restore
+    /// scenario — b49fix8 P2-5 (see `snapshots` above).
+    var lastNextPageRequest: [MusicSearchAPI.MusicSearchCategoryKind: (offset: Int, loadedCount: Int)] = [:]
+    var zeroGrowthStreak: [MusicSearchAPI.MusicSearchCategoryKind: Int] = [:]
 
     /// Clear one kind's zero-growth guard state (b49fix7 P2-5).
     /// A fresh first page invalidates the old baseline: the
@@ -462,7 +469,7 @@ final class MusicSearchViewModel: ObservableObject {
         saveSnapshot()
         tab = newTab
         if let snapshot = snapshots[newTab] {
-            restore(snapshot)
+            restore(snapshot, for: newTab)
             return
         }
         guard !loadedTabs.contains(newTab) else { return }
@@ -515,7 +522,25 @@ final class MusicSearchViewModel: ObservableObject {
         snapshots[tab] = snapshot
     }
 
-    private func restore(_ snapshot: SearchSnapshot) {
+    private func restore(_ snapshot: SearchSnapshot, for tab: MusicSearchTab) {
+        // b49fix8 P2-5: a restored tab may page at a different
+        // limit than the tab the streak was recorded under
+        // (综合 10 vs single-kind 50), and its rows were deduped
+        // under that limit too — the global per-kind (offset,
+        // count) baseline from the old tab must not close a
+        // load-more that has never fired under this tab. Clear
+        // the baseline for this tab's kinds (all three on 综合;
+        // the one kind on a single-kind tab). The reset is
+        // scoped: kinds of other tabs keep their baseline, so a
+        // genuine zero-growth loop on another tab still closes.
+        // A failed first page still keeps its streak
+        // (beginCategoryFinish returns before finishCategory):
+        // the list did not change, so the old baseline is still
+        // valid for it.
+        let kinds: [MusicSearchAPI.MusicSearchCategoryKind] = tab == .all
+            ? MusicSearchAPI.MusicSearchCategoryKind.allCases
+            : (tab.categoryKind.map { [$0] } ?? [])
+        for kind in kinds { resetZeroGrowthState(for: kind) }
         artists = snapshot.artists
         albums = snapshot.albums
         playlists = snapshot.playlists
@@ -838,7 +863,10 @@ final class MusicSearchViewModel: ObservableObject {
             // "没有更多". A fresh first page (or a new search)
             // re-opens the kind. Persisted with the snapshot, so
             // a tab switch keeps the end state with the closed
-            // pagination.
+            // pagination. b49fix8 P2-6: the end state is also a
+            // way back in — tapping it calls reopenClosedKind,
+            // so a wrongly closed kind is not a dead end for the
+            // whole search session.
             cardClosedByGuard[kind] = true
             saveSnapshot()
             return
@@ -886,6 +914,29 @@ final class MusicSearchViewModel: ObservableObject {
             return (next < 2, next)
         }
         return (true, 0)
+    }
+
+    /// Re-open a kind the zero-growth guard closed (b49fix8
+    /// P2-6): the footer "没有更多" was a dead end without it —
+    /// the only other exits were a new search or a fresh first
+    /// page landing on its own. Tapping re-issues a FIRST page
+    /// under the current tab's limit, not a next page: the guard
+    /// closed because the source kept answering the same
+    /// next-page window, and the first page under the new limit
+    /// is the window that was never fetched (e.g. rows 20–49 on
+    /// the single-kind tab, where the snapshot only holds the
+    /// 20 rows deduped from the 综合 pages). The first-page
+    /// finish clears the guard state and re-opens the kind
+    /// (finishCategory isFirstPage); if the source really has no
+    /// more, the short page ends pagination honestly instead of
+    /// re-closing through the guard. Retries are never blocked
+    /// by the guard — an explicit retry is the recovery path.
+    func reopenClosedKind(_ kind: MusicSearchAPI.MusicSearchCategoryKind) {
+        guard hasSearched, !loadingCards.contains(kind) else { return }
+        cardClosedByGuard[kind] = false
+        resetZeroGrowthState(for: kind)
+        let limit = tab == .all ? Self.allTabCardLimit : Self.singleTabCardLimit
+        loadCategory(kind, limit: limit, offset: 0, isFirstPage: true)
     }
 
     /// Retry one failed kind from inside its own section.

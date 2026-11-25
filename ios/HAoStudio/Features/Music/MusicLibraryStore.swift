@@ -964,38 +964,63 @@ enum MusicLibraryStore {
 
     /// Pinned ranking pool for the day (b49fix7 P2-3): the
     /// total-100 ranking, fixed to disk on the day's first
-    /// load. Nil when no pool was ever pinned for the key.
-    /// The pool is stored UNFILTERED by dislikes (the ranking
-    /// is computed with no dislike exclusion) — the load
-    /// filters it by the CURRENT disliked ids at use time, so
-    /// a song disliked after pinning still drops out. A pool
-    /// deeper than the 40-list is deliberate: the list holds
-    /// 40, so a 40-deep pool would have almost no song the
-    /// list does not already hold, and the fills would have
-    /// nowhere to draw from once dislikes eat into it.
+    /// load (once it reaches 40 — a thinner pool re-pins on
+    /// every load, b49fix8 P2-3). Nil when no pool was ever
+    /// pinned for the key.
+    /// The pool is stored WITH the dislikes as of pin time
+    /// excluded — pinnedRankingPool passes the pin-time
+    /// disliked ids into MusicRadio.dailyPicks, whose scoring
+    /// loop skips disliked songs — AND the load filters it by
+    /// the CURRENT disliked ids at use time, so a song disliked
+    /// after pinning still drops out. Both layers are required:
+    /// do NOT remove the use-time filter as redundant (the
+    /// old comment claimed the pool was stored UNFILTERED —
+    /// wrong, b49fix8 P2-2 — and that claim would have invited
+    /// exactly that deletion). A pool deeper than the 40-list
+    /// is deliberate: the list holds 40, so a 40-deep pool
+    /// would have almost no song the list does not already
+    /// hold, and the fills would have nowhere to draw from
+    /// once dislikes eat into it.
     static func dailyPool(for dayKey: String) -> [MusicSong]? {
         let dict = readObject(named: dailyPoolCollection)
         guard let raw = dict[dayKey] as? [[String: Any]] else { return nil }
         return raw.map(MusicSong.init(json:))
     }
 
+    /// Serial queue for pool writes (b49fix8 P2-4):
+    /// saveDailyPool is a read-modify-write of the whole dict,
+    /// called from Home's background reload and from
+    /// Discovery's main-thread load. Two writers racing across
+    /// midnight (different day keys, both reading an empty
+    /// dict) could lose a day key — the loser overwrites the
+    /// winner's key. The queue makes the read-modify-write
+    /// atomic; same-day races stay last-write-wins, which is
+    /// fine (both are valid rankings for the same day). A lost
+    /// key would only cost one recompute (the pool is a pure
+    /// derived cache, no user data), but the queue is cheap
+    /// and removes the window entirely. Readers see either
+    /// the old or the new file (atomic write), never a torn one.
+    private static let dailyPoolQueue = DispatchQueue(label: "com.haostudio.dailyPool")
+
     /// Save the day's pinned ranking pool. Same 7-day prune
     /// as saveDailyTracks (keys are YYYY-MM-DD dates; an
     /// unparseable key is kept, never deleted on a guess).
     static func saveDailyPool(_ tracks: [MusicSong], for dayKey: String) {
-        var dict = readObject(named: dailyPoolCollection)
-        dict[dayKey] = tracks.map { $0.toJSON() }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        let cutoff = Calendar.current.startOfDay(
-            for: Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date.distantPast)
-        for key in dict.keys where key != dayKey {
-            if let date = formatter.date(from: key), date < cutoff {
-                dict.removeValue(forKey: key)
+        dailyPoolQueue.sync {
+            var dict = readObject(named: dailyPoolCollection)
+            dict[dayKey] = tracks.map { $0.toJSON() }
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "yyyy-MM-dd"
+            let cutoff = Calendar.current.startOfDay(
+                for: Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date.distantPast)
+            for key in dict.keys where key != dayKey {
+                if let date = formatter.date(from: key), date < cutoff {
+                    dict.removeValue(forKey: key)
+                }
             }
+            writeObject(named: dailyPoolCollection, dict)
         }
-        writeObject(named: dailyPoolCollection, dict)
     }
 
     // MARK: - FM disliked ids

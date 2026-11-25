@@ -490,7 +490,9 @@ struct MusicExploreCategoryView: View {
                                 .padding(.vertical, 12)
                                 .frame(maxWidth: .infinity)
                         }
-                        Spacer(minLength: 12)
+                        // b49fix8 P2-14: page-bottom spacer is 16
+                        // site-wide (was 12 here).
+                        Spacer(minLength: 16)
                     }
                     .haoBottomChromeContentPadding()
                 }
