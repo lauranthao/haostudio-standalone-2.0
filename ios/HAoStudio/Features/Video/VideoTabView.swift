@@ -131,8 +131,14 @@ struct VideoTabView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            VStack(spacing: 0) {
-                Picker("片源", selection: $mode) {
+            GeometryReader { geo in
+                VStack(spacing: 0) {
+                    // b42: in-content "影视" title (HomeView's
+                    // homeHeader pattern) — build 41 there was no
+                    // title at all and the Picker's "影视" text was
+                    // clipped under the status bar / Dynamic Island.
+                    videoHeader
+                    Picker("片源", selection: $mode) {
                     Text("影视").tag("cms")
                     Text("Emby").tag("emby")
                 }
@@ -153,6 +159,18 @@ struct VideoTabView: View {
                     cmsHome
                 }
             }
+            // b42: the backdrop ZStack (haoBackdropLayer) expands
+            // to full screen — its image ignores the safe area —
+            // so a plain VStack here starts at y=0, under the
+            // status bar and Dynamic Island (build 41: the Picker's
+            // "影视" text was clipped there, and the hero went
+            // right to the top with no room for a title). The
+            // GeometryReader reads the real top safe-area inset
+            // and the VStack is padded by it, so the title sits
+            // below the status bar on every phone. The value is 0
+            // when the stack already insets the content, so this
+            // never double-pads.
+            .padding(.top, geo.safeAreaInsets.top)
             .haoBackdropLayer()
             .haoTabBackground()
             // b39: no system nav bar on this root — VidHub's home
@@ -209,6 +227,22 @@ struct VideoTabView: View {
                 }
             }
         }
+    }
+}
+
+    // MARK: - In-content large title (b42)
+
+    /// Same 34pt bold title as HomeView's homeHeader, as a row
+    /// above the Picker — the tab finally has a visible "影视"
+    /// title with room above the hero, instead of the Picker's
+    /// clipped "影视" text under the status bar.
+    private var videoHeader: some View {
+        Text("影视")
+            .font(.system(size: 34, weight: .bold))
+            .foregroundStyle(theme.textPrimary)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - CMS home
@@ -288,7 +322,12 @@ struct VideoTabView: View {
                         )
                         VStack(alignment: .leading, spacing: 4) {
                             Text(item.title)
-                                .font(.system(size: 22, weight: .bold))
+                                // b42 polish: 22 -> 24 — the hero
+                                // title is the page's one big moment
+                                // (VidHub's banner), and 24 bold
+                                // carries it instead of reading like
+                                // a section header.
+                                .font(.system(size: 24, weight: .bold))
                                 .foregroundStyle(.white)
                                 .lineLimit(1)
                             HStack(spacing: 6) {

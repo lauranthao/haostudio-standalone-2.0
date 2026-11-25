@@ -1,7 +1,7 @@
 // HAo Studio 2.0 — video poster card (S3-C leg).
 //
 // Infuse copy (Flutter video_poster_card.dart):
-// - 2:3 portrait poster, radius 8 (Beans standard).
+// - 2:3 portrait poster, radius 16 (b42 polish, was 12).
 // - Title 13px/600 below, one muted 12px meta line (`year · type`).
 // - NO rating badge on the poster (rating lives on the detail page
 //   only, as in Infuse). No coloured corner badge.
@@ -39,7 +39,12 @@ struct VideoPosterCard: View {
 
     var body: some View {
         Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 8) {
+            // b42 polish (VidHub / Streamyfin rhythm): tighter
+            // title/meta stack (8 -> 6) so the card reads as one
+            // unit, and the meta line in textSecondary instead of
+            // textMuted — on a photo-backed page the muted grey
+            // washed out, the secondary still reads quiet.
+            VStack(alignment: .leading, spacing: 6) {
                 posterImage
                     .overlay(alignment: .topLeading) {
                         if isWatched {
@@ -69,7 +74,7 @@ struct VideoPosterCard: View {
                     .lineLimit(1)
                 Text(metaLine)
                     .font(.haoFootnote)
-                    .foregroundStyle(theme.textMuted)
+                    .foregroundStyle(theme.textSecondary)
                     .lineLimit(1)
             }
         }
@@ -117,15 +122,19 @@ struct VideoPosterCard: View {
             }
         }
         .aspectRatio(2.0 / 3.0, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        // b42 polish: radius 12 -> 16 — the poster is the card's
+        // whole visual, and 16 reads softer and more premium next
+        // to the 18pt library cards and the 14pt continue cards,
+        // instead of the sharper 12 that matched nothing else.
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(theme.hairline, lineWidth: 0.5)
         }
     }
 
     private var placeholder: some View {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
             .fill(theme.surfaceStrong)
             .overlay {
                 Image(systemName: "film")

@@ -72,19 +72,18 @@ final class MiniPlayerB35Tests: XCTestCase {
 
     /// b40 (chen 2026-11-25 build 39): the mini and the bar read as
     /// two separate floating pills with a see-through seam, and the
-    /// last row stayed under the chrome. The seam is gone because
-    /// the system bar now fills the FULL 64pt stack height (no
-    /// SwiftUI vertical padding — the bar only paints glass over
-    /// its own frame), and the clearance moved inside the scroll
-    /// content so the last row can scroll fully above the chrome.
-    /// Constants level: the bar frame is the full 64, the stack
-    /// spacing is 0, and the clearance is exactly the full stack
-    /// height (66 idle / 106 playing) — no seam, no double gap.
+    /// last row stayed under the chrome. b42 (chen 2026-11-25
+    /// build 41): the b40 64pt frame let the bar's 56pt glass sit
+    /// ~4pt above the frame's top edge, so the mini OVERLAPPED
+    /// the bar instead of touching it. The frame is now the
+    /// rendered 56pt (no inset arithmetic), the stack spacing is
+    /// 0, and the clearance is exactly the full stack height
+    /// (58 idle / 98 playing) — no overlap, no seam, no double gap.
     func testB40ChromeIsOneConnectedUnit() {
-        XCTAssertEqual(HaoLayout.tabBarTotalHeight, 64)
+        XCTAssertEqual(HaoLayout.tabBarTotalHeight, 56)
         XCTAssertEqual(
             HaoLayout.tabBarTotalHeight,
-            HaoLayout.tabBarContentHeight + 2 * HaoLayout.tabBarInnerInset)
+            HaoLayout.tabBarContentHeight)
         XCTAssertEqual(HaoLayout.floatingStackSpacing, 0)
         XCTAssertEqual(
             HaoLayout.floatingStackClearance(miniPlayerVisible: false),
@@ -106,8 +105,8 @@ final class MiniPlayerB35Tests: XCTestCase {
     /// so the last row can always scroll fully above the chrome.
     func testTabBarStaysInsideSafeArea() {
         XCTAssertEqual(HaoLayout.tabBarBottomMargin, 2)
-        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: false), 66)
-        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: true), 106)
+        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: false), 58)
+        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: true), 98)
         XCTAssertEqual(
             HaoLayout.floatingStackClearance(miniPlayerVisible: true),
             HaoLayout.tabBarBottomMargin + HaoLayout.tabBarTotalHeight
@@ -127,11 +126,11 @@ final class MiniPlayerB35Tests: XCTestCase {
         XCTAssertEqual(HaoLayout.miniPlayerHeight, 40)
     }
 
-    /// Bottom clearance for scroll content under the stack: 66pt
-    /// idle, 106pt while the mini is showing (40pt taller).
+    /// Bottom clearance for scroll content under the stack: 58pt
+    /// idle, 98pt while the mini is showing (40pt taller).
     func testFloatingStackClearance() {
-        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: false), 66)
-        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: true), 106)
+        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: false), 58)
+        XCTAssertEqual(HaoLayout.floatingStackClearance(miniPlayerVisible: true), 98)
     }
 
     // MARK: - Fallback: failed / stopped track keeps the mini visible
@@ -231,9 +230,10 @@ final class MiniPlayerB35Tests: XCTestCase {
 /// Covers the b35 tab-bar link leg's SURVIVING contract: the
 /// cover-morph constants (mini 32 -> full player up to 340, one
 /// shared matchedGeometryEffect id) and the floating-stack
-/// clearance (66 idle / 106 playing — b39: bottom margin restored
-/// to 2, so the stale 64 / 104 values this test used to assert
-/// are wrong; b40 fixed them, see testClearanceFollowsMiniPlayer).
+/// clearance (58 idle / 98 playing — b42: the bar is 56, not 64,
+/// so the b40 values 66 / 106 moved to 58 / 98; b39: bottom margin
+/// restored to 2, so the stale 64 / 104 values this test used to
+/// assert are wrong).
 /// itself is REVERTED in build 37 (chen 2026-11-24: "菜单恢复原样"
 /// — the menu stays the original full glass tab bar, no narrowed
 /// capsule form): the state-machine tests, the minimized-row
@@ -246,18 +246,15 @@ final class BottomChromeB35Tests: XCTestCase {
 
     // MARK: - Clearance: follows the mini player, never shrinks
 
-    /// Clearance is 106pt while the mini is showing and 66pt
-    /// idle — it no longer shrinks to 66 when minimized, because
-    /// there is no minimized form any more. (b40 fix: this test
-    /// used to assert 104 / 64, left over from the b38
-    /// chromeBottomOffset era; the margin has been 2 since b39,
-    /// so the true values are 106 / 66 — the other clearance
-    /// tests in this file already asserted 66 / 106.)
+    /// Clearance is 98pt while the mini is showing and 58pt
+    /// idle — it no longer shrinks when minimized, because
+    /// there is no minimized form any more. (b42: the bar is 56,
+    /// not 64, so the values moved from 106 / 66 to 98 / 58.)
     func testClearanceFollowsMiniPlayer() {
         XCTAssertEqual(
-            HaoLayout.floatingStackClearance(miniPlayerVisible: true), 106)
+            HaoLayout.floatingStackClearance(miniPlayerVisible: true), 98)
         XCTAssertEqual(
-            HaoLayout.floatingStackClearance(miniPlayerVisible: false), 66)
+            HaoLayout.floatingStackClearance(miniPlayerVisible: false), 58)
     }
 
     // MARK: - Morph contract: one cover, one id, known sizes

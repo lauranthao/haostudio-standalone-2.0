@@ -58,7 +58,22 @@ struct MusicHomeView: View {
                         // O1): a reselect scrolls the proxy to it.
                         HaoChromeScrollAnchor()
                             .id(HaoTabScrollTop.id(for: .music))
+                        // b42: in-content large title (HomeView's
+                        // homeHeader pattern). The system large
+                        // title is unreliable on chen's iPhone Air
+                        // in this setup — build 38 it did not render
+                        // at all on Home, build 41 it renders ~300pt
+                        // too low on Music, drawn OVER the card grid
+                        // (the "音乐" title's lower half is covered
+                        // by the 搜歌/每日推荐 cards). A title row in
+                        // the scroll content is ordinary VStack
+                        // layout: it sits above the cards with
+                        // normal spacing and cannot overlap them.
+                        // The VStack's horizontal padding (20) is
+                        // the title's side padding, as on Home (24).
+                        musicHeader
                         featureShelf
+                            .padding(.top, 12)
                         fmRow
                             .padding(.top, 12)
                         playlistsSection
@@ -74,8 +89,11 @@ struct MusicHomeView: View {
                 .haoReselectScrollToTop(tab: .music, proxy: proxy)
                 .haoBackdropLayer()
                 .haoTabBackground()
-                .navigationTitle("音乐")
-                .navigationBarTitleDisplayMode(.large)
+                // b42: no system nav bar on this root (see
+                // musicHeader above — the system large title
+                // overlaps the cards on chen's phone). Pushed
+                // pages keep their own bars and back buttons.
+                .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(for: MusicDestination.self) { destination in
                     destinationView(destination)
                 }
@@ -87,6 +105,18 @@ struct MusicHomeView: View {
                 }
             }
         }
+    }
+
+    // MARK: - In-content large title (b42)
+
+    /// Same 34pt bold title as HomeView's homeHeader, as a row
+    /// in the scroll content — it can never vanish or overlap
+    /// the cards, because it is ordinary VStack layout.
+    private var musicHeader: some View {
+        Text("音乐")
+            .font(.system(size: 34, weight: .bold))
+            .foregroundStyle(theme.textPrimary)
+            .padding(.top, 12)
     }
 
     // MARK: - Feature shelf (b40: vibrdrome 2-column grid)

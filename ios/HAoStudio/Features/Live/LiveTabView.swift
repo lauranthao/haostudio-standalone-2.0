@@ -235,6 +235,18 @@ struct LiveTabView: View {
                         // link): drives minimize / restore as this tab scrolls.
                         HaoChromeScrollAnchor()
                             .id(HaoTabScrollTop.id(for: .live))
+                        // b42: in-content large title + header
+                        // buttons (HomeView's homeHeader pattern).
+                        // The system large title is unreliable on
+                        // chen's iPhone Air in this setup — build 41
+                        // it renders at the category-strip's height,
+                        // so the red "全部" chip sits ON the "直播"
+                        // title, and the toolbar's clock+heart pill
+                        // covers the "快手" platform tab. A title
+                        // row in the scroll content is ordinary
+                        // VStack layout: it sits above the platform
+                        // row and cannot be covered by the chips.
+                        liveHeader
                         platformRow
                             .padding(.top, 12)
                         if !viewModel.categories.isEmpty {
@@ -263,22 +275,12 @@ struct LiveTabView: View {
                 .refreshable { viewModel.reload() }
                 .haoBackdropLayer()
                 .haoTabBackground()
-                .navigationTitle("直播")
-                .navigationBarTitleDisplayMode(.large)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button(action: { path.append(.history) }) {
-                            Image(systemName: "clock")
-                        }
-                        .accessibilityLabel("观看历史")
-                    }
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button(action: { path.append(.follows) }) {
-                            Image(systemName: "heart")
-                        }
-                        .accessibilityLabel("我的关注")
-                    }
-                }
+                // b42: no system nav bar on this root (see
+                // liveHeader above — the system large title and
+                // toolbar pill overlap the content on chen's
+                // phone). Pushed pages keep their own bars and
+                // back buttons.
+                .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(for: LiveDestination.self) { destination in
                     switch destination {
                     case .search:
@@ -319,6 +321,42 @@ struct LiveTabView: View {
             title: room.title, nick: room.streamer, cover: room.cover)
         viewModel.refreshLibrary()
         path.append(.room(room, playlist))
+    }
+
+    // MARK: - In-content large title (b42)
+
+    /// Same 34pt bold title as HomeView's homeHeader, as a row
+    /// in the scroll content — it can never be covered by the
+    /// category chips, because it is ordinary VStack layout. The
+    /// history / follows buttons move here from the nav bar
+    /// (their pill used to cover the "快手" platform tab); they
+    /// sit in the header row, above the platform row, as plain
+    /// icon buttons with a full 40pt hit target.
+    private var liveHeader: some View {
+        HStack(alignment: .center) {
+            Text("直播")
+                .font(.system(size: 34, weight: .bold))
+                .foregroundStyle(theme.textPrimary)
+            Spacer()
+            Button(action: { path.append(.history) }) {
+                Image(systemName: "clock")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("观看历史")
+            Button(action: { path.append(.follows) }) {
+                Image(systemName: "heart")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("我的关注")
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 12)
     }
 
     // MARK: - Platform row (Big-5 only, Pure Live TabBar style)
