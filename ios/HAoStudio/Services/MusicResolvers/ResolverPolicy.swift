@@ -5,10 +5,13 @@
 // Flutter parity (`music_resolvers.dart`):
 // - Success updates an EMA latency (70% old / 30% new) and resets
 //   the failure streak; an error bumps the streak and cools the job
-//   after 3 consecutive failures (5 min); a TIMEOUT cools the job
-//   immediately (2 min); an EMPTY answer records nothing at all (a
-//   source that is fast but has no stock at this tier must not be
-//   cooled out of the tiers it does serve).
+//   after 3 consecutive failures (5 min); a TIMEOUT only feeds the
+//   latency EMA (b49sweep P2-10: slow ≠ dead — the old "cool
+//   immediately for 2 min" demoted a source on one slow response,
+//   against the "hard errors only, never timeouts" rule); an EMPTY
+//   answer records nothing at all (a source that is fast but has
+//   no stock at this tier must not be cooled out of the tiers it
+//   does serve).
 // - Speeds persist under the S1 mapping key `hao_resolver_speed`
 //   (`Documents/hao_resolver_speed.json`); persistence is
 //   best-effort and throttled (every 10 attempts or 5 s).
@@ -89,7 +92,6 @@ final class ResolverCooldown {
     static let unknownSpeedMs = 500
     static let coolAfterFails = 3
     static let coolFor: TimeInterval = 5 * 60
-    static let coolTimeoutFor: TimeInterval = 2 * 60
 
     private(set) var averages: [String: Int] = [:]
     private(set) var fails: [String: Int] = [:]
@@ -131,9 +133,12 @@ final class ResolverCooldown {
                 cooledUntil[key] = now().addingTimeInterval(Self.coolFor)
             }
         case .timeout:
-            let count = (fails[key] ?? 0) + 1
-            fails[key] = count
-            cooledUntil[key] = now().addingTimeInterval(Self.coolTimeoutFor)
+            // b49sweep P2-10: a timeout is "slow", not "dead" —
+            // it only feeds the latency EMA (the timeout duration
+            // is a lower-bound latency sample), never the failure
+            // streak and never a cooldown.
+            let prev = averages[key]
+            averages[key] = prev == nil ? milliseconds : (prev! * 7 + milliseconds * 3) / 10
         }
         attemptsSinceSave += 1
         if attemptsSinceSave >= 10 || now().timeIntervalSince(lastSaveAt) >= 5 {
@@ -155,6 +160,21 @@ final class ResolverCooldown {
 
     func saveNow() {
         save()
+    }
+
+    /// b49sweep P1-5: forget the cooldown + failure streak for a
+    /// set of sources (manual play re-asks every source — a
+    /// source cooled down by earlier hard errors is tried again
+    /// immediately). Latency averages are kept: they are real
+    /// speed data, not failure state. Persists immediately so a
+    /// relaunch does not resurrect the cooldown.
+    func clear(keys: [String]) {
+        guard !keys.isEmpty else { return }
+        for key in keys {
+            cooledUntil.removeValue(forKey: key)
+            fails.removeValue(forKey: key)
+        }
+        saveNow()
     }
 
     // MARK: - Persistence (best-effort)
@@ -290,6 +310,18 @@ final class ResolveFailureMemory {
         for key in failedAt.keys where key.hasSuffix(suffix) {
             failedAt.removeValue(forKey: key)
         }
+    }
+
+    /// b49sweep P1-5: the source keys that failed for one song
+    /// (manual play re-asks every source — the cooldown must be
+    /// cleared for the same keys, not just the failure memory).
+    /// The source key is the part before the `|songId` suffix.
+    func sourceKeys(forSongId songId: String) -> [String] {
+        purgeExpired()
+        let suffix = "|\(songId)"
+        return failedAt.keys
+            .filter { $0.hasSuffix(suffix) }
+            .map { String($0.dropLast(suffix.count)) }
     }
 
     /// True when this source failed for this song within the TTL.

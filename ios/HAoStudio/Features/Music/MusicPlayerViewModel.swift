@@ -186,6 +186,23 @@ final class MusicPlayerViewModel: ObservableObject {
     /// Reset whenever a track really starts (duration > 0) and
     /// when the pass is exhausted.
     private var consecutiveFailureSkips = 0
+    /// Quality-change rollback (b49sweep P2-12): the old quality
+    /// + position, armed when a playing song is re-resolved at a
+    /// new target quality. The failure sink consumes it — a
+    /// failed re-resolve restores the old quality and retries
+    /// once instead of leaving the song dead. Cleared when the
+    /// track really starts (duration > 0). 30 s validity: a
+    /// failure long after the switch is a new failure, not the
+    /// re-resolve's.
+    private var qualityRollback: (quality: AudioQuality, key: String, seconds: Int, armedAt: Date)?
+    /// FM / heartbeat refill batch counter (b49sweep P1-6): the
+    /// refill seed is the day key + this counter, so each
+    /// mid-session batch differs from the day-seeded first
+    /// queue. Reset on every new play context (recordPlayContext)
+    /// — a new session starts a new counter; the refill itself
+    /// never calls recordPlayContext, so the counter survives
+    /// across refills within one session.
+    private var fmRefillBatch = 0
     private var lastPosition: Double = 0
     // D3: guards for the position-wrap heuristic below — a
     // backward jump is only a natural completion when it lands
@@ -231,6 +248,14 @@ final class MusicPlayerViewModel: ObservableObject {
             guard let self = self else { return }
             self.sleepActive = self.sleepTimer.isActive
             self.sleepRemainingText = self.sleepTimer.remainingText
+            // b49sweep P2-11: a completion-mode timer arms the
+            // player's hard cut — the crossfade's 2.5 s ramp would
+            // otherwise make the timer pause ~2.5 s into the next
+            // song. Wall-clock timers fire via onFire directly
+            // and never arm it; cancelling the timer clears it.
+            self.player.sleepCompletionArmed = self.sleepTimer.isCurrentTrackEnd
+                || self.sleepTimer.isAfterNTracks
+                || self.sleepTimer.isQueueEnd
         }
         // Restore the persisted queue (the player restores playback
         // state itself; this only restores the queue list + index).
@@ -408,6 +433,10 @@ final class MusicPlayerViewModel: ObservableObject {
             if value > 0 {
                 self.loadFailed = false
                 self.consecutiveFailureSkips = 0
+                // b49sweep P2-12: the track really started — a
+                // quality-change re-resolve succeeded, so its
+                // rollback is dead.
+                self.qualityRollback = nil
             }
             self.applyPendingResumeSeek()
         }.store(in: &cancellables)
@@ -434,6 +463,27 @@ final class MusicPlayerViewModel: ObservableObject {
             guard let id = self.player.lastFailedRequestId,
                   let song = self.currentSong,
                   id == song.identityKey || id == song.songId else { return }
+            // b49sweep P2-12: a quality-change re-resolve failed —
+            // restore the old quality and retry once instead of
+            // advancing. The retry's own failure has no rollback
+            // left, so it falls through to the normal advance
+            // below. A stale rollback (other song / > 30 s) is
+            // cleared and ignored.
+            if let rollback = self.qualityRollback,
+               rollback.key == song.identityKey,
+               Date().timeIntervalSince(rollback.armedAt) < 30 {
+                self.qualityRollback = nil
+                self.applyTargetQuality(rollback.quality)
+                self.clearResolveFailure(for: song)
+                self.player.stop()
+                self.coordinator.stop()
+                self.pendingResume = (key: song.identityKey, seconds: rollback.seconds)
+                self.expectedItemId = song.identityKey
+                self.showToast("该音质暂不可用，已恢复之前的音质")
+                self.startPlayback()
+                return
+            }
+            self.qualityRollback = nil
             self.handleCurrentSongFailed(song: song)
         }.store(in: &cancellables)
     }
@@ -500,6 +550,48 @@ final class MusicPlayerViewModel: ObservableObject {
         // only for music. A VOD / live item must never become a
         // mini "song" (see miniFallbackSong).
         miniFallbackSong = item.kind == .music ? currentSong : nil
+        // b49sweep P1-6: FM / heartbeat refill — the choke point
+        // for every track change, manual or auto.
+        extendFMQueueIfNeeded()
+    }
+
+    /// FM / heartbeat mid-session refill (b49sweep P1-6): the
+    /// player plays the view model's snapshot copy, and the old
+    /// refill only ran when the FM view's own queue was empty —
+    /// so a 50-song FM session simply ended. When the context is
+    /// FM or heartbeat and ≤3 songs remain after the current
+    /// one, append a fresh seeded batch (a new seed each time,
+    /// so the batch differs from the day-seeded first queue),
+    /// deduped against everything already queued, and push the
+    /// grown queue into the player + the snapshot + the persisted
+    /// context. An empty filtered batch means the pool is
+    /// exhausted — the session honestly ends. The refill never
+    /// calls recordPlayContext: that would reset the batch
+    /// counter (a new session starts a new counter).
+    private func extendFMQueueIfNeeded() {
+        guard let context = currentPlayContext,
+              context.source.kind == .fm || context.source.kind == .heartbeat,
+              let current = currentSong,
+              let currentInQueue = queue.current,
+              (currentInQueue.songId == current.songId || currentInQueue.identityKey == current.identityKey),
+              queue.tracks.count - queue.index <= 3 else { return }
+        let mode: MusicFMMode = context.source.kind == .heartbeat ? .heartbeat : .fm
+        fmRefillBatch += 1
+        let seed = musicDayKey(of: Date()) + "-refill-\(fmRefillBatch)"
+        let existing = Set(queue.tracks.map { $0.identityKey })
+        let fresh = MusicFMViewModel.queueFor(mode: mode, seed: seed)
+            .filter { !existing.contains($0.identityKey) }
+        guard !fresh.isEmpty else { return }
+        queue.tracks.append(contentsOf: fresh)
+        if var updated = currentPlayContext {
+            updated.songKeys.append(contentsOf: fresh.map { $0.identityKey })
+            updated.lastPlayedAt = Date().timeIntervalSince1970
+            currentPlayContext = updated
+        }
+        PlaylistSnapshotStore.save(PlaylistSnapshot(
+            source: context.source, displayName: context.displayName, songs: queue.tracks))
+        persistPlayContext()
+        player.setQueueOnly(queue.toPlaybackItems(), startAt: queue.index)
     }
 
     private func setCurrentSong(_ song: MusicSong) {
@@ -889,6 +981,13 @@ final class MusicPlayerViewModel: ObservableObject {
     /// the queue; with no next song (or the pass exhausted) show
     /// a persistent "无法播放" state with a retry button.
     private func handleCurrentSongFailed(song: MusicSong) {
+        // b49sweep P1-3: same rebuild-first as next() / toggle /
+        // retry — a collapsed queue has no next song to advance
+        // to, while the recorded play context still holds the
+        // full list. Rebuild before computing the step.
+        if !queueCanServeSwitch || queueLostSongs {
+            rebuildQueueFromContext()
+        }
         let nextIndex = queue.nextIndex(mode: playMode, auto: false)
         if nextIndex >= 0, nextIndex != queue.index,
            consecutiveFailureSkips < max(1, queue.tracks.count) {
@@ -1006,7 +1105,20 @@ final class MusicPlayerViewModel: ObservableObject {
         if needsRebuild {
             rebuildQueueFromContext()
         }
-        let step = queue.prevStep(mode: playMode)
+        // b49sweep P0-2: same retry as next() (b48) — a collapsed
+        // 1-song queue, or the current song sitting first in
+        // sequential / single mode, passes the gate above
+        // (queueCanServeSwitch is true: the queue contains the
+        // current song), and prevStep then answers .restartCurrent
+        // / .nothing while the recorded play context still holds
+        // the full source list with a real previous song. Retry
+        // from the context before falling back to restart / no-op.
+        var step = queue.prevStep(mode: playMode)
+        if step == .restartCurrent || step == .nothing {
+            if rebuildQueueFromContext() {
+                step = queue.prevStep(mode: playMode)
+            }
+        }
         if (step == .restartCurrent || step == .nothing),
            needsRebuild,
            (!queueCanServeSwitch || queueLostSongs) {
@@ -1095,12 +1207,48 @@ final class MusicPlayerViewModel: ObservableObject {
         player.setSpeed(clamped)
     }
 
-    func setTargetQuality(_ quality: AudioQuality) {
+    /// Set the target quality, factored out of setTargetQuality
+    /// so the rollback path can restore the old quality without
+    /// re-entering the re-resolve.
+    private func applyTargetQuality(_ quality: AudioQuality) {
         coordinator.targetQuality = quality
         MusicLibraryStore.setTargetQualityCode(MusicLibraryStore.code(for: quality))
         // b45-a: after a quality switch the lyrics re-align to the
         // actual playback position (Coda §2.8).
         realignLyrics()
+    }
+
+    func setTargetQuality(_ quality: AudioQuality) {
+        // b49sweep P2-12: a quality change used to do nothing to
+        // the current song (next track only, footer text only).
+        // When a song is playing, re-resolve it at the new target
+        // now: save the position + old quality, stop first (the
+        // playLocal B8 pattern — after the stop the engine holds
+        // no track, so requestPlay takes the new-request path
+        // instead of the same-track resume branch that returns
+        // without re-resolving), then restart with the position
+        // armed as a pending resume seek. A failed re-resolve
+        // rolls back (see the failure sink). Paused / nothing
+        // loaded: no re-resolve — the new target applies from
+        // the next track, and the sheet says so.
+        guard isPlaying, player.currentTrack != nil, let song = currentSong else {
+            applyTargetQuality(quality)
+            if currentSong != nil {
+                showToast("下一首起生效")
+            }
+            return
+        }
+        let oldQuality = coordinator.targetQuality
+        let positionSeconds = Int(position)
+        applyTargetQuality(quality)
+        qualityRollback = (quality: oldQuality, key: song.identityKey, seconds: positionSeconds, armedAt: Date())
+        // b46: manual re-resolve — re-ask every source for this song.
+        clearResolveFailure(for: song)
+        player.stop()
+        coordinator.stop()
+        pendingResume = (key: song.identityKey, seconds: positionSeconds)
+        expectedItemId = song.identityKey
+        startPlayback()
     }
 
     /// Re-align the lyrics to the actual playback position after a
@@ -1165,7 +1313,10 @@ final class MusicPlayerViewModel: ObservableObject {
         recordPlayContext(
             source: PlaySource(kind: .heartbeat, id: "heartbeat"),
             displayName: "心动模式", tracks: tracks)
-        playFromQueue(at: index)
+        // b49sweep P1-4: a heartbeat start is a manual tap — the
+        // seed song is re-asked of every source, like any other
+        // manual play entry.
+        playFromQueue(at: index, manual: true)
     }
 
     /// Seek to an absolute position (seconds). On failure the bar
@@ -1521,9 +1672,20 @@ final class MusicPlayerViewModel: ObservableObject {
         showToast("下一首播放")
     }
 
-    func playFromQueue(at index: Int) {
+    /// Play the queue song at `index`. `manual` is true only for
+    /// a deliberate tap — a queue-sheet row or a heartbeat start
+    /// (b49sweep P1-4): like every other manual entry it clears
+    /// the song's failure memory first, so a previously failed
+    /// song is re-asked of every source. Auto-advance (and the
+    /// failure-skip path) must NOT clear — the memory is what
+    /// makes an auto-skip past a dead song instant (see
+    /// clearResolveFailure).
+    func playFromQueue(at index: Int, manual: Bool = false) {
         guard index >= 0 && index < queue.tracks.count else { return }
         let song = queue.tracks[index]
+        if manual {
+            clearResolveFailure(for: song)
+        }
         queue.index = index
         expectedItemId = song.identityKey
         startPlayback()
@@ -1562,6 +1724,9 @@ final class MusicPlayerViewModel: ObservableObject {
     }
 
     private func recordPlayContext(source: PlaySource?, displayName: String?, tracks: [MusicSong]) {
+        // b49sweep P1-6: a new play context starts a new FM /
+        // heartbeat refill counter.
+        fmRefillBatch = 0
         guard let source = source else {
             currentPlayContext = nil
             persistPlayContext()

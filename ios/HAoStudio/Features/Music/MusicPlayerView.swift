@@ -1234,18 +1234,26 @@ struct MusicPlayerView: View {
             // artist opens the artist — the same sheets the …
             // menu already opened, so no new destination is
             // invented. Empty title / artist is not tappable.
-            Button(action: {
-                noteInteraction()
-                showAlbum = true
-            }) {
-                Text(playerVM.currentSong?.title ?? "未在播放")
-                    .font(.haoSectionTitle)
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
+            // b49sweep P2-13: with no album the title is plain
+            // text, not a disabled Button — a disabled button
+            // still renders white/semibold like the tappable
+            // title, so it looked tappable and did nothing.
+            let titleText = Text(playerVM.currentSong?.title ?? "未在播放")
+                .font(.haoSectionTitle)
+                .foregroundStyle(.white)
+                .lineLimit(1)
+            if (playerVM.currentSong?.album ?? "").isEmpty {
+                titleText
+            } else {
+                Button(action: {
+                    noteInteraction()
+                    showAlbum = true
+                }) {
+                    titleText
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("专辑：\(playerVM.currentSong?.album ?? "")")
             }
-            .buttonStyle(.plain)
-            .disabled((playerVM.currentSong?.album ?? "").isEmpty)
-            .accessibilityLabel("专辑：\(playerVM.currentSong?.album ?? "")")
             // b45-a (Coda §2.3): title and artist share the
             // title3 size; the artist is white 0.62, and each
             // artist in a multi-artist " / " list is its own

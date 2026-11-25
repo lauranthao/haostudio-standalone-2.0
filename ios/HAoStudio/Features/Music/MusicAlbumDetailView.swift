@@ -23,6 +23,10 @@ import SwiftUI
 final class MusicAlbumDetailViewModel: ObservableObject {
     @Published private(set) var detail = AlbumDetail(name: "")
     @Published private(set) var isLoading = true
+    /// b49sweep P2-17: the name search returned hits but none
+    /// matched confidently — an honest "找不到这张专辑" instead
+    /// of opening a wrong album. Reset on every load().
+    @Published private(set) var notFound = false
     @Published private(set) var otherAlbums: [AlbumSummary] = []
 
     private let album: AlbumSummary
@@ -80,19 +84,45 @@ final class MusicAlbumDetailViewModel: ObservableObject {
 
     func load() {
         isLoading = true
+        notFound = false
         if Self.hasRealId(album) {
             loadDetail(id: album.id)
             return
         }
         MusicAlbumAPI.shared.searchAlbums(platform: album.platform, keyword: album.name) { [weak self] hits in
             guard let self = self else { return }
-            let target = MusicText.normalizeName(self.album.artist)
-            let match = hits.first { hit in
-                target.isEmpty || MusicText.normalizeName(hit.artist).contains(target)
-            } ?? hits.first
+            // b49sweep P2-17: name search, first hit wins, used to
+            // open the wrong album — a same-name album by another
+            // artist, or a different album whose name contains the
+            // query. Tier 1: exact name + exact artist. Tier 2:
+            // exact name + artist-contains either way
+            // (multi-artist credits). With no artist to check
+            // against, only a single exact-name hit is confident.
+            // No confident match is an honest "找不到这张专辑",
+            // not a guess. The hero shows the matched album's
+            // artist + publish date, so a confident match is
+            // visible once it lands.
+            let name = MusicText.normalizeName(self.album.name)
+            let artist = MusicText.normalizeName(self.album.artist)
+            let exactName = hits.filter { MusicText.normalizeName($0.name) == name }
+            let match: AlbumSummary?
+            if artist.isEmpty {
+                match = exactName.count == 1 ? exactName.first : nil
+            } else {
+                match = exactName.first { MusicText.normalizeName($0.artist) == artist }
+                    ?? exactName.first {
+                        let hitArtist = MusicText.normalizeName($0.artist)
+                        return hitArtist.contains(artist) || artist.contains(hitArtist)
+                    }
+            }
             if let match = match, Self.hasRealId(match) {
                 self.loadDetail(id: match.id)
+            } else if hits.isEmpty {
+                // No hits at all: indistinguishable from a network
+                // failure — keep the existing "加载失败" state.
+                self.isLoading = false
             } else {
+                self.notFound = true
                 self.isLoading = false
             }
         }
@@ -119,7 +149,10 @@ final class MusicAlbumDetailViewModel: ObservableObject {
         MusicArtistAPI.shared.searchArtists(platform: album.platform, keyword: artistName) { [weak self] hits in
             guard let self = self else { return }
             let target = MusicText.normalizeName(artistName)
-            guard let match = hits.first(where: { MusicText.normalizeName($0.name) == target }) ?? hits.first else { return }
+            // b49sweep P2-17: same rule as the main detail — exact
+            // name only, no first-hit fallback, or another
+            // artist's albums would fill "该歌手的其他专辑".
+            guard let match = hits.first(where: { MusicText.normalizeName($0.name) == target }) else { return }
             MusicArtistAPI.shared.artistDetail(platform: self.album.platform, id: match.id, name: match.name) { [weak self] artistDetail in
                 guard let self = self else { return }
                 self.otherAlbums = Array(artistDetail.albums.filter {
@@ -149,6 +182,15 @@ struct MusicAlbumDetailView: View {
             if viewModel.isLoading {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if viewModel.notFound {
+                // b49sweep P2-17: the search answered but nothing
+                // matched confidently — say so, don't guess.
+                MusicEmptyState(
+                    icon: "magnifyingglass",
+                    title: "找不到这张专辑",
+                    note: "没有找到和这张专辑名称、歌手都一致的结果。",
+                    onRetry: { viewModel.load() }
+                )
             } else if viewModel.songs.isEmpty {
                 MusicEmptyState(
                     icon: "square.stack",

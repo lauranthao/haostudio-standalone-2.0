@@ -253,7 +253,13 @@ final class LXSourceResolver: SourceResolver {
     /// b46: manual-play bypass — forget every failure recorded
     /// for one song, so the next resolve re-asks every source.
     func clearFailureMemory(forSongId songId: String) {
+        // b49sweep P1-5: a manual "re-ask every source" was only
+        // half-kept — the failure memory cleared, but the cooldown
+        // (5 min after 3 hard errors, persisted to disk) kept the
+        // sources deprioritised. Clear both for the same keys.
+        let keys = failureMemory.sourceKeys(forSongId: songId)
         failureMemory.clear(songId: songId)
+        cooldown.clear(keys: keys)
     }
 
     // MARK: - Main entry

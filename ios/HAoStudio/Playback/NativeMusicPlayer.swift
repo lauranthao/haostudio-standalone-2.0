@@ -960,6 +960,18 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     static let minSpeed: Double = 0.6
     static let maxSpeed: Double = 2.0
 
+    /// Set by the view model from the sleep timer's onChanged: a
+    /// completion-mode timer is armed (end of current track /
+    /// after N tracks / end of queue). Auto-advance then hard-cuts
+    /// instead of the 2.5 s crossfade — the ramp makes the next
+    /// track audible before onTrackStarted fires, so the timer's
+    /// pause would land ~2.5 s into the next song instead of at
+    /// the boundary (b49sweep P2-11). Wall-clock timers fire via
+    /// onFire directly and never set this. Manual next/previous
+    /// never trigger the timer (the view model's expectedItemId
+    /// gate), so only advanceAutoFrom reads it.
+    var sleepCompletionArmed = false
+
     /// Test seam: open timeout seconds. Production is 10; tests set
     /// a short value so the timeout path runs without waiting.
     var openTimeoutInterval: TimeInterval = NativeMusicPlayer.openTimeout
@@ -1142,35 +1154,33 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     }
 
     /// Manual play-request failure, Coda `handleUnplayable` parity
-    /// (PlayerServiceIOS.swift:1349): the toast still fires
-    /// (reportFailedRequest), and when the failed track is the
-    /// queue's current track with a next song to go to, the queue
-    /// keeps moving instead of going silent — bounded by the same
-    /// 5-in-a-row stop as the recovery path (noteFailedAdvance).
-    /// A single-song queue, the end of the queue, a looping mode
-    /// that would replay the same song, or a track that is not
-    /// the queue's current track behaves exactly as before:
-    /// toast only. The background-task-expiry path keeps calling
-    /// reportFailedRequest directly: with no background time left
-    /// a new resolve cannot run. Timeouts advance the same way
-    /// (Coda counts any unplayable track) but are never written
-    /// to the failure memory — the song stays playable later.
+    /// (PlayerServiceIOS.swift:1349): report only — the view model
+    /// owns the advance (its handleCurrentSongFailed, via the
+    /// failedRequestCount publication below). b49sweep P0-1: this
+    /// used to advance the player's own queue AFTER
+    /// reportFailedRequest published, and @Published emits
+    /// synchronously, so one failed tap advanced twice — the view
+    /// model advanced with manual (auto:false) semantics while
+    /// the player advanced with auto semantics, and in shuffle
+    /// each rolled its own random pick (the next song started,
+    /// then restarted / re-buffered). The bookkeeping stays:
+    /// failedTrackIds (didTrackFail guards the sleep timer's
+    /// natural-completion count) and the recovery stage reset.
+    /// The old 5-in-a-row stop is gone with the advance — the view
+    /// model's handleCurrentSongFailed bounds the skips to one
+    /// pass over the queue instead; the auto path
+    /// (noteFailedAdvance) keeps its own 5-stop. Callers that
+    /// drive this player without a view model must observe
+    /// failedRequestCount and advance themselves. Timeouts advance
+    /// the same way (Coda counts any unplayable track) but are
+    /// never written to the failure memory — the song stays
+    /// playable later.
     private func handleManualPlayFailure(_ item: PlaybackItem, _ error: MusicPlayerError) {
         reportFailedRequest(item, error)
         guard !queue.isEmpty, queueIndex >= 0, queueIndex < queue.count,
               queue[queueIndex].id == item.id else { return }
-        consecutiveFailureCount += 1
         failedTrackIds.insert(item.id)
         recoverStage = 0
-        guard consecutiveFailureCount < 5 else {
-            consecutiveFailureCount = 0
-            stop()
-            return
-        }
-        let nextIndex = musicNextTrackIndex(mode: playMode, current: queueIndex, length: queue.count, auto: true)
-        guard nextIndex >= 0, nextIndex != queueIndex else { return }
-        queueIndex = nextIndex
-        play(item: queue[nextIndex])
     }
 
     private var nowPlayingActive: Bool = false
@@ -1440,7 +1450,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                     self.pendingItem = nil
                     self.handleManualPlayFailure(item, error)
                 }
-                self.resolveURL?(item, tried) { [weak self] nextURL, tier in
+                self.resolveURL?(self.resolveItemSkippingExcludedLocal(item, excluding: tried), tried) { [weak self] nextURL, tier in
                     guard let self = self else { return }
                     self.ensureMain {
                         self.cancelResolveTimeout(id: timeoutId)
@@ -1926,8 +1936,10 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         // NOTE (wiring): the re-resolve below goes through the
         // coordinator, which returns `item.localFileURL` first
         // when set — a failed LOCAL copy is therefore re-offered
-        // by the coordinator. Skipping a failed local copy needs
-        // a coordinator-side `skipLocal` flag (not this file).
+        // by the coordinator unless the item is stripped first.
+        // b49sweep P1-8: the retry paths pass a stripped copy
+        // (resolveItemSkippingExcludedLocal), so no
+        // coordinator-side flag is needed.
         if isOffline {
             let isLooping = playMode == .listLoop || playMode == .singleLoop
             if let found = OfflineQueueSelector.firstAvailableIndex(
@@ -1980,11 +1992,68 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                     return
                 }
                 self.actualQuality = tier
-                self.crossfade(to: item, url: url, tried: [url], attempts: attempts)
+                if self.sleepCompletionArmed {
+                    self.hardCut(to: item, url: url, tried: [url], attempts: attempts)
+                } else {
+                    self.crossfade(to: item, url: url, tried: [url], attempts: attempts)
+                }
             }
         }
         if resolveURL == nil {
             stop()
+        }
+    }
+
+    /// Hard cut to an already-resolved URL (b49sweep P2-11): the
+    /// crossfade's 2.5 s ramp makes the next track audible before
+    /// onTrackStarted fires, so a completion-mode sleep timer
+    /// would pause ~2.5 s into the next song. With
+    /// sleepCompletionArmed, load the URL on the active engine
+    /// directly — open() fires onTrackStarted at the boundary
+    /// (via startPlaybackAfterLoad), so the timer pauses exactly
+    /// at the end of the current track. This is the manual
+    /// switch's open path, not a re-resolve: attemptOpen / play
+    /// would re-resolve and, on failure, take manual
+    /// handleManualPlayFailure semantics, which is wrong for an
+    /// auto-advance (singleLoop must replay, single must stop).
+    /// On failure, mirror the crossfade fallback — one
+    /// re-resolve with `tried`, then auto-skip. The generation
+    /// guard uses the generation at failure time (open() already
+    /// bumped it), not the caller's.
+    private func hardCut(to item: PlaybackItem, url: URL, tried: [URL], attempts: Int) {
+        open(item: item, url: url) { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .success:
+                return
+            case .failure:
+                let gen = self.generation
+                guard tried.count < 2 else {
+                    self.failedTrackIds.insert(item.id)
+                    self.advanceAutoFrom(index: self.queueIndex, attempts: attempts + 1)
+                    return
+                }
+                let timeoutId = self.beginResolveTimeout { [weak self] in
+                    guard let self = self else { return }
+                    guard gen == self.generation else { return }
+                    self.failedTrackIds.insert(item.id)
+                    self.advanceAutoFrom(index: self.queueIndex, attempts: attempts + 1)
+                }
+                self.resolveURL?(self.resolveItemSkippingExcludedLocal(item, excluding: tried), tried) { [weak self] nextURL, tier in
+                    guard let self = self else { return }
+                    self.ensureMain {
+                        self.cancelResolveTimeout(id: timeoutId)
+                        guard gen == self.generation else { return }
+                        guard let nextURL = nextURL else {
+                            self.failedTrackIds.insert(item.id)
+                            self.advanceAutoFrom(index: self.queueIndex, attempts: attempts + 1)
+                            return
+                        }
+                        self.actualQuality = tier
+                        self.hardCut(to: item, url: nextURL, tried: tried + [nextURL], attempts: attempts)
+                    }
+                }
+            }
         }
     }
 
@@ -2059,7 +2128,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                             self.failedTrackIds.insert(item.id)
                             self.advanceAutoFrom(index: self.queueIndex, attempts: attempts + 1)
                         }
-                        self.resolveURL?(item, tried) { [weak self] nextURL, tier in
+                        self.resolveURL?(self.resolveItemSkippingExcludedLocal(item, excluding: tried), tried) { [weak self] nextURL, tier in
                             guard let self = self else { return }
                             self.ensureMain {
                                 self.cancelResolveTimeout(id: timeoutId)
@@ -2408,13 +2477,14 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     ///   retry the SAME URL on the twin host once, resuming from
     ///   the breakpoint.
     /// - Stage 1 → 2: full re-resolve (skipping the failed URL;
-    ///   the local copy is skipped too when it is the failed one
-    ///   — the coordinator must honour that, see the wiring note
-    ///   in `advanceAutoFrom`), resuming from the breakpoint.
-    /// - Stage 2: offline → the downloaded copy; online → the
-    ///   serial multi-source resolve already ran, so advance to
-    ///   the next track. Five consecutive unplayable tracks stop
-    ///   playback.
+    ///   the local copy is stripped by
+    ///   resolveItemSkippingExcludedLocal when it is the failed
+    ///   one, so the coordinator never re-offers it), resuming
+    ///   from the breakpoint.
+    /// - Stage 2: offline → the downloaded copy (only when it is
+    ///   not the failed one); online → the serial multi-source
+    ///   resolve already ran, so advance to the next track. Five
+    ///   consecutive unplayable tracks stop playback.
     private func recoverFromFailure(item: PlaybackItem, excluding: [URL] = []) {
         let resumePosition = position
         let gen = nextGeneration()
@@ -2449,15 +2519,17 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             guard gen == self.generation, self.currentTrack?.id == item.id else { return }
             self.noteFailedAdvance(item: item)
         }
-        resolveURL?(item, excluding) { [weak self] url, tier in
+        resolveURL?(resolveItemSkippingExcludedLocal(item, excluding: excluding), excluding) { [weak self] url, tier in
             guard let self = self else { return }
             self.ensureMain {
                 self.cancelResolveTimeout(id: timeoutId)
                 guard gen == self.generation, self.currentTrack?.id == item.id else { return }
                 guard let url = url else {
                     // Stage 2: the re-resolve found nothing.
-                    // Offline → downloaded copy; online → next.
-                    if self.isOffline, let local = self.localAudioURL?(item) ?? item.localFileURL {
+                    // Offline → downloaded copy, unless that copy
+                    // is the failed one; online → next.
+                    if self.isOffline, let local = self.localAudioURL?(item) ?? item.localFileURL,
+                       !excluding.contains(local) {
                         self.open(item: item, url: local) { [weak self] result in
                             guard let self = self else { return }
                             switch result {
@@ -2490,6 +2562,24 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         if resolveURL == nil {
             noteFailedAdvance(item: item)
         }
+    }
+
+    /// b49sweep P1-8: a copy of the item with its local file URL
+    /// stripped when that URL is among the failed/tried ones. The
+    /// coordinator's resolveURL returns item.localFileURL FIRST
+    /// (before honouring `excluding`), so a failed local or
+    /// downloaded copy would be re-offered forever during a
+    /// retry chain. The copy keeps the same id (the resolver's
+    /// eviction key), so only the local-first offer changes —
+    /// no coordinator-side flag is needed.
+    private func resolveItemSkippingExcludedLocal(_ item: PlaybackItem, excluding: [URL]) -> PlaybackItem {
+        guard let local = item.localFileURL, excluding.contains(local) else { return item }
+        return PlaybackItem(
+            id: item.id, songId: item.songId, title: item.title, artist: item.artist,
+            album: item.album, coverURL: item.coverURL, previewURL: item.previewURL,
+            localFileURL: nil, duration: item.duration, isLocal: item.isLocal,
+            audioQuality: item.audioQuality, playSource: item.playSource,
+            isDownloaded: item.isDownloaded)
     }
 
     /// Count one unplayable track toward the 5-in-a-row stop

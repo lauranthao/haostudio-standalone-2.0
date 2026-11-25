@@ -24,6 +24,10 @@ import SwiftUI
 final class MusicArtistDetailViewModel: ObservableObject {
     @Published private(set) var detail = ArtistDetail(name: "")
     @Published private(set) var isLoading = true
+    /// b49sweep P2-17: the name search returned hits but none
+    /// matched confidently — an honest "找不到这位歌手" instead
+    /// of opening a wrong singer. Reset on every load().
+    @Published private(set) var notFound = false
 
     private let artist: ArtistSummary
 
@@ -49,21 +53,31 @@ final class MusicArtistDetailViewModel: ObservableObject {
 
     func load() {
         isLoading = true
+        notFound = false
         if !artist.id.isEmpty {
             loadDetail(id: artist.id, name: artist.name)
             return
         }
         MusicArtistAPI.shared.searchArtists(platform: artist.platform, keyword: artist.name) { [weak self] hits in
             guard let self = self else { return }
+            // b49sweep P2-17: exact normalized-name match only —
+            // the old first-hit fallback could open a different
+            // singer with a similar name. No confident match is
+            // an honest "找不到这位歌手", not a guess.
             let target = MusicText.normalizeName(self.artist.name)
             let match = hits.first {
                 MusicText.normalizeName($0.name) == target
-            } ?? hits.first
+            }
             if let match = match, !match.id.isEmpty {
                 self.loadDetail(id: match.id, name: match.name)
             } else if let match = match {
                 self.loadDetail(id: "", name: match.name)
+            } else if hits.isEmpty {
+                // No hits at all: indistinguishable from a network
+                // failure — keep the existing "加载失败" state.
+                self.isLoading = false
             } else {
+                self.notFound = true
                 self.isLoading = false
             }
         }
@@ -108,6 +122,15 @@ struct MusicArtistDetailView: View {
             if viewModel.isLoading {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if viewModel.notFound {
+                // b49sweep P2-17: the search answered but nothing
+                // matched confidently — say so, don't guess.
+                MusicEmptyState(
+                    icon: "magnifyingglass",
+                    title: "找不到这位歌手",
+                    note: "没有找到和这位歌手名称一致的结果。",
+                    onRetry: { viewModel.load() }
+                )
             } else if viewModel.songs.isEmpty && viewModel.detail.albums.isEmpty {
                 MusicEmptyState(
                     icon: "person",
