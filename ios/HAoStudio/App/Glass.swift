@@ -204,9 +204,9 @@ enum HaoLayout {
     /// Sheet top padding.
     static let sheetTopPadding: CGFloat = 16
 
-    // Retry-button variants (sweep 7 P2-24 / P2-27): two
-    // deliberate exceptions to the standard retry capsule
-    // (15 semibold, 24/12, filled accent):
+    // Retry-button variants (sweep 7 P2-24 / P2-27, sweep 8
+    // P2-16): deliberate exceptions to the standard retry
+    // capsule (15 semibold, 24/12, filled accent):
     // - Soft capsule (MusicCapsuleButton): 13 semibold,
     //   accentSoft fill, 12/7, top 6 — the EMPTY-STATE /
     //   secondary variant (MusicEmptyState, VideoTabView CMS
@@ -215,6 +215,10 @@ enum HaoLayout {
     // - White capsule on video (LiveRoomView failure card):
     //   16 semibold, white fill, 20/8 — readable on a video
     //   frame, where the accent fill would vanish.
+    // - Secondary-action capsule (EmbyTabView "重新登录"):
+    //   15 semibold, 24/12, surface fill + hairline border —
+    //   a SECONDARY action, not a retry, so it does not take
+    //   the accent fill; the fill is what marks it secondary.
     // Anything else showing a "重试" uses the standard capsule.
 }
 
@@ -493,6 +497,25 @@ final class SettingsDeepLink: ObservableObject {
     /// SettingsGroupsView paints the row with accentSoft while
     /// set, so the user sees which row the link landed on.
     @Published var highlightedRow: String?
+
+    /// Flash generation (b49fix6 P2-11): each flashRow bumps it;
+    /// the delayed clear only fires for the latest generation,
+    /// so a re-flash from the slow-layout retry is not cut
+    /// short by the stale clear scheduled by the first flash.
+    private var highlightGeneration = 0
+
+    /// Set the highlight and clear it ~1.2s later. Re-flashing
+    /// the same row re-arms the clear clock.
+    func flashRow(_ row: String) {
+        highlightedRow = row
+        highlightGeneration += 1
+        let generation = highlightGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            if self.highlightGeneration == generation, self.highlightedRow == row {
+                self.highlightedRow = nil
+            }
+        }
+    }
 
     func open(row: String) {
         guard Self.knownRows.contains(row) else { return }

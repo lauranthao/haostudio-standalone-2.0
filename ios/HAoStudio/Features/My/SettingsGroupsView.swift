@@ -1724,6 +1724,15 @@ struct BackupSnapshotView: View {
             let result = BackupEngineCore.restoreSnapshot(
                 at: target.url, documentsURL: docs
             )
+            // b49fix6 P1-1: prune only after a SUCCESSFUL
+            // restore. Pruning before (inside the safety-net
+            // call) deleted the restore target whenever it was
+            // the oldest snapshot. On a failed restore nothing
+            // is pruned, so the target stays retryable; the next
+            // successful import prunes the extra folder.
+            if result.succeeded {
+                BackupEngineCore.pruneSnapshots(documentsURL: docs)
+            }
             await MainActor.run {
                 isRestoring = false
                 restoreResultText = Self.restoreMessage(for: result, safetyNetTaken: safetyNetTaken)
@@ -1734,8 +1743,17 @@ struct BackupSnapshotView: View {
     }
 
     private static func restoreMessage(for result: BackupEngineCore.SnapshotRestoreResult, safetyNetTaken: Bool) -> String {
+        // b49fix6 P2-3: the failure branches used to drop
+        // safetyNetTaken — a partial restore with a safety net
+        // left the user not knowing the restore could be undone,
+        // and a failed safety net left them not knowing there
+        // was no undo at all. Both branches now carry the same
+        // safety-net line as the success branch.
+        let safetyNetLine = safetyNetTaken
+            ? "恢复前已为当前状态保存一份快照，可恢复刚拍的安全网快照撤销。"
+            : "本次恢复没有安全网快照。"
         if let error = result.manifestError {
-            return error
+            return error + "\n" + safetyNetLine
         }
         if result.succeeded {
             // b49fix5 P2-8: a restore that changed nothing is
@@ -1757,6 +1775,7 @@ struct BackupSnapshotView: View {
         if !result.failedFiles.isEmpty {
             lines.append("未恢复的文件：\(result.failedFiles.joined(separator: "、"))。")
         }
+        lines.append(safetyNetLine)
         return lines.joined(separator: "\n")
     }
 }
@@ -1980,6 +1999,10 @@ struct DisclaimerView: View {
             ScrollView {
                 VStack(spacing: 18) {
                     VStack(spacing: 8) {
+                        // b49fix6 P2-20: 34pt disclaimer icon — an
+                        // icon, not a text title, so it does not
+                        // use haoScreenTitle (34 bold); the size
+                        // is deliberate, not a token.
                         Image(systemName: "exclamationmark.shield")
                             .font(.system(size: 34, weight: .medium))
                             .foregroundStyle(theme.accentText)
@@ -2043,7 +2066,9 @@ struct DisclaimerView: View {
                     .buttonStyle(.bordered)
                 }
             }
-            .padding(.horizontal, 24)
+            // b49fix6 P2-12: sheet-role container (the old
+            // literal 24 happened to equal the sheet padding).
+            .padding(.horizontal, HaoLayout.sheetHorizontalPadding)
             .padding(.vertical, 16)
         }
         .background(theme.scaffoldBackground)

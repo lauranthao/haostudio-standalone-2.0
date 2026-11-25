@@ -1261,13 +1261,24 @@ extension BackupEngineCore {
             ]
             guard JSONSerialization.isValidJSONObject(manifest),
                   let manifestData = try? JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])
-            else { return nil }
+            else {
+                // b49fix6 P2-4: a snapshot that cannot get its
+                // manifest must not leave a partial folder behind
+                // — listSnapshots would show it as a
+                // "清单无法读取" orphan row.
+                try? FileManager.default.removeItem(at: dir)
+                return nil
+            }
             try manifestData.write(
                 to: dir.appendingPathComponent("snapshot-manifest.json"),
                 options: [.atomic]
             )
             return dir
         } catch {
+            // b49fix6 P2-4: same as above — a failed copy or
+            // manifest write (disk full is the classic case)
+            // must not leave a partial folder behind.
+            try? FileManager.default.removeItem(at: dir)
             return nil
         }
     }
@@ -1302,9 +1313,9 @@ extension BackupEngineCore {
     /// is false when anything failed — the UI reports the failed
     /// keys/files by name instead of claiming a full restore.
     struct SnapshotRestoreResult {
-        /// Manifest-level failure (unreadable / corrupt
-        /// manifest); nothing was restored. `nil` means the
-        /// manifest parsed.
+        /// Manifest-level failure (missing / unreadable /
+        /// corrupt manifest); nothing was restored. `nil` means
+        /// the manifest parsed.
         var manifestError: String?
         var restoredKeys: Int = 0
         var restoredFiles: Int = 0
@@ -1358,11 +1369,18 @@ extension BackupEngineCore {
     /// user-triggered restore (b49fix5 P2-9): captures the
     /// CURRENT value of exactly the keys/files the target
     /// snapshot would touch, so restoring the wrong row can
-    /// itself be undone by restoring this new snapshot. Pruned
-    /// to keep-5 like imports. Returns the new snapshot dir, or
-    /// nil when the safety net could not be taken (the caller
-    /// still restores — the confirm dialog already warned — but
-    /// says so in the result).
+    /// itself be undone by restoring this new snapshot. Returns
+    /// the new snapshot dir, or nil when the safety net could
+    /// not be taken (the caller still restores — the confirm
+    /// dialog already warned — but says so in the result).
+    /// b49fix6 P1-1: this function does NOT prune. Pruning here
+    /// (keep-5) deleted the restore TARGET whenever it was the
+    /// oldest snapshot — the safety net makes 6 folders, the
+    /// prune drops the oldest, and the restore then reported a
+    /// "corrupt manifest" for a snapshot its own safety net
+    /// had just deleted. The caller prunes AFTER a successful
+    /// restore instead (performRestore); a failed restore
+    /// prunes nothing, so the target stays retryable.
     static func createSafetyNetSnapshot(
         for snapshotDir: URL,
         documentsURL: URL,
@@ -1381,7 +1399,6 @@ extension BackupEngineCore {
             defaultKeys: keys, filePaths: files,
             documentsURL: documentsURL, defaults: defaults
         ) else { return nil }
-        pruneSnapshots(documentsURL: documentsURL)
         return dir
     }
 
@@ -1399,7 +1416,17 @@ extension BackupEngineCore {
         documentsURL: URL,
         defaults: UserDefaults = .standard
     ) -> SnapshotRestoreResult {
-        guard let manifestData = try? Data(contentsOf: snapshotDir.appendingPathComponent("snapshot-manifest.json")),
+        // b49fix6 P1-1: a missing manifest and a corrupt one are
+        // different states — the first means the snapshot was
+        // already pruned/deleted ("已被清理"), the second means
+        // the folder is there but unreadable ("清单损坏"). The
+        // old single message blamed the manifest for a snapshot
+        // the safety-net prune had itself deleted.
+        let manifestURL = snapshotDir.appendingPathComponent("snapshot-manifest.json")
+        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
+            return SnapshotRestoreResult(manifestError: "该快照已被清理，无法恢复")
+        }
+        guard let manifestData = try? Data(contentsOf: manifestURL),
               let parsed = try? JSONSerialization.jsonObject(with: manifestData, options: []),
               let manifest = parsed as? [String: Any]
         else { return SnapshotRestoreResult(manifestError: "该快照的清单损坏，无法恢复") }

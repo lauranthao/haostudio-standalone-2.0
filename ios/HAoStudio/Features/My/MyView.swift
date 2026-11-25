@@ -332,6 +332,12 @@ struct MyView: View {
     /// deep link must not be jumped over by an older one.
     /// b49fix5 P2-15: the first scroll also flashes the target
     /// row (accentSoft, ~1s) so the user sees where it landed.
+    /// b49fix6 P2-11: the retry scroll re-flashes too — on a
+    /// very slow first layout the row only materialises after
+    /// the first flash has expired; flashRow is
+    /// generation-guarded, so the re-flash re-arms the 1.2s
+    /// clear clock instead of being cut short by the stale
+    /// clear scheduled by the first flash.
     private func scrollToDeepLinkRow(_ row: String, proxy: ScrollViewProxy) {
         let target: String
         let sectionId: String
@@ -352,16 +358,12 @@ struct MyView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             guard SettingsDeepLink.shared.pendingRow == row else { return }
             proxy.scrollTo(target, anchor: .top)
-            SettingsDeepLink.shared.highlightedRow = target
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                if SettingsDeepLink.shared.highlightedRow == target {
-                    SettingsDeepLink.shared.highlightedRow = nil
-                }
-            }
+            SettingsDeepLink.shared.flashRow(target)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
             guard SettingsDeepLink.shared.pendingRow == row else { return }
             proxy.scrollTo(target, anchor: .top)
+            SettingsDeepLink.shared.flashRow(target)
             if store.sectionExpanded(sectionId) {
                 SettingsDeepLink.shared.pendingRow = nil
             }

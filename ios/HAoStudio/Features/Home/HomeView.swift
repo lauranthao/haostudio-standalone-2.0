@@ -227,7 +227,7 @@ struct HomeView: View {
                 .accessibilityLabel("查看全部\(title)")
             }
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, HaoLayout.pageMargin)
     }
 
     /// b49fix2 B1: an empty state always offers a way forward —
@@ -291,7 +291,7 @@ struct HomeView: View {
             }
             .padding(16)
             .background(theme.accentSoft, in: RoundedRectangle(cornerRadius: HaoLayout.cornerLarge, style: .continuous))
-            .padding(.horizontal, 24)
+            .padding(.horizontal, HaoLayout.pageMargin)
             .padding(.top, 12)
         }
     }
@@ -308,7 +308,7 @@ struct HomeView: View {
         Text("首页")
             .font(.haoScreenTitle)
             .foregroundStyle(theme.textPrimary)
-            .padding(.horizontal, 24)
+            .padding(.horizontal, HaoLayout.pageMargin)
             .padding(.top, 12)
             // b49fix2 B10: the in-content page title is a header.
             .accessibilityAddTraits(.isHeader)
@@ -326,7 +326,7 @@ struct HomeView: View {
                     )
                     homeEmptyCTA(label: "去找影片", icon: "film", tab: .movies)
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, HaoLayout.pageMargin)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
@@ -336,7 +336,7 @@ struct HomeView: View {
                             }
                         }
                     }
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, HaoLayout.pageMargin)
                 }
             }
         }
@@ -356,7 +356,7 @@ struct HomeView: View {
                     )
                     homeEmptyCTA(label: "去听歌", icon: "music.note", tab: .music)
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, HaoLayout.pageMargin)
             } else {
                 // One card only (the view model returns exactly
                 // one resume song), so no scroll view: a horizontal
@@ -376,7 +376,7 @@ struct HomeView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, HaoLayout.pageMargin)
             }
         }
     }
@@ -408,7 +408,7 @@ struct HomeView: View {
                     )
                     homeEmptyCTA(label: "去直播", icon: "antenna.radiowaves.left.and.right", tab: .live)
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, HaoLayout.pageMargin)
             } else {
                 LazyVGrid(columns: liveGridColumns, spacing: LiveGridLayout.gridRowSpacing) {
                     ForEach(viewModel.hotLive, id: \.id) { item in
@@ -443,7 +443,7 @@ struct HomeView: View {
                     // (Live's merged lane set the shared top to 12).
                     .font(.haoFootnoteMedium)
                     .foregroundStyle(theme.accentText)
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, HaoLayout.pageMargin)
                     .padding(.top, 12)
                     .accessibilityLabel("重试检查直播状态")
                 }
@@ -512,7 +512,7 @@ struct HomeView: View {
                     .accessibilityLabel("查看全部每日推荐")
                 }
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, HaoLayout.pageMargin)
             if viewModel.daily.isEmpty {
                 VStack(spacing: 0) {
                     MusicEmptyState(
@@ -522,7 +522,7 @@ struct HomeView: View {
                     )
                     homeEmptyCTA(label: "去听歌", icon: "music.note", tab: .music)
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, HaoLayout.pageMargin)
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(viewModel.daily.enumerated()), id: \.element.id) { index, song in
@@ -543,7 +543,7 @@ struct HomeView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, HaoLayout.pageMargin)
             }
         }
     }
