@@ -87,9 +87,55 @@ struct MainTabView: View {
     /// HaoLayout.playerCoverMorphID). Owned here so the mini and the
     /// presented player share one namespace.
     @Namespace private var playerMorph
+    /// Metered-download prompt (b45-h, P8 #7): the download
+    /// engine fires `onMeteredConfirmationNeeded` once per task;
+    /// this object queues the prompts for the dialog below.
+    /// A @StateObject (not @State) because the engine's callback
+    /// is a stored closure that outlives one body evaluation.
+    @StateObject private var meteredPrompt = MeteredDownloadPromptState()
+    /// First-launch disclaimer gate (b45-h, 包 C leftover b):
+    /// HAoStudioApp posts `.haoShowDisclaimerGate` after the
+    /// splash when the stored disclaimer version is not current.
+    @State private var showDisclaimerGate = false
 
     private var tabBarItems: [GlassTabBarItem] {
         HaoTab.allCases.map { GlassTabBarItem(tab: $0, title: $0.title, icon: $0.icon) }
+    }
+
+    /// The metered dialog's presentation binding (b45-h): the
+    /// dialog shows while a prompt is pending. Dismissing it
+    /// without choosing (tap outside) counts as "等待 Wi-Fi" —
+    /// the task is held, never silently approved or cancelled
+    /// (see MeteredDownloadPromptState.dialogDismissed).
+    private var meteredDialogBinding: Binding<Bool> {
+        return Binding(
+            get: { meteredPrompt.pending != nil },
+            set: { newValue in
+                if !newValue { meteredPrompt.dialogDismissed() }
+            }
+        )
+    }
+
+    /// The disclaimer gate's presentation binding (b45-h, 包 C
+    /// leftover b): the gate can only close by accepting — the
+    /// 同意 button stores the current version first (a
+    /// synchronous UserDefaults write), so its dismiss closes
+    /// the gate; any other dismiss (不同意) means the user
+    /// refused the disclaimer, and the app exits (Coda's
+    /// OnboardingView behaviour).
+    private var disclaimerGateBinding: Binding<Bool> {
+        return Binding(
+            get: { showDisclaimerGate },
+            set: { newValue in
+                if newValue {
+                    showDisclaimerGate = true
+                } else if DisclaimerGate.isAccepted(storedVersion: settingsStore.disclaimerAcceptedVersion) {
+                    showDisclaimerGate = false
+                } else {
+                    exit(0)
+                }
+            }
+        )
     }
 
     /// The bottom chrome (b39: restored to the original system
@@ -198,6 +244,42 @@ struct MainTabView: View {
                 FullPlayerPlaceholderView()
             }
         }
+        .fullScreenCover(isPresented: disclaimerGateBinding) {
+            DisclaimerView(mode: .gate)
+        }
+        .confirmationDialog(
+            "使用移动数据下载？",
+            isPresented: meteredDialogBinding,
+            presenting: meteredPrompt.pending
+        ) { prompt in
+            Button("继续下载") {
+                meteredPrompt.resolveCurrent { DownloadEngine.shared.approveMetered(key: $0.request.key) }
+            }
+            Button("等待 Wi-Fi") {
+                meteredPrompt.resolveCurrent { DownloadEngine.shared.holdMetered(key: $0.request.key) }
+            }
+            Button("取消", role: .cancel) {
+                meteredPrompt.resolveCurrent { DownloadEngine.shared.denyMetered(key: $0.request.key) }
+            }
+        } message: { prompt in
+            Text("当前网络按流量计费（移动数据、热点或低数据模式），下载“\(prompt.title)”会消耗流量。")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .haoShowDisclaimerGate)) { _ in
+            showDisclaimerGate = true
+        }
+        .onAppear {
+            // b45-h, P8 #7: the engine's metered-confirmation
+            // callback had no consumer anywhere in the app — the
+            // prompt never showed. The closure captures the prompt
+            // state weakly and hops to the main queue in a
+            // DispatchWorkItem (the @Sendable-safe hop, same as
+            // the engine's own callbacks).
+            DownloadEngine.shared.onMeteredConfirmationNeeded = { [weak meteredPrompt] info in
+                let prompt = MeteredDownloadPrompt(info: info)
+                let work = DispatchWorkItem { meteredPrompt?.offer(prompt) }
+                DispatchQueue.main.async(execute: work)
+            }
+        }
         .environment(\.haoTheme, palette)
         // b41: tells the five tab roots which backdrop to draw
         // behind their own content (haoBackdropLayer) — resolved
@@ -287,5 +369,57 @@ struct MainTabView: View {
             roomId: String(parts[1]), platform: platform,
             title: item.title, streamer: item.artist ?? "",
             cover: item.coverURL?.absoluteString ?? "")
+    }
+}
+
+// MARK: - Metered-download prompt (b45-h, P8 #7)
+//
+// One pending metered-download confirmation (plan §9.3): the
+// song title + engine key the dialog acts on. The engine fires
+// once per task, so a batch can offer several prompts — they
+// queue here and show one at a time; answering (or dismissing)
+// the current one advances to the next.
+struct MeteredDownloadPrompt: Identifiable {
+    let info: DownloadTaskInfo
+    var id: String { info.request.key }
+    var title: String { info.request.title }
+}
+
+@MainActor
+final class MeteredDownloadPromptState: ObservableObject {
+    @Published private(set) var pending: MeteredDownloadPrompt?
+    private var queue: [MeteredDownloadPrompt] = []
+    private var answeredID: String?
+
+    func offer(_ prompt: MeteredDownloadPrompt) {
+        if pending?.id == prompt.id || queue.contains(where: { $0.id == prompt.id }) { return }
+        if pending == nil {
+            pending = prompt
+        } else {
+            queue.append(prompt)
+        }
+    }
+
+    /// Apply the user's choice to the current prompt. The dialog
+    /// itself dismisses afterwards; advancing happens in
+    /// `dialogDismissed`, so the choice and the advance never
+    /// double-run.
+    func resolveCurrent(_ action: (DownloadTaskInfo) -> Void) {
+        guard let current = pending else { return }
+        answeredID = current.id
+        action(current.info)
+    }
+
+    /// The dialog closed. A prompt answered by a button just
+    /// advances; a prompt dismissed without choosing (tap
+    /// outside) is held for Wi-Fi — the safe default, never a
+    /// silent approve or cancel.
+    func dialogDismissed() {
+        guard let current = pending else { return }
+        if answeredID != current.id {
+            DownloadEngine.shared.holdMetered(key: current.info.request.key)
+        }
+        answeredID = nil
+        pending = queue.isEmpty ? nil : queue.removeFirst()
     }
 }

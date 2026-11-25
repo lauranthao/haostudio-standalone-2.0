@@ -1243,11 +1243,12 @@ final class MusicPlayerViewModel: ObservableObject {
                 // Only keep the result if the song is still current.
                 guard self.currentSong?.identityKey == song.identityKey else { return }
                 // b45-a: body-only filter (see the cached path above).
-                // The identity gate itself (MusicLyrics
-                // .lyricsIdentityMatches) cannot run here: Lyrics
-                // carries no candidate title/artist/duration, so the
-                // fetch-side check belongs to the API layer — the
-                // helpers ship in MusicLyrics.swift for that layer.
+                // The identity gate runs in the API layer
+                // (MusicLyricsAPI.gateLyrics, b45-h): the LRC's own
+                // [ti:] / [ar:] tags are checked against this song
+                // before the lines ever reach here — a mismatched
+                // lyric arrives as an empty Lyrics, which shows an
+                // honest "暂无歌词" below.
                 self.lyrics = MusicLyrics.filterBodyLines(
                     result.lines, title: song.title, artist: song.artist)
                 self.lyricsLoaded = true

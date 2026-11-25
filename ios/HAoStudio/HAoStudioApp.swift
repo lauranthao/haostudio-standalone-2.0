@@ -168,18 +168,33 @@ struct HAoStudioApp: App {
                 if showingSplash {
                     SplashView(isReady: $splashReady) {
                         showingSplash = false
+                        // b45-h, 包 C leftover (b): first-launch
+                        // disclaimer gate. The splash is done, so
+                        // the gate (if needed) presents over the
+                        // tabs; MainTabView owns the presentation
+                        // (it has the resolved theme palette).
+                        // A bumped DisclaimerGate.currentVersion
+                        // re-asks consent the same way.
+                        if !DisclaimerGate.isAccepted(storedVersion: settingsStore.disclaimerAcceptedVersion) {
+                            NotificationCenter.default.post(name: .haoShowDisclaimerGate, object: nil)
+                        }
                     }
                 }
             }
             // Update sheet at the app root (see backupFlow above):
             // presents on every tab, including the launch-time
             // auto-check prompt while the Home tab is up.
+            // b45-h, 包 C leftover (a): the .height(360) detent
+            // (Coda §4.2) is the initial height; .large is the
+            // escape hatch when long release notes overflow 360 —
+            // the sheet then grows instead of clipping text.
             .sheet(item: $backupFlow.updatePrompt) { result in
                 UpdatePromptSheet(
                     result: result,
                     onSkip: { backupFlow.skipPromptedVersion() },
                     onLater: { backupFlow.dismissPrompt() }
                 )
+                .presentationDetents([.height(360), .large])
                 .presentationDragIndicator(.visible)
             }
             .environmentObject(themeStore)

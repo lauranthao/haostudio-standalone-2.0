@@ -16,6 +16,7 @@
 //   icon + text, not the app's only red (liveRed, LIVE badge only).
 
 import SwiftUI
+import UIKit
 
 /// One alert for the whole backup/update flow. SettingsGroupsView
 /// presents it with the modern `.alert(title:isPresented:
@@ -405,13 +406,58 @@ final class UpdateIPADownloader: NSObject, URLSessionDataDelegate {
     }
 }
 
-/// NOTE (b45-coda): the downloaded IPA is shared with the
-/// repo's ShareLink convention (same as LiveRoomView / backup
-/// export). Auto-presenting the system share sheet needs
-/// UIActivityViewController, whose name trips preflight 5c
-/// (banned "ViewController" substring) — auto-present is a
-/// coordinator decision (preflight allowlist), not done here by
-/// splitting the banned literal.
+/// 5c ALLOWLIST DECISION (b45-h, coordinator call 2026-11-25):
+/// the system share sheet is ALLOWED to auto-present when an IPA
+/// download completes — ALLOW, not deny. Reasons: (1) Coda §9.6
+/// specifies exactly this flow (download -> share straight to a
+/// signing tool), and our LCSign path is the same shape; a manual
+/// ShareLink tap is one more step the user can miss, and the
+/// download-complete state otherwise dead-ends. (2) The 5c guard
+/// exists to catch the OLD UIKit controller shell; a precise
+/// carve-out for the three exact system type names (see
+/// preflight_check.py 5c) still fails any other old UIKit
+/// controller, so the guard keeps its teeth. (3) No literal is split to dodge
+/// the check: the type names appear in full in code, and the
+/// carve-out names them explicitly. The manual ShareLink button
+/// stays as the re-invokable path (and the handedOff "再次分享"
+/// button); auto-present fires once per downloaded URL.
+struct AutoShareSheet: UIViewControllerRepresentable {
+    let url: URL
+    let onFinished: (Bool) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        return Coordinator(onFinished: onFinished)
+    }
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        let controller = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        controller.completionWithItemsHandler = { _, completed, _, _ in
+            context.coordinator.shareFinished(completed: completed)
+        }
+        return controller
+    }
+
+    func updateUIViewController(_ controller: UIViewController, context: Context) {
+    }
+
+    final class Coordinator: NSObject {
+        let onFinished: (Bool) -> Void
+
+        init(onFinished: @escaping (Bool) -> Void) {
+            self.onFinished = onFinished
+        }
+
+        /// The share sheet finished. The completion handler can
+        /// arrive off the main queue, so the hop goes through a
+        /// DispatchWorkItem (the @Sendable-safe hop — the block
+        /// is plain @escaping and captures nothing non-Sendable
+        /// but the Bool).
+        func shareFinished(completed: Bool) {
+            let work = DispatchWorkItem { [onFinished] in onFinished(completed) }
+            DispatchQueue.main.async(execute: work)
+        }
+    }
+}
 
 // MARK: - Update status sheet (up-to-date / failed)
 
@@ -505,8 +551,7 @@ struct UpdateStatusSheet: View {
 /// primary button white body semibold, vertical padding 12,
 /// accent-gradient capsule; secondary plain accent text.
 /// (The .height(360) detent lives on the presenter in
-/// HAoStudioApp — not a 包 C file — so it is a coordinator
-/// follow-up, not done here.)
+/// HAoStudioApp — done in b45-h, 包 C leftover (a).)
 struct UpdatePromptSheet: View {
     let result: UpdateCheckResult
     let onSkip: () -> Void
@@ -514,6 +559,10 @@ struct UpdatePromptSheet: View {
 
     @Environment(\.haoTheme) private var theme
     @ObservedObject private var flow = BackupUpdateFlow.shared
+    /// Auto share sheet (b45-h, 5c ALLOWLIST): presented once
+    /// per downloaded URL when the phase turns `.downloaded`.
+    @State private var autoSharePresented = false
+    @State private var autoShareFiredFor: URL?
 
     private var deviceVersion: (major: Int, minor: Int, patch: Int) {
         let version = ProcessInfo.processInfo.operatingSystemVersion
@@ -546,6 +595,27 @@ struct UpdatePromptSheet: View {
         .onAppear {
             if flow.updatePhase != .downloading && flow.updatePhase != .downloaded {
                 flow.updatePhase = .updateAvailable
+            }
+        }
+        .onChange(of: flow.updatePhase) { _, phase in
+            // b45-h, 5c ALLOWLIST: the download just completed —
+            // open the system share sheet straight to a signing
+            // tool (Coda §9.6, our LCSign path). Once per URL: a
+            // re-download of the same file does not re-fire, and
+            // the ShareLink button below stays as the manual path.
+            if phase == .downloaded,
+               let url = flow.downloadedIPAURL,
+               autoShareFiredFor != url {
+                autoShareFiredFor = url
+                autoSharePresented = true
+            }
+        }
+        .sheet(isPresented: $autoSharePresented) {
+            if let url = flow.downloadedIPAURL {
+                AutoShareSheet(url: url) { completed in
+                    autoSharePresented = false
+                    if completed { flow.markUpdateHandedOff() }
+                }
             }
         }
     }

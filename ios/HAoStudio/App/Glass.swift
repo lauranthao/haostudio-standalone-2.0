@@ -351,6 +351,11 @@ extension Notification.Name {
     /// again (reselect). `object` is the HaoTab. Each tab root scrolls
     /// only its own list to the top; nothing else listens.
     static let haoTabReselected = Notification.Name("haoTabReselected")
+    /// Posted by HAoStudioApp after the splash when the stored
+    /// disclaimer version is not current (b45-h, 包 C leftover b).
+    /// MainTabView listens and presents the first-launch
+    /// disclaimer gate; nothing else listens.
+    static let haoShowDisclaimerGate = Notification.Name("haoShowDisclaimerGate")
 }
 
 /// Scroll-to-top anchor id for a tab root's vertical scroll content.

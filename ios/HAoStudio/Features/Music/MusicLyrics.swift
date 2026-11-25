@@ -260,6 +260,67 @@ enum MusicLyrics {
         return chars.enumerated().map { (String($0.element), Double($0.offset) * each, each) }
     }
 
+    // MARK: - Karaoke wipe render values (b45-h, P8 #1, §9.1)
+    //
+    // Coda's KaraokeGlyphRenderer: the sung part is bright, the
+    // unsung part sits at 0.28, the char being sung glows, and a
+    // long note swells the char it sits on (up to +7.5% scale,
+    // lifted). The b45-a first cut only did a line-level gradient
+    // wipe; these values drive the per-character render in
+    // LyricWipeText, where each char's own progress comes from
+    // the even pseudo-syllable split above — no word timing
+    // exists in any lyric source, so no fake per-word timing is
+    // invented. The wipe edge is feathered by the smoothstep in
+    // karaokeCharOpacity (a soft edge one char wide) instead of
+    // a gradient stop, so no separate feather width is kept.
+    // RTL lines are not mirrored (Coda supports RTL; our lyric
+    // sources are CJK / Latin — noted, not faked).
+
+    /// Unsung chars sit at 0.28 opacity.
+    static let karaokeUnsungOpacity = 0.28
+    /// Glow opacity of the char being sung.
+    static let karaokeGlowOpacity = 0.65
+
+    /// Glow blur of the char being sung: fontSize x 0.24.
+    static func karaokeGlowRadius(fontSize: Double) -> Double {
+        return fontSize * 0.24
+    }
+
+    /// Progress of one char inside its line (0...1): chars share
+    /// the line duration evenly. A zero-length line counts as
+    /// fully sung once playback has reached it.
+    static func karaokeCharProgress(lineDuration: Double, charIndex: Int, charCount: Int, positionInLine: Double) -> Double {
+        guard charCount > 0 else { return 0 }
+        guard lineDuration > 0 else { return positionInLine >= 0 ? 1 : 0 }
+        let each = lineDuration / Double(charCount)
+        let start = Double(charIndex) * each
+        return min(1, max(0, (positionInLine - start) / each))
+    }
+
+    /// Char opacity: unsung 0.28, sung 1.0, with a smoothstep
+    /// feather across the char being sung.
+    static func karaokeCharOpacity(charProgress: Double) -> Double {
+        let t = min(1, max(0, charProgress))
+        let smooth = t * t * (3 - 2 * t)
+        return karaokeUnsungOpacity + (1 - karaokeUnsungOpacity) * smooth
+    }
+
+    /// Long-note swell: the char being sung grows to +7.5% at
+    /// its midpoint and settles back. Chars progress one after
+    /// another, so the swell is naturally staggered down the
+    /// line and the last char only peaks after the first has
+    /// passed its peak (Coda's LyricLongToneEmphasis).
+    static func karaokeSwellScale(charProgress: Double) -> Double {
+        let t = min(1, max(0, charProgress))
+        return 1 + 0.075 * sin(Double.pi * t)
+    }
+
+    /// Long-note lift: the sung char floats up to fontSize x 0.065.
+    static func karaokeLift(fontSize: Double, charProgress: Double) -> Double {
+        let t = min(1, max(0, charProgress))
+        return -fontSize * 0.065 * sin(Double.pi * t)
+    }
+
     // MARK: - Row distance visuals (b45-a, §2.8)
 
     /// Non-active row opacity by distance from the active line:

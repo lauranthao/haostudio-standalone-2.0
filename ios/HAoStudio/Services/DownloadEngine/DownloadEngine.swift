@@ -124,6 +124,11 @@ struct DownloadTaskInfo: Codable, Equatable {
     /// (batch on cellular/hotspot/low-data, or a single song in
     /// low-data mode). Unapproved tasks wait for Wi-Fi.
     var needsMeteredConfirmation: Bool = false
+    /// True while the user chose "等待 Wi-Fi" for this task: it
+    /// sits in `waitingNetwork` and re-queues itself when the
+    /// path stops being expensive. Cleared on approve / manual
+    /// resume / reconnect.
+    var waitingForUnmetered: Bool = false
 }
 
 // MARK: - b45-F: metered-network confirmation policy (plan §9.3)
@@ -283,7 +288,8 @@ final class DownloadEngine: NSObject {
 
     /// Fired once (main queue) when a task needs metered-network
     /// confirmation — the UI shows "继续下载 / 等待 Wi-Fi /
-    /// 取消" and calls `approveMetered(key:)` / `denyMetered(key:)`.
+    /// 取消" and calls `approveMetered(key:)` / `holdMetered(key:)`
+    /// / `denyMetered(key:)`.
     var onMeteredConfirmationNeeded: ((DownloadTaskInfo) -> Void)?
 
     override init() {
@@ -305,6 +311,7 @@ final class DownloadEngine: NSObject {
             guard let self = self else { return }
             self.syncQueue.async {
                 let wasAvailable = self.isNetworkAvailable
+                let wasMetered = self.isMeteredNetwork
                 self.isNetworkAvailable = path.status == .satisfied
                 self.isMeteredNetwork = path.isExpensive
                 self.isLowDataMode = path.isConstrained
@@ -315,14 +322,23 @@ final class DownloadEngine: NSObject {
                         record.info.state = .waitingNetwork
                     }
                     self.persistLocked()
-                } else if !wasAvailable {
-                    // Reconnected: waiting tasks re-queue and run.
+                } else if !wasAvailable || (wasMetered && !self.isMeteredNetwork) {
+                    // Reconnected, or moved off an expensive path
+                    // (cellular / hotspot -> Wi-Fi): waiting tasks
+                    // re-queue and run — except metered-held tasks
+                    // while the path is still expensive.
+                    var resumed = false
                     for record in self.records.values where record.info.state == .waitingNetwork {
+                        if record.info.waitingForUnmetered && self.isMeteredNetwork { continue }
+                        record.info.waitingForUnmetered = false
                         record.info.state = .queued
                         record.info.errorMessage = nil
+                        resumed = true
                     }
-                    self.persistLocked()
-                    self.startNextLocked()
+                    if resumed {
+                        self.persistLocked()
+                        self.startNextLocked()
+                    }
                 }
             }
         }
@@ -554,6 +570,23 @@ final class DownloadEngine: NSObject {
         }
     }
 
+    /// Hold a metered-network download for Wi-Fi (b45-h, plan
+    /// §9.3): the task waits in `waitingNetwork` and resumes
+    /// itself when the path stops being expensive (see the path
+    /// monitor above). Unlike `denyMetered` (cancel) the
+    /// download is not lost; unlike `approveMetered` it spends
+    /// no metered data.
+    func holdMetered(key: String) {
+        syncQueue.sync {
+            guard let record = records[key] else { return }
+            guard record.info.needsMeteredConfirmation else { return }
+            record.info.needsMeteredConfirmation = false
+            record.info.waitingForUnmetered = true
+            record.info.state = .waitingNetwork
+            persistLocked()
+        }
+    }
+
     /// Cancel one owner of a shared job (plan §9.3): the job only
     /// really cancels when the owner set is empty. Passing nil
     /// cancels the whole job (the old behaviour).
@@ -629,6 +662,7 @@ final class DownloadEngine: NSObject {
         syncQueue.sync {
             guard let record = records[key] else { return }
             guard record.info.state == .paused || record.info.state == .failed || record.info.state == .waitingNetwork else { return }
+            record.info.waitingForUnmetered = false
             record.info.state = .queued
             record.info.errorMessage = nil
             record.info.retryCount = 0
@@ -1245,6 +1279,10 @@ final class DownloadEngine: NSObject {
                 || restored.state == .fetchingURL || restored.state == .validating
                 || restored.state == .waitingNetwork {
                 restored.state = .paused
+                // b45-h: a held task restarts paused, never
+                // auto-held — the hold flag is only meaningful
+                // while the task sits in waitingNetwork.
+                restored.waitingForUnmetered = false
             }
             restored.errorMessage = restored.state == .failed ? restored.errorMessage : nil
             // Re-sanitise the stored file name: a crafted/migrated

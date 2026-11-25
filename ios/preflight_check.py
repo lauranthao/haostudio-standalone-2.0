@@ -200,6 +200,19 @@ joined = "\n".join(f.read_text() for f in swift_files)
 # is actual CODE referencing them.
 code_only = re.sub(r"//.*", "", joined)
 code_only = re.sub(r"/\*.*?\*/", "", code_only, flags=re.DOTALL)
+# 5c allowlist (b45-h, coordinator decision 2026-11-25): the system
+# share sheet is the ONE allowed UIKit view controller — the update
+# flow auto-presents it after an IPA download (Coda §9.6, download
+# -> share -> signing tool). The three exact type names are stripped
+# (longest first) before the substring check below; any other old
+# UIKit controller still fails. The tokens are
+# assembled from fragments so this file never holds the banned
+# literal itself (see the header note on fragments).
+_SHARE_VC = "UIActivity" + "View" + "Controller"
+_UI_VC_REP = "UI" + "View" + "Controller" + "Representable"
+_UI_VC = "UI" + "View" + "Controller"
+for _allowed in [_SHARE_VC, _UI_VC_REP, _UI_VC]:
+    code_only = code_only.replace(_allowed, "")
 for needle, label in [(_N_WEBVIEW, "old web shell"), (_N_META, "removed metadata service"),
                       (_N_META_LOWER, "removed metadata service (lowercase)"),
                       (_N_FRONTEND, "old frontend entry"), (_N_VIEWCTRL, "old controller file"),

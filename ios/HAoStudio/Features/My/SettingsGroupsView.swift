@@ -1514,10 +1514,14 @@ struct DocumentSheetView: View {
 
 /// Disclaimer page, version 3 (DisclaimerGate). Read-only mode
 /// = bordered "关闭"; first-launch gate mode = prominent
-/// "同意并继续" (accent tint) + plain "不同意". The gate's
-/// presentation on first launch + exit-on-decline lives in the
-/// app shell (HAoStudioApp, not a 包 C file) — this view only
-/// records the consent.
+/// "同意并继续" (accent tint) + plain "不同意". The gate is
+/// presented by MainTabView (fullScreenCover, themed palette)
+/// after HAoStudioApp posts `.haoShowDisclaimerGate` when the
+/// splash finishes and the stored version is not current; the
+/// exit-on-decline lives in MainTabView's gate binding (a
+/// dismiss without acceptance exits the app — Coda's
+/// OnboardingView behaviour), so this view only records the
+/// consent and confirms the decline first.
 struct DisclaimerView: View {
     enum Mode {
         case readOnly
@@ -1529,9 +1533,25 @@ struct DisclaimerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.haoTheme) private var theme
     @EnvironmentObject private var settings: SettingsStore
+    /// Decline confirmation (gate mode only): refusing the
+    /// disclaimer exits the app, so the tap is confirmed first
+    /// instead of killing the app on a mis-tap.
+    @State private var showDeclineConfirm = false
 
     var body: some View {
         VStack(spacing: 0) {
+            // b45-h, 包 C leftover (b): first-launch step
+            // capsules (Coda OnboardingView form — current step
+            // 18pt, the rest 6pt). The onboarding is a single
+            // step (disclaimer only, no login step), so there is
+            // exactly one capsule, in the accent colour.
+            if mode == .gate {
+                Capsule()
+                    .fill(theme.accentText)
+                    .frame(width: 18, height: 6)
+                    .padding(.top, 16)
+                    .accessibilityLabel("第 1 步，共 1 步：免责声明")
+            }
             ScrollView {
                 VStack(spacing: 18) {
                     VStack(spacing: 8) {
@@ -1575,7 +1595,7 @@ struct DisclaimerView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(theme.accent)
                     Button("不同意") {
-                        dismiss()
+                        showDeclineConfirm = true
                     }
                     .font(.haoBodyStrong)
                     .foregroundStyle(theme.accentText)
@@ -1598,6 +1618,19 @@ struct DisclaimerView: View {
             .padding(.vertical, 16)
         }
         .background(theme.scaffoldBackground)
+        .alert("需要同意免责声明", isPresented: $showDeclineConfirm) {
+            Button("退出应用", role: .destructive) {
+                // Refusing the disclaimer exits the app (Coda
+                // OnboardingView behaviour). The dismiss runs
+                // MainTabView's gate binding, which exits when
+                // the disclaimer is not accepted.
+                dismiss()
+            }
+            Button("返回阅读", role: .cancel) {
+            }
+        } message: {
+            Text("不同意免责声明将无法使用 HAo Studio。")
+        }
     }
 }
 

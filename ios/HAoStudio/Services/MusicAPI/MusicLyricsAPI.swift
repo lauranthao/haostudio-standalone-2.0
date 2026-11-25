@@ -99,10 +99,16 @@ final class MusicLyricsAPI {
                 guard let json = json else { completion(nil); return }
                 let lrc = MusicAPIJSON.asMap(json["lrc"])
                 let tlyric = MusicAPIJSON.asMap(json["tlyric"])
+                let rawLrc = MusicAPIJSON.asString(lrc?["lyric"])
                 let lines = MusicLyricsAPI.parseLrcWithTranslation(
-                    MusicAPIJSON.asString(lrc?["lyric"]),
+                    rawLrc,
                     translation: MusicAPIJSON.asString(tlyric?["lyric"]))
-                completion(lines.isEmpty ? nil : Lyrics(lines: lines))
+                guard !lines.isEmpty else { completion(nil); return }
+                let gated = MusicLyricsAPI.gateLyrics(
+                    lines,
+                    candidate: MusicLyricsAPI.lyricIdentityFromLrc(rawLrc),
+                    song: track)
+                completion(Lyrics(lines: gated))
             }
         case .tx:
             client.getJson(
@@ -114,8 +120,14 @@ final class MusicLyricsAPI {
                 headers: ["Referer": "https://y.qq.com/", "User-Agent": MusicUA.value]
             ) { json in
                 guard let json = json else { completion(nil); return }
-                let lines = MusicLyricsAPI.parseLrc(MusicAPIJSON.asString(json["lyric"]))
-                completion(lines.isEmpty ? nil : Lyrics(lines: lines))
+                let rawLyric = MusicAPIJSON.asString(json["lyric"])
+                let lines = MusicLyricsAPI.parseLrc(rawLyric)
+                guard !lines.isEmpty else { completion(nil); return }
+                let gated = MusicLyricsAPI.gateLyrics(
+                    lines,
+                    candidate: MusicLyricsAPI.lyricIdentityFromLrc(rawLyric),
+                    song: track)
+                completion(Lyrics(lines: gated))
             }
         case .kw:
             client.getJson(
@@ -141,6 +153,68 @@ final class MusicLyricsAPI {
             // kg / mg: no lyrics endpoint.
             completion(nil)
         }
+    }
+
+    // MARK: - Identity gate (b45-h, P8 #2, §9.1)
+    //
+    // The b45-a helpers (MusicLyrics.lyricsIdentityMatches)
+    // shipped with no caller — the view model cannot run the gate
+    // because Lyrics carries no candidate title/artist. The gate
+    // runs HERE: NetEase / QQ LRC text usually declares its own
+    // [ti:] / [ar:] tags, and those are the candidate identity.
+    // Both tags must be present to gate (a lone title is too weak
+    // to reject on); when either is missing the id-scoped fetch
+    // stands as-is. A failed gate returns an EMPTY Lyrics, not
+    // nil — the player then shows an honest "暂无歌词" instead of
+    // the retry affordance, and the empty result is cached
+    // nowhere (fetch + disk layers both skip empties), so a later
+    // retry re-fetches. Pure-music LRCs never reach the gate: the
+    // parser drops "纯音乐" lines first, so a pure-music lyric
+    // parses to no lines; isInstrumental is therefore always
+    // false here. Kuwo stays ungated: its lrclist JSON carries no
+    // [ti:]/[ar:], and its song-name fields are not part of the
+    // verified contract, so no gate is guessed from them.
+
+    /// Declared `[ti:]` / `[ar:]` identity of an LRC text, if
+    /// both are present. Only the first of each is read; the tags
+    /// may sit anywhere in the text.
+    static func lyricIdentityFromLrc(_ text: String) -> (title: String, artist: String)? {
+        var title: String?
+        var artist: String?
+        for line in text.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if title == nil, trimmed.hasPrefix("[ti:") {
+                title = lyricIdentityTagValue(trimmed, key: "ti")
+            }
+            if artist == nil, trimmed.hasPrefix("[ar:") {
+                artist = lyricIdentityTagValue(trimmed, key: "ar")
+            }
+            if title != nil && artist != nil { break }
+        }
+        guard let title = title, !title.isEmpty,
+              let artist = artist, !artist.isEmpty else { return nil }
+        return (title, artist)
+    }
+
+    /// Value of one `[key:value]` tag line (up to the closing `]`).
+    private static func lyricIdentityTagValue(_ line: String, key: String) -> String? {
+        let prefix = "[\(key):"
+        guard line.hasPrefix(prefix), let close = line.firstIndex(of: "]") else { return nil }
+        let value = String(line[line.index(line.startIndex, offsetBy: prefix.count)..<close])
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Gate parsed lines against the song: nil identity in the
+    /// candidate means "cannot check, keep as-is"; a failed check
+    /// means empty (no matching lyrics for this song).
+    static func gateLyrics(_ lines: [LyricsLine], candidate: (title: String, artist: String)?, song: MusicTrack) -> [LyricsLine] {
+        guard let candidate = candidate else { return lines }
+        let matches = MusicLyrics.lyricsIdentityMatches(
+            songTitle: song.title, songArtist: song.artist, songDurationSeconds: song.duration ?? 0,
+            lyricTitle: candidate.title, lyricArtist: candidate.artist, lyricDurationSeconds: nil,
+            isInstrumental: false)
+        return matches ? lines : []
     }
 
     // MARK: - LRC parsing (pure, unit-tested)

@@ -784,17 +784,20 @@ struct MusicPlayerView: View {
                                 // under its line, smaller and dimmer.
                                 VStack(spacing: 2) {
                                     if isActive {
-                                        // b45-a: karaoke wipe (first
-                                        // cut) — the sung part of the
-                                        // line is bright white, the
-                                        // rest sits at 0.28, with a
-                                        // short feather between them.
+                                        // b45-h: per-character karaoke
+                                        // wipe (P8 #1) — each char is
+                                        // rendered on its own so the
+                                        // wipe advances char by char
+                                        // (pseudo-syllable split; no
+                                        // word timing exists in any
+                                        // lyric source), unsung chars
+                                        // at 0.28, the sung char
+                                        // glowing and swelling.
                                         LyricWipeText(
                                             text: line.text.isEmpty ? " " : line.text,
-                                            progress: MusicLyrics.lineProgress(
-                                                lines: playerVM.lyrics,
-                                                index: index,
-                                                position: playerVM.position),
+                                            lineStart: line.time,
+                                            lineDuration: (index + 1 < playerVM.lyrics.count ? playerVM.lyrics[index + 1].time : line.time + 4) - line.time,
+                                            position: playerVM.position,
                                             fontSize: 22
                                         )
                                     } else {
@@ -1552,33 +1555,48 @@ struct LyricRowPressStyle: ButtonStyle {
     }
 }
 
-/// Karaoke wipe, first cut (b45-a, §9.1): the sung part of the
-/// active line is bright white, the rest sits at 0.28, with a
-/// short feather between the two stops. The full Coda renderer
-/// (Core Text tiles at 2x, 30fps CADisplayLink, per-glyph glow,
-/// long-tone swell) is a remaining item — this gradient wipe
-/// carries the same visual contract with plain SwiftUI.
+/// Per-character karaoke wipe (b45-h, P8 #1, §9.1): each char
+/// of the active line is rendered on its own so the wipe can
+/// advance char by char (pseudo-syllable split — no word timing
+/// exists in any lyric source), the unsung chars sit at 0.28,
+/// the char being sung glows (blur fontSize x 0.24, 0.65 white)
+/// and swells up to +7.5% with a lift (long-note emphasis).
+/// The wipe steps with the player's published position (0.5 s
+/// tick) — not a 30 fps CADisplayLink like Coda's tile
+/// renderer; the per-char HStack is cheap enough that no tile
+/// cache is needed at our line lengths.
 struct LyricWipeText: View {
     var text: String
-    /// 0…1 progress through the line.
-    var progress: Double
+    /// Start of the line, seconds.
+    var lineStart: Double
+    /// Line duration, seconds (next line start minus this start;
+    /// 4 s for the last line).
+    var lineDuration: Double
+    /// Current playback position, seconds.
+    var position: Double
     var fontSize: CGFloat
 
+    private var chars: [String] {
+        return text.map { String($0) }
+    }
+
     var body: some View {
-        Text(text)
-            .font(.system(size: fontSize, weight: .bold))
-            .foregroundStyle(
-                LinearGradient(
-                    stops: [
-                        .init(color: .white, location: 0),
-                        .init(color: .white, location: max(0, progress - 0.02)),
-                        .init(color: .white.opacity(0.28), location: min(1, progress + 0.08)),
-                        .init(color: .white.opacity(0.28), location: 1),
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            ForEach(Array(chars.enumerated()), id: \.offset) { index, char in
+                let progress = MusicLyrics.karaokeCharProgress(
+                    lineDuration: lineDuration,
+                    charIndex: index,
+                    charCount: chars.count,
+                    positionInLine: position - lineStart)
+                let isCurrent = progress > 0 && progress < 1
+                Text(char)
+                    .font(.system(size: fontSize, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(MusicLyrics.karaokeCharOpacity(charProgress: progress)))
+                    .scaleEffect(CGFloat(MusicLyrics.karaokeSwellScale(charProgress: progress)))
+                    .offset(y: CGFloat(MusicLyrics.karaokeLift(fontSize: Double(fontSize), charProgress: progress)))
+                    .shadow(color: .white.opacity(isCurrent ? MusicLyrics.karaokeGlowOpacity : 0), radius: CGFloat(MusicLyrics.karaokeGlowRadius(fontSize: Double(fontSize))))
+            }
+        }
     }
 }
 
