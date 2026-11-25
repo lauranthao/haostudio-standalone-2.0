@@ -775,7 +775,7 @@ private struct MyRecentPlaysView: View {
                                 song: song,
                                 isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
                                 onTap: {
-                                    playerVM.play(song: song, in: displayedRecent, startAt: index)
+                                    playerVM.play(song: song, in: displayedRecent, startAt: index, source: PlaySource(kind: .recent, id: "recent"), sourceDisplayName: "最近播放")
                                 },
                                 onToggleFav: {
                                     recent = MusicLibraryStore.getRecent()

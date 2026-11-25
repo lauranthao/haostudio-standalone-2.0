@@ -769,7 +769,7 @@ struct MusicHomeView: View {
     private func recentCard(song: MusicSong, index: Int, isPlaying: Bool) -> some View {
         MusicSongMenuHost(song: song, onFavToggled: { homeVM.reload() }) { menu in
             Button(action: {
-                playerVM.play(song: song, in: homeVM.recent, startAt: index)
+                playerVM.play(song: song, in: homeVM.recent, startAt: index, source: PlaySource(kind: .recent, id: "recent"), sourceDisplayName: "最近播放")
             }) {
                 VStack(alignment: .leading, spacing: 6) {
                     MusicCoverView(urlString: song.cover, size: 148, cornerRadius: 12)

@@ -478,6 +478,12 @@ enum PlaySourceKind: String, Codable, CaseIterable {
     case recent
     case heartbeat
     case fm
+    /// Our extension beyond Coda's seven (b45): our app has a
+    /// favourites list and chart lists that are real reloadable
+    /// places too. Adding cases is backward compatible — old
+    /// snapshots simply never contain them.
+    case favourites
+    case chart
 }
 
 struct PlaySource: Codable, Hashable {

@@ -211,7 +211,7 @@ struct MusicArtistDetailView: View {
                                 trackNumber: item.offset + 1,
                                 compact: true,
                                 onTap: {
-                                    playerVM.play(song: item.element, in: viewModel.songs, startAt: item.offset)
+                                    playerVM.play(song: item.element, in: viewModel.songs, startAt: item.offset, source: PlaySource(kind: .artist, id: artist.id), sourceDisplayName: artist.name)
                                 }
                             )
                             .frame(width: columnWidth, alignment: .leading)

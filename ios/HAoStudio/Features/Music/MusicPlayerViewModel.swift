@@ -42,6 +42,19 @@ final class MusicPlayerViewModel: ObservableObject {
     @Published private(set) var queue = MusicQueue(tracks: [], index: 0)
     @Published private(set) var currentSong: MusicSong?
 
+    /// The reloadable "place" the current queue came from (b45,
+    /// Coda PlaySource/PlayContext approach, our rewrite): the
+    /// playlist / album / artist / chart / daily / recent list
+    /// the user tapped, by kind + id. The in-memory queue is
+    /// the only copy until this is set — when it is lost (the
+    /// retry/toggle single-song fallback rebuilt it to one song,
+    /// or an outside item replaced the current song), next() /
+    /// previous() reload the list from this source instead of
+    /// answering "nothing". Nil for one-off plays (search rows
+    /// without a list, play-next inserts): those have no place
+    /// to reload from, and the old behaviour stands.
+    @Published private(set) var currentPlayContext: PlayContext?
+
     /// The music song the mini player falls back to when the
     /// coordinator has no current item. The full player keeps
     /// showing the loaded song after its URL failed to resolve or
@@ -573,7 +586,15 @@ final class MusicPlayerViewModel: ObservableObject {
     /// re-seek: a paused track resumes where it stopped, which
     /// is the checkpoint itself (pause writes it), and a playing
     /// track is already past it.
-    func play(song: MusicSong, in tracks: [MusicSong]? = nil, startAt: Int? = nil, resumeFrom: Double? = nil) {
+    ///
+    /// `source` / `sourceDisplayName` (b45): the reloadable
+    /// "place" this list came from — a playlist detail passes
+    /// its list, an album detail its album, and so on. Recorded
+    /// as the current play context (and snapshotted to disk for
+    /// remote lists), so a later 切歌 can reload the list when
+    /// the in-memory queue is gone. Nil = one-off play, no
+    /// place to reload from; the context is cleared then.
+    func play(song: MusicSong, in tracks: [MusicSong]? = nil, startAt: Int? = nil, resumeFrom: Double? = nil, source: PlaySource? = nil, sourceDisplayName: String? = nil) {
         if queue.isCurrentTrack(song),
            let track = player.currentTrack,
            track.id == song.identityKey || track.id == song.songId {
@@ -591,8 +612,10 @@ final class MusicPlayerViewModel: ObservableObject {
         if let tracks = tracks {
             let start = startAt ?? tracks.firstIndex(where: { $0.identityKey == song.identityKey }) ?? 0
             queue = MusicQueue(tracks: tracks, index: min(max(0, start), max(0, tracks.count - 1)))
+            recordPlayContext(source: source, displayName: sourceDisplayName, tracks: tracks)
         } else {
             queue = MusicQueue(tracks: [song], index: 0)
+            currentPlayContext = nil
         }
         expectedItemId = song.identityKey
         // H1: arm the resume seek (if any) BEFORE startPlayback.
@@ -611,10 +634,12 @@ final class MusicPlayerViewModel: ObservableObject {
         hapticTick()
     }
 
-    /// Play a whole list from the top (e.g. 播放全部).
-    func playAll(_ tracks: [MusicSong]) {
+    /// Play a whole list from the top (e.g. 播放全部). `source`
+    /// is the list's reloadable place (b45) — same contract as
+    /// play(song:in:source:).
+    func playAll(_ tracks: [MusicSong], source: PlaySource? = nil, sourceDisplayName: String? = nil) {
         guard let first = tracks.first else { return }
-        play(song: first, in: tracks, startAt: 0)
+        play(song: first, in: tracks, startAt: 0, source: source, sourceDisplayName: sourceDisplayName)
     }
 
     /// Play a downloaded / local song. The resolver (player leg)
@@ -763,6 +788,13 @@ final class MusicPlayerViewModel: ObservableObject {
         if queue.isCurrentTrack(song) {
             expectedItemId = song.identityKey
             startPlayback()
+        } else if rebuildQueueFromContext() {
+            // b45: the queue lost the playlist (the current song
+            // is not in it) — the context rebuild above restored
+            // it, so play from the restored queue instead of
+            // collapsing to a single song.
+            expectedItemId = song.identityKey
+            startPlayback()
         } else {
             play(song: song)
         }
@@ -802,6 +834,12 @@ final class MusicPlayerViewModel: ObservableObject {
         if queue.isCurrentTrack(song) {
             expectedItemId = song.identityKey
             startPlayback()
+        } else if rebuildQueueFromContext() {
+            // b45: same context rebuild as togglePlayPauseOrRetry
+            // — do not collapse the queue to one song when the
+            // playlist can still be reloaded.
+            expectedItemId = song.identityKey
+            startPlayback()
         } else {
             play(song: song)
         }
@@ -817,6 +855,13 @@ final class MusicPlayerViewModel: ObservableObject {
         // which reads the player's queue. The dead end restarts
         // the current song (see restartCurrentSong): a manual tap
         // always answers.
+        // b45: if the queue lost the playlist (single-song rebuild
+        // or an outside item), reload it from the play context
+        // first — a collapsed queue still "serves" a restart, so
+        // the reload must run before the step, not only on .nothing.
+        if !queueCanServeSwitch || queueLostSongs {
+            rebuildQueueFromContext()
+        }
         switch queue.nextStep(mode: playMode) {
         case .play(let index):
             playFromQueue(at: index)
@@ -831,6 +876,10 @@ final class MusicPlayerViewModel: ObservableObject {
     func previous() {
         // b41: same contract as next() — the live queue drives,
         // the dead end restarts the current song.
+        // b45: same context reload as next().
+        if !queueCanServeSwitch || queueLostSongs {
+            rebuildQueueFromContext()
+        }
         switch queue.prevStep(mode: playMode) {
         case .play(let index):
             playFromQueue(at: index)
@@ -970,10 +1019,15 @@ final class MusicPlayerViewModel: ObservableObject {
     /// Play from a queue supplied by the caller (heartbeat mode):
     /// same as playFromQueue(at:) but the queue itself is replaced
     /// first, so the seed song plays at its position in the new
-    /// list instead of in the old queue.
+    /// list instead of in the old queue. The generated list is a
+    /// reloadable place too (b45): record the heartbeat context
+    /// so a later 切歌 can rebuild it from the snapshot.
     private func playFromQueue(at index: Int, in tracks: [MusicSong]) {
         guard index >= 0 && index < tracks.count else { return }
         queue = MusicQueue(tracks: tracks, index: index)
+        recordPlayContext(
+            source: PlaySource(kind: .heartbeat, id: "heartbeat"),
+            displayName: "心动模式", tracks: tracks)
         playFromQueue(at: index)
     }
 
@@ -1299,6 +1353,96 @@ final class MusicPlayerViewModel: ObservableObject {
         queue.index = index
         expectedItemId = song.identityKey
         startPlayback()
+    }
+
+    // MARK: - Play context reload (b45: 切歌读歌单数据)
+
+    /// Record the reloadable place a list play came from, and
+    /// snapshot remote lists to disk (b45-F §9.3). Local lists
+    /// (playlist / recent / favourites) reload live from the
+    /// store, so their snapshot is only a fallback; remote lists
+    /// (album / artist / chart / plaza / daily) have no store
+    /// copy — without the snapshot the reload would have nothing
+    /// to read once the owning view is gone. A nil source clears
+    /// the context: a one-off play has no place.
+    private func recordPlayContext(source: PlaySource?, displayName: String?, tracks: [MusicSong]) {
+        guard let source = source else {
+            currentPlayContext = nil
+            return
+        }
+        currentPlayContext = PlayContext(
+            source: source,
+            displayName: displayName ?? source.id,
+            songKeys: tracks.map { $0.identityKey },
+            lastPlayedAt: Date().timeIntervalSince1970)
+        PlaylistSnapshotStore.save(PlaylistSnapshot(
+            source: source, displayName: displayName ?? source.id, songs: tracks))
+    }
+
+    /// The current context's songs, re-read from wherever that
+    /// place lives now. Local lists read the live store (a rename
+    /// or an edit is picked up); everything else reads the
+    /// snapshot saved at play time. Nil when there is no context
+    /// or the place has no songs left to read.
+    private func reloadSongsFromContext() -> [MusicSong]? {
+        guard let context = currentPlayContext else { return nil }
+        switch context.source.kind {
+        case .playlist:
+            if let list = MusicLibraryStore.getLists().first(where: { $0.id == context.source.id }),
+               !list.tracks.isEmpty {
+                return list.tracks
+            }
+            return PlaylistSnapshotStore.load(source: context.source)?.musicSongs
+        case .recent:
+            let recent = MusicLibraryStore.getRecent()
+            return recent.isEmpty ? nil : recent
+        case .favourites:
+            let favs = MusicLibraryStore.favSongs()
+            return favs.isEmpty ? nil : favs
+        case .album, .artist, .chart, .daily, .heartbeat, .fm:
+            return PlaylistSnapshotStore.load(source: context.source)?.musicSongs
+        }
+    }
+
+    /// Rebuild the in-memory queue from the current play context,
+    /// keeping the playing song current. Returns false when there
+    /// is no context, nothing to reload, or the playing song is
+    /// not in the reloaded list — the caller then keeps the old
+    /// behaviour (restart / nothing). The rebuild is a pure queue
+    /// swap: no playback call, no resolve — the caller re-runs
+    /// its step against the rebuilt queue.
+    @discardableResult
+    private func rebuildQueueFromContext() -> Bool {
+        guard let songs = reloadSongsFromContext(), !songs.isEmpty,
+              let song = currentSong ?? queue.current,
+              let index = songs.firstIndex(where: { $0.identityKey == song.identityKey })
+        else { return false }
+        queue = MusicQueue(tracks: songs, index: index)
+        return true
+    }
+
+    /// True when the queue can serve a manual switch right now:
+    /// it holds songs, has a current song, and the playing song
+    /// is actually in it. False is the "切歌读不到歌单数据"
+    /// state — the queue was rebuilt to one song, or an outside
+    /// item replaced the current song without rewriting it.
+    private var queueCanServeSwitch: Bool {
+        guard !queue.isEmpty, queue.current != nil else { return false }
+        guard let song = currentSong ?? queue.current else { return false }
+        return queue.tracks.contains(where: { $0.identityKey == song.identityKey })
+    }
+
+    /// True when the queue holds fewer songs than the play
+    /// context promises — the queue was collapsed to one song
+    /// (the retry/toggle fallback) while the playlist still has
+    /// more. A collapsed queue still "serves" a restart, so
+    /// queueCanServeSwitch alone cannot catch it; this is the
+    /// check that does. A queue the user edited (insert/remove)
+    /// can also read short; a reload then re-syncs to the
+    /// playlist, which is the source of truth.
+    private var queueLostSongs: Bool {
+        guard let context = currentPlayContext else { return false }
+        return queue.tracks.count < context.songKeys.count
     }
 
     /// Drag-reorder the queue (b45-a, Coda §2.9: List + .onMove,

@@ -272,7 +272,7 @@ struct MusicChartDetailView: View {
                                 isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
                                 trackNumber: index + 1,
                                 onTap: {
-                                    playerVM.play(song: song, in: viewModel.tracks, startAt: index)
+                                    playerVM.play(song: song, in: viewModel.tracks, startAt: index, source: PlaySource(kind: .chart, id: chart.id), sourceDisplayName: chart.name)
                                 }
                             )
                             .listRowBackground(theme.scaffoldBackground)

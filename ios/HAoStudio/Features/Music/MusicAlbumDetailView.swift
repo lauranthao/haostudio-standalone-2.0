@@ -199,7 +199,7 @@ struct MusicAlbumDetailView: View {
                                 compact: true,
                                 showFavHeart: true,
                                 onTap: {
-                                    playerVM.play(song: song, in: viewModel.songs, startAt: index)
+                                    playerVM.play(song: song, in: viewModel.songs, startAt: index, source: PlaySource(kind: .album, id: album.id), sourceDisplayName: album.name)
                                 }
                             )
                             .listRowBackground(theme.scaffoldBackground)

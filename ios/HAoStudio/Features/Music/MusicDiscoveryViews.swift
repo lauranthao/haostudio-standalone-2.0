@@ -70,7 +70,7 @@ struct MusicDailyView: View {
                                     isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
                                     showFavHeart: true,
                                     onTap: {
-                                        playerVM.play(song: song, in: discoveryVM.dailyTracks, startAt: index)
+                                        playerVM.play(song: song, in: discoveryVM.dailyTracks, startAt: index, source: PlaySource(kind: .daily, id: "daily"), sourceDisplayName: "每日推荐")
                                     }
                                 )
                                 if !discoveryVM.dailySpares.isEmpty {
@@ -561,7 +561,7 @@ struct MusicPlazaDetailView: View {
                                 isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
                                 trackNumber: index + 1,
                                 onTap: {
-                                    playerVM.play(song: song, in: viewModel.tracks, startAt: index)
+                                    playerVM.play(song: song, in: viewModel.tracks, startAt: index, source: PlaySource(kind: .playlist, id: summary.id), sourceDisplayName: summary.name)
                                 }
                             )
                             .listRowBackground(theme.scaffoldBackground)
@@ -580,7 +580,7 @@ struct MusicPlazaDetailView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 MusicCapsuleButton(icon: "play.fill", label: "播放全部", enabled: !viewModel.tracks.isEmpty) {
-                    playerVM.playAll(viewModel.tracks)
+                    playerVM.playAll(viewModel.tracks, source: PlaySource(kind: .playlist, id: summary.id), sourceDisplayName: summary.name)
                 }
             }
         }

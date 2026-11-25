@@ -43,7 +43,7 @@ struct MusicFavouritesView: View {
                             isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
                             showFavHeart: true,
                             onTap: {
-                                playerVM.play(song: song, in: libraryVM.favSongs, startAt: index)
+                                playerVM.play(song: song, in: libraryVM.favSongs, startAt: index, source: PlaySource(kind: .favourites, id: "favourites"), sourceDisplayName: "音乐收藏")
                             }
                         )
                         .listRowBackground(theme.scaffoldBackground)
@@ -278,7 +278,7 @@ struct MusicPlaylistDetailView: View {
                                 onToggleFavourite: {
                                     isFavPlaylist = MusicLibraryStore.toggleFavPlaylist(id: list.id)
                                 },
-                                onPlay: { playerVM.playAll(displayedTracks) },
+                                onPlay: { playerVM.playAll(displayedTracks, source: PlaySource(kind: .playlist, id: listId), sourceDisplayName: list.name) },
                                 playEnabled: !displayedTracks.isEmpty
                             ) {
                                 Picker("排序", selection: $sortOrder) {
@@ -334,7 +334,7 @@ struct MusicPlaylistDetailView: View {
                                     isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
                                     showFavHeart: true,
                                     onTap: {
-                                        playerVM.play(song: song, in: displayedTracks, startAt: index)
+                                        playerVM.play(song: song, in: displayedTracks, startAt: index, source: PlaySource(kind: .playlist, id: listId), sourceDisplayName: list.name)
                                     },
                                     onRemoveFromList: {
                                         libraryVM.removeFromPlaylist(song: song, listId: listId)
