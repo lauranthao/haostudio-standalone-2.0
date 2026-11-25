@@ -21,12 +21,18 @@
 /*
  * HAo Studio 2.0 — bundled LX script (de-keyed 2026-11-23, B leg).
  * Source: Flutter 1.1.6+32 assets/lx_scripts/hyw.js.
- * Audited: no plaintext key/secret/token found in this script. Tokens it uses are generated at runtime (server-issued or device-derived) or left empty for the user to fill in.
+ * Audited 2026-11-25 (b49fix2, P2-36): the audit header used to claim
+ * "no plaintext key" — that was wrong for this script.
+ * Key policy (2026-11-25, b49fix2): this script deliberately bundles ONE
+ * shared public card key for the HYWmusic public API (the same key is
+ * shared by the HYW legs in hyw.js / helloworld.js / stellarwave.js).
+ * It is a public API key for a free service, not a user credential and
+ * not a secret: it buys no account access. If the author rotates it,
+ * the HYW legs fail explicitly and the fallback chains move on.
+ * No other key/secret/token is bundled in this script.
  * Degradation: any backend that needed a removed key now fails its own
  * request and the script's fallback chain moves to the next backend —
  * an explicit per-backend failure, never a silent wrong result.
- * A user key is never bundled: fill it in via the script's own config
- * (showConfigView) or re-import the script yourself with your key.
  * Do not paste any key/secret/token into this file.
  */
 

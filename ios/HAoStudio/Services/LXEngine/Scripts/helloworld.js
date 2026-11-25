@@ -8,12 +8,18 @@
 /*
  * HAo Studio 2.0 — bundled LX script (de-keyed 2026-11-23, B leg).
  * Source: Flutter 1.1.6+32 assets/lx_scripts/helloworld.js.
- * Audited: no plaintext key/secret/token found in this script. Tokens it uses are generated at runtime (server-issued or device-derived) or left empty for the user to fill in.
+ * Audited 2026-11-25 (b49fix2, P2-36): the audit header used to claim
+ * "no plaintext key" — that was wrong for this script.
+ * Key policy (2026-11-25, b49fix2): this script deliberately bundles ONE
+ * shared public card key for the HYWmusic public API (the same key is
+ * shared by the HYW legs in hyw.js / helloworld.js / stellarwave.js).
+ * It is a public API key for a free service, not a user credential and
+ * not a secret: it buys no account access. If the author rotates it,
+ * the HYW legs fail explicitly and the fallback chains move on.
+ * No other key/secret/token is bundled in this script.
  * Degradation: any backend that needed a removed key now fails its own
  * request and the script's fallback chain moves to the next backend —
  * an explicit per-backend failure, never a silent wrong result.
- * A user key is never bundled: fill it in via the script's own config
- * (showConfigView) or re-import the script yourself with your key.
  * Do not paste any key/secret/token into this file.
  */
 
@@ -43,7 +49,7 @@ const CONFIG = {
         }
       },
 {
-  api: 'http://nmobi.kuwo.cn/mobi.s?f=web&user=0&source=kwplayerhd_ar_6.6.6.6_tianbao_T1A_qirui.apk&type=convert_url_with_sign&rid={id}&br={quality}',
+  api: 'https://nmobi.kuwo.cn/mobi.s?f=web&user=0&source=kwplayerhd_ar_6.6.6.6_tianbao_T1A_qirui.apk&type=convert_url_with_sign&rid={id}&br={quality}',
   idField: ['rid', 'hash', 'songId', 'id', 'songmid'],
   urlField: ['data.url'],
   quality: {
@@ -66,7 +72,7 @@ const CONFIG = {
     name: '酷狗音乐',
     apis: [
       {
-        api: 'http://103.79.184.97/api/music/url?source=kg&songId={id}&quality={quality}&key=6C1F-53W0-GRKI-EVFG',
+        api: 'https://103.79.184.97/api/music/url?source=kg&songId={id}&quality={quality}&key=6C1F-53W0-GRKI-EVFG',
         idField: ['hash', 'songmid', 'id', 'rid'],
         headers: {
           'User-Agent': 'Mozilla/5.0',
@@ -133,7 +139,7 @@ const CONFIG = {
     name: 'QQ音乐',
     apis: [
       {
-        api: 'http://103.79.184.97/api/music/url?source=tx&songId={id}&quality={quality}&key=6C1F-53W0-GRKI-EVFG',
+        api: 'https://103.79.184.97/api/music/url?source=tx&songId={id}&quality={quality}&key=6C1F-53W0-GRKI-EVFG',
         idField: ['songmid', 'id', 'hash'],
         headers: { 'User-Agent': 'Mozilla/5.0', 'X-Card-Key': '6C1F-53W0-GRKI-EVFG' },
         urlField: ['url', 'data.url'],
@@ -307,7 +313,7 @@ wy: {
       }
     },
    {
-  api: 'http://103.79.184.97/api/music/url?platform=wy&songId={id}&quality={quality}&key=6C1F-53W0-GRKI-EVFG',
+  api: 'https://103.79.184.97/api/music/url?platform=wy&songId={id}&quality={quality}&key=6C1F-53W0-GRKI-EVFG',
   idField: ['songmid', 'songId', 'id', 'hash'],
   urlField: ['url', 'data.url', 'data'],
   quality: {
@@ -358,7 +364,10 @@ wy: {
         api: 'https://oiapi.net/api/MiGu_Music?msg={keyword}&br={quality}&n=1',
         idField: ['songmid', 'id', 'hash'],
         urlField: ['data.url', 'url'],
-        quality: { '128k': 'LQ', '320k': 'HQ', flac: 'SQ', hires: 'SQ' }
+        quality: { '128k': 'LQ', '320k': 'HQ', flac: 'SQ', hires: 'SQ' },
+        // 2026-11-25 b49fix2 (P1-15): oiapi 的 MiGu_Music 无论 br 要什么
+        // 都只给 MP3_128（实测 br=320 也是 128k 文件）— 如实标 128k。
+        servesQuality: '128k'
       }
     ]
   }
@@ -499,7 +508,10 @@ const tryApi = async (s, info, quality) => {
     if (api.quality && !api.quality[quality]) throw new Error(`${tag}:不支持${quality}`);
     try {
       const params = buildParams(api, info, quality, keyword);
-      return await (api.raw ? runRaw(api, params) : runStandard(api, params));
+      const url = await (api.raw ? runRaw(api, params) : runStandard(api, params));
+      // 2026-11-25 b49fix2 (P1-15): 返回 {url, quality}，按实际命中的
+      // 档位标；自报固定档位的腿（如咪咕 oiapi 只出 128k）以 servesQuality 为准。
+      return { url, quality: api.servesQuality || quality };
     } catch (e) {
       throw new Error(`${tag}:${e.message}`);
     }

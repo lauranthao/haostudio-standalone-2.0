@@ -67,6 +67,22 @@ const KW_LEVEL = {
 
 const GD_BR = { master: 999, atmos_plus: 999, atmos: 999, hires: 999, flac24bit: 999, flac: 999, '320k': 320, '128k': 128 };
 
+// 2026-11-25 b49fix2 (P1-15/P1-16): 向引擎报告的档位必须是引擎档位表里的值
+// （'128k','320k','flac','flac24bit','hires','master'）；192k 没有对应档位，
+// 如实报 128k；后端自报的档位不在表里时用本次尝试的档位。
+const REPORT_VOCAB = ['128k', '320k', 'flac', 'flac24bit', 'hires', 'master'];
+function reportQuality(q, fallback) {
+  if (q === '192k') return '128k';
+  return REPORT_VOCAB.includes(q) ? q : fallback;
+}
+// 码率数字 -> 档位（只降不升：900+ 报 flac，320+ 报 320k，其余 128k）
+function bitrateQuality(br) {
+  const n = parseInt(String(br), 10) || 0;
+  if (n >= 900) return 'flac';
+  if (n >= 320) return '320k';
+  return '128k';
+}
+
 const TAG = '[屿溪-终章]';
 const log = (...args) => console.log(TAG, ...args);
 
@@ -149,7 +165,7 @@ async function fromBackend(source, level, musicInfo) {
   const resp = await httpFetch('https://yy.zddyr.top/lx/api/?' + qs, { timeout: 8000 });
   const d = resp.body || {};
   const url = pick(d.url);
-  if (d.code === 200 && url) return { url, quality: d.quality || level, from: '星海后端' };
+  if (d.code === 200 && url) return { url, quality: reportQuality(d.quality, level), from: '星海后端' };
   throw new Error(d.msg || ('后端返回 ' + (d.code == null ? resp.statusCode : d.code)));
 }
 
@@ -159,7 +175,9 @@ async function fromWyGd(id, level) {
   const resp = await httpFetch('https://music-api.gdstudio.xyz/api.php?types=url&source=netease&id=' + encodeURIComponent(id) + '&br=' + br, { timeout: 13000 });
   const d = resp.body || {};
   const url = pick(d.url);
-  if (url) return { url, quality: level, from: 'GD API' };
+  // 2026-11-25 b49fix2 (P1-15): GD br=999 最高只出 flac24bit，按实际
+  // 请求的 br 标档位，不冒充请求的 level。
+  if (url) return { url, quality: br === 999 ? 'flac24bit' : br === 320 ? '320k' : '128k', from: 'GD API' };
   throw new Error('GD API 无链接');
 }
 
@@ -260,23 +278,25 @@ async function fromTxVkey(mid, level) {
 
 // ---------- 酷狗 ----------
 async function fromKgPlayInfo(hash) {
-  const resp = await httpFetch('http://m.kugou.com/app/i/getSongInfo.php?cmd=playInfo&hash=' + encodeURIComponent(hash), {
+  const resp = await httpFetch('https://m.kugou.com/app/i/getSongInfo.php?cmd=playInfo&hash=' + encodeURIComponent(hash), {
     headers: { 'User-Agent': UA_MOBILE },
     timeout: 9000
   });
   const d = resp.body || {};
   const url = pick(d.url);
-  if (url) return { url, quality: d.bitRate ? d.bitRate + 'k' : '128k', from: '酷狗 playInfo' };
+  // 2026-11-25 b49fix2 (P1-9): http -> https（ATS 在真机上拦 http）；
+  // (P1-15): bitRate 是数字码率，按码率归一化档位，不直接拼 'k'。
+  if (url) return { url, quality: bitrateQuality(d.bitRate), from: '酷狗 playInfo' };
   throw new Error('酷狗无直链(版权限制)');
 }
 
 // ---------- 酷我 ----------
 async function fromKwMobi(rid, level, useCar) {
   const channels = useCar
-    ? [{ base: 'http://anymatch.kuwo.cn/mobi.s', type: 'convert_url2', src: 'kwplayercar_ar_6.0.0.9_B_jiakong_vh.apk' }]
+    ? [{ base: 'https://anymatch.kuwo.cn/mobi.s', type: 'convert_url2', src: 'kwplayercar_ar_6.0.0.9_B_jiakong_vh.apk' }]
     : [
         { base: 'https://mobi.kuwo.cn/mobi.s', type: 'convert_url_with_sign', src: 'kwplayer_ar_8.5.5.0_apk_keluze.apk' },
-        { base: 'http://mobi.kuwo.cn/mobi.s', type: 'convert_url2', src: 'kwplayer_ar_8.5.5.0_apk_keluze.apk' }
+        { base: 'https://mobi.kuwo.cn/mobi.s', type: 'convert_url2', src: 'kwplayer_ar_8.5.5.0_apk_keluze.apk' }
       ];
   let lastErr;
   for (const ch of channels) {
@@ -299,7 +319,8 @@ async function fromKwMobi(rid, level, useCar) {
       let quality = level;
       if (body && typeof body === 'object' && body.data && body.data.url) {
         url = pick(body.data.url);
-        if (body.data.bitrate) quality = body.data.bitrate + 'k';
+        // 2026-11-25 b49fix2 (P1-15): 返回的 bitrate 按码率归一化档位。
+        if (body.data.bitrate) quality = bitrateQuality(body.data.bitrate);
       } else if (typeof body === 'string') {
         const m = /(?:^|\n)url=(https?:\/\/\S+)/.exec(body);
         if (m) url = m[1].trim();
@@ -330,7 +351,6 @@ async function resolveUrl(source, level, musicInfo) {
     attempts.push(() => fromBackend(source, lv, musicInfo));
     if (source === 'wy') {
       attempts.push(() => fromWyGd(rid, lv));
-      attempts.push(async () => fromWyOuter(rid));
       attempts.push(() => fromWyMeting(rid, lv));
     } else if (source === 'tx') {
       attempts.push(() => fromTxVkey(rid, lv));
@@ -345,13 +365,23 @@ async function resolveUrl(source, level, musicInfo) {
         const r = await fn();
         if (r && r.url) {
           log('解析成功', source, level, '->', r.quality, '(' + r.from + ')');
-          return r.url;
+          // 2026-11-25 b49fix2 (P1-15): 返回 {url, quality} 对象，不丢档位。
+          return { url: r.url, quality: reportQuality(r.quality, lv) };
         }
       } catch (e) {
         lastErr = e;
         log('通路失败', source, lv, e && e.message);
       }
     }
+  }
+  // 2026-11-25 b49fix2 (P1-16): 网易外链是最后的兜底 — 它不发任何请求、
+  // 永不失败（可能是 30 秒试听或已下架的死链），只能在所有档位和后端
+  // 都失败后才用，且如实标 128k。以前它排在第一档位的第 3 位，meting
+  // 永远走不到。
+  if (source === 'wy') {
+    const outer = fromWyOuter(rid);
+    log('解析成功', source, level, '->', outer.quality, '(' + outer.from + '，最后兜底)');
+    return outer;
   }
   throw new Error('无可用播放链接：' + (lastErr && lastErr.message ? lastErr.message : '未知原因'));
 }

@@ -4,16 +4,14 @@
 // MusicPlayerTests.swift (FakeEngine / FakeResolver, injected
 // clock, no real audio, no waiting real seconds).
 //
-// NOTE: like the rest of Tests/MusicPlayerTests, this target is
-// unwired until the S7 Xcode test target exists (see Package.swift
-// header) — `swift test` does not run it yet. It runs with
+// NOTE: wired into the Xcode HAoStudioTests target — runs with
 // `xcodebuild test` against an iOS Simulator destination.
 
 import CoreMedia
 import Foundation
 import XCTest
 
-@testable import MusicCore
+@testable import HAoStudio
 
 final class MusicPlayerAuditTests: XCTestCase {
     private var defaults: UserDefaults!

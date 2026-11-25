@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- HAo Studio 2.0 — shared HAoStudioTests scheme (2026-11-25, b49fix2 T5).
+     The Xcode HAoStudioTests target existed in the pbxproj but no workflow
+     ever ran it and there was no shared scheme, so `xcodebuild test` had
+     nothing deterministic to run. This scheme gives CI a fixed test
+     action (Testables: HAoStudioTests). CI runs `build-for-testing`
+     against it on the device SDK — that proves the test target compiles.
+     It does NOT run the tests: the simulator link is broken by IJK
+     (arm64 device-only static lib) and there is no device on CI, so a
+     real `xcodebuild test` run needs an IJK simulator slice first. -->
+<Scheme
+   LastUpgradeVersion = "2620"
+   version = "1.7">
+   <BuildAction
+      parallelizeBuildables = "YES"
+      buildImplicitDependencies = "YES"
+      runPostActionsOnFailure = "NO">
+      <BuildActionEntries>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "000000000000000000000062"
+               BuildableName = "HAoStudio.app"
+               BlueprintName = "HAoStudio"
+               ReferencedContainer = "container:HAoStudio.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "0000000000000000000001C9"
+               BuildableName = "HAoStudioTests.xctest"
+               BlueprintName = "HAoStudioTests"
+               ReferencedContainer = "container:HAoStudio.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+      </BuildActionEntries>
+   </BuildAction>
+   <TestAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      shouldUseLaunchSchemeArgsEnv = "YES"
+      codeCoverageEnabled = "YES">
+      <Testables>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "0000000000000000000001C9"
+               BuildableName = "HAoStudioTests.xctest"
+               BlueprintName = "HAoStudioTests"
+               ReferencedContainer = "container:HAoStudio.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+      </Testables>
+   </TestAction>
+   <LaunchAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      launchStyle = "0"
+      useCustomWorkingDirectory = "NO"
+      ignoresPersistentStateOnLaunch = "NO"
+      debugDocumentVersioning = "YES"
+      debugServiceExtension = "internal"
+      allowLocationSimulation = "YES">
+      <BuildableProductRunnable
+         runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "000000000000000000000062"
+            BuildableName = "HAoStudio.app"
+            BlueprintName = "HAoStudio"
+            ReferencedContainer = "container:HAoStudio.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+   </LaunchAction>
+   <ProfileAction
+      buildConfiguration = "Release"
+      shouldUseLaunchSchemeArgsEnv = "YES"
+      savedToolIdentifier = ""
+      useCustomWorkingDirectory = "NO"
+      debugDocumentVersioning = "YES">
+      <BuildableProductRunnable
+         runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "000000000000000000000062"
+            BuildableName = "HAoStudio.app"
+            BlueprintName = "HAoStudio"
+            ReferencedContainer = "container:HAoStudio.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+   </ProfileAction>
+   <AnalyzeAction
+      buildConfiguration = "Debug">
+   </AnalyzeAction>
+   <ArchiveAction
+      buildConfiguration = "Release"
+      revealArchiveInOrganizer = "YES">
+   </ArchiveAction>
+</Scheme>

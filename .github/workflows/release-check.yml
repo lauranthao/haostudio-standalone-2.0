@@ -1,0 +1,50 @@
+# HAo Studio 2.0 — release gate (2026-11-25, b49fix2 P2-67).
+#
+# The release is a manual chain (Bitrise build -> IPA verify -> README
+# update -> shop deploy -> GitHub Release) with no guard: nothing
+# checked that the shop manifest, README and artifact name agree.
+# This workflow runs ios/release_check.py, which verifies the repo-side
+# agreement (version.json <-> Info.plist <-> README <-> Bitrise
+# artifact name) on every run, and the shop manifest too when its URL
+# is given (after the shop deploy — before that, the live manifest is
+# still the previous version and the comparison would fail spuriously).
+# The built-IPA check needs an IPA path; pass it when one is attached
+# to the run, otherwise run the script locally with --ipa.
+#
+# Manual trigger only. This does not build anything.
+
+name: Release Check
+
+on:
+  workflow_dispatch:
+    inputs:
+      shop_manifest_url:
+        description: 'Live shop version.json URL (leave empty to skip the shop check)'
+        required: false
+        default: ''
+      ref:
+        description: 'Branch or commit to check (default: main)'
+        required: false
+        default: 'main'
+
+permissions:
+  contents: read
+
+jobs:
+  release-check:
+    name: Release Check
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Run release check
+        run: |
+          if [ -n "${{ inputs.shop_manifest_url }}" ]; then
+            python3 ios/release_check.py --shop-manifest-url "${{ inputs.shop_manifest_url }}"
+          else
+            python3 ios/release_check.py
+          fi

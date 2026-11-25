@@ -4,13 +4,12 @@
 // play-count text (MusicDiscoveryViews.swift). Pure functions only:
 // no files, no network, no runloop.
 //
-// NOTE: like the rest of Tests/MusicFeaturesTests, this target is
-// unwired until the S7 Xcode test target exists (see Package.swift
-// header) — `swift test` does not run it yet.
+// NOTE: wired into the Xcode HAoStudioTests target (see the
+// project.pbxproj Sources phase) — runs with `xcodebuild test`.
 
 import XCTest
 
-@testable import MusicFeatures
+@testable import HAoStudio
 
 final class MusicS7PolishTests: XCTestCase {
 

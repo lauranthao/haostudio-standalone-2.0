@@ -50,6 +50,21 @@ const MUSIC_QUALITIES = {
 // 音质降级顺序
 const QUALITY_ORDER = ['jymaster', 'sky', 'jyeffect', 'master', 'hires', 'flac24bit', 'atmos', 'flac', '320k', '192k', '128k'];
 
+// 2026-11-25 b49fix2 (P1-15): 向引擎报告的档位必须是引擎档位表里的值
+// （'128k','320k','flac','flac24bit','hires','master'）。网易臻品档位
+// （jymaster/sky/jyeffect）与全景声（atmos/atmos_plus）不在表里：
+// 臻品母带/臻品音质是无损 24bit 级，报 master；臻品音质 AI 报 hires；
+// 全景声是多声道有损，保守报 320k，不冒充无损。
+const ENGINE_TIERS = ['128k', '320k', 'flac', 'flac24bit', 'hires', 'master'];
+const TIER_ALIAS = { '192k': '128k', jymaster: 'master', sky: 'master', jyeffect: 'hires', atmos: '320k', atmos_plus: '320k' };
+function reportTier(q, fallback) {
+  if (q == null) return fallback;
+  if (TIER_ALIAS[q]) return TIER_ALIAS[q];
+  return ENGINE_TIERS.includes(q) ? q : fallback;
+}
+// GD br -> 实际档位（br=999 最高只出 flac24bit，740 是 flac）
+const GD_BR_QUALITY = { '999': 'flac24bit', '740': 'flac', '320': '320k', '192': '128k', '128': '128k' };
+
 // ==================== API 端点 ====================
 const API = {
   // 安妮 - 酷狗代理
@@ -57,7 +72,7 @@ const API = {
   // 安妮 - QQ vkeys
   txVkeys: 'https://api.vkeys.cn/v2/music/tencent/geturl',
   // 安妮 - 酷我
-  kwMobi: 'http://nmobi.kuwo.cn/mobi.s',
+  kwMobi: 'https://nmobi.kuwo.cn/mobi.s', // 2026-11-25 b49fix2 (P1-9): http -> https（ATS 在真机上拦 http）
   // 安妮 - 网易
   wyWeb: 'https://c.wwwweb.top/music/url',
   // 星海 - 后端主接口
@@ -108,33 +123,6 @@ function mapQuality(quality, avail) {
     if (avail.includes(q)) return q;
   }
   return avail[0] || '128k';
-}
-
-function getSongId(info) {
-  return info?.hash || info?.songmid || info?.id || info?.rid || '';
-}
-
-// ==================== 缓存 ====================
-const cache = new Map();
-const CACHE_TTL = 6 * 60 * 60 * 1000; // 6小时
-const MAX_CACHE_SIZE = 500;
-
-function getCache(key) {
-  const entry = cache.get(key);
-  if (!entry) return null;
-  if (Date.now() - entry.time > CACHE_TTL) {
-    cache.delete(key);
-    return null;
-  }
-  return entry.data;
-}
-
-function setCache(key, data) {
-  cache.set(key, { data, time: Date.now() });
-  if (cache.size > MAX_CACHE_SIZE) {
-    const first = cache.keys().next().value;
-    if (first) cache.delete(first);
-  }
 }
 
 // ==================== 各平台URL解析器 ====================
@@ -218,11 +206,14 @@ async function resolveXhBackend(platform, info, quality, baseUrl) {
   const resp = await httpFetch(url);
   const data = resp.body;
   if (data?.code === 200 && data?.url) {
+    // 2026-11-25 b49fix2 (P1-15): 后端自报的档位只在档位表里才采信，
+    // 否则返回 null，由调用方按请求的档位标。
+    const servedQuality = reportTier(data.quality, null);
     // 处理酷我加密链接
     if (platform === 'kw' && KW_DECRYPT_PROXY.allowEncryptedLossless && data.ekey && KW_DECRYPT_PROXY.url) {
-      return `${KW_DECRYPT_PROXY.url}?${KW_DECRYPT_PROXY.urlParamName}=${encodeURIComponent(data.url)}&${KW_DECRYPT_PROXY.ekeyParamName}=${encodeURIComponent(data.ekey)}`;
+      return { url: `${KW_DECRYPT_PROXY.url}?${KW_DECRYPT_PROXY.urlParamName}=${encodeURIComponent(data.url)}&${KW_DECRYPT_PROXY.ekeyParamName}=${encodeURIComponent(data.ekey)}`, quality: servedQuality };
     }
-    return data.url;
+    return { url: data.url, quality: servedQuality };
   }
   throw new Error(data?.msg || `星海后端获取失败(code:${data?.code})`);
 }
@@ -234,12 +225,13 @@ async function resolveWyGdStudio(info, quality) {
   const br = GD_BR_MAP[quality] || '320';
   const url = `${API.gdStudio}?use_xbridge3=true&loader_name=forest&need_sec_link=1&sec_link_scene=im&theme=light&types=url&source=netease&id=${id}&br=${br}`;
   const resp = await httpFetch(url);
-  if (resp.body?.url) return resp.body.url;
+  // 2026-11-25 b49fix2 (P1-15): 按实际请求的 br 标档位；740 兜底是 flac。
+  if (resp.body?.url) return { url: resp.body.url, quality: GD_BR_QUALITY[String(br)] || '128k' };
   // 若hires失败回退到flac
   if (quality === 'hires' || quality === 'flac24bit') {
     const fallbackUrl = `${API.gdStudio}?use_xbridge3=true&loader_name=forest&need_sec_link=1&sec_link_scene=im&theme=light&types=url&source=netease&id=${id}&br=740`;
     const resp2 = await httpFetch(fallbackUrl);
-    if (resp2.body?.url) return resp2.body.url;
+    if (resp2.body?.url) return { url: resp2.body.url, quality: 'flac' };
   }
   throw new Error(resp.body?.msg || 'GD Studio获取失败');
 }
@@ -278,10 +270,15 @@ async function searchQsVip(keywords, page = 1, pageSize = 30) {
       const resp = await httpFetch(url);
       const data = resp.body;
       if (data?.code === 200 && Array.isArray(data?.data?.list)) {
+        // 2026-11-25 b49fix2 (P2-30): 以前 id/songmid/hash 全填 QSVIP
+        // 自己的 id，任何按 id 取流的腿都解不出来，只能靠歌名+歌手
+        // 兜底。QSVIP 条目若自带平台原生 id（songmid/mid/hash/rid），
+        // 保留它；没有才回落到 QSVIP id。
         const list = data.data.list.map(item => ({
-          id: item.id || '',
-          songmid: item.id || '',
-          hash: item.id || '',
+          id: item.songmid || item.mid || item.hash || item.rid || item.id || '',
+          songmid: item.songmid || item.mid || item.id || '',
+          hash: item.hash || item.rid || item.id || '',
+          rid: item.rid || item.songmid || item.id || '',
           name: item.name || '',
           singer: item.singer || item.artist || '',
           albumName: item.albumName || item.album || '',
@@ -298,9 +295,6 @@ async function searchQsVip(keywords, page = 1, pageSize = 30) {
   }
   throw lastErr || new Error('QSVIP搜索全部失败');
 }
-
-/* ---- 歌词/封面缓存 ---- */
-const extraCache = new Map();
 
 // ==================== 核心：获取音乐URL ====================
 async function fetchMusicUrl(platform, info, quality) {
@@ -345,10 +339,13 @@ async function fetchMusicUrl(platform, info, quality) {
   const errors = [];
   for (const provider of chain) {
     try {
-      const url = await provider.fn();
+      // 2026-11-25 b49fix2 (P1-15): 解析器返回裸字符串或 {url, quality}；
+      // 有自报档位就用它，否则按本次请求的档位标。
+      const result = await provider.fn();
+      const url = typeof result === 'string' ? result : result?.url;
       if (typeof url === 'string' && url.startsWith('http')) {
-        extraCache.set(id, { provider: provider.name });
-        return url;
+        const served = typeof result === 'object' ? reportTier(result.quality, null) : null;
+        return { url, quality: reportTier(served, reportTier(actualQuality, '128k')) };
       }
       errors.push(`${provider.name}: 返回无效URL`);
     } catch (e) {

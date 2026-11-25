@@ -131,6 +131,19 @@ let clientHeader = '';
 let deviceId = '';
 let availablePlatforms = [];
 let backendAggBlocked = false;
+let backendAggBlockedAt = 0;
+// 2026-11-25 b49fix2 (P2-35): 单次 403 就永久屏蔽主后端是错的 — 403
+// 可能是 transient 限流。屏蔽只持续 10 分钟，到期自动解封；后端
+// 一旦成功返回就立即清除屏蔽。
+const BACKEND_AGG_BLOCK_MS = 10 * 60 * 1000;
+const isBackendAggBlocked = () => {
+    if (!backendAggBlocked) return false;
+    if (Date.now() - backendAggBlockedAt > BACKEND_AGG_BLOCK_MS) {
+        backendAggBlocked = false;
+        return false;
+    }
+    return true;
+};
 const extraCache = new Map();
 
 // -------------------- 工具函数 --------------------
@@ -360,14 +373,17 @@ async function getWyGDUrl(id, q) {
     const br = GD_BR_MAP[q] || '320';
     const url = buildUrl('gdStudio', 'gdApi', `&${URL_CONFIG.gdParams}&types=url&source=netease&id=${id}&br=${br}`);
     let resp = await httpFetch(url, { headers: { 'User-Agent': 'LX-Music-Mobile' }, timeout: 8000 });
+    let servedQuality = q;
     if (q === 'hires' && (resp.statusCode !== 200 || !resp.body.url)) {
         const fallbackUrl = buildUrl('gdStudio', 'gdApi', `&${URL_CONFIG.gdParams}&types=url&source=netease&id=${id}&br=740`);
         resp = await httpFetch(fallbackUrl, { headers: { 'User-Agent': 'LX-Music-Mobile' }, timeout: 8000 });
+        // 2026-11-25 b49fix2 (P1-15): 740 兜底出的是 flac，不是 hires。
+        servedQuality = 'flac';
     }
     if (resp.statusCode !== 200 || !resp.body.url) {
         throw new Error(`GD接口状态${resp.statusCode}，未返回音频`);
     }
-    return { url: resp.body.url, lyric: null, cover: null };
+    return { url: resp.body.url, lyric: null, cover: null, quality: servedQuality };
 }
 
 // 自建后端接口（通用）
@@ -398,13 +414,17 @@ async function getUrlFromBackend(source, musicInfo, quality) {
 
     if (resp.statusCode === 403) {
         backendAggBlocked = true;
-        throw new Error('后端聚合接口返回403，已屏蔽');
+        backendAggBlockedAt = Date.now();
+        throw new Error('后端聚合接口返回403，已屏蔽10分钟');
     }
 
     if (resp.statusCode !== 200) throw new Error(`后端接口状态${resp.statusCode}`);
 
     const data = resp.body;
     if (data.code !== 200) throw new Error(data.msg || '后端无可用链接');
+
+    // 后端恢复成功：清除 403 屏蔽（P2-35）。
+    backendAggBlocked = false;
 
     // 汽水音乐专用分支 —— 抖音加密流
     if (backendSource === 'qs') {
@@ -464,7 +484,7 @@ async function fetchMusicUrl(source, musicInfo, quality) {
             }
         }
 
-        if (!result.url && !backendAggBlocked) {
+        if (!result.url && !isBackendAggBlocked()) {
             try {
                 result = await getUrlFromBackend('wy', musicInfo, actualQuality);
             } catch (e) {
@@ -516,7 +536,10 @@ async function fetchMusicUrl(source, musicInfo, quality) {
         throw new Error(lastError || '获取播放链接失败');
     }
 
-    return trimmedUrl;
+    // 2026-11-25 b49fix2 (P1-15): 返回 {url, quality}。actualQuality 是
+    // 本脚本实际向后端请求的档位（mapQuality 可能已把请求降级，如 kw
+    // 的 master->flac）；后端自报档位（如 GD 740 兜底的 flac）优先。
+    return { url: trimmedUrl, quality: result.quality || actualQuality };
 }
 
 // -------------------- 更新检查 --------------------

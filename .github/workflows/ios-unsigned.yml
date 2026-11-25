@@ -89,6 +89,30 @@ jobs:
               CODE_SIGNING_REQUIRED=NO
           fi
 
+      - name: Xcode test target compiles (device build-for-testing)
+        run: |
+          cd ios
+          # (2026-11-25, b49fix2 T5): the Xcode HAoStudioTests target
+          # never executed anywhere — no workflow ran xcodebuild test
+          # and there was no shared scheme (now committed at
+          # HAoStudio.xcodeproj/xcshareddata/xcschemes/). This step
+          # proves the test target COMPILES (build-for-testing,
+          # device SDK, unsigned). It does NOT run the tests: the
+          # simulator link is broken by IJK (arm64 device-only
+          # static lib) and there is no device on CI, so a real
+          # `xcodebuild test` run needs an IJK simulator slice
+          # first. Do not add a simulator test step that cannot link
+          # and call it a fix.
+          xcodebuild -project HAoStudio.xcodeproj \
+            -scheme HAoStudioTests \
+            -configuration Debug \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            build-for-testing \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO
+
       - name: Package IPA
         run: |
           cd ios
@@ -97,7 +121,12 @@ jobs:
           rm -rf Payload HAoStudio.ipa
           mkdir -p Payload
           cp -r "$APP_PATH" Payload/
-          zip -r HAoStudio.ipa Payload
+          # LCSign (2026-11-24, b37) cannot import a `zip -r` IPA: it
+          # puts Payload/*.app/Info.plist last and LCSign's
+          # shallow/local-header scan never reaches it. package_ipa.py
+          # writes Info.plist third, plain deflate, no extra fields,
+          # no data descriptors — same packager Bitrise uses.
+          python3 package_ipa.py Payload HAoStudio.ipa
           ls -lh HAoStudio.ipa
 
       - name: Upload IPA artifact

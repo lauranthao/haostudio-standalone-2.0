@@ -13,6 +13,14 @@
 // with `swift test` from ios/, which Codemagic runs as a step
 // before xcodebuild. No app code changes are needed to test.
 //
+// The Xcode HAoStudioTests target exists now (added in the
+// b49fix2 round) for the iOS-only tests — Tests/MusicFeaturesTests,
+// Tests/VideoPlayerTests, Tests/MusicPlayerTests,
+// Tests/SettingsUITests and Tests/HAoStudioTests, which import the
+// app module and run with `xcodebuild test`. This SwiftPM package
+// stays for the Foundation-only AppCore tests, which `swift test`
+// can run on a macOS runner without an iOS simulator.
+//
 // One target, not two: S1 had a MigrationCore target (whole
 // Storage dir) and S2 added a MusicLX target that also listed
 // Storage/LocalStore.swift + Storage/KeychainStore.swift. SwiftPM
@@ -29,16 +37,16 @@
 // feature UI (MusicFeatures) import iOS-only frameworks
 // (MediaPlayer, AVRoutePickerView) and cannot run under
 // `swift test`; their tests run via `xcodebuild test` on an iOS
-// Simulator destination once an Xcode test target exists — there
-// is deliberately none yet (see the note above about the pbxproj).
+// Simulator destination through the Xcode HAoStudioTests target
+// (wired in the pbxproj since the b49fix2 round).
 //
 // S3: the video services (CMS / Douban / Emby / danmaku) and the
 // shared download engine are Foundation-only too, so they join
 // AppCore as whole directories. VideoLibraryStore.swift joins as
 // a single file (its home is Features/Video, outside the service
 // dirs) so its tests compile; no other Features file is claimed.
-// VideoPlayerTests (A leg, iOS-only driver tests) stays unwired
-// until S7 — it is not a SwiftPM target.
+// VideoPlayerTests (A leg, iOS-only driver tests) is wired into
+// the Xcode HAoStudioTests target — it is not a SwiftPM target.
 
 import PackageDescription
 
@@ -91,17 +99,18 @@ let package = Package(
                 // SettingsTests target covers it under `swift
                 // test`. The SwiftUI settings files in the same
                 // directory are NOT in AppCore (they need the app
-                // target); their tests live unwired in
-                // Tests/SettingsUITests/ until the S7 Xcode test
-                // target, same as MusicFeaturesTests.
+                // target); their tests live in
+                // Tests/SettingsUITests/, wired into the Xcode
+                // HAoStudioTests target.
                 "Features/My/SettingsLogic.swift",
                 // Autoresume: music resume checkpoints are pure
                 // logic (Foundation-only) — tested by SettingsTests.
                 "Features/Music/MusicResumeLogic.swift",
                 // S6: backup engine + update checker (Foundation-only).
                 // The SwiftUI backup/update flow (BackupUpdateViews)
-                // lives in the app target only; its UI tests stay
-                // unwired in Tests/SettingsUITests/ until S7.
+                // lives in the app target only; its UI tests live in
+                // Tests/SettingsUITests/, wired into the Xcode
+                // HAoStudioTests target.
                 "Features/My/BackupUpdateLogic.swift",
                 "Services/Backup",
                 "Services/Update",
@@ -156,9 +165,8 @@ let package = Package(
         // S5: settings pure logic only (SettingsLogic.swift, the
         // one Foundation-only file in Features/My). The iOS-only
         // settings tests (SettingsStore / Emby / cache / My tab)
-        // live in Tests/SettingsUITests/ and stay unwired until
-        // the S7 Xcode test target — same treatment as
-        // MusicFeaturesTests / VideoPlayerTests.
+        // live in Tests/SettingsUITests/, wired into the Xcode
+        // HAoStudioTests target.
         .testTarget(
             name: "SettingsTests",
             dependencies: ["AppCore"],
