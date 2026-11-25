@@ -1572,7 +1572,7 @@ final class MusicPlayerViewModel: ObservableObject {
                 }()
                 if !truncated {
                     let stored = result.lines.map { StoredLyricLine(t: $0.time, text: $0.text, translation: $0.translation) }
-                    MusicLibraryStore.putLyrics(stored, for: song.identityKey)
+                    MusicLibraryStore.putLyrics(stored, for: song.identityKey, duration: TimeInterval(song.dur))
                 }
                 self.updateActiveLyric()
             }

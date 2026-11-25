@@ -497,7 +497,7 @@ struct MusicRecommendView: View {
                 spacing: 16
             ) {
                 MusicFeatureCollageCard(
-                    icon: "calendar", title: "每日推荐", subtitle: "每天 6:00 更新",
+                    icon: "calendar", title: "每日推荐", subtitle: "每天更新",
                     palette: [.orange, .yellow], size: cardSize, isDateCard: true
                 ) { path.append(.daily) }
                 MusicFeatureCollageCard(
