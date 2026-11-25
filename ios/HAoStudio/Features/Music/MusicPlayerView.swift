@@ -85,6 +85,18 @@
 import AVFoundation
 import SwiftUI
 
+/// Lyrics list scroll offset (b47-player): the lyrics content's
+/// minY in the lyrics ScrollView's coordinate space — 0 at the
+/// top edge, negative when scrolled. The dismiss drag reads it
+/// to know when the list is at its top edge and the drag may
+/// take over from scrolling.
+private struct LyricsScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 struct MusicPlayerView: View {
     /// The presenting view's binding. Setting it false is the
     /// close path; defaults to a constant so the view still
@@ -148,6 +160,28 @@ struct MusicPlayerView: View {
     // back on playerSpringBack (0.38/0.86). The 190pt scale ramp
     // is our choice — Coda gives the min scale, not the ramp.
     @State private var dismissDragY: CGFloat = 0
+    /// Translation at which the dismiss gate opened during this
+    /// drag (b47-player; nil = gate not yet open). When the gate
+    /// opens mid-drag — the drag first scrolled the lyrics list
+    /// to its top edge — the morph is anchored there, so the
+    /// surface doesn't jump by the scroll distance.
+    @State private var dismissDragAnchor: CGFloat?
+    /// Whether the dismiss gate was closed at any point during
+    /// this drag (the drag started on the lyrics list while it
+    /// was scrolled). Distinguishes "gate open from the start"
+    /// (anchor 0, morph tracks the raw translation) from "gate
+    /// opened mid-drag" (anchor = translation at opening).
+    @State private var dismissGateWasClosed = false
+    /// Lyrics list scroll offset (b47-player): the content
+    /// VStack's minY in the lyrics ScrollView's coordinate space
+    /// — 0 at the top edge, negative when scrolled. The dismiss
+    /// drag may only take over from the list when it is at its
+    /// top edge; further down, the list owns the drag and scrolls.
+    @State private var lyricsScrollOffset: CGFloat = 0
+    /// Safe-area top inset of the full-screen surface (b47-player:
+    /// the root ignores the safe area, so geo reports the real
+    /// insets; the dismiss top zone is measured from it).
+    @State private var safeTopInset: CGFloat = 59
     /// Drag-linked scale: 1.0 at rest, 0.86 at the close threshold.
     private var dismissDragScale: CGFloat {
         max(0.86, 1 - 0.14 * min(1, dismissDragY / 190))
@@ -201,7 +235,11 @@ struct MusicPlayerView: View {
                             .padding(.vertical, 9)
                             .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
-                            .padding(.bottom, 90)
+                            // b47-player: the root is full-screen now,
+                            // so the toast keeps its old distance from
+                            // the SAFE bottom (90pt), not the screen
+                            // bottom, or it would crowd the toolbar.
+                            .padding(.bottom, 90 + geo.safeAreaInsets.bottom)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                     .animation(.spring(duration: 0.3), value: playerVM.toast)
@@ -213,7 +251,30 @@ struct MusicPlayerView: View {
             .scaleEffect(dismissDragScale)
             .clipShape(RoundedRectangle(cornerRadius: dismissDragCornerRadius, style: .continuous))
             .frame(width: geo.size.width, height: geo.size.height)
+            .onChange(of: geo.safeAreaInsets.top, initial: true) { _, newValue in
+                safeTopInset = newValue
+            }
         }
+        // b47-player (chen build 46: "还不是全屏呀"): the root
+        // ignores the safe area, so geo is the FULL screen and the
+        // background paints under the status bar and the home
+        // indicator. Before this the root was laid out in the safe
+        // rect (measured on chen's screenshot: purple [68, 878] of
+        // a 912pt screen — the status-bar and home-indicator bands
+        // stayed white), because the background's inner
+        // ignoresSafeArea cannot paint outside its parent ZStack's
+        // safe-sized frame (same trap class as the b43 wallpaper
+        // lesson in Glass.swift). Content stays in the safe area
+        // via the top/bottom padding in portraitBody/landscapeBody.
+        // The surface is always dark (cover tint), so the status
+        // bar is forced to light content regardless of the app's
+        // appearance — the player's own colours are explicit white
+        // / cover tints and the sheets use explicit theme colours,
+        // so forcing dark changes no rendered colour, only the
+        // system chrome (nav bars, List defaults) which renders
+        // dark-coherent with the player.
+        .ignoresSafeArea()
+        .preferredColorScheme(.dark)
         // Cover tint follows the song (b38, item 1): the old
         // tint is cleared synchronously on a song change, so the
         // previous song's colour never lingers; a stale load
@@ -333,50 +394,82 @@ struct MusicPlayerView: View {
     /// dismiss, so the player supplies its own. b45-a (Coda §8.2):
     /// translation > 110pt OR predicted (distance + velocity ×
     /// 0.25) > 190pt closes; horizontal drags belong to the Slider.
-    /// In lyrics mode the swipe must start on the top bar because
-    /// the lyrics list owns vertical drags elsewhere. The top-bar
-    /// zone is 140pt in portrait and the 60pt top strip in
-    /// landscape (the screen is short there).
+    /// b47-player: the distances are measured from the ANCHOR
+    /// (dismissDragAnchor) — the translation where the gate
+    /// opened — so a drag that first scrolled the lyrics list to
+    /// its top edge is judged on the dismiss pull alone, not on
+    /// the scroll distance. A drag the gate never opened for (the
+    /// list is still scrolled) always springs back.
     /// b45-g: a drag that does NOT close springs the surface back
     /// on Coda's rebound spring (response 0.38 / damping 0.86).
     private func handleDismissDrag(_ value: DragGesture.Value) {
-        let translation = value.translation
-        let predicted = value.predictedEndTranslation.height
-        guard translation.height > 110 || predicted > 190,
-              abs(translation.width) < 80 else {
+        let anchor = dismissDragAnchor ?? 0
+        let effectiveHeight = value.translation.height - anchor
+        let effectivePredicted = value.predictedEndTranslation.height - anchor
+        let shouldClose = dismissDragAllowed(startY: value.startLocation.y)
+            && (effectiveHeight > 110 || effectivePredicted > 190)
+            && abs(value.translation.width) < 80
+        dismissDragAnchor = nil
+        dismissGateWasClosed = false
+        if shouldClose {
+            dismissDragY = 0
+            close()
+        } else {
             withAnimation(HaoPlayerMotion.playerSpringBack) {
                 dismissDragY = 0
             }
-            return
         }
-        let isLandscape = UIScreen.main.bounds.width > UIScreen.main.bounds.height
-        if playerVM.showLyrics && value.startLocation.y > (isLandscape ? 60 : 140) {
-            withAnimation(HaoPlayerMotion.playerSpringBack) {
-                dismissDragY = 0
-            }
-            return
-        }
-        close()
     }
 
     /// Drag morph driver (b45-g, Coda §8.1): while a drag that
     /// could close is in flight, track its downward distance so
-    /// the surface shrinks/rounds with it. The predicate mirrors
-    /// handleDismissDrag exactly — a drag that cannot close never
-    /// morphs (the Slider and the lyrics list keep their drags
-    /// visually untouched). Upward or horizontal movement resets.
+    /// the surface shrinks/rounds with it. Upward or horizontal
+    /// movement resets. b47-player: the gate is dismissDragAllowed
+    /// — in lyrics mode a drag starting on the list only morphs
+    /// once the list is at its top edge (before that the list
+    /// owns the drag and scrolls); the morph is anchored to the
+    /// translation where the gate opened, so the surface never
+    /// jumps by the scroll distance.
     private func handleDismissDragChanged(_ value: DragGesture.Value) {
+        noteInteraction()
         let translation = value.translation
         guard translation.height > 0, abs(translation.width) < 80 else {
             dismissDragY = 0
+            dismissDragAnchor = nil
+            dismissGateWasClosed = false
             return
         }
-        let isLandscape = UIScreen.main.bounds.width > UIScreen.main.bounds.height
-        if playerVM.showLyrics && value.startLocation.y > (isLandscape ? 60 : 140) {
+        guard dismissDragAllowed(startY: value.startLocation.y) else {
+            dismissGateWasClosed = true
             dismissDragY = 0
             return
         }
-        dismissDragY = translation.height
+        if dismissDragAnchor == nil {
+            dismissDragAnchor = dismissGateWasClosed ? translation.height : 0
+        }
+        dismissDragY = max(0, translation.height - (dismissDragAnchor ?? 0))
+    }
+
+    /// Top zone where a downward drag always dismisses (the top
+    /// bar + lyrics header — not scrollable, so no list owns the
+    /// drag there). Portrait: the old 140pt zone measured from the
+    /// safe-area top (the root used to start there; now it starts
+    /// at the screen top, so the inset is added back). Landscape
+    /// keeps the old 60pt strip (its safe top is ~0).
+    private var dismissTopZone: CGFloat {
+        let isLandscape = UIScreen.main.bounds.width > UIScreen.main.bounds.height
+        return isLandscape ? 60 : safeTopInset + 140
+    }
+
+    /// Whether a downward drag starting at startY (root
+    /// coordinates) may drive the dismiss morph. Outside lyrics
+    /// mode: anywhere. In lyrics mode: the top zone always,
+    /// otherwise only when the lyrics list is at its top edge
+    /// (further down, the list owns the drag and scrolls).
+    private func dismissDragAllowed(startY: CGFloat) -> Bool {
+        guard playerVM.showLyrics else { return true }
+        if startY <= dismissTopZone { return true }
+        return lyricsScrollOffset >= -1
     }
 
     /// Content width: the GeometryReader width minus the safe-area
@@ -400,26 +493,30 @@ struct MusicPlayerView: View {
     private func portraitBody(geo: GeometryProxy) -> some View {
         let slotSize = MusicPlayerLayout.coverSize(
             screenWidth: geo.size.width, screenHeight: geo.size.height)
-        // b38, item 1: the slack is shared across the column
-        // (one Spacer per gap, minLength 0) instead of a single
-        // Spacer above the bottom row — the old layout left one
-        // ~116pt dead gap between transport and bottom row on
-        // chen's phone while the top sat tight. The spacers
+        // b38, item 1: in cover mode the slack is shared across
+        // the column (one Spacer per gap, minLength 0) instead of
+        // a single Spacer above the bottom row — the old layout
+        // left one ~116pt dead gap between transport and bottom
+        // row on chen's phone while the top sat tight. The spacers
         // collapse to 0 on short phones, so the minimum height
         // (and fitsOneScreen) is unchanged.
+        // b47-player: in lyrics mode there are NO Spacers — the
+        // lyrics area itself is flexible and takes ALL the slack
+        // (a Spacer would split it and the dead gap between the
+        // last lyric line and the progress bar would come back).
+        // The column therefore fills the screen exactly: top bar,
+        // lyrics, progress, transport, toolbar, with only the
+        // fixed paddings between them.
         return VStack(spacing: 0) {
             topBar
                 .frame(maxWidth: .infinity)
                 .chromeFade(hidden: chromeHidden)
-            Spacer(minLength: 0)
             if playerVM.showLyrics {
-                // b46-player (Coda lyrics): compact header + lyrics
-                // in one column — the same total height as the cover
-                // slot + title row it replaces (lyricsModeColumn).
-                lyricsModeColumn(size: slotSize)
+                lyricsModeColumn()
                     .padding(.top, 8)
                     .chromeFade(hidden: chromeHidden)
             } else {
+                Spacer(minLength: 0)
                 coverOrLyrics(size: slotSize)
                     .padding(.top, 8)
                 Spacer(minLength: 0)
@@ -432,23 +529,36 @@ struct MusicPlayerView: View {
                 loadFailedBanner
                     .padding(.top, 10)
             }
-            Spacer(minLength: 0)
+            if !playerVM.showLyrics {
+                Spacer(minLength: 0)
+            }
             progressSection(isLandscape: false)
                 .padding(.top, 14)
                 .frame(maxWidth: .infinity)
                 .chromeFade(hidden: chromeHidden)
-            Spacer(minLength: 0)
+            if !playerVM.showLyrics {
+                Spacer(minLength: 0)
+            }
             transportRow
                 .padding(.top, 6)
                 .frame(maxWidth: .infinity)
                 .chromeFade(hidden: chromeHidden)
-            Spacer(minLength: 0)
+            if !playerVM.showLyrics {
+                Spacer(minLength: 0)
+            }
             toolbarRow
                 .padding(.bottom, 8)
                 .frame(maxWidth: .infinity)
                 .chromeFade(hidden: chromeHidden)
         }
         .padding(.horizontal, 24)
+        // b47-player: the root is full-screen now (see body), so
+        // the content is kept inside the safe area here — the
+        // layout is pixel-identical to the old safe-sized root,
+        // only the background extends under the status bar and
+        // the home indicator.
+        .padding(.top, geo.safeAreaInsets.top)
+        .padding(.bottom, geo.safeAreaInsets.bottom)
         .frame(width: contentWidth(geo: geo))
     }
 
@@ -536,7 +646,12 @@ struct MusicPlayerView: View {
             .frame(maxWidth: .infinity)
         }
         .padding(.horizontal, 24)
-        .padding(.vertical, 12)
+        // b47-player: the root is full-screen now (see body), so
+        // the 12pt vertical padding is measured from the SAFE
+        // edges, not the screen edges — the landscape column sits
+        // exactly where it sat under the old safe-sized root.
+        .padding(.top, 12 + geo.safeAreaInsets.top)
+        .padding(.bottom, 12 + geo.safeAreaInsets.bottom)
         .frame(width: contentWidth(geo: geo))
     }
 
@@ -894,7 +1009,20 @@ struct MusicPlayerView: View {
                         }
                 }
                 .frame(minHeight: height)
+                // b47-player: report the content's offset so the
+                // dismiss drag knows when the list is at its top
+                // edge (see LyricsScrollOffsetKey). A background
+                // GeometryReader — it measures without sizing.
+                .background(
+                    GeometryReader { contentGeo in
+                        Color.clear.preference(
+                            key: LyricsScrollOffsetKey.self,
+                            value: contentGeo.frame(in: .named("lyricsScroll")).minY
+                        )
+                    }
+                )
             }
+            .coordinateSpace(name: "lyricsScroll")
             .frame(height: height)
             .simultaneousGesture(
                 DragGesture(minimumDistance: 10)
@@ -948,6 +1076,10 @@ struct MusicPlayerView: View {
                     proxy.scrollTo(index, anchor: .center)
                 }
             }
+            // b47-player: track the list offset for the dismiss
+            // gate (see dismissDragAllowed) — 0 at the top edge,
+            // negative when scrolled.
+            .onPreferenceChange(LyricsScrollOffsetKey.self) { lyricsScrollOffset = $0 }
         }
         .accessibilityLabel("歌词，点行跳转，点空白回封面")
     }
@@ -979,10 +1111,11 @@ struct MusicPlayerView: View {
 
     /// Quality badge (b46-player, Coda §2.4): 148×24 slot, badge
     /// 21pt, 10.5pt medium, white 0.70, capsule stroke white 0.28
-    /// / 0.75pt. It sits BELOW the progress bar, centred, in its
-    /// own row — never over the bar. Hit-testing is off. No label
-    /// (no song / unknown tier) collapses to zero height, so the
-    /// row leaves no dead gap.
+    /// / 0.75pt. b47-player: it rides in the middle of the time
+    /// row (see progressSection), never over the bar and never in
+    /// its own row. Hit-testing is off. No label (no song /
+    /// unknown tier) collapses to zero size, so the row is just
+    /// the two times.
     private var qualityBadgeOverlay: some View {
         Group {
             if let label = playerVM.qualityBadgeLabel {
@@ -1154,37 +1287,47 @@ struct MusicPlayerView: View {
     }
 
     /// Lyrics-mode middle column (b46-player): compact header over
-    /// the lyrics, the same total height as the cover slot + title
-    /// row it replaces — 64 header + 8 gap + lyrics (size − 12) =
-    /// size + 60 — so the column fits exactly like cover mode and
-    /// the lyrics fill the middle instead of leaving the title
-    /// row's band below them.
-    private func lyricsModeColumn(size: CGFloat) -> some View {
+    /// the lyrics. b47-player: the lyrics area is FLEXIBLE — a
+    /// GeometryReader takes all the slack the portrait column has
+    /// left and hands its height to lyricsArea, so the lyrics fill
+    /// the middle instead of leaving a dead gap above the progress
+    /// bar (the old fixed slotSize area was shorter than the tall
+    /// screen, and the Spacers spread the rest). The header stays
+    /// 64pt; only the area grows. Cover mode is untouched.
+    private func lyricsModeColumn() -> some View {
         VStack(spacing: 8) {
             lyricsHeader
-            lyricsArea(height: size - 12)
+            GeometryReader { areaGeo in
+                lyricsArea(height: areaGeo.size.height)
+            }
+            .frame(maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity)
     }
 
     // MARK: - Progress
 
-    /// Progress (b46-player): bar → quality badge → time row in
-    /// portrait (Coda §2.4: the badge sits BELOW the bar, centred,
-    /// never over it). In landscape the right column has no room
-    /// for a badge row (5pt of slack on the shortest landscape
-    /// phone), so the badge stays overlaid on the bar there.
+    /// Progress (b47-player): bar → time row in portrait, with
+    /// the quality badge centred IN the time row (elapsed left,
+    /// badge centre, remaining right) — Apple Music grammar for
+    /// the times, no wasted row for the badge. The old own-row
+    /// badge (b46-player) left a full row between the bar and the
+    /// times and pushed the chrome budget up 30pt. In landscape
+    /// the right column has no room for a badge in the row (5pt
+    /// of slack on the shortest landscape phone), so the badge
+    /// stays overlaid on the bar there.
     private func progressSection(isLandscape: Bool) -> some View {
         VStack(spacing: 6) {
             thinProgressBar(badgeOverlay: isLandscape)
-            if !isLandscape {
-                qualityBadgeOverlay
-            }
             HStack {
                 Text(musicDurationText(seconds: Int(playerVM.scrubSeconds ?? playerVM.position)))
                     .font(.haoCaption)
                     .monospacedDigit()
                     .foregroundStyle(.white.opacity(0.55))
+                Spacer()
+                if !isLandscape {
+                    qualityBadgeOverlay
+                }
                 Spacer()
                 Text(remainingText)
                     .font(.haoCaption)
@@ -1202,9 +1345,9 @@ struct MusicPlayerView: View {
     /// back on failure — the same semantics the Slider had (see
     /// seek(to:)). The HIT area stays 28pt (the old 4pt frame was
     /// nearly untappable — the drag only fired when the finger
-    /// landed exactly on the line). b46-player: the quality badge
+    /// landed exactly on the line). b47-player: the quality badge
     /// overlay lives here ONLY in landscape (portrait shows the
-    /// badge in its own row below the bar, see progressSection).
+    /// badge centred in the time row, see progressSection).
     private func thinProgressBar(badgeOverlay: Bool) -> some View {
         GeometryReader { geo in
             let width = geo.size.width
@@ -1371,13 +1514,15 @@ struct MusicPlayerView: View {
 
     // MARK: - Toolbar (50pt, Coda §2.6)
 
-    /// Left: the real output-device button — AirPlay icon 19pt
-    /// medium + the audio session's real output name 13pt medium,
-    /// white 0.85, spacing 8 (the name follows route changes).
-    /// Right: comment / queue / lyrics, 20pt medium on 44×44 hit
-    /// targets; unselected white 0.65, selected white 1.0 + white
-    /// 0.16 background r10. Panel switches run in a
-    /// Transaction(animation: nil) — only the layout moves.
+    /// Left: the real output-device button — route glyph only,
+    /// 20pt medium on a 44×44 hit target, white 0.85 (b47-player:
+    /// the output name text is gone — bottom row is icons only,
+    /// chen's iron rule; the name lives in the picker sheet and
+    /// the VoiceOver label). Right: comment / queue / lyrics,
+    /// 20pt medium on 44×44 hit targets; unselected white 0.65,
+    /// selected white 1.0 + white 0.16 background r10. Panel
+    /// switches run in a Transaction(animation: nil) — only the
+    /// layout moves.
     private var toolbarRow: some View {
         HStack(spacing: 0) {
             MusicOutputDeviceButton()
@@ -1702,17 +1847,18 @@ struct MusicOutputDeviceButton: View {
 
     var body: some View {
         Button(action: { showPicker = true }) {
-            HStack(spacing: 8) {
-                Image(systemName: outputIcon)
-                    .font(.system(size: 19, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.85))
-                Text(outputName)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .lineLimit(1)
-            }
-            .frame(height: 44)
-            .contentShape(Rectangle())
+            // b47-player (chen build 46: bottom row must be icons
+            // only): the output NAME is gone from the row — it was
+            // the only text label down here and made the left side
+            // read as a labeled control against three bare icons.
+            // The glyph still follows the route (AirPlay / AirPods
+            // / headphones / speaker); the name lives in the picker
+            // sheet ("当前输出") and in the VoiceOver label.
+            Image(systemName: outputIcon)
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("输出设备：\(outputName)")
@@ -1788,18 +1934,18 @@ private extension View {
 enum MusicPlayerLayout {
     /// Horizontal side padding of the player stack (24pt each side).
     static let sidePadding: CGFloat = 24
-    /// Fixed chrome below the cover slot. b46-player: the quality
-    /// badge moved off the progress bar into its own row below it
-    /// (bar → badge 24 + 6 gap → time row), so the honest budget
-    /// grows 284 → 314 and the cover's height term 388 → 418.
-    /// MusicPlayerLayoutTests pins coverSize(375, 667) == 249 on
-    /// the new budget. The lyrics-mode compact header is
-    /// height-neutral by construction (lyricsModeColumn: 64 header
-    /// + 8 gap + lyrics size − 12 = size + 60, the cover slot +
-    /// title row it replaces), so it needs no budget term. The
+    /// Fixed chrome below the cover slot. b47-player: the quality
+    /// badge moved out of its own row into the time row (bar → time
+    /// row with the badge centred in it), so the honest budget
+    /// shrinks 314 → 292 (the badge row's 24 + 6 gap is gone; the
+    /// time row grows 16 → 24 because the badge drives it, net
+    /// −22) and the cover's height term 418 → 396.
+    /// MusicPlayerLayoutTests pins coverSize(375, 667) == 271 on
+    /// the new budget. Lyrics mode needs no budget term: its area
+    /// is flexible and takes whatever height is left. The
     /// pre-existing ~15pt slack risk on the shortest (667pt)
     /// screens that the old comment carried is unchanged.
-    static let fixedChromeHeight: CGFloat = 314
+    static let fixedChromeHeight: CGFloat = 292
 
     static func contentWidth(screenWidth: CGFloat) -> CGFloat {
         screenWidth - sidePadding * 2
@@ -1810,7 +1956,7 @@ enum MusicPlayerLayout {
     /// screen with no scrolling on any phone height. Tall phones
     /// still get the 340 cap.
     static func coverSize(screenWidth: CGFloat, screenHeight: CGFloat) -> CGFloat {
-        min(screenWidth - sidePadding * 2, 340, max(180, screenHeight - 418))
+        min(screenWidth - sidePadding * 2, 340, max(180, screenHeight - 396))
     }
 
     /// The whole player fits on one screen iff cover + chrome +
