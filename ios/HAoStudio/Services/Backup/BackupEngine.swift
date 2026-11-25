@@ -1587,10 +1587,23 @@ extension BackupEngineCore {
             }
         }
         let filesPresent = manifest["filesPresent"] as? [String] ?? []
-        result.failedFiles = restoreFilesFromSnapshot(
+        // b49fix10 P1-1: a deletion IS a restoration — a file
+        // the snapshot says was absent is removed here, and
+        // that removal counts toward restoredFiles, symmetric
+        // with the keys side (b49fix5 P2-8 counts a removed
+        // defaultsAbsent key). Before this, a delete-only
+        // restore reported 0 restored files, so performRestore
+        // judged it provably zero-change and deleted the
+        // safety net — the only copy of the deleted file —
+        // misreported "没有需要恢复的内容", and never posted
+        // .haoBackupImported (the app kept showing the file
+        // until the next reload).
+        let fileRestore = restoreFilesFromSnapshot(
             snapshotDir: snapshotDir, documentsURL: documentsURL
         )
+        result.failedFiles = fileRestore.failures
         result.restoredFiles = filesPresent.filter { !result.failedFiles.contains($0) }.count
+            + fileRestore.deletedAbsent
         if result.restoredKeys + result.restoredFiles > 0 {
             NotificationCenter.default.post(name: .haoBackupImported, object: nil)
         }
@@ -1653,7 +1666,7 @@ extension BackupEngineCore {
         journal.restore(defaults: defaults)
         return restoreFilesFromSnapshot(
             snapshotDir: snapshotDir, documentsURL: documentsURL
-        )
+        ).failures
     }
 
     /// Restores the files captured in a snapshot folder, from
@@ -1661,19 +1674,24 @@ extension BackupEngineCore {
     /// restore (copy failure, removal failure, or an unreadable
     /// manifest — in that last case a single descriptive entry,
     /// since the manifest is the only record of what was
-    /// captured). b49fix4 P1-4/P2-36: the old rollback swallowed
-    /// every failure with `catch { continue }` / `try?` and
-    /// still reported "已全量回滚". Shared by the in-import
+    /// captured) plus the number of files it actually DELETED
+    /// for the filesAbsent list. b49fix4 P1-4/P2-36: the old
+    /// rollback swallowed every failure with `catch { continue }`
+    /// / `try?` and still reported "已全量回滚". b49fix10 P1-1:
+    /// only a removal that actually happened counts — a file
+    /// that was never there needs no restoring, same rule as
+    /// the keys side (b49fix5 P2-8). Shared by the in-import
     /// rollback and by the user-triggered snapshot restore.
     static func restoreFilesFromSnapshot(
         snapshotDir: URL,
         documentsURL: URL
-    ) -> [String] {
+    ) -> (failures: [String], deletedAbsent: Int) {
         guard let manifestData = try? Data(contentsOf: snapshotDir.appendingPathComponent("snapshot-manifest.json")),
               let parsed = try? JSONSerialization.jsonObject(with: manifestData, options: []),
               let manifest = parsed as? [String: Any]
-        else { return ["快照清单（snapshot-manifest.json）无法读取"] }
+        else { return (["快照清单（snapshot-manifest.json）无法读取"], 0) }
         var failures: [String] = []
+        var deletedAbsent = 0
         for relativePath in (manifest["filesPresent"] as? [String] ?? []) {
             let source = snapshotDir.appendingPathComponent(relativePath)
             let target = documentsURL.appendingPathComponent(relativePath)
@@ -1692,17 +1710,20 @@ extension BackupEngineCore {
         }
         for relativePath in (manifest["filesAbsent"] as? [String] ?? []) {
             let target = documentsURL.appendingPathComponent(relativePath)
-            // Only a removal that actually fails counts: a file
-            // that was never there needs no restoring.
+            // Only a removal that actually happens counts: a
+            // file that was never there needs no restoring
+            // (same rule as the keys side, b49fix5 P2-8), and
+            // a failed removal is a failure, not a restore.
             if FileManager.default.fileExists(atPath: target.path) {
                 do {
                     try FileManager.default.removeItem(at: target)
+                    deletedAbsent += 1
                 } catch {
                     failures.append(relativePath)
                 }
             }
         }
-        return failures
+        return (failures, deletedAbsent)
     }
 }
 
