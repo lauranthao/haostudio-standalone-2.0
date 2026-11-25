@@ -208,7 +208,7 @@ struct MusicSearchView: View {
                         .frame(minHeight: 300)
                 }
             } else {
-                LazyVStack(alignment: .leading, spacing: 24) {
+                LazyVStack(alignment: .leading, spacing: HaoLayout.sectionTopSpacing) {
                     songsSection
                     artistShelf
                     albumShelf
@@ -327,6 +327,14 @@ struct MusicSearchView: View {
                     }
                 }
             }
+            // b49fix9 P2-1: the guard can close a kind on the
+            // 综合 shelves too (loadMoreCards runs here) — the
+            // same footer as the single-kind grids, so a closed
+            // kind shows "没有更多，点击重试" here instead of
+            // ending silently. The footer renders nothing in
+            // the normal state (not loading, no error, not
+            // closed), so this adds no spacing then.
+            cardFooter(kind: .artists)
         }
     }
 
@@ -360,6 +368,8 @@ struct MusicSearchView: View {
                     }
                 }
             }
+            // b49fix9 P2-1: same footer as the artists shelf.
+            cardFooter(kind: .albums)
         }
     }
 
@@ -393,6 +403,8 @@ struct MusicSearchView: View {
                     }
                 }
             }
+            // b49fix9 P2-1: same footer as the artists shelf.
+            cardFooter(kind: .playlists)
         }
     }
 
@@ -731,9 +743,12 @@ struct MusicSearchView: View {
             // kind (the source answered two identical next-page
             // requests with the same page) — show the end state
             // instead of silently dropping the load-more button.
-            // A fresh first page re-opens the kind; the footer
-            // is only rendered on the single-kind grids, which
-            // is where the guard can close a kind.
+            // A fresh first page re-opens the kind. The footer
+            // is rendered on the single-kind grids AND under the
+            // 综合 shelves (b49fix9 P2-1: the guard can close a
+            // kind on 综合 too, since the shelves call
+            // loadMoreCards — the "only single-kind pages can
+            // close a kind" claim was wrong).
             // b49fix8 P2-6: the end state is also the way back
             // in — it is a light retry, not a dead label. Tapping
             // re-issues a first page under the current tab's

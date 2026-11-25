@@ -20,7 +20,11 @@ struct MusicEqualizerView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                // b49fix9 P2-3: the outer spacing is the 16pt
+                // token, not a third value (20) — the cards are
+                // separated by the same 16 as the listening
+                // report's card stack (MusicDiscoveryViews).
+                VStack(alignment: .leading, spacing: 16) {
                     enableRow
                     responseCard
                     bandsCard

@@ -230,11 +230,15 @@ final class MusicSearchRestoreTests: XCTestCase {
         // identical request closed the kind without ever trying
         // the limit-50 second page.
         let vm = MusicSearchViewModel()
-        vm.lastNextPageRequest[.artists] = (offset: 20, loadedCount: 20)
+        // b49fix9 P2-2: the baseline was recorded under the
+        // 综合 limit 10, so restoring the artists tab (limit
+        // 50) clears it — cross-limit baselines are not
+        // comparable. The limit rides in the tuple now.
+        vm.lastNextPageRequest[.artists] = (offset: 20, loadedCount: 20, limit: 10)
         vm.zeroGrowthStreak[.artists] = 1
         // A kind from another tab keeps its baseline — the reset
         // is scoped to the restored tab's kinds.
-        vm.lastNextPageRequest[.albums] = (offset: 20, loadedCount: 20)
+        vm.lastNextPageRequest[.albums] = (offset: 20, loadedCount: 20, limit: 10)
         vm.zeroGrowthStreak[.albums] = 1
         var snapshot = MusicSearchViewModel.SearchSnapshot()
         snapshot.cardHasMore[.artists] = true
@@ -243,6 +247,7 @@ final class MusicSearchRestoreTests: XCTestCase {
         XCTAssertNil(vm.lastNextPageRequest[.artists])
         XCTAssertNil(vm.zeroGrowthStreak[.artists])
         XCTAssertEqual(vm.lastNextPageRequest[.albums]?.offset, 20)
+        XCTAssertEqual(vm.lastNextPageRequest[.albums]?.limit, 10)
         XCTAssertEqual(vm.zeroGrowthStreak[.albums], 1)
         // With the baseline gone, the next (20, 20) load-more
         // under the new limit fires (streak 0) — the pure
@@ -268,9 +273,9 @@ final class MusicSearchRestoreTests: XCTestCase {
         // under the single tabs' limit 50 do not apply to the
         // 综合 limit-10 paging either.
         let vm = MusicSearchViewModel()
-        vm.lastNextPageRequest[.artists] = (offset: 50, loadedCount: 50)
+        vm.lastNextPageRequest[.artists] = (offset: 50, loadedCount: 50, limit: 50)
         vm.zeroGrowthStreak[.artists] = 1
-        vm.lastNextPageRequest[.playlists] = (offset: 50, loadedCount: 50)
+        vm.lastNextPageRequest[.playlists] = (offset: 50, loadedCount: 50, limit: 50)
         vm.zeroGrowthStreak[.playlists] = 2
         var snapshot = MusicSearchViewModel.SearchSnapshot()
         snapshot.cardHasMore[.artists] = true
@@ -283,5 +288,62 @@ final class MusicSearchRestoreTests: XCTestCase {
         XCTAssertNil(vm.zeroGrowthStreak[.artists])
         XCTAssertNil(vm.lastNextPageRequest[.playlists])
         XCTAssertNil(vm.zeroGrowthStreak[.playlists])
+    }
+
+    func testRestoreKeepsBaselineWhenLimitMatches() {
+        // b49fix9 P2-2: a baseline recorded under the SAME
+        // limit as the restored tab's paging survives the
+        // flip — the requests are comparable, so the streak
+        // is real and the guard can still close. Before the
+        // fix the restore cleared unconditionally, so flipping
+        // tabs reset the streak every time and the guard never
+        // accumulated the two identical repeats it needs.
+        let vm = MusicSearchViewModel()
+        vm.lastNextPageRequest[.artists] = (offset: 50, loadedCount: 50, limit: 50)
+        vm.zeroGrowthStreak[.artists] = 1
+        var snapshot = MusicSearchViewModel.SearchSnapshot()
+        snapshot.cardHasMore[.artists] = true
+        vm.snapshots[.artists] = snapshot
+        vm.selectTab(.artists)
+        XCTAssertEqual(vm.lastNextPageRequest[.artists]?.offset, 50)
+        XCTAssertEqual(vm.lastNextPageRequest[.artists]?.loadedCount, 50)
+        XCTAssertEqual(vm.lastNextPageRequest[.artists]?.limit, 50)
+        XCTAssertEqual(vm.zeroGrowthStreak[.artists], 1)
+        // The kept baseline still closes the kind: the next
+        // identical (50, 50) request is the second repeat.
+        let decision = MusicSearchViewModel.loadMoreStreakDecision(
+            lastOffset: vm.lastNextPageRequest[.artists]?.offset,
+            lastLoadedCount: vm.lastNextPageRequest[.artists]?.loadedCount,
+            streak: vm.zeroGrowthStreak[.artists] ?? 0,
+            offset: 50, loadedCount: 50)
+        XCTAssertFalse(decision.fire)
+        XCTAssertEqual(decision.streak, 2)
+    }
+
+    func testFlipThroughSongsKeepsAllTabBaseline() {
+        // b49fix9 P2-2: the sweep's flip scenario — the 综合
+        // baseline (limit 10, streak 1) survives a round trip
+        // through a tab that pages no cards (.songs restores
+        // nothing for the card kinds), so the next identical
+        // (20, 20) load-more on 综合 still closes the kind.
+        let vm = MusicSearchViewModel()
+        vm.lastNextPageRequest[.artists] = (offset: 20, loadedCount: 20, limit: 10)
+        vm.zeroGrowthStreak[.artists] = 1
+        var snapshot = MusicSearchViewModel.SearchSnapshot()
+        snapshot.cardHasMore[.artists] = true
+        vm.snapshots[.all] = snapshot
+        vm.selectTab(.songs)
+        vm.selectTab(.all)
+        XCTAssertEqual(vm.lastNextPageRequest[.artists]?.offset, 20)
+        XCTAssertEqual(vm.lastNextPageRequest[.artists]?.loadedCount, 20)
+        XCTAssertEqual(vm.lastNextPageRequest[.artists]?.limit, 10)
+        XCTAssertEqual(vm.zeroGrowthStreak[.artists], 1)
+        let decision = MusicSearchViewModel.loadMoreStreakDecision(
+            lastOffset: vm.lastNextPageRequest[.artists]?.offset,
+            lastLoadedCount: vm.lastNextPageRequest[.artists]?.loadedCount,
+            streak: vm.zeroGrowthStreak[.artists] ?? 0,
+            offset: 20, loadedCount: 20)
+        XCTAssertFalse(decision.fire)
+        XCTAssertEqual(decision.streak, 2)
     }
 }

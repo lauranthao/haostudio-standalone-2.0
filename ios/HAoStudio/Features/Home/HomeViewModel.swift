@@ -392,8 +392,9 @@ final class HomeViewModel: ObservableObject {
                 // still valid, and the disliked songs stay dead.
                 // If even that is empty, the section is honestly
                 // empty and the next reload recomputes (the
-                // all-disliked cache falls through to a fresh
-                // ranking in the load).
+                // all-disliked cache falls through to a recompute
+                // from the day's pinned pool in the load — not a
+                // fresh ranking; b49fix9 P2-4).
                 // Residual (b49fix8, disclosed): the fallback can
                 // only see dislikes — if the disk list was
                 // rewritten by a NON-dislike write (e.g. a
@@ -450,6 +451,23 @@ final class HomeViewModel: ObservableObject {
                 }
                 picksToPublish = picksToPublish.filter(notDislikedNow)
                 sparesToPublish = sparesToPublish.filter(notDislikedNow)
+                // b49fix9 P2-4: the publish-time filter above can
+                // drop a pick mid-reload — backfill the picks
+                // from the (already filtered) spares so the day's
+                // list is not short one until the next reload.
+                // The spares are songId-deduped and disjoint from
+                // the picks, and the moved songs leave the spare
+                // tail, so the 20/20 boundary is preserved. The
+                // total stays short by the disliked count for the
+                // round (the disliked song is gone); the next
+                // reload's <40 branch re-fills the list to 40
+                // from the pinned pool and re-saves. A thin
+                // library (spares empty) stays short, as before.
+                if picksToPublish.count < 20 {
+                    let need = 20 - picksToPublish.count
+                    picksToPublish += sparesToPublish.prefix(need)
+                    sparesToPublish = Array(sparesToPublish.dropFirst(need))
+                }
                 self.reload(
                     videoHistory: videoHistory,
                     recent: recent,
@@ -805,7 +823,7 @@ final class HomeViewModel: ObservableObject {
                 // the re-save migrates the cache to 40.
                 // b49fix5 P2-3: the picks are BACKFILLED, not left
                 // short — the surviving cached picks keep their
-                // order, and the fresh ranking fills the missing
+                // order, and the pinned pool fills the missing
                 // slots to 20 (deduped by identityKey). A disliked
                 // pick is therefore replaced by the next-ranked
                 // song on the next reload, exactly as the P2-32
