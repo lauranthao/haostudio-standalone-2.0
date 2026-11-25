@@ -640,7 +640,26 @@ enum MusicLibraryStore {
 
     // MARK: - Lyrics cache
 
+    /// Lyrics-cache schema version (b49): 1 = unversioned, no
+    /// length check — an old fetch that only returned the first
+    /// half of a song's lyrics stayed cached forever, and every
+    /// later play hit it first and never re-fetched (chen build
+    /// 48: "歌词到后面也不显示"). Version 2 invalidates all
+    /// version-1 entries on first read; new entries are also
+    /// length-checked at the call site (see loadLyrics), so a
+    /// truncated fetch can never poison the cache again.
+    static let lyricsCacheVersion = 2
+    private static let lyricsCacheVersionKey = "hao.lyricsCacheVersion"
+
     static func cachedLyrics(for identityKey: String) -> [StoredLyricLine]? {
+        guard UserDefaults.standard.integer(forKey: lyricsCacheVersionKey) == lyricsCacheVersion else {
+            // First read after the bump (or a fresh install with
+            // no version stamped): drop the stale collection once
+            // so truncated version-1 entries are never served.
+            writeObject(named: lyricsCacheCollection, [:])
+            UserDefaults.standard.set(lyricsCacheVersion, forKey: lyricsCacheVersionKey)
+            return nil
+        }
         let dict = readObject(named: lyricsCacheCollection)
         guard let raw = dict[identityKey] as? [[String: Any]] else { return nil }
         return raw.map(StoredLyricLine.init(json:))
@@ -653,6 +672,7 @@ enum MusicLibraryStore {
             if let first = cache.keys.first { cache.removeValue(forKey: first) }
         }
         writeObject(named: lyricsCacheCollection, cache)
+        UserDefaults.standard.set(lyricsCacheVersion, forKey: lyricsCacheVersionKey)
     }
 
     // MARK: - Queue persistence

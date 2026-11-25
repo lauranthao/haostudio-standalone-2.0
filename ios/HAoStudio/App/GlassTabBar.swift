@@ -1,40 +1,42 @@
 // HAo Studio 2.0 — bottom tab bar.
 //
-// This is a REAL system UITabBar (UIKit), hosted in SwiftUI through a
-// UIViewRepresentable. It is NOT a hand-drawn capsule: there is no
-// floating glass capsule, no sliding pill view, no drag-to-switch-tabs,
-// no settle spring. Tab switching, selection state, VoiceOver and
-// haptics are all the system's own behaviour.
+// b49 (chen 2026-11-25 build 48: "菜单也没修好"): this is now a
+// PURE SwiftUI bar — an HStack of buttons drawn with the same
+// haoGlassRoundedRect as the mini player, so the single glass
+// layer is CONSTRUCTED, not hidden. The UITabBar version is gone:
+// its Liquid Glass could not be killed on iOS 27 —
+// configureWithTransparentBackground + empty background image +
+// backgroundColor .clear + clipsToBounds still left the system
+// pill, and the b48 hideSystemBackground never shipped at all
+// (the 0.0.2 binary contains no "BarBackground" literal — the
+// helper never ran on device; and the mechanism was flawed
+// anyway: updateUIView can run before UIKit creates
+// _UIBarBackground, it only scans direct subviews, and iOS 27
+// glass may be the bar's backgroundEffect, not a subview). Do
+// NOT go back to hiding the system background.
 //
-// Layout contract (MainTabView.swift, untouched): this view sits in the
-// bottom safe-area inset, in the same VStack as the mini player — the
-// mini player is the row above the bar, so the two can never overlap
-// and the mini player never appears twice. The 5 tabs come from
-// HaoTab.allCases in MainTabView's order: 首页/音乐/影视/直播/我的.
-// Tab content switching stays in MainTabView (@State selection +
-// content swap); this file owns only the bar itself.
+// Layout contract (unchanged from the UITabBar version, Coda
+// §6.2 — 64/52/8/16/6): the bar sits in the same VStack as the
+// mini player in MainTabView's bottom safe-area inset, 16pt side
+// margins, 6pt bottom margin, 8pt gap to the mini — the mini and
+// the bar are TWO SEPARATE equal-width pills. The 5 tabs come
+// from HaoTab.allCases in MainTabView's order:
+// 首页/音乐/影视/直播/我的. Tab content switching stays in
+// MainTabView (@State selection + content swap); this file owns
+// only the bar itself. No TabView is used: the built-in tab bar
+// cannot be replaced by a floating capsule.
 //
-// Glass:
-// - iOS 26+: the system tab bar is Liquid Glass from its default
-//   background (configureWithDefaultBackground()). No effect is assigned
-//   explicitly: UITabBarAppearance.backgroundEffect only accepts
-//   UIBlurEffect, so a glass effect cannot go there. No custom opaque
-//   background is painted over it: a custom background would overlay
-//   and kill the glass (Apple: "Any custom backgrounds and appearances
-//   you use in these elements might overlay or interfere with Liquid
-//   Glass"). isTranslucent stays true for the same reason.
-// - iOS 17–25: configureWithDefaultBackground() — the classic
-//   translucent frosted-glass bar. Deployment target is 17.0.
-//
-// Selection pill (UITabBar.selectionIndicatorImage):
-// - Solid #E4E4E4 in light mode, solid #3A3A3C in dark mode.
-//   Never black, never faint.
-// - Selected icon + label: theme.tabSelected — BLACK (light) / white
-//   (dark) in all four themes. Never red, never the theme accent.
-// - Unselected: primary at 80%, as before.
+// Selection (same values as the old selectionIndicatorImage):
+// solid #E4E4E4 in light mode, solid #3A3A3C in dark mode, a
+// 60×36 rounded pill behind the selected item. Selected icon +
+// label: theme.tabSelected (black / white) or the user's chosen
+// tab accent from Settings. Unselected: primary at 80%.
+// No selection haptic: the UITabBar had none, so the bar keeps
+// none (the full-player expand tick lives on the stack in
+// MainTabView, untouched). Reselect (tap the already-selected
+// tab) reports through onReselect, exactly as before.
 
 import SwiftUI
-import UIKit
 
 /// One tab in the bar.
 struct GlassTabBarItem: Identifiable {
@@ -59,201 +61,54 @@ struct GlassTabBar: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.haoTheme) private var theme
 
+    /// The selected-item pill: solid #E4E4E4 (light) / #3A3A3C
+    /// (dark), 60×36 — the old selectionIndicatorImage values.
+    private var selectionPillColor: Color {
+        colorScheme == .dark
+            ? Color(red: 0x3A / 255, green: 0x3A / 255, blue: 0x3C / 255)
+            : Color(red: 0xE4 / 255, green: 0xE4 / 255, blue: 0xE4 / 255)
+    }
+
     var body: some View {
-        SystemTabBar(
-            items: items,
-            selection: $selection,
-            onReselect: onReselect,
-            theme: theme,
-            colorScheme: colorScheme,
-            tabAccent: tabAccent
-        )
-        // b47 (chen 2026-11-25 build 46: "迷你播放器也没有和菜单栏
-        // 一样长"): the mini's visible pill is the SwiftUI glass
-        // (haoGlassRoundedRect), exactly the stack width; the system
-        // UITabBar's own Liquid Glass overhangs its frame (b43 measured
-        // ~4pt above a 64pt frame — the glass is bigger than the bar),
-        // so the bar's visible pill read LONGER than the mini. The
-        // visible pill is now drawn by the same SwiftUI glass modifier
-        // as the mini — same shape, same radius, same width by
-        // construction — and the UITabBar underneath is transparent
-        // (configureWithTransparentBackground), so no system glass
-        // defines the edges any more. Items, tint and the selection
-        // pill are untouched; the 64/52/8/16/6 geometry is unchanged.
-        // The visual gap to the mini is now exactly the 8pt frame
-        // spacing (no more system overhang on top of it).
+        HStack(spacing: 0) {
+            ForEach(items) { item in
+                let isSelected = item.tab == selection
+                Button {
+                    if isSelected {
+                        onReselect(item.tab)
+                    } else {
+                        selection = item.tab
+                    }
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: item.icon)
+                            .font(.system(size: 22, weight: .regular))
+                            .accessibilityHidden(true)
+                        Text(item.title)
+                            .font(.system(size: 10, weight: isSelected ? .semibold : .regular))
+                    }
+                    .foregroundStyle(
+                        isSelected
+                            ? (tabAccent ?? theme.tabSelected)
+                            : Color.primary.opacity(0.8)
+                    )
+                    // Selected pill behind the whole item (icon +
+                    // label), 60×36 — the old indicator image size.
+                    .background {
+                        if isSelected {
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(selectionPillColor)
+                                .frame(width: 60, height: 36)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .accessibilityLabel(item.title)
+            }
+        }
         .frame(height: HaoLayout.tabBarTotalHeight)
         .haoGlassRoundedRect()
-    }
-}
-
-/// The system UITabBar, bridged into SwiftUI.
-///
-/// A bare UITabBar (not a UITabBarController): MainTabView owns the tab
-/// content and switches it by @State, so no view-controller ownership
-/// is needed here — the bar is a control, not a container.
-private struct SystemTabBar: UIViewRepresentable {
-    let items: [GlassTabBarItem]
-    @Binding var selection: HaoTab
-    var onReselect: (HaoTab) -> Void
-    let theme: HaoThemePalette
-    let colorScheme: ColorScheme
-    var tabAccent: Color? = nil
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    func makeUIView(context: Context) -> UITabBar {
-        let tabBar = UITabBar()
-        tabBar.delegate = context.coordinator
-        // Translucent: the glass (iOS 26) / blur (iOS 17–25) must show
-        // the content behind the bar. Setting this false would turn the
-        // bar into a flat opaque slab.
-        tabBar.isTranslucent = true
-        // b47 (mini-width fix, see GlassTabBar.body): the visible pill
-        // is the SwiftUI glass, so the system bar paints no background
-        // of its own — no background image, no shadow line, no glass
-        // overhang past the frame edges.
-        tabBar.backgroundImage = UIImage()
-        tabBar.shadowImage = UIImage()
-        // b48 (chen 2026-11-25 build 47: "菜单栏有两层玻璃"): the
-        // b47 transparency did NOT kill the system glass on iOS 27 —
-        // the bar still draws its own Liquid Glass pill, bottom-
-        // anchored to the screen edge and wider than the SwiftUI
-        // frame, so a second pill peeks out below/right of the
-        // SwiftUI pill. Two belts: (1) backgroundColor .clear,
-        // explicit; (2) clipsToBounds, so nothing the system draws
-        // can escape the 64pt SwiftUI frame — the overhang is cut
-        // at the frame edge. The background subview itself is hidden
-        // in updateUIView (hideSystemBackground), so inside the
-        // frame there is exactly one glass — the SwiftUI one.
-        tabBar.backgroundColor = .clear
-        tabBar.clipsToBounds = true
-        return tabBar
-    }
-
-    func updateUIView(_ tabBar: UITabBar, context: Context) {
-        // Keep the coordinator's copy fresh: it is created once, and the
-        // struct snapshot it was born with goes stale after the first
-        // selection change.
-        context.coordinator.items = items
-        context.coordinator.selection = $selection
-        context.coordinator.onReselect = onReselect
-
-        // Items, in the order MainTabView defines them. Titles + SF
-        // Symbols come from HaoTab, so the bar can never drift from the
-        // tab definitions.
-        tabBar.items = items.enumerated().map { offset, item in
-            UITabBarItem(
-                title: item.title,
-                image: UIImage(systemName: item.icon),
-                tag: offset
-            )
-        }
-
-        // Selected item follows the SwiftUI binding. Setting selectedItem
-        // directly does not call the delegate, so this cannot loop.
-        if let index = items.firstIndex(where: { $0.tab == selection }) {
-            tabBar.selectedItem = tabBar.items?[index]
-        }
-
-        // Selected icon + label: theme.tabSelected (black / white).
-        // Never red, never the theme accent.
-        tabBar.tintColor = tabAccent.map(UIColor.init) ?? UIColor(theme.tabSelected)
-        // Unselected: primary at 80%.
-        tabBar.unselectedItemTintColor = UIColor.label.withAlphaComponent(0.8)
-
-        // Selection pill: solid #E4E4E4 (light) / #3A3A3C (dark).
-        // Never black, never faint.
-        tabBar.selectionIndicatorImage = Self.selectionPillImage(for: colorScheme)
-
-        Self.configureAppearance(for: tabBar)
-        Self.hideSystemBackground(of: tabBar)
-    }
-
-    /// Hide the system-drawn background (b48, see makeUIView): the
-    /// transparent appearance does not stop iOS 27's UITabBar from
-    /// painting its own Liquid Glass pill, so the background view
-    /// itself is hidden — the bar keeps its items, tint and selection
-    /// pill (separate subviews), and the only glass left is the
-    /// SwiftUI one in GlassTabBar.body. Matched by class name for
-    /// the private _UIBarBackground and by type for the effect view
-    /// inside it; runs on every update because the bar can rebuild
-    /// its background subviews when the appearance changes.
-    private static func hideSystemBackground(of tabBar: UITabBar) {
-        for subview in tabBar.subviews {
-            let name = String(describing: type(of: subview))
-            if name.contains("BarBackground") || subview is UIVisualEffectView {
-                subview.isHidden = true
-            }
-        }
-    }
-
-    /// Bar background: transparent on every iOS version.
-    ///
-    /// b47: the visible pill is drawn by the SwiftUI glass
-    /// (`.haoGlassRoundedRect()` in GlassTabBar.body — the same
-    /// modifier as the mini player, so the two pills are the same
-    /// width by construction). The old `configureWithDefaultBackground`
-    /// let the system UITabBar paint its own Liquid Glass, which
-    /// overhangs the bar's frame (b43 measured ~4pt above a 64pt
-    /// frame) — the bar's visible pill read longer than the mini
-    /// (chen 2026-11-25 build 46). No backgroundColor and no
-    /// backgroundImage are set — either would paint over the glass.
-    private static func configureAppearance(for tabBar: UITabBar) {
-        let appearance = UITabBarAppearance()
-        appearance.configureWithTransparentBackground()
-        tabBar.standardAppearance = appearance
-        tabBar.scrollEdgeAppearance = appearance
-    }
-
-    /// Stretchable solid pill for the selected tab.
-    ///
-    /// #E4E4E4 in light mode, #3A3A3C in dark mode — opaque, solid.
-    /// Never black, never faint (the old capsule used black @ 7.5% /
-    /// white @ 10%, which read as a smudge, not a selection).
-    /// Cap insets keep the semicircular ends intact while the middle
-    /// stretches to the tab's width.
-    private static func selectionPillImage(for colorScheme: ColorScheme) -> UIImage {
-        let color: UIColor
-        if colorScheme == .dark {
-            // #3A3A3C, opaque.
-            color = UIColor(red: 0x3A / 255, green: 0x3A / 255, blue: 0x3C / 255, alpha: 1)
-        } else {
-            // #E4E4E4, opaque.
-            color = UIColor(red: 0xE4 / 255, green: 0xE4 / 255, blue: 0xE4 / 255, alpha: 1)
-        }
-        let size = CGSize(width: 60, height: 36)
-        let image = UIGraphicsImageRenderer(size: size).image { _ in
-            let path = UIBezierPath(
-                roundedRect: CGRect(origin: .zero, size: size),
-                cornerRadius: size.height / 2
-            )
-            color.setFill()
-            path.fill()
-        }
-        let inset = UIEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        return image.resizableImage(withCapInsets: inset, resizingMode: .stretch)
-    }
-
-    /// UITabBarDelegate: taps go back to the SwiftUI binding. Tapping
-    /// the already-selected tab reports a reselect instead of a switch.
-    final class Coordinator: NSObject, UITabBarDelegate {
-        var items: [GlassTabBarItem] = []
-        var selection: Binding<HaoTab> = .constant(.home)
-        var onReselect: (HaoTab) -> Void = { _ in }
-
-        func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
-            guard let index = tabBar.items?.firstIndex(where: { $0 === item }),
-                  index < items.count
-            else { return }
-            let tab = items[index].tab
-            if tab == selection.wrappedValue {
-                onReselect(tab)
-            } else {
-                selection.wrappedValue = tab
-            }
-        }
     }
 }

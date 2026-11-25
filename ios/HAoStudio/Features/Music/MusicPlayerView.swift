@@ -51,18 +51,16 @@
 //   column (top bar, title, progress, transport, bottom row).
 //   Same components, same sizes where they fit.
 // - CLOSE (chen 2026-11-24: opened player could not be closed):
-//   fullScreenCover has no system swipe-down dismiss, and the old
-//   close control was a bare 32pt white chevron with no scrim —
-//   invisible on a light cover and the only way out. Now the
-//   close is a 40pt glass circle (Beans PlayerView: 38pt glass
-//   circle + white 0.22 hairline) over a 0.55 top scrim, it sets
-//   the presenting binding false (Beans closePlayer()), with
-//   dismiss() only as fallback, AND a downward swipe anywhere on
-//   the player closes it (lyrics mode: swipe must start on the
-//   top bar, so the list keeps its vertical drags). b46-player:
+//   fullScreenCover has no system swipe-down dismiss. The close
+//   is a downward swipe anywhere on the player (lyrics mode:
+//   swipe must start on the top bar, so the list keeps its
+//   vertical drags) plus the presenting binding set false
+//   (Beans closePlayer()) — one close path, no dismiss()
+//   fallback (b49: the double-close is gone). b46-player:
 //   a 60×5 drag handle sits centred on the top bar as the visual
-//   affordance for that swipe — fullScreenCover has no system
-//   swipe dismiss, so the drag stays custom (see
+//   affordance for that swipe, with no scrim behind it (b49:
+//   Coda has none; the 0.55 black gradient read as a black band
+//   on light covers). The drag stays custom (see
 //   handleDismissDrag).
 // - WIDTH PIN (chen 2026-11-24, build 35): build 34 on his phone
 //   rendered the player ~2x wider than the screen — prev/next
@@ -99,8 +97,8 @@ private struct LyricsScrollOffsetKey: PreferenceKey {
 
 struct MusicPlayerView: View {
     /// The presenting view's binding. Setting it false is the
-    /// close path; defaults to a constant so the view still
-    /// compiles anywhere else (then dismiss() is the fallback).
+    /// close path (the only one — b49 removed the dismiss()
+    /// fallback; MainTabView presents via fullScreenCover).
     @Binding var isPresented: Bool
     /// Namespace for the cover morph from the mini player (b35
     /// tab-bar link): when MainTabView passes its namespace, this
@@ -118,7 +116,6 @@ struct MusicPlayerView: View {
 
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
     @EnvironmentObject private var coordinator: PlaybackCoordinator
-    @Environment(\.dismiss) private var dismiss
 
     /// Dominant cover colour for the background gradient (b38,
     /// item 1): the average cover colour, saturation-boosted, so
@@ -208,6 +205,14 @@ struct MusicPlayerView: View {
     /// stagger (forward 0.05 s / reverse 0.025 s per row).
     @State private var lyricScrollForward = true
     @State private var prevActiveLyricIndex = -1
+    /// Declarative lyrics scroll position (b49): the row id the
+    /// list is scrolled to, anchored at 36% of the viewport.
+    /// The follow writes it (see the activeLyricIndex onChange);
+    /// the user's own scrolling writes it back, and the 3 s
+    /// follow pause keeps the follow from fighting the user.
+    /// Replaces the imperative ScrollViewReader + scrollTo, which
+    /// could silently lose follow with no error.
+    @State private var lyricScrollPosition: Int? = nil
     /// The artist name tapped in the multi-artist title row (Coda
     /// §2.3: each artist is its own link; id=0 / empty names are
     /// filtered — we only have names, so empty names are dropped).
@@ -377,17 +382,18 @@ struct MusicPlayerView: View {
         )
     }
 
-    /// Close the player. The binding is the authority (Beans
-    /// PlayerView: closePlayer() sets isPresented = false) — the
-    /// environment dismiss is only a fallback, so the close path
-    /// never depends on which presentation wrapper the caller used.
+    /// Close the player. Single close path (b49): the binding is
+    /// the authority (Beans PlayerView: closePlayer() sets
+    /// isPresented = false) — the only presentation site is
+    /// MainTabView's fullScreenCover(isPresented:), so the
+    /// environment dismiss() was a second, redundant close
+    /// (double-close on every drag dismiss, build 48). Removed.
     /// b45-a: the close runs on Coda's close spring (response 0.42
     /// / damping 1, CoverZoomMotion.close).
     private func close() {
         withAnimation(HaoPlayerMotion.playerClose) {
             isPresented = false
         }
-        dismiss()
     }
 
     /// Mark a user interaction: restores the control bar and
@@ -805,26 +811,19 @@ struct MusicPlayerView: View {
     /// the cover (titleRow); dismissal is the drag-down gesture
     /// only (handleDismissDrag; close() is still its closer).
     /// What remains of the top row is the drag grabber (Coda
-    /// 60×5, white 0.5) on the short top scrim, so the drag
-    /// affordance stays visible on any cover. The row keeps its
-    /// 40pt height — the layout budget in MusicPlayerLayout
-    /// (fixedChromeHeight 346, top bar 40) counts it, so the
-    /// player still fits one screen with no scrolling.
+    /// 60×5, white 0.5) with no backing — b49: Coda's player has
+    /// no top scrim, and the 0.55 -> 0 black gradient read as a
+    /// black band across the top on light covers (build 48).
+    /// The row keeps its 40pt height — the layout budget in
+    /// MusicPlayerLayout (fixedChromeHeight 346, top bar 40)
+    /// counts it, so the player still fits one screen with no
+    /// scrolling.
     private var topBar: some View {
         Capsule()
             .fill(.white.opacity(0.5))
             .frame(width: 60, height: 5)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .padding(.top, 2)
-            // Top scrim so the grabber reads on any (even light)
-            // cover — the same 0.55 -> 0 top gradient the VOD
-            // player uses.
-            .background(
-                LinearGradient(
-                    colors: [Color.black.opacity(0.55), Color.black.opacity(0)],
-                    startPoint: .top, endPoint: .bottom
-                )
-            )
             .frame(height: 40)
     }
 
@@ -904,246 +903,245 @@ struct MusicPlayerView: View {
     }
 
     private func lyricsArea(height: CGFloat) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(spacing: 0) {
-                    if !playerVM.lyricsLoaded {
-                        ProgressView()
-                            .tint(.white)
-                            .frame(height: height)
-                    } else if playerVM.lyrics.isEmpty {
-                        if playerVM.lyricsLoadFailed {
-                            // §3.3 retry: the fetch returned nothing
-                            // on a platform that has a lyrics endpoint
-                            // (network failure or no lyrics published
-                            // — the API cannot tell the two apart, so
-                            // the wording stays neutral). The button is
-                            // the only tap target here: unlike the plain
-                            // empty state it must NOT flip back to the
-                            // cover, or the retry could never be tapped
-                            // without leaving lyrics.
-                            VStack(spacing: 12) {
-                                Text("未能加载歌词")
-                                    .font(.haoSubhead)
-                                    .foregroundStyle(.white.opacity(0.55))
-                                Button("重新加载") {
-                                    noteInteraction()
-                                    playerVM.retryLyrics()
-                                }
-                                .font(.haoSubheadStrong)
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .strokeBorder(.white.opacity(0.35), lineWidth: 0.5)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            .frame(height: height)
-                        } else {
-                            Text("暂无歌词")
+        ScrollView {
+            VStack(spacing: 0) {
+                if !playerVM.lyricsLoaded {
+                    ProgressView()
+                        .tint(.white)
+                        .frame(height: height)
+                } else if playerVM.lyrics.isEmpty {
+                    if playerVM.lyricsLoadFailed {
+                        // §3.3 retry: the fetch returned nothing
+                        // on a platform that has a lyrics endpoint
+                        // (network failure or no lyrics published
+                        // — the API cannot tell the two apart, so
+                        // the wording stays neutral). The button is
+                        // the only tap target here: unlike the plain
+                        // empty state it must NOT flip back to the
+                        // cover, or the retry could never be tapped
+                        // without leaving lyrics.
+                        VStack(spacing: 12) {
+                            Text("未能加载歌词")
                                 .font(.haoSubhead)
                                 .foregroundStyle(.white.opacity(0.55))
-                                .frame(height: height)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    noteInteraction()
-                                    playerVM.toggleLyrics()
-                                }
+                            Button("重新加载") {
+                                noteInteraction()
+                                playerVM.retryLyrics()
+                            }
+                            .font(.haoSubheadStrong)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .strokeBorder(.white.opacity(0.35), lineWidth: 0.5)
+                            }
+                            .buttonStyle(.plain)
                         }
+                        .frame(height: height)
                     } else {
-                        // b47-player Coda check
-                        // (AppleMusicLyricsColumn): the current line
-                        // sits at 36% of the viewport, so the list
-                        // carries a 36% blank above the first line
-                        // and a 64% blank below the last — the first
-                        // and last lines can both reach the anchor.
-                        // The old fixed 24pt blanks pinned the first
-                        // line near the top and the last line near
-                        // the bottom instead. Blank taps flip back
-                        // to the cover (our rule, not Coda's: Coda
-                        // toggles its controls there). The tap
-                        // target is ONLY the blank spacers, never
-                        // the rows: a tap gesture on the whole list
-                        // would also fire when a lyric row is
-                        // tapped, seeking AND flipping back at once.
-                        Color.clear
-                            .frame(height: height * 0.36)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                noteInteraction()
-                                playerVM.toggleLyrics()
-                            }
-                        ForEach(Array(playerVM.lyrics.enumerated()), id: \.offset) { index, line in
-                            let distance = index - playerVM.activeLyricIndex
-                            let isActive = index == playerVM.activeLyricIndex
-                            let isConfirmed = lyricConfirmIndex == index
-                            Button(action: {
-                                tapLyricRow(index: index, line: line)
-                            }) {
-                                // A11: the translation (when one was
-                                // matched and the switch is on) rides
-                                // under its line, smaller and dimmer.
-                                VStack(alignment: .leading, spacing: 2) {
-                                    if isActive {
-                                        // b45-h: per-character karaoke
-                                        // wipe (P8 #1) — each char is
-                                        // rendered on its own so the
-                                        // wipe advances char by char
-                                        // (pseudo-syllable split; no
-                                        // word timing exists in any
-                                        // lyric source), unsung chars
-                                        // at 0.28, the sung char
-                                        // glowing and swelling.
-                                        LyricWipeText(
-                                            text: line.text.isEmpty ? " " : line.text,
-                                            lineStart: line.time,
-                                            lineDuration: (index + 1 < playerVM.lyrics.count ? playerVM.lyrics[index + 1].time : line.time + 4) - line.time,
-                                            position: playerVM.position,
-                                            fontSize: 28
-                                        )
-                                    } else {
-                                        Text(line.text.isEmpty ? " " : line.text)
-                                            .font(.system(size: 20, weight: .regular))
-                                            .foregroundStyle(.white.opacity(
-                                                MusicLyrics.lineOpacity(
-                                                    distance: distance,
-                                                    browsing: isBrowsingLyrics,
-                                                    sung: index < playerVM.activeLyricIndex)
-                                            ))
-                                    }
-                                    if playerVM.showLyricTranslation,
-                                       let translation = line.translation, !translation.isEmpty {
-                                        Text(translation)
-                                            .font(.system(
-                                                size: isActive ? 15 : 13
-                                            ))
-                                            .foregroundStyle(.white.opacity(
-                                                isActive ? 0.85 : 0.4
-                                            ))
-                                    }
-                                }
-                                .multilineTextAlignment(.leading)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, 10)
-                                // b45-a: the seek-confirm state — the
-                                // tapped row stays highlighted until
-                                // the active line lands on it.
-                                .background(
-                                    isConfirmed
-                                        ? Color.white.opacity(0.12)
-                                        : Color.clear,
-                                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                )
-                            }
-                            .buttonStyle(LyricRowPressStyle())
-                            // b46-player (Coda §2.8): non-active rows
-                            // sit at 0.98 scale with a faint distance
-                            // blur (cap 2.0, floor opacity 0.45) — no
-                            // row is ever cut: the old "> 6 away =
-                            // opacity 0" left the bottom of the slot
-                            // empty on chen's phone.
-                            .scaleEffect(isActive ? 1.0 : 0.98)
-                            .blur(radius: isActive ? 0 : MusicLyrics.lineBlur(distance: distance))
-                            // b45-a: row-by-row stagger — 0.05 s
-                            // forward / 0.025 s reverse, capped at
-                            // 0.4 s (Coda §8.3).
-                            .animation(
-                                HaoPlayerMotion.lyricsFollow.delay(
-                                    min(Double(abs(distance)) * (lyricScrollForward ? 0.05 : 0.025), 0.4)
-                                ),
-                                value: playerVM.activeLyricIndex
-                            )
-                            .id(index)
-                        }
-                        Color.clear
-                            .frame(height: height * 0.64)
+                        Text("暂无歌词")
+                            .font(.haoSubhead)
+                            .foregroundStyle(.white.opacity(0.55))
+                            .frame(height: height)
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 noteInteraction()
                                 playerVM.toggleLyrics()
                             }
                     }
-                }
-                .frame(minHeight: height)
-                // b47-player: report the content's offset so the
-                // dismiss drag knows when the list is at its top
-                // edge (see LyricsScrollOffsetKey). A background
-                // GeometryReader — it measures without sizing.
-                .background(
-                    GeometryReader { contentGeo in
-                        Color.clear.preference(
-                            key: LyricsScrollOffsetKey.self,
-                            value: contentGeo.frame(in: .named("lyricsScroll")).minY
-                        )
-                    }
-                )
-            }
-            .coordinateSpace(name: "lyricsScroll")
-            .frame(height: height)
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 10)
-                    .onChanged { value in
-                        noteInteraction()
-                        // b45-a: manual scroll pauses auto-follow
-                        // for 3 s (Coda holdDuration), timed from
-                        // the last real move, inertia included —
-                        // onEnded below re-arms it at settle time.
-                        followPausedUntil = Date().addingTimeInterval(3)
-                        // b45-a: scrolling down accumulates toward
-                        // 200pt to hide the control bar; any upward
-                        // scroll restores it at once.
-                        if let lastY = lastLyricsDragY {
-                            let delta = value.translation.height - lastY
-                            if delta < 0 {
-                                lyricsScrollDownAccum += -delta
-                                if lyricsScrollDownAccum >= 200,
-                                   !controlsHidden {
-                                    withAnimation(HaoPlayerMotion.controlFade) {
-                                        controlsHidden = true
-                                    }
-                                }
-                            } else if delta > 0 {
-                                lyricsScrollDownAccum = 0
-                                noteInteraction()
-                            }
-                        }
-                        lastLyricsDragY = value.translation.height
-                    }
-                    .onEnded { _ in
-                        followPausedUntil = Date().addingTimeInterval(3)
-                        lastLyricsDragY = nil
-                    }
-            )
-            .onChange(of: playerVM.activeLyricIndex) { _, index in
-                lyricScrollForward = index >= prevActiveLyricIndex
-                prevActiveLyricIndex = index
-                guard index >= 0, Date() >= followPausedUntil else { return }
-                // b45-a: follow spring response 0.7 / damping 0.85,
-                // with the scroll capped at remaining time × 0.8 so
-                // a follow never overruns the next line.
-                let remaining: Double
-                if index + 1 < playerVM.lyrics.count {
-                    remaining = playerVM.lyrics[index + 1].time - playerVM.position
                 } else {
-                    remaining = 0.7
-                }
-                let response = min(0.7, max(0.10, remaining * 0.8))
-                withAnimation(.spring(response: response, dampingFraction: 0.85)) {
                     // b47-player Coda check
-                    // (AppleMusicLyricsColumn): the current line is
-                    // anchored at 36% of the viewport, not the
-                    // centre — the old .center put it halfway down
-                    // and left the lower half under-filled.
-                    proxy.scrollTo(index, anchor: UnitPoint(x: 0.5, y: 0.36))
+                    // (AppleMusicLyricsColumn): the current line
+                    // sits at 36% of the viewport, so the list
+                    // carries a 36% blank above the first line
+                    // and a 64% blank below the last — the first
+                    // and last lines can both reach the anchor.
+                    // The old fixed 24pt blanks pinned the first
+                    // line near the top and the last line near
+                    // the bottom instead. Blank taps flip back
+                    // to the cover (our rule, not Coda's: Coda
+                    // toggles its controls there). The tap
+                    // target is ONLY the blank spacers, never
+                    // the rows: a tap gesture on the whole list
+                    // would also fire when a lyric row is
+                    // tapped, seeking AND flipping back at once.
+                    Color.clear
+                        .frame(height: height * 0.36)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            noteInteraction()
+                            playerVM.toggleLyrics()
+                        }
+                    ForEach(Array(playerVM.lyrics.enumerated()), id: \.offset) { index, line in
+                        let distance = index - playerVM.activeLyricIndex
+                        let isActive = index == playerVM.activeLyricIndex
+                        let isConfirmed = lyricConfirmIndex == index
+                        Button(action: {
+                            tapLyricRow(index: index, line: line)
+                        }) {
+                            // A11: the translation (when one was
+                            // matched and the switch is on) rides
+                            // under its line, smaller and dimmer.
+                            VStack(alignment: .leading, spacing: 2) {
+                                if isActive {
+                                    // b45-h: per-character karaoke
+                                    // wipe (P8 #1) — each char is
+                                    // rendered on its own so the
+                                    // wipe advances char by char
+                                    // (pseudo-syllable split; no
+                                    // word timing exists in any
+                                    // lyric source), unsung chars
+                                    // at 0.28, the sung char
+                                    // glowing and swelling.
+                                    LyricWipeText(
+                                        text: line.text.isEmpty ? " " : line.text,
+                                        lineStart: line.time,
+                                        lineDuration: (index + 1 < playerVM.lyrics.count ? playerVM.lyrics[index + 1].time : line.time + 4) - line.time,
+                                        position: playerVM.position,
+                                        fontSize: 28
+                                    )
+                                } else {
+                                    Text(line.text.isEmpty ? " " : line.text)
+                                        .font(.system(size: 20, weight: .regular))
+                                        .foregroundStyle(.white.opacity(
+                                            MusicLyrics.lineOpacity(
+                                                distance: distance,
+                                                browsing: isBrowsingLyrics,
+                                                sung: index < playerVM.activeLyricIndex)
+                                        ))
+                                }
+                                if playerVM.showLyricTranslation,
+                                   let translation = line.translation, !translation.isEmpty {
+                                    Text(translation)
+                                        .font(.system(
+                                            size: isActive ? 15 : 13
+                                        ))
+                                        .foregroundStyle(.white.opacity(
+                                            isActive ? 0.85 : 0.4
+                                        ))
+                                }
+                            }
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 10)
+                            // b45-a: the seek-confirm state — the
+                            // tapped row stays highlighted until
+                            // the active line lands on it.
+                            .background(
+                                isConfirmed
+                                    ? Color.white.opacity(0.12)
+                                    : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            )
+                        }
+                        .buttonStyle(LyricRowPressStyle())
+                        // b46-player (Coda §2.8): non-active rows
+                        // sit at 0.98 scale with a faint distance
+                        // blur (cap 2.0, floor opacity 0.45) — no
+                        // row is ever cut: the old "> 6 away =
+                        // opacity 0" left the bottom of the slot
+                        // empty on chen's phone.
+                        .scaleEffect(isActive ? 1.0 : 0.98)
+                        .blur(radius: isActive ? 0 : MusicLyrics.lineBlur(distance: distance))
+                        // b45-a: row-by-row stagger — 0.05 s
+                        // forward / 0.025 s reverse, capped at
+                        // 0.4 s (Coda §8.3).
+                        .animation(
+                            HaoPlayerMotion.lyricsFollow.delay(
+                                min(Double(abs(distance)) * (lyricScrollForward ? 0.05 : 0.025), 0.4)
+                            ),
+                            value: playerVM.activeLyricIndex
+                        )
+                        .id(index)
+                    }
+                    Color.clear
+                        .frame(height: height * 0.64)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            noteInteraction()
+                            playerVM.toggleLyrics()
+                        }
                 }
             }
-            // b47-player: track the list offset for the dismiss
-            // gate (see dismissDragAllowed) — 0 at the top edge,
-            // negative when scrolled.
-            .onPreferenceChange(LyricsScrollOffsetKey.self) { lyricsScrollOffset = $0 }
+            .frame(minHeight: height)
+            // b47-player: report the content's offset so the
+            // dismiss drag knows when the list is at its top
+            // edge (see LyricsScrollOffsetKey). A background
+            // GeometryReader — it measures without sizing.
+            .background(
+                GeometryReader { contentGeo in
+                    Color.clear.preference(
+                        key: LyricsScrollOffsetKey.self,
+                        value: contentGeo.frame(in: .named("lyricsScroll")).minY
+                    )
+                }
+            )
         }
+        .coordinateSpace(name: "lyricsScroll")
+        .scrollPosition(id: $lyricScrollPosition, anchor: UnitPoint(x: 0.5, y: 0.36))
+        .frame(height: height)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 10)
+                .onChanged { value in
+                    noteInteraction()
+                    // b45-a: manual scroll pauses auto-follow
+                    // for 3 s (Coda holdDuration), timed from
+                    // the last real move, inertia included —
+                    // onEnded below re-arms it at settle time.
+                    followPausedUntil = Date().addingTimeInterval(3)
+                    // b45-a: scrolling down accumulates toward
+                    // 200pt to hide the control bar; any upward
+                    // scroll restores it at once.
+                    if let lastY = lastLyricsDragY {
+                        let delta = value.translation.height - lastY
+                        if delta < 0 {
+                            lyricsScrollDownAccum += -delta
+                            if lyricsScrollDownAccum >= 200,
+                               !controlsHidden {
+                                withAnimation(HaoPlayerMotion.controlFade) {
+                                    controlsHidden = true
+                                }
+                            }
+                        } else if delta > 0 {
+                            lyricsScrollDownAccum = 0
+                            noteInteraction()
+                        }
+                    }
+                    lastLyricsDragY = value.translation.height
+                }
+                .onEnded { _ in
+                    followPausedUntil = Date().addingTimeInterval(3)
+                    lastLyricsDragY = nil
+                }
+        )
+        .onChange(of: playerVM.activeLyricIndex) { _, index in
+            lyricScrollForward = index >= prevActiveLyricIndex
+            prevActiveLyricIndex = index
+            guard index >= 0, Date() >= followPausedUntil else { return }
+            // b45-a: follow spring response 0.7 / damping 0.85,
+            // with the scroll capped at remaining time × 0.8 so
+            // a follow never overruns the next line.
+            let remaining: Double
+            if index + 1 < playerVM.lyrics.count {
+                remaining = playerVM.lyrics[index + 1].time - playerVM.position
+            } else {
+                remaining = 0.7
+            }
+            let response = min(0.7, max(0.10, remaining * 0.8))
+            withAnimation(.spring(response: response, dampingFraction: 0.85)) {
+                // b49: declarative follow — the position
+                // binding scrolls the list (see the
+                // .scrollPosition below); the old
+                // proxy.scrollTo could silently lose
+                // follow with no error. Anchor stays 36%.
+                lyricScrollPosition = index
+            }
+        }
+        // b47-player: track the list offset for the dismiss
+        // gate (see dismissDragAllowed) — 0 at the top edge,
+        // negative when scrolled.
+        .onPreferenceChange(LyricsScrollOffsetKey.self) { lyricsScrollOffset = $0 }
         .accessibilityLabel("歌词，点行跳转，点空白回封面")
     }
 

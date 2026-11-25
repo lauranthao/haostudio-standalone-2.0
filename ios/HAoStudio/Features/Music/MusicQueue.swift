@@ -241,6 +241,14 @@ struct MusicQueue {
 
     var isEmpty: Bool { tracks.isEmpty }
 
+    /// Dedupe by identityKey, first occurrence wins, order kept
+    /// (b49: merged search results / playlists can list the same
+    /// song twice; the twin makes next() target the current song).
+    static func deduped(_ tracks: [MusicSong]) -> [MusicSong] {
+        var seen = Set<String>()
+        return tracks.filter { seen.insert($0.identityKey).inserted }
+    }
+
     /// True when tapping `song` must NOT restart playback: it is the
     /// track already loaded. A paused same-track tap resumes instead.
     func isCurrentTrack(_ song: MusicSong) -> Bool {
