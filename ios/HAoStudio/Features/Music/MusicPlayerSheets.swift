@@ -170,7 +170,12 @@ struct MusicQualitySheet: View {
                 } header: {
                     Text("播放音质（目标）")
                 } footer: {
-                    Text("目标音质保留到下一首。没有该档位时立刻降一档播放，徽标只显示实际档位——降档绝不标 Master。")
+                    // b49sweep P2-12: the footer describes both
+                    // behaviours — a playing song re-resolves at the
+                    // new quality now (position kept, old quality
+                    // restored on failure); a paused / unloaded song
+                    // picks it up from the next track.
+                    Text("播放中的歌立刻按新音质重播（位置保留；该档位不可用时恢复之前的音质）。暂停或没有在播的歌，下一首起生效。没有该档位时立刻降一档播放，徽标只显示实际档位——降档绝不标 Master。")
                 }
                 Section {
                     HStack {

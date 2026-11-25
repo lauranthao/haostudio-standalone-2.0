@@ -872,10 +872,12 @@ struct MusicSongMenuHandle {
     }
 }
 
-/// The visible "…" button: 28×28 hit target, ellipsis icon,
-/// theme secondary text — Apple Music's row affordance. The
-/// favourite label inside the menu is live (the host syncs it),
-/// so this button needs no state of its own.
+/// The visible "…" button: 44×44 hit target (Apple's 44pt
+/// minimum — b49sweep P2-14; the old 28×28 was below it),
+/// ellipsis icon, theme secondary text — Apple Music's row
+/// affordance. The favourite label inside the menu is live
+/// (the host syncs it), so this button needs no state of its
+/// own.
 struct MusicSongMenuButton: View {
     var handle: MusicSongMenuHandle
 
@@ -886,7 +888,7 @@ struct MusicSongMenuButton: View {
             Image(systemName: "ellipsis")
                 .font(.haoSubheadStrong)
                 .foregroundStyle(theme.textSecondary)
-                .frame(width: 28, height: 28)
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .accessibilityLabel("更多操作")

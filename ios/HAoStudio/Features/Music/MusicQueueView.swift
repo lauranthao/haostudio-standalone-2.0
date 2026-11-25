@@ -103,7 +103,10 @@ struct MusicQueueView: View {
     private func queueRow(song: MusicSong, index: Int) -> some View {
         let isCurrent = index == playerVM.queue.index
         return Button(action: {
-            playerVM.playFromQueue(at: index)
+            // b49sweep P1-4: a queue-sheet tap is a manual play —
+            // the song is re-asked of every source (a previously
+            // failed song is not skipped from memory).
+            playerVM.playFromQueue(at: index, manual: true)
         }) {
             HStack(spacing: 12) {
                 MusicCoverView(urlString: song.cover, size: 48, cornerRadius: 5)

@@ -150,7 +150,13 @@ enum MusicRadio {
         for song in favourites { addToPool(song) }
         for song in recent { addToPool(song) }
         for song in playlistTracks { addToPool(song) }
-        for key in logOrder { addToPool(stats[key]!.song) }
+        for key in logOrder {
+            // b49sweep P2-15: no force unwrap — the key was
+            // inserted in the same loop today, but one edit away
+            // from a crash.
+            guard let entry = stats[key] else { continue }
+            addToPool(entry.song)
+        }
         // 3. Score every candidate.
         let favKeys = Set(favourites.map { $0.identityKey })
         var recentIndex: [String: Int] = [:]
@@ -278,8 +284,11 @@ enum MusicRadio {
                 order.append(key)
             }
         }
-        let ranked = order.sorted { counts[$0]!.plays > counts[$1]!.plays }
-        return ranked.prefix(limit).map { counts[$0]!.song }
+        // b49sweep P2-15: no force unwraps — the keys were
+        // inserted in the same loop today, but one edit away
+        // from a crash.
+        let ranked = order.sorted { (counts[$0]?.plays ?? 0) > (counts[$1]?.plays ?? 0) }
+        return ranked.prefix(limit).compactMap { counts[$0]?.song }
     }
 
     /// Top artists by listen count, most first.
@@ -309,22 +318,12 @@ enum MusicFMMode: Hashable {
     }
 }
 
-/// FM refill policy (Coda §9.2 PersonalFMRefill): an empty
-/// queue retries at most 3 times, 1s apart; a refill that was
-/// superseded (mode changed / view gone) is abandoned; a
-/// final failure surfaces a toast via the caller.
-enum MusicFMRefill {
-    static let maxAttempts = 3
-    static let retryInterval: TimeInterval = 1.0
-}
-
 @MainActor
 final class MusicFMViewModel: ObservableObject {
     @Published private(set) var queue: [MusicSong] = []
     @Published private(set) var refillFailed = false
 
     private let mode: MusicFMMode
-    private var generation = 0
 
     init(mode: MusicFMMode) {
         self.mode = mode
@@ -333,13 +332,19 @@ final class MusicFMViewModel: ObservableObject {
     var title: String { mode.title }
 
     func buildQueue() {
-        generation += 1
         refillFailed = false
         queue = Self.queueFor(mode: mode)
     }
 
     static func queueFor(mode: MusicFMMode) -> [MusicSong] {
-        let seed = musicDayKey(of: Date())
+        queueFor(mode: mode, seed: musicDayKey(of: Date()))
+    }
+
+    /// A fresh batch for the same mode with an explicit seed
+    /// (b49sweep P1-6: the mid-session refill). The base
+    /// queueFor(mode:) keeps the day seed, so a refill with the
+    /// same seed would return the same songs.
+    static func queueFor(mode: MusicFMMode, seed: String) -> [MusicSong] {
         switch mode {
         case .fm:
             return MusicRadio.fmQueue(
@@ -356,34 +361,22 @@ final class MusicFMViewModel: ObservableObject {
         }
     }
 
-    /// Refill an empty queue: up to 3 attempts, 1s apart, with
-    /// a fresh seed each time. A newer generation (rebuild /
-    /// mode change) abandons the loop; exhaustion sets
-    /// refillFailed so the view can toast. No async/await —
-    /// preflight 5e bans it; the retry is a DispatchWorkItem
-    /// chain (the same pattern the codebase uses for delayed
-    /// work), and the work item — not the bare async closure —
-    /// is what DispatchQueue.main.asyncAfter executes.
+    /// Refill an empty queue (b49sweep P1-9): one synchronous
+    /// attempt. queueFor is a pure function of local data + the
+    /// day seed, so rebuilding 1 s later returns the same empty
+    /// queue — the old 3×/1 s retry (Coda §9.2 PersonalFMRefill)
+    /// could never succeed and only delayed the honest empty
+    /// state. A later data change (a new favourite / recent
+    /// play) re-runs this from the view's store-change
+    /// observers; exhaustion sets refillFailed so the view can
+    /// toast.
     func refillIfEmpty() {
-        refillStep(generation: generation, attempt: 1)
-    }
-
-    private func refillStep(generation gen: Int, attempt: Int) {
-        guard gen == generation else { return }
+        refillFailed = false
         guard queue.isEmpty else { return }
-        guard attempt <= MusicFMRefill.maxAttempts else {
+        queue = Self.queueFor(mode: mode)
+        if queue.isEmpty {
             refillFailed = true
-            return
         }
-        let work = DispatchWorkItem { [weak self] in
-            guard let self = self, gen == self.generation else { return }
-            self.queue = Self.queueFor(mode: self.mode)
-            if self.queue.isEmpty {
-                self.refillStep(generation: gen, attempt: attempt + 1)
-            }
-        }
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + MusicFMRefill.retryInterval, execute: work)
     }
 }
 
@@ -412,14 +405,34 @@ struct MusicFMView: View {
         _fmVM = StateObject(wrappedValue: MusicFMViewModel(mode: mode))
     }
 
-    private var currentSong: MusicSong? { playerVM.currentSong }
+    /// The FM/heartbeat source for this mode (b49sweep P1-7):
+    /// the old code always used .fm/"fm", so a heartbeat session
+    /// recorded the wrong place (its context rebuilt as FM) and
+    /// the view's toasts/buttons said 漫游 in 心动模式.
+    private var fmSource: PlaySource {
+        PlaySource(kind: mode == .heartbeat ? .heartbeat : .fm,
+                   id: mode == .heartbeat ? "heartbeat" : "fm")
+    }
+
+    /// The song this page's controls act on (b49sweep P1-7):
+    /// only the current song when its play context matches this
+    /// mode. Any other playing song (a playlist/search song, or
+    /// the other FM mode) renders the start state instead of
+    /// wearing this mode's cover and controls — the old code
+    /// showed whatever was playing, and the trash button then
+    /// disliked a song that had nothing to do with FM.
+    private var fmSong: MusicSong? {
+        guard let song = playerVM.currentSong,
+              playerVM.currentPlayContext?.source.kind == fmSource.kind else { return nil }
+        return song
+    }
 
     var body: some View {
         GeometryReader { geo in
             let coverSize = fmCoverSize(width: geo.size.width, height: geo.size.height)
             VStack(spacing: 0) {
                 Spacer()
-                if let song = currentSong {
+                if let song = fmSong {
                     MusicCoverView(urlString: song.cover, size: coverSize, cornerRadius: 16)
                         .shadow(color: .black.opacity(0.35), radius: 28, y: 14)
                         .scaleEffect(playerVM.isPlaying ? 1.0 : 0.94)
@@ -451,15 +464,24 @@ struct MusicFMView: View {
             fmVM.buildQueue()
             if !fmVM.queue.isEmpty, playerVM.currentSong == nil {
                 // b46: FM queue is a reloadable place.
-                playerVM.playAll(fmVM.queue, source: PlaySource(kind: .fm, id: "fm"), sourceDisplayName: fmVM.title)
+                playerVM.playAll(fmVM.queue, source: fmSource, sourceDisplayName: fmVM.title)
             }
             refreshFav()
             fmVM.refillIfEmpty()
         }
         .onChange(of: playerVM.currentSong?.identityKey) { _, _ in refreshFav() }
-        .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { _ in refreshFav() }
+        .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { _ in
+            refreshFav()
+            // b49sweep P1-9: the pool changed — a previously empty
+            // FM queue may have songs now.
+            fmVM.refillIfEmpty()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .haoMusicRecentChanged)) { _ in
+            // b49sweep P1-9: same data-driven retry as favourites.
+            fmVM.refillIfEmpty()
+        }
         .onChange(of: fmVM.refillFailed) { _, failed in
-            if failed { playerVM.showToast("私人漫游暂时不可用") }
+            if failed { playerVM.showToast("\(fmVM.title)暂时不可用") }
         }
     }
 
@@ -481,7 +503,7 @@ struct MusicFMView: View {
                 .font(.haoSubhead)
                 .foregroundStyle(theme.textSecondary)
             Button(action: startPlayback) {
-                Text("开始漫游")
+                Text(mode == .fm ? "开始漫游" : "开始心动模式")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 24)
@@ -506,7 +528,7 @@ struct MusicFMView: View {
             return
         }
         // b46: FM queue is a reloadable place.
-        playerVM.playAll(fmVM.queue, source: PlaySource(kind: .fm, id: "fm"), sourceDisplayName: fmVM.title)
+        playerVM.playAll(fmVM.queue, source: fmSource, sourceDisplayName: fmVM.title)
     }
 
     private func controlsRow(song: MusicSong) -> some View {
