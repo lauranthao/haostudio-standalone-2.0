@@ -387,23 +387,23 @@ struct LiveTabView: View {
                                 .font(.haoFootnoteMedium)
                                 .foregroundStyle(theme.accentText)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 24)
+                                .padding(.horizontal, HaoLayout.pageMargin)
                                 .padding(.top, 12)
                                 .buttonStyle(.plain)
                         }
                         searchEntry
-                            .padding(.horizontal, 24)
+                            .padding(.horizontal, HaoLayout.pageMargin)
                             .padding(.top, 12)
                         if !viewModel.follows.isEmpty {
                             followSection
-                                .padding(.top, 16)
+                                .padding(.top, HaoLayout.sectionTopSpacing)
                         }
                         if !viewModel.history.isEmpty {
                             historySection
-                                .padding(.top, 16)
+                                .padding(.top, HaoLayout.sectionTopSpacing)
                         }
                         recommendSection
-                            .padding(.top, 16)
+                            .padding(.top, HaoLayout.sectionTopSpacing)
                         Spacer(minLength: 16)
                     }
                     .background(
@@ -491,7 +491,7 @@ struct LiveTabView: View {
             Spacer()
             Button(action: { path.append(.history) }) {
                 Image(systemName: "clock")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.system(size: HaoLayout.iconSize, weight: .semibold))
                     .foregroundStyle(theme.textPrimary)
                     .frame(width: 40, height: 40)
             }
@@ -499,14 +499,14 @@ struct LiveTabView: View {
             .accessibilityLabel("观看历史")
             Button(action: { path.append(.follows) }) {
                 Image(systemName: "heart")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.system(size: HaoLayout.iconSize, weight: .semibold))
                     .foregroundStyle(theme.textPrimary)
                     .frame(width: 40, height: 40)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("我的关注")
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, HaoLayout.pageMargin)
         .padding(.top, 12)
     }
 
@@ -568,7 +568,7 @@ struct LiveTabView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, HaoLayout.pageMargin)
         }
     }
 
@@ -613,7 +613,7 @@ struct LiveTabView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, HaoLayout.pageMargin)
             }
         }
     }
@@ -632,7 +632,7 @@ struct LiveTabView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, HaoLayout.pageMargin)
             }
         }
     }
@@ -647,7 +647,7 @@ struct LiveTabView: View {
                 .font(.haoDenseBody)
                 .foregroundStyle(theme.accentText)
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, HaoLayout.pageMargin)
     }
 
     // MARK: - Recommend grid
@@ -660,7 +660,7 @@ struct LiveTabView: View {
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, HaoLayout.pageMargin)
             if viewModel.isLoading && viewModel.rooms.isEmpty {
                 ProgressView()
                     .frame(maxWidth: .infinity)
@@ -675,7 +675,7 @@ struct LiveTabView: View {
                         ? (viewModel.loadFailed ? "直播源没有返回数据，下拉重试。" : "该平台暂时没有在播的房间。")
                         : "推荐直播由直播源提供，接入后在这里显示。关注与历史不受影响。"
                 )
-                .padding(.horizontal, 24)
+                .padding(.horizontal, HaoLayout.pageMargin)
                 if viewModel.hasGateway && viewModel.loadFailed {
                     // (sweep-6 P2-6) Standard retry capsule:
                     // 15 semibold, 24/12.

@@ -134,7 +134,7 @@ struct LiveRoomCard: View {
             .fill(theme.surfaceStrong)
             .overlay {
                 Image(systemName: "antenna.radiowaves.left.and.right")
-                    .font(.system(size: 20))
+                    .font(.system(size: HaoLayout.iconSize))
                     .foregroundStyle(theme.textSecondary)
             }
     }

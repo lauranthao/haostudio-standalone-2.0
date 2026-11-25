@@ -538,7 +538,7 @@ struct LiveRoomView: View {
                             .frame(width: max(0, 100 * CGFloat(liveDragLevel)), height: 6)
                     }
                     Text("\(Int(liveDragLevel * 100))%")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.haoFootnoteMedium)
                 }
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14)
@@ -561,7 +561,7 @@ struct LiveRoomView: View {
                     .font(.haoFootnote)
                     .foregroundStyle(.white.opacity(0.7))
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, HaoLayout.pageMargin)
                 Button(action: { livePlayer.retryCurrentRoom() }) {
                     Text("重试")
                         .font(.haoCalloutStrong)
@@ -801,6 +801,7 @@ struct LiveRoomView: View {
             // the simultaneous tap gesture below.
             if !livePlayer.isPlaying && livePlayer.videoView != nil {
                 Image(systemName: "play.fill")
+                    // 34pt 视频覆盖层大播放图标（无字重；不是正文标题，不用 haoScreenTitle）。
                     .font(.system(size: 34))
                     .foregroundStyle(.white.opacity(0.9))
             }
