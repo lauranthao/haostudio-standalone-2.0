@@ -421,6 +421,14 @@ struct MusicRecommendView: View {
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
     @Environment(\.haoTheme) private var theme
 
+    /// b48 (chen 2026-11-25 build 47: "这些太丑了 你不知道收进去
+    /// 吗"): each chart folds into its header; expanded chart ids
+    /// live here. Default: all collapsed, so the 榜单 section is
+    /// three compact headers instead of 30 inline rows. The full
+    /// charts page (榜单 >) and each chart's detail page (from the
+    /// charts page) are unchanged.
+    @State private var expandedCharts: Set<String> = []
+
     var body: some View {
         GeometryReader { geo in
             let availableWidth = max(geo.size.width - 40, 200)
@@ -736,9 +744,24 @@ struct MusicRecommendView: View {
         }
     }
 
+    /// b48: a chart is a foldable block — its header (cover + name
+    /// + source + chevron) is always visible; tap it to expand /
+    /// collapse the top-10 rows with animation. Default collapsed.
+    /// The header no longer navigates to the chart detail (that
+    /// page is one tap away from the 榜单 > charts page); the
+    /// header tap is the fold, so the two never fight.
     private func chartBlock(chart: PlaylistSummary) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            NavigationLink(destination: MusicChartDetailView(chart: chart)) {
+        let isExpanded = expandedCharts.contains(chart.id)
+        return VStack(alignment: .leading, spacing: 8) {
+            Button(action: {
+                withAnimation(HaoLayout.settleSpring) {
+                    if isExpanded {
+                        expandedCharts.remove(chart.id)
+                    } else {
+                        expandedCharts.insert(chart.id)
+                    }
+                }
+            }) {
                 HStack(spacing: 12) {
                     MusicCoverView(urlString: chart.cover, size: 48, cornerRadius: 8)
                     VStack(alignment: .leading, spacing: 2) {
@@ -746,57 +769,66 @@ struct MusicRecommendView: View {
                             .font(.haoBodyStrong)
                             .foregroundStyle(theme.textPrimary)
                             .lineLimit(1)
+                            .truncationMode(.tail)
                         Text(chart.desc.isEmpty ? "网易云音乐" : chart.desc)
                             .font(.haoFootnote)
                             .foregroundStyle(theme.textSecondary)
                             .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                     Spacer()
-                    Image(systemName: "chevron.right")
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(theme.accentText)
+                        .foregroundStyle(theme.textMuted)
+                        .animation(HaoLayout.settleSpring, value: isExpanded)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            if let tracks = homeVM.chartTracks[chart.id] {
-                if tracks.isEmpty {
-                    Text("该榜单没有返回曲目。")
-                        .font(.haoFootnote)
-                        .foregroundStyle(theme.textSecondary)
-                        .padding(.vertical, 8)
-                } else {
-                    VStack(spacing: 1) {
-                        ForEach(Array(tracks.prefix(10).enumerated()), id: \.element.id) { index, song in
-                            Button(action: {
-                                // b46: chart list is a reloadable place.
-                                playerVM.play(song: song, in: tracks, startAt: index, source: PlaySource(kind: .chart, id: chart.id), sourceDisplayName: chart.name)
-                            }) {
-                                HStack(spacing: 12) {
-                                    Text("\(index + 1)")
-                                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(index < 3 ? theme.liveRed : theme.textSecondary)
-                                        .frame(width: 28, alignment: .center)
-                                    Text(song.title.isEmpty ? "未知歌曲" : song.title)
-                                        .font(.system(size: 17, weight: .medium))
-                                        .foregroundStyle(theme.textPrimary)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text(song.artist.isEmpty ? "" : song.artist)
-                                        .font(.haoSubhead)
-                                        .foregroundStyle(theme.textSecondary)
-                                        .lineLimit(1)
+            if isExpanded {
+                if let tracks = homeVM.chartTracks[chart.id] {
+                    if tracks.isEmpty {
+                        Text("该榜单没有返回曲目。")
+                            .font(.haoFootnote)
+                            .foregroundStyle(theme.textSecondary)
+                            .padding(.vertical, 8)
+                    } else {
+                        VStack(spacing: 1) {
+                            ForEach(Array(tracks.prefix(10).enumerated()), id: \.element.id) { index, song in
+                                Button(action: {
+                                    // b46: chart list is a reloadable place.
+                                    playerVM.play(song: song, in: tracks, startAt: index, source: PlaySource(kind: .chart, id: chart.id), sourceDisplayName: chart.name)
+                                }) {
+                                    HStack(spacing: 12) {
+                                        Text("\(index + 1)")
+                                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                            .foregroundStyle(index < 3 ? theme.liveRed : theme.textSecondary)
+                                            .frame(width: 28, alignment: .center)
+                                        Text(song.title.isEmpty ? "未知歌曲" : song.title)
+                                            .font(.system(size: 17, weight: .medium))
+                                            .foregroundStyle(theme.textPrimary)
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                            .layoutPriority(1)
+                                        Spacer()
+                                        Text(song.artist.isEmpty ? "" : song.artist)
+                                            .font(.haoSubhead)
+                                            .foregroundStyle(theme.textSecondary)
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                            .frame(maxWidth: 150, alignment: .trailing)
+                                    }
+                                    .frame(minHeight: 32)
+                                    .contentShape(Rectangle())
                                 }
-                                .frame(minHeight: 32)
-                                .contentShape(Rectangle())
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
-                }
-            } else {
-                VStack(spacing: 1) {
-                    ForEach(0..<4, id: \.self) { _ in MusicSkeletonRow() }
+                } else {
+                    VStack(spacing: 1) {
+                        ForEach(0..<4, id: \.self) { _ in MusicSkeletonRow() }
+                    }
                 }
             }
         }

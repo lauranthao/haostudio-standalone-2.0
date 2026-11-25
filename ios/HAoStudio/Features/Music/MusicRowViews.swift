@@ -317,40 +317,50 @@ struct MusicCoverCard: View {
     @Environment(\.haoTheme) private var theme
 
     var body: some View {
-        Button(action: { onTap?() }) {
-            VStack(alignment: .leading, spacing: 8) {
-                MusicCoverView(urlString: coverURL, size: size, cornerRadius: 8)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
-                    }
-                    .overlay(alignment: .topTrailing) {
-                        if let playCount = playCount, playCount > 0 {
-                            MusicPlayCountBadge(count: playCount)
-                                .padding(8)
-                        }
-                    }
-                    .overlay(alignment: .topLeading) {
-                        if isVIP {
-                            MusicVIPBadge()
-                                .padding(8)
-                        }
-                    }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title.isEmpty ? "未知" : title)
-                        .font(.haoBodyStrong)
-                        .foregroundStyle(theme.textPrimary)
-                        .lineLimit(2)
-                    Text(subtitle)
-                        .font(.haoFootnote)
-                        .foregroundStyle(theme.textSecondary)
-                        .lineLimit(1)
-                }
+        // b48: same rule as MusicCoverCardBody — no disabled Button
+        // (it renders dimmed, i.e. a grey veil over the cover).
+        // The Button exists only when there is an action.
+        Group {
+            if let onTap = onTap {
+                Button(action: onTap) { cardContent }
+                    .buttonStyle(.plain)
+            } else {
+                cardContent
             }
-            .frame(width: size, alignment: .leading)
         }
-        .buttonStyle(.plain)
-        .disabled(onTap == nil)
+    }
+
+    private var cardContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            MusicCoverView(urlString: coverURL, size: size, cornerRadius: 8)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                }
+                .overlay(alignment: .topTrailing) {
+                    if let playCount = playCount, playCount > 0 {
+                        MusicPlayCountBadge(count: playCount)
+                            .padding(8)
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    if isVIP {
+                        MusicVIPBadge()
+                            .padding(8)
+                    }
+                }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title.isEmpty ? "未知" : title)
+                    .font(.haoBodyStrong)
+                    .foregroundStyle(theme.textPrimary)
+                    .lineLimit(2)
+                Text(subtitle)
+                    .font(.haoFootnote)
+                    .foregroundStyle(theme.textSecondary)
+                    .lineLimit(1)
+            }
+        }
+        .frame(width: size, alignment: .leading)
     }
 }
 
@@ -366,35 +376,53 @@ struct MusicCoverCardBody: View {
     @Environment(\.haoTheme) private var theme
 
     var body: some View {
-        Button(action: { onTap?() }) {
-            VStack(alignment: .leading, spacing: 8) {
-                MusicCoverView(urlString: coverURL, size: size, cornerRadius: 22)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title.isEmpty ? "未知" : title)
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(theme.textPrimary)
-                        .lineLimit(2)
-                        .truncationMode(.tail)
-                        .frame(width: size, alignment: .leading)
-                    Text(subtitle)
-                        .font(.system(size: 13))
-                        .foregroundStyle(theme.textSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(width: size, alignment: .leading)
-                }
-                .frame(width: size, alignment: .leading)
+        // b48 (chen 2026-11-25 build 47: "发现歌单这里图片都是灰
+        // 色的"): the card used to ALWAYS be a Button, disabled
+        // when onTap is nil — and every grid usage (发现歌单 / 新
+        // 专辑 / 歌单广场 / 我的专辑) passes no onTap because the
+        // surrounding NavigationLink owns the tap. A disabled
+        // Button renders dimmed, so every cover read as a grey
+        // veil over the photo (the mini player and chart covers,
+        // whose Buttons have actions, stayed vivid). A Button with
+        // no action is also the wrong shape for a NavigationLink
+        // label (nested buttons). The Button now exists only when
+        // there is an action; otherwise the card is plain content.
+        Group {
+            if let onTap = onTap {
+                Button(action: onTap) { cardContent }
+                    .buttonStyle(.plain)
+            } else {
+                cardContent
+            }
+        }
+    }
+
+    private var cardContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            MusicCoverView(urlString: coverURL, size: size, cornerRadius: 22)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title.isEmpty ? "未知" : title)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(theme.textPrimary)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .frame(width: size, alignment: .leading)
+                Text(subtitle)
+                    .font(.system(size: 13))
+                    .foregroundStyle(theme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(width: size, alignment: .leading)
             }
             .frame(width: size, alignment: .leading)
-            // b47-home: clip to the card bounds — the meta line used
-            // to spill past the card's right edge and read as cut
-            // mid-character (chen's 16:11 frames); the explicit text
-            // widths + tail truncation make every line end cleanly
-            // with an ellipsis instead.
-            .clipped()
         }
-        .buttonStyle(.plain)
-        .disabled(onTap == nil)
+        .frame(width: size, alignment: .leading)
+        // b47-home: clip to the card bounds — the meta line used
+        // to spill past the card's right edge and read as cut
+        // mid-character (chen's 16:11 frames); the explicit text
+        // widths + tail truncation make every line end cleanly
+        // with an ellipsis instead.
+        .clipped()
     }
 }
 
