@@ -461,7 +461,16 @@ struct VideoDetailView: View {
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
                         .haoDarkGlassCapsule(darkness: 0.7)
-                        .padding(.bottom, 90)
+                        // b49fix11 (sweep 13 alignment P2-2): the toast
+                        // sits toastBottomOffset above the SAFE bottom —
+                        // the token, not a literal 90, so a token change
+                        // moves this capsule too. No + safeAreaInsets.bottom
+                        // here (unlike MusicPlayerView:274): this page
+                        // does not ignore the safe area, so the VStack's
+                        // bottom edge already IS the safe bottom; the
+                        // player root is full-screen, so it must add the
+                        // inset back.
+                        .padding(.bottom, HaoLayout.toastBottomOffset)
                         .onAppear {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                                 viewModel.clearDownloadNote()
