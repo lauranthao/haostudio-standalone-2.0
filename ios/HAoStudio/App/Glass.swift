@@ -137,13 +137,12 @@ enum HaoLayout {
     // One place for the page geometry every tab root and pushed
     // page shares (sweep-5 Lens 3 found 24 / 20 / 16 margins,
     // 48 / 40 / 36 search heights, 12 / 16 / 32 section tops).
-    // HaoDesignTokens (HaoTheme.swift) keeps the older Coda
-    // spacing/corner set (page 24, phonePage 20, cornerStandard 8,
-    // cornerLarge 12, cornerPanel 20, cornerCover 22); the values
-    // below deliberately repeat the shared ones so every lane
-    // reads the same names — do not add a second value for the
-    // same role. Font roles live in HaoTheme.swift (.haoScreenTitle
-    // etc.) and are NOT repeated here.
+    // HaoDesignTokens (HaoTheme.swift) keeps only animation +
+    // heartRed now (b49fix4 P2-28 deleted its spacing/corner
+    // members); the values below are the single source of truth
+    // for geometry — do not add a second value for the same role.
+    // Font roles live in HaoTheme.swift (.haoScreenTitle etc.)
+    // and are NOT repeated here.
     /// Tab-root horizontal margin (all five roots).
     static let pageMargin: CGFloat = 24
     /// Pushed-page horizontal margin (detail / list pages).
@@ -163,7 +162,10 @@ enum HaoLayout {
     /// Corner-radius scale (sweep 5 P2-42): 8 / 12 / 16 / 20 / 22,
     /// for cards and sheets. Rectangular selection cells are NOT
     /// on this scale — they use selectionCellCornerRadius (10,
-    /// sweep 5 P2-41); pill chips stay Capsule.
+    /// sweep 5 P2-41); small chips use chipCornerRadius (10,
+    /// sweep 7 P2-38) — same VALUE as the selection cell, a
+    /// different ROLE, so the two tokens must never be swapped;
+    /// pill chips stay Capsule.
     /// b49fix4 P2-27: every literal `cornerRadius:` in the repo is
     /// either wired to a token above or deliberately literal —
     /// a purpose-named token must not be used for unrelated UI:
@@ -172,11 +174,12 @@ enum HaoLayout {
     /// settings swatch; 10 non-selection (toasts, covers,
     /// skeletons, badges, clips); 18 geometric, always half of
     /// 36 (tab pill, 36pt avatar); 24 equalizer cards only;
-    /// 36/40/64 circles, always half of the size. The two
-    /// off-scale wirings are deliberate: 14 -> cornerMedium
-    /// (nearest below, so compact cards do not grow) and the
-    /// 18pt surface card -> cornerXLarge (rounder than medium
-    /// by design, so the next rung up, not down to 16).
+    /// 36/40/64 circles, always half of the size. A 24pt
+    /// avatar's r12 is likewise half-of-size, not a scale step
+    /// (sweep 7 P2-39). The one off-scale wiring is deliberate:
+    /// 14 -> cornerMedium (nearest below, so compact cards do
+    /// not grow); 18 is geometric only — there is no 18pt
+    /// surface card any more, do not wire one to 18.
     static let cornerSmall: CGFloat = 8
     static let cornerMedium: CGFloat = 12
     static let cornerLarge: CGFloat = 16
@@ -185,6 +188,11 @@ enum HaoLayout {
     /// Rectangular selection-cell corner radius (quality / line /
     /// episode grids, sweep 5 P2-41).
     static let selectionCellCornerRadius: CGFloat = 10
+    /// Small-chip corner radius (sweep 7 P2-38): 10 — the same
+    /// value as selectionCellCornerRadius, a different role
+    /// (mini bar, live cards, discovery cards, small covers).
+    /// Never use selectionCellCornerRadius for a chip.
+    static let chipCornerRadius: CGFloat = 10
     /// Player content horizontal margin (music player already 24;
     /// video player 20 -> 24, sweep 5 P2-44).
     static let playerHorizontalMargin: CGFloat = 24
@@ -195,6 +203,19 @@ enum HaoLayout {
     static let sheetHorizontalPadding: CGFloat = 24
     /// Sheet top padding.
     static let sheetTopPadding: CGFloat = 16
+
+    // Retry-button variants (sweep 7 P2-24 / P2-27): two
+    // deliberate exceptions to the standard retry capsule
+    // (15 semibold, 24/12, filled accent):
+    // - Soft capsule (MusicCapsuleButton): 13 semibold,
+    //   accentSoft fill, 12/7, top 6 — the EMPTY-STATE /
+    //   secondary variant (MusicEmptyState, VideoTabView CMS
+    //   empty state, HomeView homeEmptyCTA). A full standard
+    //   capsule is too heavy inside an empty state.
+    // - White capsule on video (LiveRoomView failure card):
+    //   16 semibold, white fill, 20/8 — readable on a video
+    //   frame, where the accent fill would vanish.
+    // Anything else showing a "重试" uses the standard capsule.
 }
 
 /// Player motion values (b45-a, copy plan §8.1/§8.3). Animation /
@@ -458,9 +479,23 @@ extension Notification.Name {
 final class SettingsDeepLink: ObservableObject {
     static let shared = SettingsDeepLink()
 
+    /// Known rows only (b49fix5 P2-12): an unknown row is
+    /// ignored by open(row:) and never stored — both consumers'
+    /// `default` branches just return, so a stranded bad value
+    /// would otherwise be retried on every appear forever.
+    static let knownRows: Set<String> = ["backup", "sources"]
+
     @Published var pendingRow: String?
 
+    /// Row id currently flashed after a deep-link scroll
+    /// ("backupImport" / "musicSources", b49fix5 P2-15): set by
+    /// MyView when it scrolls, cleared ~1s later.
+    /// SettingsGroupsView paints the row with accentSoft while
+    /// set, so the user sees which row the link landed on.
+    @Published var highlightedRow: String?
+
     func open(row: String) {
+        guard Self.knownRows.contains(row) else { return }
         pendingRow = row
     }
 }

@@ -10,8 +10,11 @@
 // "不可用" alert instead of a dead button or a crash.
 //
 // Wiring note:
-// - The update button opens the download URL in Safari with
-//   `openURL`: no silent download, no automatic install.
+// - The update button downloads the IPA in-app with
+//   `UpdateIPADownloader` and verifies it (expected size,
+//   PK\x03\x04 magic, SHA-256) before offering the share
+//   sheet to a signing tool: no silent download, no
+//   automatic install.
 // - Red is never used here: the minOs-blocked state is a warning
 //   icon + text, not the app's only red (liveRed, LIVE badge only).
 
@@ -167,7 +170,10 @@ final class BackupUpdateFlow: ObservableObject {
             alert = BackupUpdateAlert(title: "导入备份不可用", message: "备份引擎不可用，请稍后再试。")
             return
         }
+        // b49fix5 P2-18: picking a second file while an import
+        // is running used to drop it silently — say so instead.
         guard !isImporting else {
+            alert = BackupUpdateAlert(title: "正在导入", message: "上一个备份还在导入，请稍候再选文件。")
             return
         }
         // b49fix4 P2-35: a second pick while the preview sheet is
@@ -817,7 +823,11 @@ struct ImportPreviewSheet: View {
                 .foregroundStyle(theme.accentText)
             }
         }
-        .padding(24)
+        // b49fix5 P2-32: sheet padding tokens (the old
+        // .padding(24) made the top 24, not the sheet
+        // standard 16).
+        .padding(.horizontal, HaoLayout.sheetHorizontalPadding)
+        .padding(.vertical, HaoLayout.sheetTopPadding)
         .background(theme.scaffoldBackground)
     }
 
@@ -858,7 +868,10 @@ struct UpdateStatusSheet: View {
             .foregroundStyle(theme.accentText)
             .buttonStyle(.plain)
         }
-        .padding(24)
+        // b49fix5 P2-32: sheet padding tokens (see
+        // ImportPreviewSheet above).
+        .padding(.horizontal, HaoLayout.sheetHorizontalPadding)
+        .padding(.vertical, HaoLayout.sheetTopPadding)
         .background(theme.scaffoldBackground)
     }
 
@@ -963,7 +976,10 @@ struct UpdatePromptSheet: View {
             }
             buttonsSection
         }
-        .padding(24)
+        // b49fix5 P2-32: sheet padding tokens (see
+        // ImportPreviewSheet above).
+        .padding(.horizontal, HaoLayout.sheetHorizontalPadding)
+        .padding(.vertical, HaoLayout.sheetTopPadding)
         .background(theme.scaffoldBackground)
         .onAppear {
             if flow.updatePhase != .downloading && flow.updatePhase != .downloaded {
