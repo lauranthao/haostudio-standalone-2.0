@@ -281,7 +281,7 @@ struct LiveRoomView: View {
                     .padding(.vertical, 9)
                     .haoDarkGlassRoundedRect(cornerRadius: 10, darkness: 0.7)
                     .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
-                    .padding(.bottom, 96)
+                    .padding(.bottom, HaoLayout.toastBottomOffset)
                     .allowsHitTesting(false)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -875,7 +875,7 @@ struct LiveRoomView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("全屏")
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 16)
         .padding(.bottom, 4)
         .background(
             LinearGradient(
@@ -939,7 +939,7 @@ struct LiveRoomView: View {
                 if !watchingText.isEmpty {
                     HStack(spacing: 4) {
                         Image(systemName: "flame.fill")
-                            .font(.system(size: 20, weight: .semibold))  // icon size, not text
+                            .font(.system(size: HaoLayout.iconSize, weight: .semibold))  // icon size, not text
                             .foregroundStyle(.orange)
                         Text(watchingText)
                             .font(.haoDenseTitle)
@@ -949,7 +949,7 @@ struct LiveRoomView: View {
                 }
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 16)
         .padding(.vertical, 8)
     }
 
@@ -1039,7 +1039,7 @@ struct LiveRoomView: View {
                     .accessibilityLabel("弹幕设置")
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 16)
             .padding(.vertical, 8)
             LiveDanmakuListView(
                 messages: livePlayer.messages,
@@ -1356,7 +1356,7 @@ struct LiveRoomView: View {
         HStack(spacing: 16) {
             Button(action: { livePlayer.togglePlayPause() }) {
                 Image(systemName: livePlayer.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 22, weight: .semibold))  // icon size, not text
+                    .font(.system(size: HaoLayout.iconSize, weight: .semibold))  // icon size, not text
                     .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 44, height: 44)
             }
@@ -1378,9 +1378,10 @@ struct LiveRoomView: View {
                     .lineLimit(1)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("画质")
             Button(action: { livePlayer.refreshCurrentRoom() }) {
                 Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.system(size: HaoLayout.iconSize, weight: .semibold))
                     .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 44, height: 44)
             }
@@ -1389,7 +1390,7 @@ struct LiveRoomView: View {
             if playlist.count > 1 {
                 Button(action: { switchToRoom(at: currentIndex - 1) }) {
                     Image(systemName: "chevron.up")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(.system(size: HaoLayout.iconSize, weight: .semibold))
                         .foregroundStyle(hasPreviousRoom ? theme.accentOnVideo : .white.opacity(0.4))
                         .frame(width: 44, height: 44)
                 }
@@ -1398,7 +1399,7 @@ struct LiveRoomView: View {
                 .accessibilityLabel("上一个房间")
                 Button(action: { switchToRoom(at: currentIndex + 1) }) {
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(.system(size: HaoLayout.iconSize, weight: .semibold))
                         .foregroundStyle(hasNextRoom ? theme.accentOnVideo : .white.opacity(0.4))
                         .frame(width: 44, height: 44)
                 }
@@ -1552,7 +1553,7 @@ struct LiveQualityLineSheet: View {
                                         .background(
                                             index == selectedQualityIndex
                                                 ? theme.accent : theme.surface,
-                                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                            in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
                                 }
                                 .buttonStyle(.plain)
                                 // (b49 sweep #30) No acked tier yet:
@@ -1595,7 +1596,7 @@ struct LiveQualityLineSheet: View {
                                         .background(
                                             index == selectedLineIndex
                                                 ? theme.accent : theme.surface,
-                                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                            in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -1610,8 +1611,8 @@ struct LiveQualityLineSheet: View {
                     }
                     Spacer(minLength: 16)
                 }
-                .padding(.horizontal, 24)
-                .padding(.top, 12)
+                .padding(.horizontal, HaoLayout.sheetHorizontalPadding)
+                .padding(.top, HaoLayout.sheetTopPadding)
             }
             .background(theme.scaffoldBackground)
             .navigationTitle("画质与线路")
@@ -1642,8 +1643,8 @@ struct LiveBrightnessVolumeSheet: View {
                     volumeNote: "系统音量；只在直播播放器里调节。")
                 Spacer()
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 16)
+            .padding(.horizontal, HaoLayout.sheetHorizontalPadding)
+            .padding(.top, HaoLayout.sheetTopPadding)
             .background(theme.scaffoldBackground)
             .navigationTitle("亮度与音量")
             .navigationBarTitleDisplayMode(.inline)
