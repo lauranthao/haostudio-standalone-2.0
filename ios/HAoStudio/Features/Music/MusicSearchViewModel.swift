@@ -224,6 +224,15 @@ final class MusicSearchViewModel: ObservableObject {
     /// through retryPlan (P2-34).
     private var cardLimits: [MusicSearchAPI.MusicSearchCategoryKind: Int] = [:]
 
+    /// Zero-growth guard state (b49fix6 P2-5): the last next-page
+    /// request per kind (offset + loaded count at fire time) and
+    /// how many consecutive times a request fired with an
+    /// identical (offset, count) — i.e. the previous request
+    /// produced zero growth because the source ignores the
+    /// offset and answers every page with the same rows.
+    private var lastNextPageRequest: [MusicSearchAPI.MusicSearchCategoryKind: (offset: Int, loadedCount: Int)] = [:]
+    private var zeroGrowthStreak: [MusicSearchAPI.MusicSearchCategoryKind: Int] = [:]
+
     static func freshArtistMerge() -> MusicSearchCategoryMerge<ArtistSummary> {
         MusicSearchCategoryMerge(
             key: { $0.id.isEmpty ? "name|\($0.name.lowercased())" : "\($0.platform.rawValue)|\($0.id)" },
@@ -298,6 +307,8 @@ final class MusicSearchViewModel: ObservableObject {
         hasSearched = true
         isSearching = true
         settledBatchCount = 0
+        lastNextPageRequest = [:]
+        zeroGrowthStreak = [:]
         searchSettled = false
         armSettleTimer()
         MusicLibraryStore.saveSearchQuery(trimmed)
@@ -373,6 +384,8 @@ final class MusicSearchViewModel: ObservableObject {
         cardErrors = [:]
         suggestions = []
         lastSuggestionText = ""
+        lastNextPageRequest = [:]
+        zeroGrowthStreak = [:]
         suggestionTask?.cancel()
         suggestionTask = nil
         hasSearched = false
@@ -741,7 +754,27 @@ final class MusicSearchViewModel: ObservableObject {
         guard cardHasMore[kind] == true else { return }
         // Single-kind tabs page at 50; the 综合 shelves page at 10.
         let limit = tab == .all ? Self.allTabCardLimit : Self.singleTabCardLimit
-        loadCategory(kind, limit: limit, offset: Self.nextCardOffset(loadedCount: liveCardCount(for: kind)), isFirstPage: false)
+        let loadedCount = liveCardCount(for: kind)
+        let offset = Self.nextCardOffset(loadedCount: loadedCount)
+        // b49fix6 P2-5: a source that ignores the offset answers
+        // every load-more with the same page; the merge dedupes,
+        // the live count never grows, and cardHasMore stays true
+        // forever. Two consecutive identical (offset, count)
+        // requests close the kind instead of looping — the button
+        // disappears rather than re-requesting the same page.
+        let last = lastNextPageRequest[kind]
+        let decision = Self.loadMoreStreakDecision(
+            lastOffset: last?.offset, lastLoadedCount: last?.loadedCount,
+            streak: zeroGrowthStreak[kind] ?? 0,
+            offset: offset, loadedCount: loadedCount)
+        zeroGrowthStreak[kind] = decision.streak
+        guard decision.fire else {
+            cardHasMore[kind] = false
+            saveSnapshot()
+            return
+        }
+        lastNextPageRequest[kind] = (offset: offset, loadedCount: loadedCount)
+        loadCategory(kind, limit: limit, offset: offset, isFirstPage: false)
     }
 
     /// Live row count for one kind on the current tab — the source
@@ -757,9 +790,32 @@ final class MusicSearchViewModel: ObservableObject {
     }
 
     /// Pure next-page offset (b49fix5 P1-2, unit-tested): the next
-    /// page starts where the loaded rows end.
-    static func nextCardOffset(loadedCount: Int) -> Int {
+    /// page starts where the loaded rows end. Nonisolated (pure)
+    /// so XCTest can call it without the main actor.
+    nonisolated static func nextCardOffset(loadedCount: Int) -> Int {
         max(loadedCount, 0)
+    }
+
+    /// Pure zero-growth decision (b49fix6 P2-5, unit-tested): a
+    /// source that ignores the offset answers every load-more
+    /// with the same page; the merge dedupes, the live count
+    /// never grows, and cardHasMore stays true forever. Two
+    /// consecutive requests that fire the identical offset with
+    /// the identical loaded count mean the previous request
+    /// produced zero growth — the first repeat still fires (one
+    /// transient dup is forgiven), the second closes the kind
+    /// instead of looping. Any change in offset or count (growth
+    /// happened) resets the streak. Nonisolated (pure) so XCTest
+    /// can call it without the main actor.
+    nonisolated static func loadMoreStreakDecision(
+        lastOffset: Int?, lastLoadedCount: Int?, streak: Int,
+        offset: Int, loadedCount: Int
+    ) -> (fire: Bool, streak: Int) {
+        if lastOffset == offset && lastLoadedCount == loadedCount {
+            let next = streak + 1
+            return (next < 2, next)
+        }
+        return (true, 0)
     }
 
     /// Retry one failed kind from inside its own section.
@@ -780,6 +836,13 @@ final class MusicSearchViewModel: ObservableObject {
         let plan = Self.retryPlan(
             loadedCount: liveCardCount(for: kind), cardLimits: cardLimits[kind],
             limit: limit, isEmpty: isEmpty)
+        if !plan.isFirstPage {
+            // A next-page retry is a next-page request too: record
+            // it so the zero-growth guard (b49fix6 P2-5) can see
+            // whether it grew the list. Retries are never blocked
+            // — an explicit retry is the recovery path.
+            lastNextPageRequest[kind] = (offset: plan.offset, loadedCount: liveCardCount(for: kind))
+        }
         loadCategory(kind, limit: limit, offset: plan.offset, isFirstPage: plan.isFirstPage)
     }
 
@@ -800,8 +863,9 @@ final class MusicSearchViewModel: ObservableObject {
     /// cross-limit hole as loadMoreCards: 70 rows loaded, then a
     /// retry under a new limit asked for offset 100 and rows
     /// 70–99 were skipped for good (the merge only self-heals
-    /// overlaps, never gaps).
-    static func retryPlan(loadedCount: Int, cardLimits: Int?, limit: Int, isEmpty: Bool) -> (offset: Int, isFirstPage: Bool) {
+    /// overlaps, never gaps). Nonisolated (pure) so XCTest can
+    /// call it without the main actor.
+    nonisolated static func retryPlan(loadedCount: Int, cardLimits: Int?, limit: Int, isEmpty: Bool) -> (offset: Int, isFirstPage: Bool) {
         if isEmpty || cardLimits == nil || cardLimits != limit {
             return (0, true)
         }

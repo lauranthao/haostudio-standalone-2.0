@@ -365,10 +365,40 @@ final class HomeViewModel: ObservableObject {
                 // already holds a complete newer list, so this
                 // stale write is skipped instead of undoing the
                 // replacement.
+                // b49fix6 P2-1: the CAS only guarded the DISK. The
+                // publish below still wrote this stale computation
+                // into memory, resurrecting the just-replaced song
+                // on screen (the generation guard cannot catch it:
+                // replaceDailySong does not bump the generation,
+                // and the discovery page's replace does not even
+                // know about it). When the CAS refuses the write,
+                // publish the on-disk list instead — it is the
+                // complete newer list and already excludes the
+                // replaced song. The dislike filter is re-applied
+                // with the ids as of now, then re-split at the 20
+                // boundary. If the re-read yields nothing usable,
+                // fall back to the computed result (the next
+                // reload recomputes, same as the all-disliked
+                // fall-through in the load).
+                var picksToPublish = dailyResult.picks
+                var sparesToPublish = dailyResult.spares
                 if let saveTracks = dailyResult.saveTracks {
-                    MusicLibraryStore.saveDailyTracksIfUnchanged(
+                    let saved = MusicLibraryStore.saveDailyTracksIfUnchanged(
                         saveTracks, for: dayKey,
                         expectedKeys: dailyResult.expectedDiskKeys)
+                    if !saved,
+                       let fresh = MusicLibraryStore.dailyTracks(for: dayKey),
+                       let valid = Self.validatedDailyTracks(fresh, dayKey: dayKey, todayKey: dayKey),
+                       !valid.isEmpty {
+                        let dislikedNow = MusicLibraryStore.fmDislikedIds()
+                        let freshFiltered = valid.filter {
+                            !dislikedNow.contains($0.identityKey) && !dislikedNow.contains($0.songId)
+                        }
+                        if !freshFiltered.isEmpty {
+                            picksToPublish = Array(freshFiltered.prefix(20))
+                            sparesToPublish = Array(freshFiltered.dropFirst(20))
+                        }
+                    }
                 }
                 self.reload(
                     videoHistory: videoHistory,
@@ -377,8 +407,8 @@ final class HomeViewModel: ObservableObject {
                     resumeMap: resumeMap,
                     follows: follows,
                     liveHistory: liveHistory,
-                    dailyPicks: dailyResult.picks,
-                    dailySpares: dailyResult.spares,
+                    dailyPicks: picksToPublish,
+                    dailySpares: sparesToPublish,
                     dayKey: dayKey)
             }
         }
@@ -727,10 +757,32 @@ final class HomeViewModel: ObservableObject {
                     dayKey: dayKey, total: 40)
                 let surviving = Array(filtered.prefix(20))
                 let survivingKeys = Set(surviving.map { $0.identityKey })
-                let fills = ranked.filter { !survivingKeys.contains($0.identityKey) }
+                // b49fix6 P2-2: fills prefer the OLD cached spares.
+                // The fresh ranking's input (listenLog / recent)
+                // moves during the day, so filling from it on every
+                // reload lets picks drift mid-day; the cached
+                // spares were ranked this morning and are stable.
+                // The old spares also survive on disk now: the old
+                // code built spares from the fresh ranking only, so
+                // a cached spare outside the new top 40 silently
+                // vanished from the "换一首" pool.
+                let oldSpares = Array(filtered.dropFirst(20)).filter {
+                    !survivingKeys.contains($0.identityKey)
+                }
+                let oldSpareKeys = Set(oldSpares.map { $0.identityKey })
+                let fills = oldSpares + ranked.filter {
+                    !survivingKeys.contains($0.identityKey)
+                        && !oldSpareKeys.contains($0.identityKey)
+                }
                 let picks = Array((surviving + fills).prefix(20))
                 let pickKeys = Set(picks.map { $0.identityKey })
-                let spares = ranked.filter { !pickKeys.contains($0.identityKey) }
+                var seenKeys = pickKeys
+                var spares: [MusicSong] = []
+                for song in oldSpares + ranked where spares.count < 20 {
+                    guard !seenKeys.contains(song.identityKey) else { continue }
+                    seenKeys.insert(song.identityKey)
+                    spares.append(song)
+                }
                 let all = picks + spares
                 return DailyLoadResult(
                     picks: picks,

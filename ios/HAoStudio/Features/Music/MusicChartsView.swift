@@ -231,10 +231,12 @@ struct MusicChartsView: View {
                     }
                     // b49fix4 P2-6: inline text retries are 13
                     // medium site-wide (was 12 regular here).
+                    // b49fix6 P2-7: top spacing is 12, not
+                    // vertical 4 (the standard's top value).
                     .font(.haoFootnoteMedium)
                     .foregroundStyle(theme.accentText)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 4)
+                    .padding(.top, 12)
                 } else {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(0..<3, id: \.self) { _ in

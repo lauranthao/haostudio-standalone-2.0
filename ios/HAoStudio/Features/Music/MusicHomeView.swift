@@ -849,11 +849,11 @@ struct MusicRecommendView: View {
                             Image(systemName: "arrow.clockwise")
                             Text("加载失败，点按重试")
                         }
-                        .font(.haoFootnoteStrong)
+                        .font(.haoFootnoteMedium)
                         .foregroundStyle(theme.accentText)
                     }
                     .buttonStyle(.plain)
-                    .padding(.vertical, 8)
+                    .padding(.top, 12)
                 } else {
                     VStack(spacing: 1) {
                         ForEach(0..<4, id: \.self) { _ in MusicSkeletonRow() }

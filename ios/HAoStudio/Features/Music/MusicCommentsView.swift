@@ -133,7 +133,7 @@ struct MusicCommentsView: View {
                             Text("最新").tag(CommentTab.latest)
                         }
                         .pickerStyle(.segmented)
-                        .padding(.horizontal, 20)
+                        .padding(.horizontal, HaoLayout.pushedPageMargin)
                         .padding(.top, 12)
                         List {
                             // b49fix2 A14: the read-only note sits
