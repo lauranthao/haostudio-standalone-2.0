@@ -47,8 +47,10 @@ final class VodDanmakuLayerState: ObservableObject {
     /// as long as the app-level player view model, so it is
     /// NOT fresh on every open — the player VM re-reads the
     /// setting in applySettings() (on engine attach and on
-    /// every settings change), which is the refresh path.
-    /// Was a fixed 16 medium.
+    /// every settings change), which is the refresh path, plus
+    /// the UserDefaults observer below (b49fix9 P2-6), which
+    /// covers a VOD left hanging while the live settings page
+    /// changes the size. Was a fixed 16 medium.
     @Published var fontSize: Double = LiveDanmakuSettings.load().fontSize
     /// A fetch is in flight for the current episode. The player
     /// page reads this (with `didLoad`) to decide whether the
@@ -84,6 +86,49 @@ final class VodDanmakuLayerState: ObservableObject {
     /// effect — the network request itself has no cancel handle,
     /// but its result is discarded.
     private var loadGeneration = 0
+
+    /// Token for the UserDefaults change observer (b49fix9 P2-6).
+    private var settingsObserver: NSObjectProtocol?
+
+    init() {
+        // b49fix9 P2-6: applySettings() refreshes the font size on
+        // attach and on every settings change, but a VOD left
+        // hanging while the live settings page changes the size
+        // never passes through applySettings — VOD is a
+        // fullScreenCover and the settings page cannot open over
+        // it, so the window is narrow, but this observer closes it
+        // for real instead of documenting it away.
+        // UserDefaults.didChangeNotification fires for any defaults
+        // write; the refresh is a scalar re-read and only assigns
+        // when the size actually changed, so unrelated writes cause
+        // no @Published churn. Same token-retained shape as the
+        // MusicPlayerViewModel observers (b49fix2 P1-30).
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshFontSizeFromSettings()
+        }
+    }
+
+    deinit {
+        if let token = settingsObserver {
+            NotificationCenter.default.removeObserver(token)
+        }
+    }
+
+    /// Re-read the font size from the live settings and apply it
+    /// when it changed (b49fix9 P2-6). Scalar-only read — the full
+    /// `LiveDanmakuSettings.load()` would also read the enabled-map
+    /// and block-list collection files, which this callback does
+    /// not need. The struct init clamps to 12...20, so a stale or
+    /// corrupt stored value cannot land here unclamped.
+    private func refreshFontSizeFromSettings() {
+        let stored = UserDefaults.standard.object(forKey: LiveDanmakuSettings.keyFontSize) as? Double
+        let size = LiveDanmakuSettings(fontSize: stored ?? LiveDanmakuSettings.defaultFontSize).fontSize
+        if fontSize != size { fontSize = size }
+    }
 
     /// Fetch danmaku for `episode` through `provider`. A nil
     /// provider (Leg B not wired yet) leaves the layer empty —
