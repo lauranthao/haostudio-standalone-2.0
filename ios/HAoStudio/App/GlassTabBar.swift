@@ -68,25 +68,22 @@ struct GlassTabBar: View {
             colorScheme: colorScheme,
             tabAccent: tabAccent
         )
-        // b46-chrome (Coda §6.2 whole set): the frame is 64pt
-        // (56 content + 4pt inset top/bottom). The frame is NOT
-        // the rendered glass — the system bar's Liquid Glass
-        // renders a few points ABOVE its frame's top edge (b43
-        // measured ~13pt above a 56pt frame, ~4pt above a 64pt
-        // frame on chen's build-41/42 screenshots: the glass top
-        // sits at roughly the same screen position either way,
-        // so the glass is ~68pt tall in total, bottom-anchored).
-        // With the 8pt Coda spacing the mini's glass bottom and
-        // the bar's glass top read as two separate pills with a
-        // ~12pt visual gap — as in Coda's screenshot — not one
-        // touching block. No SwiftUI .padding(.vertical) around
-        // it: the padding left a transparent band above the bar
-        // and read as a seam (chen 2026-11-25 build 39).
-        // Horizontal padding was never here: the visible bar spans
-        // exactly the mini player's width (screen minus the shared
-        // 16pt side margins in MainTabView). Rollback if the device
-        // check fails: the whole b43 set (56 frame / 13 spacing).
+        // b47 (chen 2026-11-25 build 46: "迷你播放器也没有和菜单栏
+        // 一样长"): the mini's visible pill is the SwiftUI glass
+        // (haoGlassRoundedRect), exactly the stack width; the system
+        // UITabBar's own Liquid Glass overhangs its frame (b43 measured
+        // ~4pt above a 64pt frame — the glass is bigger than the bar),
+        // so the bar's visible pill read LONGER than the mini. The
+        // visible pill is now drawn by the same SwiftUI glass modifier
+        // as the mini — same shape, same radius, same width by
+        // construction — and the UITabBar underneath is transparent
+        // (configureWithTransparentBackground), so no system glass
+        // defines the edges any more. Items, tint and the selection
+        // pill are untouched; the 64/52/8/16/6 geometry is unchanged.
+        // The visual gap to the mini is now exactly the 8pt frame
+        // spacing (no more system overhang on top of it).
         .frame(height: HaoLayout.tabBarTotalHeight)
+        .haoGlassRoundedRect()
     }
 }
 
@@ -114,6 +111,12 @@ private struct SystemTabBar: UIViewRepresentable {
         // the content behind the bar. Setting this false would turn the
         // bar into a flat opaque slab.
         tabBar.isTranslucent = true
+        // b47 (mini-width fix, see GlassTabBar.body): the visible pill
+        // is the SwiftUI glass, so the system bar paints no background
+        // of its own — no background image, no shadow line, no glass
+        // overhang past the frame edges.
+        tabBar.backgroundImage = UIImage()
+        tabBar.shadowImage = UIImage()
         return tabBar
     }
 
@@ -155,16 +158,20 @@ private struct SystemTabBar: UIViewRepresentable {
         Self.configureAppearance(for: tabBar)
     }
 
-    /// Bar background: glass on iOS 26, classic blur below.
+    /// Bar background: transparent on every iOS version.
     ///
-    /// No explicit effect is assigned: `UITabBarAppearance.backgroundEffect`
-    /// only accepts `UIBlurEffect` (assigning `UIGlassEffect()` fails to
-    /// compile), and the system tab bar on iOS 26 already renders with
-    /// Liquid Glass from its default background. No backgroundColor and
-    /// no backgroundImage are set — either would paint over the glass.
+    /// b47: the visible pill is drawn by the SwiftUI glass
+    /// (`.haoGlassRoundedRect()` in GlassTabBar.body — the same
+    /// modifier as the mini player, so the two pills are the same
+    /// width by construction). The old `configureWithDefaultBackground`
+    /// let the system UITabBar paint its own Liquid Glass, which
+    /// overhangs the bar's frame (b43 measured ~4pt above a 64pt
+    /// frame) — the bar's visible pill read longer than the mini
+    /// (chen 2026-11-25 build 46). No backgroundColor and no
+    /// backgroundImage are set — either would paint over the glass.
     private static func configureAppearance(for tabBar: UITabBar) {
         let appearance = UITabBarAppearance()
-        appearance.configureWithDefaultBackground()
+        appearance.configureWithTransparentBackground()
         tabBar.standardAppearance = appearance
         tabBar.scrollEdgeAppearance = appearance
     }

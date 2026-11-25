@@ -26,15 +26,17 @@ enum HaoLayout {
     /// 64/52/8/6, chen 2026-11-25 14:36 ordered the Coda menu +
     /// mini sizes). The b43 set was 56/13/40, device-verified on
     /// build 43 — it is the rollback if this set fails the device
-    /// check. The system UITabBar's Liquid Glass renders a few
-    /// points above its frame top, so the visual gap to the mini
-    /// is the 8pt frame spacing plus that overhang (~12pt total):
-    /// two separate pills, as in Coda's screenshot — not the one
-    /// touching block b43 made (there the 13pt frame gap was a
-    /// glass compensation: the bar's glass top sat ~13pt above
-    /// a 56pt frame, and the gap put the mini's glass bottom back
-    /// on it; with a 64pt frame the overhang is ~4pt, so the
-    /// compensation must not survive — the whole set replaces it).
+    /// check. b47: the visible pill is the SwiftUI glass
+    /// (haoGlassRoundedRect, same as the mini) — the system
+    /// UITabBar underneath is transparent, so there is no system
+    /// glass overhang any more and the visual gap to the mini is
+    /// exactly the 8pt frame spacing: two separate pills, as in
+    /// Coda's screenshot — not the one touching block b43 made
+    /// (there the 13pt frame gap was a glass compensation: the
+    /// bar's system glass top sat ~13pt above a 56pt frame, and
+    /// the gap put the mini's glass bottom back on it; with a
+    /// 64pt frame the overhang was ~4pt, so the compensation must
+    /// not survive — the whole set replaces it).
     static let tabBarTotalHeight: CGFloat = tabBarContentHeight + 8
     /// Distance from the safe-area bottom edge: 6 (b46-chrome,
     /// Coda §6.2 — the bottom margin is 6, inside the safe area).

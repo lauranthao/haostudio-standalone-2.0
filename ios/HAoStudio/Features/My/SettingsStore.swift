@@ -475,6 +475,11 @@ final class SettingsStore: ObservableObject {
         self.bgColorEnabled = SettingsStore.boolValue(defaults, key: Self.bgColorEnabledKey, default: false)
         self.bgColorHex = defaults.string(forKey: Self.bgColorHexKey) ?? ""
 
+        // b47: section folding state — the @Published source of
+        // truth, loaded from the stored settingsSectionExpanded_<id>
+        // keys (see the section-expansion MARK).
+        self.collapsedSections = Self.loadCollapsedSections(from: defaults)
+
         // chen 2026-11-24: 个人资料/会员已删。清掉旧安装留下的昵称值
         // 与头像文件（`Documents/profile/avatar.jpg`），不留读不到
         // 的孤儿 key / 孤儿文件。值不存在时两步都是 no-op。
@@ -551,6 +556,8 @@ final class SettingsStore: ObservableObject {
         wallpaperPaths = WallpaperStore.list(documentsURL: documentsURL)
         bgColorEnabled = SettingsStore.boolValue(defaults, key: Self.bgColorEnabledKey, default: false)
         bgColorHex = defaults.string(forKey: Self.bgColorHexKey) ?? ""
+        // b47: backup import re-reads the folding state too.
+        collapsedSections = Self.loadCollapsedSections(from: defaults)
     }
 
     // MARK: - Helpers
@@ -567,19 +574,56 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - Section expansion (B leg)
 
+    /// Ids of the settings sections currently folded (collapsed).
+    ///
+    /// b47 (chen 2026-11-25 build 46: 设置里面的主题也不能收放):
+    /// the 11-24 fix wrote UserDefaults + a manual
+    /// `objectWillChange.send()` — and the section STILL did not
+    /// fold on device. A manual send is the fragile path: it is
+    /// easy to drop across the List's hoisted section content,
+    /// while every working toggle in Settings flows through a
+    /// @Published property. The collapsed set IS the @Published
+    /// source of truth now; the `settingsSectionExpanded_<id>`
+    /// UserDefaults keys stay the persisted copy (same keys, same
+    /// defaults — expanded unless an explicit false is stored —
+    /// and BackupEngine still exports/imports those keys directly,
+    /// so `setSectionExpanded` keeps writing them).
+    @Published var collapsedSections: Set<String> = []
+
+    /// Collapsed section ids from the stored
+    /// `settingsSectionExpanded_<id>` keys: an id is collapsed
+    /// only when its key exists AND is false (a missing key means
+    /// expanded — the default). Scans the stored keys rather than
+    /// a fixed list, so ids from older builds migrate too.
+    static func loadCollapsedSections(from defaults: UserDefaults) -> Set<String> {
+        var collapsed: Set<String> = []
+        for key in defaults.dictionaryRepresentation().keys
+        where key.hasPrefix(sectionExpandedKeyPrefix) {
+            guard defaults.object(forKey: key) != nil,
+                  defaults.bool(forKey: key) == false
+            else { continue }
+            collapsed.insert(String(key.dropFirst(sectionExpandedKeyPrefix.count)))
+        }
+        return collapsed
+    }
+
     /// Whether a settings section is expanded. Default true.
     /// Stored per section under `settingsSectionExpanded_<id>`.
     func sectionExpanded(_ id: String) -> Bool {
-        let key = Self.sectionExpandedKeyPrefix + id
-        guard defaults.object(forKey: key) != nil else { return true }
-        return defaults.bool(forKey: key)
+        !collapsedSections.contains(id)
     }
 
     func setSectionExpanded(_ expanded: Bool, for id: String) {
-        // chen 2026-11-24 报：设置分组点标题收不起来。根因：这里只写
-        // UserDefaults、不发任何变更通知，SwiftUI 收不到重算信号，
-        // body 里的 `if isExpanded(...)` 永远不变。先发通知再写值。
-        objectWillChange.send()
+        // b47: mutate the @Published set — the @Published wrapper
+        // sends objectWillChange through the standard pipeline, the
+        // same mechanism as every working Settings toggle. The
+        // UserDefaults write stays: it is the persisted copy and
+        // the backup export reads these keys directly.
+        if expanded {
+            collapsedSections.remove(id)
+        } else {
+            collapsedSections.insert(id)
+        }
         defaults.set(expanded, forKey: Self.sectionExpandedKeyPrefix + id)
     }
 
