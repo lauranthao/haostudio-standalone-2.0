@@ -1141,6 +1141,38 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         onTrackFailed?(item, error)
     }
 
+    /// Manual play-request failure, Coda `handleUnplayable` parity
+    /// (PlayerServiceIOS.swift:1349): the toast still fires
+    /// (reportFailedRequest), and when the failed track is the
+    /// queue's current track with a next song to go to, the queue
+    /// keeps moving instead of going silent — bounded by the same
+    /// 5-in-a-row stop as the recovery path (noteFailedAdvance).
+    /// A single-song queue, the end of the queue, a looping mode
+    /// that would replay the same song, or a track that is not
+    /// the queue's current track behaves exactly as before:
+    /// toast only. The background-task-expiry path keeps calling
+    /// reportFailedRequest directly: with no background time left
+    /// a new resolve cannot run. Timeouts advance the same way
+    /// (Coda counts any unplayable track) but are never written
+    /// to the failure memory — the song stays playable later.
+    private func handleManualPlayFailure(_ item: PlaybackItem, _ error: MusicPlayerError) {
+        reportFailedRequest(item, error)
+        guard !queue.isEmpty, queueIndex >= 0, queueIndex < queue.count,
+              queue[queueIndex].id == item.id else { return }
+        consecutiveFailureCount += 1
+        failedTrackIds.insert(item.id)
+        recoverStage = 0
+        guard consecutiveFailureCount < 5 else {
+            consecutiveFailureCount = 0
+            stop()
+            return
+        }
+        let nextIndex = musicNextTrackIndex(mode: playMode, current: queueIndex, length: queue.count, auto: true)
+        guard nextIndex >= 0, nextIndex != queueIndex else { return }
+        queueIndex = nextIndex
+        play(item: queue[nextIndex])
+    }
+
     private var nowPlayingActive: Bool = false
     private var nowPlayingArtwork: MPMediaItemArtwork?
     /// Artwork fetch attempts for the current track (reset on a
@@ -1360,7 +1392,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                 guard let self = self else { return }
                 guard self.pendingItem?.id == item.id else { return }
                 self.pendingItem = nil
-                self.reportFailedRequest(item, .timeout)
+                self.handleManualPlayFailure(item, .timeout)
             }
             self.resolveURL?(item, []) { [weak self] url, tier in
                 guard let self = self else { return }
@@ -1369,7 +1401,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                     guard self.pendingItem?.id == item.id else { return }
                     guard let url = url else {
                         self.pendingItem = nil
-                        self.reportFailedRequest(item, .noPlayableURL)
+                        self.handleManualPlayFailure(item, .noPlayableURL)
                         return
                     }
                     self.actualQuality = tier
@@ -1396,7 +1428,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             case .failure(let error):
                 guard tried.count < 2 else {
                     self.pendingItem = nil
-                    self.reportFailedRequest(item, error)
+                    self.handleManualPlayFailure(item, error)
                     return
                 }
                 // b44: same stall class as the first resolve — the
@@ -1406,7 +1438,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                     guard let self = self else { return }
                     guard self.pendingItem?.id == item.id else { return }
                     self.pendingItem = nil
-                    self.reportFailedRequest(item, error)
+                    self.handleManualPlayFailure(item, error)
                 }
                 self.resolveURL?(item, tried) { [weak self] nextURL, tier in
                     guard let self = self else { return }
@@ -1415,7 +1447,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                         guard self.pendingItem?.id == item.id else { return }
                         guard let nextURL = nextURL else {
                             self.pendingItem = nil
-                            self.reportFailedRequest(item, error)
+                            self.handleManualPlayFailure(item, error)
                             return
                         }
                         self.actualQuality = tier

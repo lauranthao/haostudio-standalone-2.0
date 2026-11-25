@@ -1384,6 +1384,12 @@ final class MusicPlayerViewModel: ObservableObject {
         // path, so this edit can never be overwritten by a switch's
         // still-pending queue write.
         MusicLibraryStore.saveQueueAsync(queue.toQueueData())
+        // b47-playlogic: the player's flat queue is what
+        // auto-advance reads — without a re-sync the inserted
+        // song is invisible to it (Coda consumes its play-next
+        // list first in advanceToNext; AudioStreaming inserts
+        // into the same queue the player advances through).
+        player.setQueueOnly(queue.toPlaybackItems(), startAt: queue.index)
         showToast("下一首播放")
     }
 
@@ -1538,6 +1544,10 @@ final class MusicPlayerViewModel: ObservableObject {
         } ?? queue.index
         queue = MusicQueue(tracks: tracks, index: min(newIndex, max(0, tracks.count - 1)))
         MusicLibraryStore.saveQueueAsync(queue.toQueueData())
+        // b47-playlogic: same re-sync as playNext — a reorder
+        // the player never sees leaves auto-advance following
+        // the old order.
+        player.setQueueOnly(queue.toPlaybackItems(), startAt: queue.index)
     }
 
     func removeFromQueue(at index: Int) {
@@ -1564,6 +1574,11 @@ final class MusicPlayerViewModel: ObservableObject {
                 clearCurrentSongState()
             }
             miniFallbackSong = queue.current
+        } else {
+            // b47-playlogic: same re-sync as playNext — the
+            // removed song must leave the player's flat queue
+            // too, or auto-advance plays a song the user deleted.
+            player.setQueueOnly(queue.toPlaybackItems(), startAt: queue.index)
         }
     }
 
