@@ -339,7 +339,7 @@ struct VideoTabView: View {
                         .padding(.top, 12)
                     if !viewModel.continueWatching.isEmpty {
                         continueSection
-                            .padding(.top, 16)
+                            .padding(.top, HaoLayout.sectionTopSpacing)
                     }
                     if viewModel.isLoading && viewModel.rows.isEmpty {
                         ProgressView()
@@ -392,7 +392,7 @@ struct VideoTabView: View {
                         }
                         ForEach(viewModel.rows) { row in
                             homeRowSection(row)
-                                .padding(.top, 16)
+                                .padding(.top, HaoLayout.sectionTopSpacing)
                         }
                     }
                     Spacer(minLength: 16)

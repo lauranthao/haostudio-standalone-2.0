@@ -533,13 +533,18 @@ struct VideoDetailContentView: View {
                     Spacer(minLength: 24)
                 }
                 .padding(.horizontal, HaoLayout.pushedPageMargin)
-                .padding(.top, 16)
-                // b49fix5 P2-16: the loading placeholder counts as
-                // a retry state for clearance ownership — while it
-                // holds the inset, the scroll content carries no
-                // clearance of its own, exactly like the retry
-                // state, so the bottom geometry never changes
-                // between retry / loading / failed.
+                // b49fix6 P2-35: the first section's top spacing
+                // under the cover header — the same 16 rhythm as
+                // the section gaps, so it takes the token.
+                .padding(.top, HaoLayout.sectionTopSpacing)
+                // b49fix5 P2-16, b49fix6 P2-10: the loading
+                // placeholder (and the success-empty placeholder)
+                // counts as a retry state for clearance ownership
+                // — while it holds the inset, the scroll content
+                // carries no clearance of its own, exactly like
+                // the retry state, so the bottom geometry never
+                // changes between retry / loading / failed /
+                // success-empty.
                 .modifier(DetailBottomChromePadding(showRetry: showRetryButton || showRetryPlaceholder))
             }
         }
@@ -557,14 +562,15 @@ struct VideoDetailContentView: View {
                     .padding(.bottom, 12)
                     .padding(.bottom, bottomChromeClearance)
             } else if showRetryPlaceholder {
-                // b49fix5 P2-16: the load keeps the retry inset's
+                // b49fix5 P2-16, b49fix6 P2-10: the load — and the
+                // successful empty load — keeps the retry inset's
                 // exact height (the same button, hidden) so the
                 // content bottom doesn't jump 54pt when the retry
-                // button is tapped, or when the load lands failed.
-                // Same view + same paddings = same height by
-                // construction. A hidden view takes no taps and is
-                // skipped by VoiceOver; .disabled(true) is
-                // belt-and-braces.
+                // button is tapped, when the load lands failed,
+                // or when it lands empty. Same view + same
+                // paddings = same height by construction. A hidden
+                // view takes no taps and is skipped by VoiceOver;
+                // .disabled(true) is belt-and-braces.
                 retryButton
                     .hidden()
                     .disabled(true)
@@ -591,13 +597,18 @@ struct VideoDetailContentView: View {
     }
 
     /// Whether the loading state holds the retry inset as an
-    /// invisible placeholder (b49fix5 P2-16): loading with no
-    /// detail yet. The placeholder keeps the bottom geometry
-    /// identical across the retry / loading / failed states,
-    /// so tapping "重试" (or the load landing failed) never
-    /// moves the content bottom by 54pt.
+    /// invisible placeholder (b49fix5 P2-16, b49fix6 P2-10): loading
+    /// with no detail yet, OR a successful empty load. The
+    /// placeholder keeps the bottom geometry identical across
+    /// the retry / loading / failed / success-empty states, so
+    /// tapping "重试" (or the load landing failed — or landing
+    /// empty) never moves the content bottom by 54pt. A success
+    /// WITH lines is unaffected: the content is long and the
+    /// user is at the top, so no jump is visible there, and the
+    /// inset stays empty with the clearance inside the content.
     private var showRetryPlaceholder: Bool {
-        viewModel.isLoading && viewModel.detail == nil
+        (viewModel.isLoading && viewModel.detail == nil)
+            || (viewModel.detail?.lines.isEmpty == true && !viewModel.loadFailed)
     }
 
     /// Bottom-chrome clearance for this page, from the same rule
@@ -1029,10 +1040,11 @@ extension PlayEpisode {
 /// same NavigationStack, so it follows the same rule. Last-row
 /// scroll-out still needs chen's phone to confirm (未验).
 private struct DetailBottomChromePadding: ViewModifier {
-    /// True for the retry-button state AND the loading
-    /// placeholder state (b49fix5 P2-16): both own the
-    /// clearance in the inset, so the content bottom never
-    /// moves between retry / loading / failed.
+    /// True for the retry-button state AND the loading /
+    /// success-empty placeholder states (b49fix5 P2-16, b49fix6
+    /// P2-10): all of them own the clearance in the inset, so
+    /// the content bottom never moves between retry / loading /
+    /// failed / success-empty.
     var showRetry: Bool
     func body(content: Content) -> some View {
         if showRetry {

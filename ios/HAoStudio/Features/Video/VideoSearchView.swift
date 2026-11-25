@@ -310,14 +310,17 @@ struct VideoSearchView: View {
                                         .foregroundStyle(theme.accentText)
                                 }
                                 .foregroundStyle(theme.textSecondary)
-                                // b49fix5 P2-17: the banner carries
-                                // its own top 12 (same as the Emby
-                                // banner below) — it is the first
-                                // element of the results branch, so
-                                // without it the banner sticks to the
-                                // search field.
+                                // b49fix6 P2-25: the banner carries
+                                // NO top of its own — the content
+                                // VStack already has top 12, and the
+                                // banner is always the first element
+                                // of the results branch, so its own
+                                // 12 doubled the gap to 24. (The
+                                // b49fix5 P2-17 comment claiming the
+                                // banner would otherwise stick to
+                                // the search field was wrong: the
+                                // container top 12 provides it.)
                                 .padding(.horizontal, HaoLayout.pushedPageMargin)
-                                .padding(.top, 12)
                             }
                             if !viewModel.results.isEmpty {
                                 resultSection(
@@ -341,8 +344,17 @@ struct VideoSearchView: View {
                                         .foregroundStyle(theme.accentText)
                                 }
                                 .foregroundStyle(theme.textSecondary)
+                                // b49fix6 P2-25: top 12 only when
+                                // the CMS grid is above this banner
+                                // (it is the gap from the grid, not
+                                // from the search field). When there
+                                // are no CMS results the banner is
+                                // the first element of the branch and
+                                // the container's top 12 already
+                                // provides the gap — an own 12 would
+                                // double it to 24.
                                 .padding(.horizontal, HaoLayout.pushedPageMargin)
-                                .padding(.top, 12)
+                                .padding(.top, viewModel.results.isEmpty ? 0 : 12)
                             }
                             // sweep-5 P2-13: Emby is configured but
                             // the search failed — one hint row with a
@@ -361,8 +373,16 @@ struct VideoSearchView: View {
                                     }
                                 }
                                 .foregroundStyle(theme.textSecondary)
+                                // b49fix6 P2-25: top 12 only when
+                                // the CMS grid is above this row
+                                // (same rule as the Emby banner
+                                // above — it never co-shows with it).
+                                // With no CMS results this row is
+                                // the first element of the branch
+                                // and the container's top 12 is the
+                                // gap; an own 12 would double it.
                                 .padding(.horizontal, HaoLayout.pushedPageMargin)
-                                .padding(.top, 12)
+                                .padding(.top, viewModel.results.isEmpty ? 0 : 12)
                             }
                             if !viewModel.embyResults.isEmpty {
                                 resultSection(
@@ -370,7 +390,7 @@ struct VideoSearchView: View {
                                     hasMore: viewModel.embyHasMore,
                                     loadFailed: viewModel.embyErrorMessage != nil,
                                     onLoadMore: { viewModel.loadMoreEmby() })
-                                    .padding(.top, 16)
+                                    .padding(.top, HaoLayout.sectionTopSpacing)
                             }
                         }
                     } else {
