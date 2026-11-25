@@ -10,6 +10,16 @@
 // There is NO word-level timing in any lyric source (NetEase returns
 // line-level `lrc` + `tlyric` only; QQ line-level LRC; Kuwo line
 // times) — no fake per-word karaoke timing is invented.
+// b47-player refs check (verified 2026-11-25, live): real word
+// timing DOES exist — NetEase `klyric`/`yrc` (Lyricify YrcParser),
+// Kugou KRC, QQ QRC — but none of it reaches us: the plain
+// `/api/song/lyric` endpoint our app uses returns `klyric` EMPTY
+// for every song tested (21 songs incl. 晴天) and no `yrc` field
+// at all; the word-timed fields only come from the encrypted
+// weapi/eapi endpoints, and KRC/QRC need vendor decryption keys.
+// We copy no keys (iron rule), so the even pseudo-syllable split
+// stays — it is an approximation, disclosed as one, not a fake
+// timing claim.
 
 import Foundation
 
@@ -222,14 +232,21 @@ enum MusicLyrics {
         return karaokeUnsungOpacity + (1 - karaokeUnsungOpacity) * smooth
     }
 
-    /// Long-note swell: the char being sung grows to +7.5% at
+    /// Long-note swell: the char being sung grows to +14% at
     /// its midpoint and settles back. Chars progress one after
     /// another, so the swell is naturally staggered down the
     /// line and the last char only peaks after the first has
-    /// passed its peak (Coda's LyricLongToneEmphasis).
+    /// passed its peak. b47-player refs check: MeloX
+    /// (AppleMusicLyricsMotionProfile.emphasisScaleRange) and
+    /// BetterLyrics (LyricsAnimator auto char scale) both put
+    /// the peak at 1.14–1.15 — the old +7.5% was our own
+    /// under-reading, not Coda's value (Coda's long-tone
+    /// emphasis is a positional spread, not a scale). The lift
+    /// below stays: 0.065 × fontSize peaks at 1.8pt on our 28pt
+    /// lines, i.e. MeloX's 2pt syllableLift.
     static func karaokeSwellScale(charProgress: Double) -> Double {
         let t = min(1, max(0, charProgress))
-        return 1 + 0.075 * sin(Double.pi * t)
+        return 1 + 0.14 * sin(Double.pi * t)
     }
 
     /// Long-note lift: the sung char floats up to fontSize x 0.065.
@@ -252,10 +269,16 @@ enum MusicLyrics {
         return max(0.45, 0.72 - Double(abs(distance)) * 0.035)
     }
 
-    /// Non-active row blur (b46-player): a faint depth cue only —
-    /// min(1.0, |d| × 0.15). The old cap (3.5) blurred distant
-    /// lines into illegibility.
+    /// Non-active row blur (b46-player, b47-player refs check):
+    /// min(2.0, |d| × 0.3). MeloX (AppleMusicLyricsMotionProfile)
+    /// uses 3pt non-focused / 4pt max and BetterLyrics
+    /// (LyricsAnimator) up to 5 × distanceFactor — but those rows
+    /// are 36pt, ours are 20pt, so the values are scaled by
+    /// font size (3 × 20/36 ≈ 1.7, 4 × 20/36 ≈ 2.2): the cap
+    /// lands at 2.0. The b46 cap of 1.0 was too faint to read as
+    /// a depth cue at all; the old 3.5 cap (unscaled) blurred
+    /// 20pt lines into illegibility.
     static func lineBlur(distance: Int) -> Double {
-        return min(1.0, Double(abs(distance)) * 0.15)
+        return min(2.0, Double(abs(distance)) * 0.3)
     }
 }

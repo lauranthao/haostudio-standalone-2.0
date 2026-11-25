@@ -692,10 +692,29 @@ struct MusicPlayerView: View {
                     colors: [Color(tint), Color(coverTintSecondary ?? tint.haoSecondary())],
                     startPoint: .topLeading, endPoint: .bottomTrailing
                 )
-                RadialGradient(
-                    colors: [.white.opacity(0.12), .clear],
-                    center: .topLeading, startRadius: 0, endRadius: 700
-                )
+                // b47-player refs check (BetterLyrics
+                // AmbientBackgroundControl.BlurredBlobs): the
+                // ambient light DRIFTS — blobs orbit on
+                // sin(_time × 0.2) / cos(_time × 0.15), i.e. ~31 s
+                // / ~42 s periods. Our colours stay cover-derived
+                // (BetterLyrics' blobs are fixed-theme, not from
+                // the cover — we do not copy that); only the
+                // MOTION is adopted, on the white 0.12 radial
+                // lift, so the tint slowly breathes instead of
+                // sitting still. TimelineView ticks once a second
+                // (a soft 0.12 veil shows no 1 s steps) instead of
+                // every frame, so the drift costs ~nothing.
+                TimelineView(.periodic(from: .now, by: 1.0)) { timeline in
+                    let t = timeline.date.timeIntervalSinceReferenceDate
+                    let center = UnitPoint(
+                        x: 0.25 + 0.20 * CGFloat(sin(t * 0.2)),
+                        y: 0.08 + 0.08 * CGFloat(cos(t * 0.15))
+                    )
+                    RadialGradient(
+                        colors: [.white.opacity(0.12), .clear],
+                        center: center, startRadius: 0, endRadius: 700
+                    )
+                }
                 LinearGradient(
                     colors: [.clear, .black.opacity(0.35)],
                     startPoint: .top, endPoint: .bottom
@@ -1012,7 +1031,7 @@ struct MusicPlayerView: View {
                             .buttonStyle(LyricRowPressStyle())
                             // b46-player (Coda §2.8): non-active rows
                             // sit at 0.98 scale with a faint distance
-                            // blur (cap 1.0, floor opacity 0.45) — no
+                            // blur (cap 2.0, floor opacity 0.45) — no
                             // row is ever cut: the old "> 6 away =
                             // opacity 0" left the bottom of the slot
                             // empty on chen's phone.
