@@ -79,9 +79,11 @@ against README:100. The flow, in order:
   2. Bitrise build from that bump commit (workflow primary,
      branch main), download the IPA and verify the in-package
      version/build;
-  3. release commit (README version-table row + version.json
-     size/sha256 + a commit message naming the build number
-     and the triggering commit's full 40-hex hash).
+  3. release commit (README version-table row — carrying
+     the Bitrise build number and the triggering commit, see
+     README:100 — + version.json size/sha256 + a commit
+     message naming the build number and the triggering
+     commit's full 40-hex hash).
 Precedent from 0.0.2 (same two-stage shape, before the rule
 existed): bump commit 5b67e3c -> build -> release commit
 42963ab. The triggering commit is the bump commit, never
