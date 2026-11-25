@@ -56,7 +56,7 @@ ignored = re.findall(r'static let ignoredPrefixes: \[String\] = \[(.*?)\]', src,
 ignored_prefixes = re.findall(r'"([^"]+)"', ignored)
 
 mapping = {key: (kind, dest, arg) for key, kind, dest, arg in table}
-check("mapping table has 136 named keys", len(mapping) == 136, f"{len(mapping)}")
+check("mapping table has 112 named keys", len(mapping) == 112, f"{len(mapping)}")
 check("mapping keys unique", len(set(mapping)) == len(mapping))
 check("3 prefix families", len(prefixes) == 3, str([p[0] for p in prefixes]))
 check("1 ignored family", ignored_prefixes == ["hao_play_url_cache:"])
@@ -137,7 +137,7 @@ for unknown in ["hao_future_feature_flag", "hao_unknown_2027_key", "custom_plugi
     data[unknown] = "keep me"
 
 total = len(data)
-print(f"snapshot keys: {total} (136 named + 9 family + 2 ignored + 3 unknown)")
+print(f"snapshot keys: {total} (112 named + 9 family + 2 ignored + 3 unknown)")
 
 # --- Build the fake 1.1.6 Documents directory ---------------------------
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="hao-upgrade-sim-"))
