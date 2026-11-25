@@ -36,6 +36,12 @@ enum MigrationKeyKind {
     case json
     case intList
     case doubleList
+    /// Raw Data (b49fix2 P1-4): a UserDefaults Data value, e.g.
+    /// `hao.currentPlayContext` (JSON-encoded PlayContext).
+    /// It cannot sit in a JSON envelope as-is, so it travels
+    /// base64: `coerce` encodes Data to its base64 string on
+    /// export and decodes a base64 string back to Data on import.
+    case data
 }
 
 /// Where one Flutter key lands in Swift storage.
@@ -103,6 +109,16 @@ enum MigrationStore {
     static let doneKey = "hao_migration_done_v1"
     static let stateKey = "hao_migration_state"
     static let noticeDismissedKey = "hao_migration_notice_dismissed"
+    /// Failed-attempt backoff (b49fix2 P2-12): a migration that
+    /// keeps failing retried every launch and grew
+    /// migration_backup/ without bound. After this many failed
+    /// attempts the launch path stops retrying; the My-page
+    /// notice (migrationNoticeNeeded) is the one surfacing, and
+    /// the user can still re-run the import by hand from a
+    /// backup file. A success resets the count.
+    static let failedAttemptsKey = "hao_migration_failed_attempts"
+    static let lastFailedAtKey = "hao_migration_last_failed_at"
+    static let maxFailedAttempts = 3
     static let unknownKeysFileName = "migration_unknown_keys"
     static let snapshotSchemaVersion = 1
     static let backupSchemaVersion = 1
@@ -120,19 +136,38 @@ enum MigrationStore {
 
     // MARK: - Mapping table (docs/storage-mapping.md, same rows)
 
+    // b49fix2 P1-3 removedMappings: 25 keys were deleted from
+    // this table because the app migrates them but nothing ever
+    // reads them (preferResolution, liveCrashStage,
+    // engineSectionExpanded, playbackSectionExpanded,
+    // hao_feature_cover_plaza, hao_feature_cover_charts,
+    // hao_music_bookmarks, hao_music_sources,
+    // hao_music_queue_memory, hao_sa_xh_device,
+    // hao_wallpaper_v115_off_once, hao_tabbar_accent_presets,
+    // hao_custom_font_family, hao_custom_font_name,
+    // hao_custom_font_path, hao_vod_playback_rate,
+    // hao_vod_sleep_custom_minutes, hao_vod_sleep_episode_count,
+    // hao_vod_subtitle_delay, hao_vod_metadata_overrides,
+    // hao_emby_home, hao_live_hist_retention_days,
+    // hao_live_hidden_platforms, hao_live_clock_corner,
+    // hao_live_volume_boost_pct). A key that arrives in a
+    // snapshot without a mapping is NOT dropped: it is
+    // isolated into migration_unknown_keys.json (see importData),
+    // so the data survives and a future lane can re-add the
+    // mapping the day it wires a real reader. hao_sa_xh_device
+    // is not a UserDefaults key at all — the resolver reads
+    // hao_sa_xh_device.json as a file — so deleting its row
+    // loses nothing functional.
+
     static let mappings: [MigrationKeyMapping] = [
         // Playback / player preference.
         MigrationKeyMapping(key: "videoPlayerKey", kind: .string, destination: .userDefaults),
         MigrationKeyMapping(key: "hapticsEnabled", kind: .bool, destination: .userDefaults),
         MigrationKeyMapping(key: "audioMixWithOthers", kind: .bool, destination: .userDefaults),
         MigrationKeyMapping(key: "autoResumeLastPlayback", kind: .bool, destination: .userDefaults),
-        MigrationKeyMapping(key: "preferResolution", kind: .string, destination: .userDefaults),
-        MigrationKeyMapping(key: "liveCrashStage", kind: .string, destination: .userDefaults),
         MigrationKeyMapping(key: "skippedVersion", kind: .string, destination: .userDefaults),
         MigrationKeyMapping(key: "lastUpdateCheckAt", kind: .int, destination: .userDefaults),
         MigrationKeyMapping(key: "autoUpdateCheck", kind: .bool, destination: .userDefaults),
-        MigrationKeyMapping(key: "engineSectionExpanded", kind: .bool, destination: .userDefaults),
-        MigrationKeyMapping(key: "playbackSectionExpanded", kind: .bool, destination: .userDefaults),
         MigrationKeyMapping(key: "haoThemeId", kind: .string, destination: .userDefaults),
         MigrationKeyMapping(key: "haoThemeMode", kind: .string, destination: .userDefaults),
         // Music: scalars.
@@ -163,43 +198,28 @@ enum MigrationStore {
         MigrationKeyMapping(key: "musicDownloads", kind: .json, destination: .collectionFile("musicDownloads")),
         MigrationKeyMapping(key: "musicResume", kind: .json, destination: .collectionFile("musicResume")),
         MigrationKeyMapping(key: "fmDislikedIds", kind: .json, destination: .collectionFile("fmDislikedIds")),
-        MigrationKeyMapping(key: "hao_feature_cover_plaza", kind: .json, destination: .collectionFile("hao_feature_cover_plaza")),
-        MigrationKeyMapping(key: "hao_feature_cover_charts", kind: .json, destination: .collectionFile("hao_feature_cover_charts")),
-        MigrationKeyMapping(key: "hao_music_bookmarks", kind: .json, destination: .collectionFile("hao_music_bookmarks")),
         MigrationKeyMapping(key: "hao_music_loudness_cache", kind: .json, destination: .collectionFile("hao_music_loudness_cache")),
-        MigrationKeyMapping(key: "hao_music_sources", kind: .json, destination: .collectionFile("hao_music_sources")),
         MigrationKeyMapping(key: "hao_local_music", kind: .json, destination: .collectionFile("hao_local_music")),
-        MigrationKeyMapping(key: "hao_music_queue_memory", kind: .json, destination: .collectionFile("hao_music_queue_memory")),
         MigrationKeyMapping(key: "hao_resolver_speed", kind: .json, destination: .collectionFile("hao_resolver_speed")),
-        MigrationKeyMapping(key: "hao_sa_xh_device", kind: .string, destination: .userDefaults),
         // Appearance.
         MigrationKeyMapping(key: "hao_wallpaper_enabled", kind: .bool, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_wallpaper_paths", kind: .json, destination: .collectionFile("hao_wallpaper_paths")),
         MigrationKeyMapping(key: "hao_wallpaper_current", kind: .string, destination: .userDefaults),
-        MigrationKeyMapping(key: "hao_wallpaper_v115_off_once", kind: .bool, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_bgcolor_enabled", kind: .bool, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_bgcolor_hex", kind: .string, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_tabbar_accent", kind: .int, destination: .userDefaults),
-        MigrationKeyMapping(key: "hao_tabbar_accent_presets", kind: .intList, destination: .userDefaults),
-        MigrationKeyMapping(key: "hao_custom_font_family", kind: .string, destination: .userDefaults),
-        MigrationKeyMapping(key: "hao_custom_font_name", kind: .string, destination: .userDefaults),
-        MigrationKeyMapping(key: "hao_custom_font_path", kind: .string, destination: .userDefaults),
         // Video / VOD: scalars.
         MigrationKeyMapping(key: "hao_video_auto_next", kind: .bool, destination: .userDefaults),
-        MigrationKeyMapping(key: "hao_vod_playback_rate", kind: .double, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_vod_double_tap_seconds", kind: .int, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_vod_dialogue_boost", kind: .bool, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_vod_spoiler_hide_synopsis", kind: .bool, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_vod_spoiler_blur_unwatched", kind: .bool, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_vod_audio_only", kind: .bool, destination: .userDefaults),
-        MigrationKeyMapping(key: "hao_vod_sleep_custom_minutes", kind: .int, destination: .userDefaults),
-        MigrationKeyMapping(key: "hao_vod_sleep_episode_count", kind: .int, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_vod_video_fit", kind: .string, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_vod_super_resolution", kind: .bool, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_vod_skip_intro_mode", kind: .string, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_vod_interpolation", kind: .bool, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_vod_sdr_to_hdr", kind: .bool, destination: .userDefaults),
-        MigrationKeyMapping(key: "hao_vod_subtitle_delay", kind: .double, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_vod_subtitle_font_size", kind: .string, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_vod_subtitle_color", kind: .string, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_vod_subtitle_position", kind: .string, destination: .userDefaults),
@@ -207,7 +227,6 @@ enum MigrationStore {
         MigrationKeyMapping(key: "hao_vod_dv_p8_downgrade", kind: .bool, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_low_memory_mode", kind: .string, destination: .userDefaults),
         // Video / VOD: collections.
-        MigrationKeyMapping(key: "hao_vod_metadata_overrides", kind: .json, destination: .collectionFile("hao_vod_metadata_overrides")),
         MigrationKeyMapping(key: "hao_video_category_prefs", kind: .json, destination: .collectionFile("hao_video_category_prefs")),
         MigrationKeyMapping(key: "hao_vod_skip_intro_durations", kind: .json, destination: .collectionFile("hao_vod_skip_intro_durations")),
         MigrationKeyMapping(key: "hao_video_home", kind: .json, destination: .collectionFile("hao_video_home")),
@@ -219,20 +238,16 @@ enum MigrationStore {
         MigrationKeyMapping(key: "hao_douban_no_suggest", kind: .bool, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_sa_video", kind: .json, destination: .collectionFile("hao_sa_video")),
         MigrationKeyMapping(key: "hao_sa_video_rev", kind: .int, destination: .userDefaults),
+        MigrationKeyMapping(key: "hao_sa_video_applied", kind: .json, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_emby_config", kind: .json, destination: .emby),
         MigrationKeyMapping(key: "hao_video_tab_mode", kind: .string, destination: .userDefaults),
-        MigrationKeyMapping(key: "hao_emby_home", kind: .json, destination: .collectionFile("hao_emby_home")),
         // Live.
         MigrationKeyMapping(key: "hao_live_sources", kind: .json, destination: .collectionFile("hao_live_sources")),
         MigrationKeyMapping(key: "hao_live_hist", kind: .json, destination: .collectionFile("hao_live_hist")),
         MigrationKeyMapping(key: "hao_live_hist_limit", kind: .int, destination: .userDefaults),
-        MigrationKeyMapping(key: "hao_live_hist_retention_days", kind: .int, destination: .userDefaults),
         MigrationKeyMapping(key: "hao_live_follows", kind: .json, destination: .collectionFile("hao_live_follows")),
         MigrationKeyMapping(key: "hao_live_search_hist", kind: .json, destination: .collectionFile("hao_live_search_hist")),
-        MigrationKeyMapping(key: "hao_live_hidden_platforms", kind: .json, destination: .collectionFile("hao_live_hidden_platforms")),
         MigrationKeyMapping(key: "hao_live_cellular_downgrade", kind: .bool, destination: .userDefaults),
-        MigrationKeyMapping(key: "hao_live_clock_corner", kind: .string, destination: .userDefaults),
-        MigrationKeyMapping(key: "hao_live_volume_boost_pct", kind: .int, destination: .userDefaults),
         // Danmaku.
         MigrationKeyMapping(key: "hao_danmaku_enabled", kind: .json, destination: .collectionFile("hao_danmaku_enabled")),
         MigrationKeyMapping(key: "hao_danmaku_font_size", kind: .double, destination: .userDefaults),
@@ -329,6 +344,15 @@ enum MigrationStore {
         if isMigrationDone(defaults: defaults) {
             return MigrationReport.empty(.alreadyDone, detail: "migration already done")
         }
+        // b49fix2 P2-12: stop retrying a migration that has
+        // already failed maxFailedAttempts times. Without this
+        // every launch paid for a full attempt and left another
+        // timestamped folder in migration_backup/.
+        let failedAttempts = (defaults.object(forKey: failedAttemptsKey) as? NSNumber)?.intValue ?? 0
+        if failedAttempts >= maxFailedAttempts {
+            defaults.set(stateFailed, forKey: stateKey)
+            return MigrationReport.empty(.failed, detail: "migration failed \(maxFailedAttempts) times; not retrying")
+        }
         let docs = documentsURL ?? LocalStore.documentsDirectory()
         let snapshotURL = docs.appendingPathComponent(snapshotFileName)
         guard FileManager.default.fileExists(atPath: snapshotURL.path) else {
@@ -357,8 +381,12 @@ enum MigrationStore {
         switch report.outcome {
         case .migrated, .alreadyDone:
             defaults.set(stateDone, forKey: stateKey)
+            defaults.set(0, forKey: failedAttemptsKey)
         case .failed:
             defaults.set(stateFailed, forKey: stateKey)
+            let attempts = ((defaults.object(forKey: failedAttemptsKey) as? NSNumber)?.intValue ?? 0) + 1
+            defaults.set(attempts, forKey: failedAttemptsKey)
+            defaults.set(Date().timeIntervalSince1970, forKey: lastFailedAtKey)
         case .noSnapshot, .invalidSnapshot:
             defaults.set(stateInvalidSnapshot, forKey: stateKey)
         }
@@ -576,6 +604,10 @@ enum MigrationStore {
             journal.recordFile(name: "hao_listen", documentsURL: documentsURL)
             var existing = readJSONList(name: "hao_listen", documentsURL: documentsURL)
             existing.append(contentsOf: listenEntries)
+            // b49fix2 P2-11: a re-import of the same backup used to
+            // double the history (append with no dedupe). Same
+            // song at the same second is the same listen, not two.
+            existing = dedupedListenEntries(existing)
             if existing.count > 3000 {
                 existing = Array(existing.suffix(3000))
             }
@@ -729,6 +761,20 @@ enum MigrationStore {
                 out.append(number.doubleValue)
             }
             return out
+        case .data:
+            // Bidirectional by construction: the export reads Data
+            // out of UserDefaults and needs a JSON-safe string;
+            // the import reads that string out of the envelope and
+            // needs Data back. A base64 string that does not decode
+            // is a bad type, never silently stored.
+            if let data = value as? Data {
+                return data.base64EncodedString()
+            }
+            if let text = value as? String,
+               let data = Data(base64Encoded: text) {
+                return data
+            }
+            return nil
         }
     }
 
@@ -762,6 +808,46 @@ enum MigrationStore {
 
     // MARK: - File helpers
 
+    /// Dedupe key for one listen-history entry (b49fix2 P2-11):
+    /// identity (platform + song id, or title + artist when the
+    /// id is empty — the same fallback MusicSong.identityKey
+    /// uses) + the play timestamp. A re-import of the same
+    /// backup must not double the history.
+    static func listenDedupeKey(for entry: [String: Any]) -> String {
+        let platform = entry["platform"] as? String ?? ""
+        let songId = entry["songId"] as? String ?? ""
+        let at: String
+        if let number = numberValue(entry["at"]) {
+            at = "\(number.intValue)"
+        } else if let text = entry["at"] as? String {
+            at = text
+        } else {
+            at = ""
+        }
+        if !songId.isEmpty {
+            return "\(platform)|\(songId)|\(at)"
+        }
+        let title = entry["title"] as? String ?? ""
+        let artist = entry["artist"] as? String ?? ""
+        return "\(platform)|\(title)|\(artist)|\(at)"
+    }
+
+    /// Drop duplicate listen entries (same identity + timestamp),
+    /// keeping the first occurrence. Shared by MigrationStore's
+    /// own import and BackupEngineCore.mergePrefixValue — one
+    /// rule for both import paths.
+    static func dedupedListenEntries(_ entries: [[String: Any]]) -> [[String: Any]] {
+        var seen = Set<String>()
+        var out: [[String: Any]] = []
+        out.reserveCapacity(entries.count)
+        for entry in entries {
+            if seen.insert(listenDedupeKey(for: entry)).inserted {
+                out.append(entry)
+            }
+        }
+        return out
+    }
+
     static func writeJSONFile(name: String, value: Any, documentsURL: URL) -> Bool {
         guard JSONSerialization.isValidJSONObject(value),
               let jsonData = try? JSONSerialization.data(withJSONObject: value, options: [])
@@ -775,21 +861,33 @@ enum MigrationStore {
         }
     }
 
+    /// A file that exists but does not decode is quarantined
+    /// (b49fix2 P0-1 — same shape as LocalStore.loadCollection):
+    /// returning [:] and then merging would let the next write
+    /// permanently overwrite the user's data with the merged
+    /// result. The corrupt file moves aside; the merge starts
+    /// from empty with the original preserved for recovery.
     static func readJSONDictionary(name: String, documentsURL: URL) -> [String: Any] {
         let url = documentsURL.appendingPathComponent("\(name).json")
-        guard let rawData = try? Data(contentsOf: url),
-              let parsed = try? JSONSerialization.jsonObject(with: rawData, options: []),
+        guard let rawData = try? Data(contentsOf: url) else { return [:] }
+        guard let parsed = try? JSONSerialization.jsonObject(with: rawData, options: []),
               let dict = parsed as? [String: Any]
-        else { return [:] }
+        else {
+            LocalStore.quarantineFile(at: url, name: name, reason: "decode failed", documentsURL: documentsURL)
+            return [:]
+        }
         return dict
     }
 
     static func readJSONList(name: String, documentsURL: URL) -> [[String: Any]] {
         let url = documentsURL.appendingPathComponent("\(name).json")
-        guard let rawData = try? Data(contentsOf: url),
-              let parsed = try? JSONSerialization.jsonObject(with: rawData, options: []),
+        guard let rawData = try? Data(contentsOf: url) else { return [] }
+        guard let parsed = try? JSONSerialization.jsonObject(with: rawData, options: []),
               let list = parsed as? [[String: Any]]
-        else { return [] }
+        else {
+            LocalStore.quarantineFile(at: url, name: name, reason: "decode failed", documentsURL: documentsURL)
+            return []
+        }
         return list
     }
 
@@ -811,6 +909,8 @@ enum MigrationStore {
             return list.allSatisfy { numberValue($0) != nil }
         case .json:
             return true
+        case .data:
+            return value is Data
         }
     }
 
@@ -937,9 +1037,32 @@ struct MigrationBackup {
                     try fileManager.copyItem(at: source, to: collectionsDir.appendingPathComponent("\(name).json"))
                 }
             }
+            // b49fix2 P2-12: every attempt leaves a folder; keep
+            // only the newest 5 so a failing migration cannot grow
+            // migration_backup/ without bound.
+            MigrationBackup.pruneOldBackups(documentsURL: documentsURL)
             return true
         } catch {
             return false
+        }
+    }
+
+    /// Delete all but the newest 5 attempt folders under
+    /// migration_backup/. Folder names start with a
+    /// yyyyMMdd-HHmmss stamp, so lexicographic order is
+    /// chronological; the UUID suffix keeps same-second folders
+    /// distinct without breaking the order.
+    static func pruneOldBackups(documentsURL: URL) {
+        let base = documentsURL.appendingPathComponent(MigrationStore.backupDirectoryName)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: base.path) else { return }
+        let dirs = names.sorted().filter { name in
+            var isDir: ObjCBool = false
+            return FileManager.default.fileExists(
+                atPath: base.appendingPathComponent(name).path, isDirectory: &isDir) && isDir.boolValue
+        }
+        guard dirs.count > 5 else { return }
+        for name in dirs.dropLast(5) {
+            try? FileManager.default.removeItem(at: base.appendingPathComponent(name))
         }
     }
 

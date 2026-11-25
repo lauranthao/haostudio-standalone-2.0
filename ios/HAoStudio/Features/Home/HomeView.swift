@@ -29,7 +29,6 @@ import SwiftUI
 enum HomeDestination: Hashable {
     case detail(VideoItem)
     case history
-    case recent
     case hotLive
     case daily
     case room(LiveRoom, [LiveRoom])
@@ -38,6 +37,12 @@ enum HomeDestination: Hashable {
 struct HomeView: View {
     @StateObject private var viewModel = HomeViewModel()
     @State private var path: [HomeDestination] = []
+    /// b49fix2 B4: the first-run welcome card, dismissed once.
+    @AppStorage("hao_home_welcome_dismissed") private var welcomeDismissed = false
+    /// b49fix2 B13: the live grid's laid-out container width,
+    /// reported by the preference key below. 0 until the first
+    /// layout — the screen width is the first-frame fallback.
+    @State private var liveGridWidth: CGFloat = 0
 
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
     @Environment(\.haoTheme) private var theme
@@ -55,6 +60,7 @@ struct HomeView: View {
                         HaoChromeScrollAnchor()
                             .id(HaoTabScrollTop.id(for: .home))
                         homeHeader
+                        welcomeCard
                         continueWatchingSection
                             .padding(.top, 12)
                         continueListeningSection
@@ -62,8 +68,6 @@ struct HomeView: View {
                         hotLiveSection
                             .padding(.top, 16)
                         dailySection
-                            .padding(.top, 16)
-                        recentSection
                             .padding(.top, 16)
                         Spacer(minLength: 16)
                     }
@@ -113,8 +117,6 @@ struct HomeView: View {
                         VideoDetailView(item: item)
                     case .history:
                         VideoHistoryView()
-                    case .recent:
-                        HomeRecentPlaysView(viewModel: viewModel)
                     case .hotLive:
                         HomeHotLiveView(viewModel: viewModel) { room, playlist in
                             openRoom(room, playlist: playlist)
@@ -167,7 +169,7 @@ struct HomeView: View {
                 }
                 // Live-history change (A2): entering a room, or a
                 // history row removed/cleared from the pushed list,
-                // posts haoLiveHistoryChanged — home's 热门直播
+                // posts haoLiveHistoryChanged — home's 我的直播
                 // reloads without waiting for a tab switch or
                 // pop-back.
                 .onReceive(NotificationCenter.default.publisher(for: .haoLiveHistoryChanged)) { _ in
@@ -194,6 +196,8 @@ struct HomeView: View {
             Text(title)
                 .font(.haoSectionTitle)
                 .foregroundStyle(theme.textPrimary)
+                // b49fix2 B10: section titles are headers.
+                .accessibilityAddTraits(.isHeader)
             Spacer()
             if let onAll = onAll {
                 Button(action: onAll) {
@@ -210,9 +214,59 @@ struct HomeView: View {
                     .contentShape(Rectangle())
                 }
                 .foregroundStyle(theme.accentText)
+                // b49fix2 B10: "全部" alone tells VoiceOver
+                // nothing — name the section it opens.
+                .accessibilityLabel("查看全部\(title)")
             }
         }
         .padding(.horizontal, 24)
+    }
+
+    /// b49fix2 B1: an empty state always offers a way forward —
+    /// a capsule button that switches to the tab where the user
+    /// can fill it. The shell (MainTabView) listens for
+    /// .haoSwitchTab.
+    private func homeEmptyCTA(label: String, icon: String, tab: HaoTab) -> some View {
+        MusicCapsuleButton(icon: icon, label: label) {
+            NotificationCenter.default.post(name: .haoSwitchTab, object: tab)
+        }
+        .padding(.top, 6)
+    }
+
+    /// b49fix2 B4: first-run hint, shown only while every
+    /// section is empty (a fresh install) and never again once
+    /// dismissed. Minimal — one card, no new system, no
+    /// onboarding flow.
+    @ViewBuilder
+    private var welcomeCard: some View {
+        if !welcomeDismissed,
+           viewModel.continueWatching.isEmpty,
+           viewModel.continueListening.isEmpty,
+           viewModel.hotLive.isEmpty,
+           viewModel.daily.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("从搜索开始")
+                    .font(.haoSectionTitle)
+                    .foregroundStyle(theme.textPrimary)
+                Text("去音乐搜一首歌，或去影视找一部影片——播过的都会出现在这里。")
+                    .font(.haoFootnote)
+                    .foregroundStyle(theme.textSecondary)
+                HStack(spacing: 16) {
+                    MusicCapsuleButton(icon: "music.note", label: "去音乐") {
+                        NotificationCenter.default.post(name: .haoSwitchTab, object: HaoTab.music)
+                    }
+                    Button("不再显示") {
+                        welcomeDismissed = true
+                    }
+                    .font(.haoFootnote)
+                    .foregroundStyle(theme.textSecondary)
+                }
+            }
+            .padding(16)
+            .background(theme.accentSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .padding(.horizontal, 24)
+            .padding(.top, 12)
+        }
     }
 
     // MARK: - Continue watching
@@ -229,17 +283,22 @@ struct HomeView: View {
             .foregroundStyle(theme.textPrimary)
             .padding(.horizontal, 24)
             .padding(.top, 12)
+            // b49fix2 B10: the in-content page title is a header.
+            .accessibilityAddTraits(.isHeader)
     }
 
     private var continueWatchingSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             sectionHeader(title: "继续观看", onAll: { path.append(.history) })
             if viewModel.continueWatching.isEmpty {
-                MusicEmptyState(
-                    icon: "film",
-                    title: "还没有看过影片",
-                    note: "看过的影片会出现在这里，点一下继续看"
-                )
+                VStack(spacing: 0) {
+                    MusicEmptyState(
+                        icon: "film",
+                        title: "还没有看过影片",
+                        note: "看过的影片会出现在这里，点一下继续看"
+                    )
+                    homeEmptyCTA(label: "去找影片", icon: "film", tab: .movies)
+                }
                 .padding(.horizontal, 24)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -262,11 +321,14 @@ struct HomeView: View {
         VStack(alignment: .leading, spacing: 10) {
             sectionHeader(title: "继续听")
             if viewModel.continueListening.isEmpty {
-                MusicEmptyState(
-                    icon: "music.note",
-                    title: "还没有听过歌",
-                    note: "播过的歌会出现在这里，点一下继续听"
-                )
+                VStack(spacing: 0) {
+                    MusicEmptyState(
+                        icon: "music.note",
+                        title: "还没有听过歌",
+                        note: "播过的歌会出现在这里，点一下继续听"
+                    )
+                    homeEmptyCTA(label: "去听歌", icon: "music.note", tab: .music)
+                }
                 .padding(.horizontal, 24)
             } else {
                 // One card only (the view model returns exactly
@@ -307,16 +369,21 @@ struct HomeView: View {
 
     private var hotLiveSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionHeader(title: "热门直播", onAll: { path.append(.hotLive) })
+            // b49fix2 A15: this list is follows + history, not
+            // hot rooms — the honest name is 我的直播.
+            sectionHeader(title: "我的直播", onAll: { path.append(.hotLive) })
             if viewModel.hotLive.isEmpty {
-                MusicEmptyState(
-                    icon: "antenna.radiowaves.left.and.right",
-                    title: "暂无直播",
-                    note: "去直播里关注主播，开播后会出现在这里"
-                )
+                VStack(spacing: 0) {
+                    MusicEmptyState(
+                        icon: "antenna.radiowaves.left.and.right",
+                        title: "暂无直播",
+                        note: "去直播里关注主播，开播后会出现在这里"
+                    )
+                    homeEmptyCTA(label: "去直播", icon: "antenna.radiowaves.left.and.right", tab: .live)
+                }
                 .padding(.horizontal, 24)
             } else {
-                LazyVGrid(columns: homeLiveGridColumns(), spacing: LiveGridLayout.gridRowSpacing) {
+                LazyVGrid(columns: liveGridColumns, spacing: LiveGridLayout.gridRowSpacing) {
                     ForEach(viewModel.hotLive, id: \.id) { item in
                         let room = homeLiveRoom(from: item)
                         LiveRoomCard(room: room) {
@@ -325,8 +392,26 @@ struct HomeView: View {
                     }
                 }
                 .padding(.horizontal, LiveGridLayout.gridEdgePadding)
+                // b49fix2 B13: the laid-out width reports up
+                // through this background reader (attached after
+                // the padding, so it measures the container
+                // width, not the grid width).
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(key: HomeLiveGridWidthKey.self, value: geo.size.width)
+                    }
+                )
+                .onPreferenceChange(HomeLiveGridWidthKey.self) { liveGridWidth = $0 }
             }
         }
+    }
+
+    /// The live grid's columns from the laid-out container width
+    /// (b49fix2 B13). Falls back to the screen width on the first
+    /// frame, before the preference fires.
+    private var liveGridColumns: [GridItem] {
+        let width = liveGridWidth > 0 ? liveGridWidth : UIScreen.main.bounds.width
+        return homeLiveGridColumns(forWidth: width)
     }
 
     private var hotLiveRooms: [LiveRoom] {
@@ -345,6 +430,8 @@ struct HomeView: View {
                 Text("每日推荐")
                     .font(.haoSectionTitle)
                     .foregroundStyle(theme.textPrimary)
+                    // b49fix2 B10: section title is a header.
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
                 if !viewModel.allDailyPicks.isEmpty {
                     Button(action: {
@@ -363,6 +450,8 @@ struct HomeView: View {
                         .contentShape(Rectangle())
                     }
                     .foregroundStyle(theme.accentText)
+                    // b49fix2 B10: name what the button plays.
+                    .accessibilityLabel("播放全部每日推荐")
                     Button(action: { path.append(.daily) }) {
                         HStack(spacing: 2) {
                             Text("全部")
@@ -374,15 +463,20 @@ struct HomeView: View {
                         .contentShape(Rectangle())
                     }
                     .foregroundStyle(theme.accentText)
+                    // b49fix2 B10: name the section it opens.
+                    .accessibilityLabel("查看全部每日推荐")
                 }
             }
             .padding(.horizontal, 24)
             if viewModel.daily.isEmpty {
-                MusicEmptyState(
-                    icon: "calendar",
-                    title: "今天还没有推荐",
-                    note: "先收藏几首歌或播几首歌，每日推荐会从你听过的歌里挑"
-                )
+                VStack(spacing: 0) {
+                    MusicEmptyState(
+                        icon: "calendar",
+                        title: "今天还没有推荐",
+                        note: "先收藏几首歌或播几首歌，每日推荐会从你听过的歌里挑"
+                    )
+                    homeEmptyCTA(label: "去听歌", icon: "music.note", tab: .music)
+                }
                 .padding(.horizontal, 24)
             } else {
                 VStack(spacing: 0) {
@@ -402,29 +496,6 @@ struct HomeView: View {
                                 .accessibilityLabel("不喜欢，换一首")
                             }
                         }
-                    }
-                }
-                .padding(.horizontal, 24)
-            }
-        }
-    }
-
-    // MARK: - Recent plays
-
-    private var recentSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sectionHeader(title: "最近播放", onAll: { path.append(.recent) })
-            if viewModel.recentPlays.isEmpty {
-                MusicEmptyState(
-                    icon: "clock",
-                    title: "还没有播放记录",
-                    note: "播过的歌会出现在这里"
-                )
-                .padding(.horizontal, 24)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(viewModel.recentPlays.prefix(10).enumerated()), id: \.element.id) { index, song in
-                        songRow(song: song, tracks: viewModel.recentPlays, index: index, source: PlaySource(kind: .recent, id: "recent"), sourceDisplayName: "最近播放")
                     }
                 }
                 .padding(.horizontal, 24)
@@ -499,19 +570,35 @@ fileprivate func homeLiveRoom(from item: HomeLiveItem) -> LiveRoom {
     )
 }
 
-/// Live grid columns for the current screen width: 2 in
+/// Live grid columns for a container of the given width: 2 in
 /// portrait, 3–4 when the container is wide (landscape phone
 /// / iPad) — the fixed 2-column grid left tall 16:9 cells and
 /// the floating chrome eating a third of a landscape screen.
 /// Same width math as LiveGridLayout.columns(forWidth:); the
 /// GridItem array itself lives here because LiveDataGateway is
 /// Foundation-only (AppCore) and cannot build SwiftUI items.
-fileprivate func homeLiveGridColumns() -> [GridItem] {
-    let count = LiveGridLayout.columns(forWidth: Double(UIScreen.main.bounds.width))
+/// b49fix2 B13: the width comes from the layout (preference
+/// key), not UIScreen.main.bounds — the screen width goes
+/// stale on rotation and Split View, so the grid kept the
+/// wrong column count until relaunch. The argument is the
+/// container width (the reader sits outside the grid padding).
+/// At 320pt (SE) this still yields 2 columns of 130pt cells —
+/// no overflow.
+fileprivate func homeLiveGridColumns(forWidth width: CGFloat) -> [GridItem] {
+    let count = LiveGridLayout.columns(forWidth: Double(width))
     return Array(
         repeating: GridItem(.flexible(minimum: 0), spacing: CGFloat(LiveGridLayout.interItemSpacing)),
         count: count
     )
+}
+
+/// Reports a live grid's laid-out container width up the tree
+/// (b49fix2 B13).
+private struct HomeLiveGridWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
 }
 
 /// Bottom clearance inside home's scroll content, landscape-
@@ -601,78 +688,6 @@ struct HomeSongCard: View {
     }
 }
 
-/// Full recent-plays list behind the "全部" link. Reads the
-/// view model's full list (allRecentPlays, up to 100) — the
-/// home section itself only shows the first 10, so this page
-/// used to list exactly the same 10 rows as the section. The
-/// music recent list in MyView.swift is private to that file,
-/// so the home tab carries this small list instead of
-/// duplicating the store read.
-private struct HomeRecentPlaysView: View {
-    @ObservedObject var viewModel: HomeViewModel
-
-    @EnvironmentObject private var playerVM: MusicPlayerViewModel
-    @Environment(\.haoTheme) private var theme
-
-    var body: some View {
-        Group {
-            if viewModel.allRecentPlays.isEmpty {
-                MusicEmptyState(
-                    icon: "clock",
-                    title: "还没有播放记录",
-                    note: "播过的歌会出现在这里"
-                )
-                .haoBottomChromePadding()
-            } else {
-                // Lazy (build 36, item 10): a plain VStack built
-                // all 100 rows — each with its cover, menu host
-                // and subscriptions — on every appearance. A
-                // List only builds the rows on screen, like
-                // every other music list in the app. Same rows,
-                // same order, same tap behaviour.
-                List {
-                    ForEach(Array(viewModel.allRecentPlays.enumerated()), id: \.element.id) { index, song in
-                        MusicSongRow(
-                            song: song,
-                            isPlaying: playerVM.currentSong?.identityKey == song.identityKey && playerVM.isPlaying,
-                            showFavHeart: true,
-                            onTap: {
-                                // b46: recent plays are a reloadable place.
-                                playerVM.play(song: song, in: viewModel.allRecentPlays, startAt: index, source: PlaySource(kind: .recent, id: "recent"), sourceDisplayName: "最近播放")
-                            }
-                            // No onToggleFav: same as the home
-                            // songRow — the row flips its own
-                            // favourite state; a star tap no
-                            // longer pays for a full reload
-                            // (build 36, item 10).
-                        )
-                        .listRowBackground(theme.scaffoldBackground)
-                        .listRowSeparatorTint(theme.hairline)
-                        .listRowInsets(EdgeInsets(top: 6, leading: 24, bottom: 6, trailing: 24))
-                    }
-                }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .haoBottomChromePadding()
-            }
-        }
-        .background(theme.scaffoldBackground)
-        .navigationTitle("最近播放")
-        .navigationBarTitleDisplayMode(.inline)
-        // This page's only reload: pushing it does NOT re-fire
-        // home's onAppear (the NavigationStack root stays
-        // mounted), so without this the list would show the data
-        // from home's last reload — stale if a song was played
-        // from home just before tapping "全部". Coalesced, not
-        // unconditional: if home reloaded less than a second ago
-        // (e.g. a pop back straight into "全部"), the data is
-        // already fresh and this is skipped — no duplicate full
-        // reload for one trip. HomeHotLiveView needs no reload
-        // of its own (it reuses the same hotLive array).
-        .onAppear { viewModel.reloadForAppearance() }
-    }
-}
-
 /// Full hot-live list behind the "全部" link: the same merged
 /// follow + history rooms as the home section, in the same grid
 /// with the same cards and LIVE badges. The follows page
@@ -685,6 +700,9 @@ private struct HomeHotLiveView: View {
     var openRoom: (LiveRoom, [LiveRoom]) -> Void
 
     @Environment(\.haoTheme) private var theme
+    /// b49fix2 B13: this page's own laid-out grid width (same
+    /// preference-key pattern as the home section).
+    @State private var liveGridWidth: CGFloat = 0
 
     private var rooms: [LiveRoom] {
         viewModel.hotLive.map { homeLiveRoom(from: $0) }
@@ -702,7 +720,7 @@ private struct HomeHotLiveView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 0) {
-                        LazyVGrid(columns: homeLiveGridColumns(), spacing: LiveGridLayout.gridRowSpacing) {
+                        LazyVGrid(columns: homeLiveGridColumns(forWidth: liveGridWidth > 0 ? liveGridWidth : UIScreen.main.bounds.width), spacing: LiveGridLayout.gridRowSpacing) {
                             ForEach(viewModel.hotLive, id: \.id) { item in
                                 let room = homeLiveRoom(from: item)
                                 LiveRoomCard(room: room) {
@@ -712,6 +730,12 @@ private struct HomeHotLiveView: View {
                         }
                         .padding(.horizontal, LiveGridLayout.gridEdgePadding)
                         .padding(.top, 12)
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.preference(key: HomeLiveGridWidthKey.self, value: geo.size.width)
+                            }
+                        )
+                        .onPreferenceChange(HomeLiveGridWidthKey.self) { liveGridWidth = $0 }
                         Spacer(minLength: 16)
                     }
                 }
@@ -719,7 +743,8 @@ private struct HomeHotLiveView: View {
             }
         }
         .background(theme.scaffoldBackground)
-        .navigationTitle("热门直播")
+        // b49fix2 A15: follows + history, not hot rooms.
+        .navigationTitle("我的直播")
         .navigationBarTitleDisplayMode(.inline)
     }
 }

@@ -55,6 +55,13 @@ enum UpdateCheckOutcome {
     case unavailable(UpdateFetchError)
 }
 
+/// Which manifest source answered (b49fix2 P2-68): the shop
+/// server (primary) or GitHub raw (fallback).
+enum UpdateManifestSource: String {
+    case primary
+    case fallback
+}
+
 /// One in-flight fetch, cancellable by the deadline guard.
 protocol UpdateCancellable: AnyObject {
     func cancel()
@@ -172,6 +179,13 @@ final class DefaultUpdateChecker: UpdateChecker {
     static let lastUpdateCheckAtKey = "lastUpdateCheckAt"
     static let autoUpdateCheckKey = "autoUpdateCheck"
     static let lastCheckDateKey = "hao_last_update_check_date"
+    /// The last primary manifest id seen ("version+build", b49fix2
+    /// P2-68): a fallback answer on a later launch is compared
+    /// against this, so a drift between the two sources is caught
+    /// even when the shop has been down for days. This is checker
+    /// state, not user data — it is deliberately not in the
+    /// backup catalogue.
+    static let lastPrimaryManifestKey = "hao_last_primary_manifest"
 
     /// The two manifest URLs, parsed once. Both literals are valid.
     static let primaryManifestURL = URL(string: DefaultUpdateChecker.primaryManifestURLString)!
@@ -206,7 +220,6 @@ final class DefaultUpdateChecker: UpdateChecker {
     private let systemInfo: UpdateSystemInfo
     private let defaults: UserDefaults
     private let stateQueue = DispatchQueue(label: "com.haostudio.update-checker")
-    private let taskSlot = UpdateTaskSlot()
 
     /// Kind of the most recent fetch failure, for the manual-check
     /// error message. Nil when the last fetch succeeded or none ran.
@@ -215,6 +228,17 @@ final class DefaultUpdateChecker: UpdateChecker {
     /// HTTP status of the most recent fetch failure, when the failure
     /// was an HTTP error. Nil otherwise.
     private(set) var lastHttpStatus: Int?
+
+    /// Source of the last manifest fetched successfully (b49fix2
+    /// P2-68). Nil when no manifest was ever fetched.
+    private(set) var lastManifestSource: UpdateManifestSource?
+
+    /// True when the last fallback answer disagreed with the
+    /// last-seen primary manifest (b49fix2 P2-68). The fallback
+    /// result is still used — the check must not fail outright
+    /// when the shop is down — but the disagreement is logged
+    /// and flagged instead of silently trusted as truth.
+    private(set) var lastFallbackDisagreed = false
 
     init(
         currentVersion: String = DefaultUpdateChecker.bundleVersion,
@@ -413,6 +437,11 @@ final class DefaultUpdateChecker: UpdateChecker {
             latestBuild: manifest.build,
             minOs: manifest.minOs,
             downloadURL: manifest.downloadURL,
+            // b49fix2 P1-40: the manifest's size + hash ride into
+            // the result so the downloader can verify the IPA
+            // instead of trusting any 200 body.
+            size: manifest.size,
+            sha256: manifest.sha256,
             // b36 item 8, F5: preferredLanguages carries the script
             // subtag ("zh-Hant-TW"), languageCode alone is just
             // "zh" — Traditional users would get Simplified notes.
@@ -454,7 +483,15 @@ final class DefaultUpdateChecker: UpdateChecker {
     /// can actually reach. The whole check is capped at totalTimeout
     /// by a deadline: when it fires, the in-flight task is cancelled
     /// and the check reports a timeout.
+    ///
+    /// b49fix2 P1-5: the task slot is PER CHECK, created here and
+    /// passed down — the old shared instance slot let a manual and
+    /// an automatic check share one slot, so one check's deadline
+    /// guard cancelled the other's in-flight task and one
+    /// completion was dropped (a manual check could stick on
+    /// "checking" forever). Each check now completes independently.
     func fetchRemote(completion: @escaping (UpdateManifest?, UpdateFetchError?) -> Void) {
+        let slot = UpdateTaskSlot()
         let deadline = clock.now().addingTimeInterval(DefaultUpdateChecker.totalTimeout)
         var finished = false
         let finish: (UpdateManifest?, UpdateFetchError?) -> Void = { manifest, error in
@@ -463,7 +500,7 @@ final class DefaultUpdateChecker: UpdateChecker {
                     return
                 }
                 finished = true
-                self.taskSlot.set(nil)
+                slot.set(nil)
                 self.lastFetchError = error
                 if let error = error, case .http(let status) = error {
                     self.lastHttpStatus = status
@@ -478,20 +515,22 @@ final class DefaultUpdateChecker: UpdateChecker {
         }
         clock.scheduleAfter(DefaultUpdateChecker.totalTimeout) {
             self.stateQueue.async {
-                self.taskSlot.cancel()
+                slot.cancel()
                 finish(nil, .timeout)
             }
         }
-        attemptPrimary(deadline: deadline, allowRetry: true, finish: finish)
+        attemptPrimary(deadline: deadline, allowRetry: true, finish: finish, slot: slot)
     }
 
     private func attemptPrimary(
         deadline: Date,
         allowRetry: Bool,
-        finish: @escaping (UpdateManifest?, UpdateFetchError?) -> Void
+        finish: @escaping (UpdateManifest?, UpdateFetchError?) -> Void,
+        slot: UpdateTaskSlot
     ) {
-        fetchOne(url: DefaultUpdateChecker.primaryManifestURL, deadline: deadline) { manifest, error in
+        fetchOne(url: DefaultUpdateChecker.primaryManifestURL, deadline: deadline, slot: slot) { manifest, error in
             if let manifest = manifest {
+                self.recordPrimaryManifest(manifest)
                 finish(manifest, nil)
                 return
             }
@@ -499,17 +538,18 @@ final class DefaultUpdateChecker: UpdateChecker {
             if allowRetry && DefaultUpdateChecker.isTransient(failure) {
                 self.attemptPrimary(deadline: deadline, allowRetry: false, finish: { retryManifest, retryError in
                     if let retryManifest = retryManifest {
+                        self.recordPrimaryManifest(retryManifest)
                         finish(retryManifest, nil)
                         return
                     }
-                    self.attemptFallback(deadline: deadline, primaryError: retryError ?? failure, finish: finish)
-                })
+                    self.attemptFallback(deadline: deadline, primaryError: retryError ?? failure, finish: finish, slot: slot)
+                }, slot: slot)
                 return
             }
             if allowRetry {
                 // Non-transient primary failure: no retry, straight
                 // to the fallback.
-                self.attemptFallback(deadline: deadline, primaryError: failure, finish: finish)
+                self.attemptFallback(deadline: deadline, primaryError: failure, finish: finish, slot: slot)
             } else {
                 // The retry already ran and failed: report it. The
                 // caller (the retry handler above) runs the fallback
@@ -520,13 +560,41 @@ final class DefaultUpdateChecker: UpdateChecker {
         }
     }
 
+    /// Record a primary manifest as the last-seen truth (b49fix2
+    /// P2-68): the fallback is compared against this id.
+    private func recordPrimaryManifest(_ manifest: UpdateManifest) {
+        lastManifestSource = .primary
+        lastFallbackDisagreed = false
+        defaults.set(manifest.id, forKey: DefaultUpdateChecker.lastPrimaryManifestKey)
+    }
+
+    /// Record a fallback answer (b49fix2 P2-68): when it disagrees
+    /// with the last-seen primary, flag it and log — the two
+    /// sources serve the same version.json, so a drift means one
+    /// of them is stale. The fallback result is still used (the
+    /// shop may genuinely be down); it is just never silently
+    /// treated as truth.
+    private func recordFallbackManifest(_ manifest: UpdateManifest) {
+        lastManifestSource = .fallback
+        if let lastPrimary = defaults.string(forKey: DefaultUpdateChecker.lastPrimaryManifestKey),
+           !lastPrimary.isEmpty,
+           lastPrimary != manifest.id {
+            lastFallbackDisagreed = true
+            print("[UpdateChecker] WARNING: fallback manifest \(manifest.id) disagrees with last-seen primary \(lastPrimary)")
+        } else {
+            lastFallbackDisagreed = false
+        }
+    }
+
     private func attemptFallback(
         deadline: Date,
         primaryError: UpdateFetchError,
-        finish: @escaping (UpdateManifest?, UpdateFetchError?) -> Void
+        finish: @escaping (UpdateManifest?, UpdateFetchError?) -> Void,
+        slot: UpdateTaskSlot
     ) {
-        fetchOne(url: DefaultUpdateChecker.fallbackManifestURL, deadline: deadline) { manifest, _ in
+        fetchOne(url: DefaultUpdateChecker.fallbackManifestURL, deadline: deadline, slot: slot) { manifest, _ in
             if let manifest = manifest {
+                self.recordFallbackManifest(manifest)
                 finish(manifest, nil)
                 return
             }
@@ -541,6 +609,7 @@ final class DefaultUpdateChecker: UpdateChecker {
     private func fetchOne(
         url: URL,
         deadline: Date,
+        slot: UpdateTaskSlot,
         completion: @escaping (UpdateManifest?, UpdateFetchError?) -> Void
     ) {
         let remaining = deadline.timeIntervalSince(clock.now())
@@ -551,7 +620,7 @@ final class DefaultUpdateChecker: UpdateChecker {
         var task: UpdateCancellable? = nil
         let fetched = fetcher.fetch(url: url, timeout: remaining) { data, response, error in
             if let task = task {
-                self.taskSlot.clear(task)
+                slot.clear(task)
             }
             if let urlError = error as? URLError {
                 if urlError.code == .timedOut {
@@ -583,7 +652,7 @@ final class DefaultUpdateChecker: UpdateChecker {
             completion(manifest, nil)
         }
         task = fetched
-        taskSlot.set(fetched)
+        slot.set(fetched)
     }
 
     /// Transient: worth one immediate retry on the same host. A parse

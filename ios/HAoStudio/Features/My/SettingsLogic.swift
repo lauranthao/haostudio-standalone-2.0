@@ -519,14 +519,17 @@ enum SongCacheLimitOptions {
 
 // MARK: - 免责声明 (b45-coda 包 C, §4.3)
 //
-// Disclaimer text, version 3: a material change bumps the
-// version and re-asks consent. Written for THIS app (local-only,
-// no login, third-party sources) — never copied from Coda's
-// text, which names its platforms and login risks.
+// Disclaimer text, version 4 (b49fix2: clauses 5 and 6 were
+// corrected — clause 5 omitted the Emby upload, clause 6
+// over-promised auto-cleanup for downloads; the change is
+// material, so the version bumps and consent is re-asked).
+// Written for THIS app (local-only, no login, third-party
+// sources) — never copied from Coda's text, which names its
+// platforms and login risks.
 enum DisclaimerGate {
     /// Current disclaimer version. Bump on any material change;
     /// the stored accepted version must equal this to count.
-    static let currentVersion = 3
+    static let currentVersion = 4
     static let acceptedVersionKey = "hao_disclaimer_accepted_version"
 
     static func isAccepted(storedVersion: Int?) -> Bool {
@@ -562,11 +565,11 @@ enum DisclaimerContent {
         ),
         DisclaimerClause(
             title: "5. 本地数据",
-            body: "你的歌单、收藏、播放记录、下载与各项设置只保存在本机，不会上传到任何服务器。卸载应用或清除数据后，这些内容将无法恢复。"
+            body: "你的歌单、收藏、播放记录、下载与各项设置只保存在本机，不会上传到任何服务器——你自己配置的 Emby 服务器除外：开启上报后，播放进度会同步到你的 Emby。卸载应用或清除数据后，这些内容将无法恢复。"
         ),
         DisclaimerClause(
             title: "6. 下载与缓存",
-            body: "下载与缓存的内容仅供本机离线播放使用。缓存会在空间不足时被系统或应用自动清理，清理后需要重新获取。"
+            body: "下载与缓存的内容仅供本机离线播放使用。下载的文件会一直保留，直到你手动删除，不会自动清理；音频缓存会在空间不足时被系统或应用自动清理，清理后需要重新获取。"
         ),
         DisclaimerClause(
             title: "7. 网络与费用",
@@ -618,5 +621,5 @@ enum OpenSourceLicenses {
         SOFTWARE.
         """
 
-    static let thanksText = "HAo Studio 使用并参考了多个开源项目，感谢每一位开源作者的付出。完整的第三方声明请在 GitHub 仓库中查看。"
+    static let thanksText = "HAo Studio 使用并参考了多个开源项目，感谢每一位开源作者的付出。完整的第三方声明见 GitHub 仓库根目录的 THIRD-PARTY-NOTICES.md。"
 }

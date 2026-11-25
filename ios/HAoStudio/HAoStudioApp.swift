@@ -49,6 +49,9 @@ struct HAoStudioApp: App {
     /// handed in, so theme-owned state has exactly one owner (see
     /// SettingsStore.swift).
     @StateObject private var settingsStore: SettingsStore
+    /// b49fix2 P2-59: holds the background task while downloads
+    /// are active (see DownloadBackgroundTaskHolder below).
+    @StateObject private var downloadBackgroundTask: DownloadBackgroundTaskHolder
 
     init() {
         // Build 36 item 10 leg 6: size the shared HTTP cache
@@ -71,6 +74,16 @@ struct HAoStudioApp: App {
         // two lines run.
         BackupUpdateFlow.shared.engine = FileBackupEngine()
         BackupUpdateFlow.shared.checker = DefaultUpdateChecker()
+        // b49fix2 P2-59: while any download is active, hold a
+        // background task so iOS does not suspend the app (and
+        // freeze the data tasks) the moment it backgrounds. The
+        // engine fires onActivityChanged on the main queue at
+        // every activity flip.
+        let downloadBackgroundTask = DownloadBackgroundTaskHolder()
+        _downloadBackgroundTask = StateObject(wrappedValue: downloadBackgroundTask)
+        DownloadEngine.shared.onActivityChanged = { [weak downloadBackgroundTask] active in
+            downloadBackgroundTask?.setActive(active)
+        }
         let coordinator = PlaybackCoordinator()
         // S2: wire the music engine behind the coordinator. The LX
         // resolver answers resolveFirstPlayable; the player is the
@@ -164,7 +177,19 @@ struct HAoStudioApp: App {
                             if let checker = BackupUpdateFlow.shared.checker as? DefaultUpdateChecker {
                                 checker.checkAutoIfEnabled { result in
                                     if let result = result {
-                                        BackupUpdateFlow.shared.updatePrompt = result
+                                        // b49fix2 P2-25: an auto-check
+                                        // result must never overlap
+                                        // the disclaimer gate. Before
+                                        // acceptance it is stashed in
+                                        // the flow; MainTabView flushes
+                                        // it when the gate closes with
+                                        // acceptance.
+                                        if DisclaimerGate.isAccepted(storedVersion: settingsStore.disclaimerAcceptedVersion) {
+                                            BackupUpdateFlow.shared.updatePrompt = result
+                                            BackupUpdateFlow.shared.showingUpdatePrompt = true
+                                        } else {
+                                            BackupUpdateFlow.shared.pendingAutoUpdateResult = result
+                                        }
                                     }
                                 }
                             }
@@ -212,14 +237,22 @@ struct HAoStudioApp: App {
             // (Coda §4.2) is the initial height; .large is the
             // escape hatch when long release notes overflow 360 —
             // the sheet then grows instead of clipping text.
-            .sheet(item: $backupFlow.updatePrompt) { result in
-                UpdatePromptSheet(
-                    result: result,
-                    onSkip: { backupFlow.skipPromptedVersion() },
-                    onLater: { backupFlow.dismissPrompt() }
-                )
-                .presentationDetents([.height(360), .large])
-                .presentationDragIndicator(.visible)
+            // b49fix2 P2-24: driven by showingUpdatePrompt, not by
+            // updatePrompt — dismissing the sheet mid-download
+            // must not clear the prompt (the download keeps
+            // running and the sheet reopens on the same prompt).
+            // A swipe-dismiss only hides the sheet; dismissPrompt
+            // is what clears the prompt.
+            .sheet(isPresented: $backupFlow.showingUpdatePrompt) {
+                if let result = backupFlow.updatePrompt {
+                    UpdatePromptSheet(
+                        result: result,
+                        onSkip: { backupFlow.skipPromptedVersion() },
+                        onLater: { backupFlow.dismissPrompt() }
+                    )
+                    .presentationDetents([.height(360), .large])
+                    .presentationDragIndicator(.visible)
+                }
             }
             // b49sweep: the splash reads its background from
             // `.haoTheme`; it sits outside MainTabView, which is
@@ -261,5 +294,34 @@ struct HAoStudioApp: App {
                 }
             }
         }
+    }
+}
+
+/// Holds a UIBackgroundTaskIdentifier while downloads are active
+/// (b49fix2 P2-59). Without it, iOS suspends the app the moment
+/// it backgrounds and the engine's data tasks freeze until
+/// foreground — the download made no progress in the background.
+/// Ended when activity stops; the expiration handler ends it
+/// early (the .part files make the downloads resumable, so an
+/// expired task loses nothing but time). Main queue only:
+/// the engine fires onActivityChanged there.
+final class DownloadBackgroundTaskHolder: ObservableObject {
+    private var task: UIBackgroundTaskIdentifier = .invalid
+
+    func setActive(_ active: Bool) {
+        if active {
+            guard task == .invalid else { return }
+            task = UIApplication.shared.beginBackgroundTask(withName: "HAoStudio-download") { [weak self] in
+                self?.end()
+            }
+        } else {
+            end()
+        }
+    }
+
+    private func end() {
+        guard task != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(task)
+        task = .invalid
     }
 }

@@ -97,6 +97,15 @@ struct MainTabView: View {
     /// HAoStudioApp posts `.haoShowDisclaimerGate` after the
     /// splash when the stored disclaimer version is not current.
     @State private var showDisclaimerGate = false
+    /// One-time storage notice (b49fix2 P1-13): LocalStore posts
+    /// .haoStoreSaveFailed / .haoStoreQuarantined when a save
+    /// fails or a corrupt file is quarantined; the shell surfaces
+    /// it once here instead of leaving 27 call sites each
+    /// ignoring the failure.
+    @State private var storeNotice: String?
+    /// One-time backup nudge (b49fix2 B5): offered after the
+    /// first favourite or download.
+    @State private var showingBackupNudge = false
     /// The five tab roots, kept alive (b49sweep P1): every tab
     /// mounts once — on first visit — and then stays mounted,
     /// hidden with opacity 0 when it is not selected. The old
@@ -152,11 +161,35 @@ struct MainTabView: View {
                     showDisclaimerGate = true
                 } else if DisclaimerGate.isAccepted(storedVersion: settingsStore.disclaimerAcceptedVersion) {
                     showDisclaimerGate = false
+                    // b49fix2 P2-25: the gate just closed with
+                    // acceptance — flush a held auto-check result
+                    // now (never before: the update prompt must
+                    // not overlap the gate).
+                    if let pending = BackupUpdateFlow.shared.pendingAutoUpdateResult {
+                        BackupUpdateFlow.shared.pendingAutoUpdateResult = nil
+                        BackupUpdateFlow.shared.updatePrompt = pending
+                        BackupUpdateFlow.shared.showingUpdatePrompt = true
+                    }
                 } else {
                     showDisclaimerGate = true
                 }
             }
         )
+    }
+
+    /// b49fix2 B5: one-time backup nudge after the first
+    /// favourite or download — the disclaimer is honest that a
+    /// reinstall loses everything, but nothing ever suggested a
+    /// backup. Shows once per install, never while the
+    /// disclaimer gate is up, and never after the user has
+    /// exported once (beginExport records that flag).
+    private func maybeShowBackupNudge() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: "hao_backup_nudge_shown"),
+              !defaults.bool(forKey: "hao_backup_exported_once"),
+              !showDisclaimerGate else { return }
+        defaults.set(true, forKey: "hao_backup_nudge_shown")
+        showingBackupNudge = true
     }
 
     /// The bottom chrome (b39: restored to the original system
@@ -312,8 +345,62 @@ struct MainTabView: View {
         } message: { prompt in
             Text("当前网络按流量计费（移动数据、热点或低数据模式），下载“\(prompt.title)”会消耗流量。")
         }
+        // b49fix2 P1-13: the one-time storage notice.
+        .alert("存储提示", isPresented: Binding(get: { storeNotice != nil }, set: { if !$0 { storeNotice = nil } }), presenting: storeNotice) { _ in
+            Button("知道了", role: .cancel) {}
+        } message: { notice in
+            Text(notice)
+        }
+        // b49fix2 B5: the one-time backup nudge. "去备份" opens
+        // the My tab, where the backup rows live in Settings.
+        .alert("备份一次更安心", isPresented: $showingBackupNudge) {
+            Button("去备份") {
+                mountedTabs.insert(.my)
+                selectedTab = .my
+            }
+            Button("以后再说", role: .cancel) {}
+        } message: {
+            Text("收藏和下载只保存在本机，换手机或重装会丢。导出一份备份，几秒钟就好。")
+        }
         .onReceive(NotificationCenter.default.publisher(for: .haoShowDisclaimerGate)) { _ in
             showDisclaimerGate = true
+        }
+        // b49fix2 B1: Home empty-state CTAs ask the shell to
+        // switch tabs. Mount the tab (a tab never visited has no
+        // root yet) and select it.
+        .onReceive(NotificationCenter.default.publisher(for: .haoSwitchTab)) { notification in
+            if let tab = notification.object as? HaoTab {
+                mountedTabs.insert(tab)
+                selectedTab = tab
+            }
+        }
+        // b49fix2 P1-13: a failed save / quarantined file
+        // surfaces once here. The posts can arrive off the main
+        // queue (LocalStore saves run on any thread), so the
+        // @State write hops to main. The first notice wins — a
+        // second failure while one is unread does not clobber it.
+        .onReceive(NotificationCenter.default.publisher(for: .haoStoreSaveFailed)) { _ in
+            DispatchQueue.main.async {
+                if storeNotice == nil {
+                    storeNotice = "存储空间不足：部分数据没能保存。请清理空间后重试。"
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .haoStoreQuarantined)) { _ in
+            DispatchQueue.main.async {
+                if storeNotice == nil {
+                    storeNotice = "发现一份损坏的本地数据，已隔离保存。你的其他数据不受影响。"
+                }
+            }
+        }
+        // b49fix2 B5: first favourite / download → one-time
+        // backup nudge. The download post arrives from the
+        // engine's queue, so the @State write hops to main.
+        .onReceive(NotificationCenter.default.publisher(for: .haoMusicFavChanged)) { _ in
+            DispatchQueue.main.async { maybeShowBackupNudge() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .haoDownloadCompleted)) { _ in
+            DispatchQueue.main.async { maybeShowBackupNudge() }
         }
         .onAppear {
             // b45-h, P8 #7: the engine's metered-confirmation

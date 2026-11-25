@@ -410,27 +410,48 @@ enum HaoAudioCache {
 
     /// Evict least-recently-used (by mtime) files until under the
     /// cap. Leased (playing) files are never evicted.
+    ///
+    /// b49fix2 P2-15: the track id used to be parsed by splitting
+    /// the audio file name on "-" (`<trackID>-<uuid>.<ext>`), but
+    /// a track id may itself contain "-" (only /, \, : and NUL
+    /// are sanitised out), so the first segment was the wrong id:
+    /// the lease check missed and the metadata delete removed the
+    /// wrong `<id>.json`. The metadata file is the authority now:
+    /// each `<trackID>.json` names its own audio file and track
+    /// id, so no filename parsing happens at all. An audio file
+    /// with no metadata (orphan) is evicted by its own mtime
+    /// with no metadata to delete.
     static func evictLRUIfNeeded(cachesURL: URL? = nil) {
         let cap = limitBytes(freeBytes: AutomaticCacheLimit.freeBytes(), cachesURL: cachesURL)
         var total = totalBytes(cachesURL: cachesURL)
         guard total > cap else { return }
         let dir = audioDirectory(cachesURL: cachesURL)
         let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        var files: [(url: URL, mtime: Date, size: Int64, trackID: String)] = []
+        // Metadata files: the authority for track id + audio name.
+        var byFileName: [String: AudioCacheEntry] = [:]
+        for name in names where name.hasSuffix(".json") {
+            let metaURL = dir.appendingPathComponent(name)
+            guard let data = try? Data(contentsOf: metaURL),
+                  let entry = try? JSONDecoder().decode(AudioCacheEntry.self, from: data)
+            else { continue }
+            byFileName[entry.fileName] = entry
+        }
+        var files: [(url: URL, mtime: Date, size: Int64, trackID: String?)] = []
         for name in names where !name.hasPrefix("tmp-") && !name.hasSuffix(".json") {
             let url = dir.appendingPathComponent(name)
             guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
                   let size = attrs[.size] as? NSNumber,
                   let mtime = attrs[.modificationDate] as? Date
             else { continue }
-            let trackID = name.components(separatedBy: "-").first ?? name
-            files.append((url, mtime, size.int64Value, trackID))
+            files.append((url, mtime, size.int64Value, byFileName[name]?.trackID))
         }
         files.sort { $0.mtime < $1.mtime }
         for file in files where total > cap {
-            if isLeased(trackID: file.trackID) { continue }
+            if let trackID = file.trackID, isLeased(trackID: trackID) { continue }
             try? FileManager.default.removeItem(at: file.url)
-            try? FileManager.default.removeItem(at: metadataURL(trackID: file.trackID, cachesURL: cachesURL))
+            if let trackID = file.trackID {
+                try? FileManager.default.removeItem(at: metadataURL(trackID: trackID, cachesURL: cachesURL))
+            }
             total -= file.size
         }
     }
@@ -538,9 +559,20 @@ enum OfflineMetadataStore {
     private static func loadIfNeeded(documentsURL: URL?) {
         guard !loaded else { return }
         loaded = true
-        guard let data = try? Data(contentsOf: catalogURL(documentsURL: documentsURL)),
-              let decoded = try? JSONDecoder().decode([String: OfflineTrackMeta].self, from: data)
-        else { return }
+        // b49fix2 P0-1: a corrupt catalog used to read as empty,
+        // and the next debounced write then overwrote the user's
+        // metadata with the empty map. Quarantine it instead —
+        // same shape as LocalStore.loadCollection — so the data
+        // survives for manual recovery.
+        guard let data = try? Data(contentsOf: catalogURL(documentsURL: documentsURL)) else { return }
+        guard let decoded = try? JSONDecoder().decode([String: OfflineTrackMeta].self, from: data)
+        else {
+            LocalStore.quarantineFile(
+                at: catalogURL(documentsURL: documentsURL),
+                name: fileName.replacingOccurrences(of: ".json", with: ""),
+                reason: "decode failed", documentsURL: documentsURL)
+            return
+        }
         entries = decoded
     }
 
