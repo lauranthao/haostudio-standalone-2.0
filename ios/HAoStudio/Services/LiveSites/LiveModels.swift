@@ -78,6 +78,16 @@ enum LivePlatform: String, CaseIterable, Identifiable {
         return filtered.isEmpty ? allCases : filtered
     }
 
+    /// No-arg form: the platforms the live source switches leave
+    /// enabled right now (reads `hao_live_sources` via
+    /// `LiveSourcePrefs`). This lives here — not in LiveTabView —
+    /// because `LiveDataGatewayAdapter` (AppCore) filters through
+    /// it and LiveTabView is not an AppCore source (b49 sweep-4
+    /// T1: `swift test` could not compile AppCore).
+    static var enabledCases: [LivePlatform] {
+        LivePlatform.enabledCases(from: LiveSourcePrefs.load())
+    }
+
     /// Room page URL for a room id (used for `LiveRoom.link` fallbacks).
     func roomLink(roomId: String) -> String {
         switch self {

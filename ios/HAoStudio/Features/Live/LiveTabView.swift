@@ -761,18 +761,6 @@ extension LiveHistoryEntry {
     }
 }
 
-/// Platforms the live source switches leave enabled (b49 sweep
-/// #2): `LiveSourcePrefs.load()` reads the `hao_live_sources`
-/// collection the settings page writes; the tabs, the search
-/// page and the gateway all filter through this one list, so a
-/// platform switched off can appear in none of them. An empty or
-/// unreadable list means all five (the prefs' own default).
-extension LivePlatform {
-    static var enabledCases: [LivePlatform] {
-        LivePlatform.enabledCases(from: LiveSourcePrefs.load())
-    }
-}
-
 // MARK: - Shared platform text tabs (Pure Live home TabBar style)
 
 /// The one platform switcher the live tab and live search share:
