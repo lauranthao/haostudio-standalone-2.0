@@ -2,7 +2,7 @@
 
 ![iOS 17.0+](https://img.shields.io/badge/iOS-17.0%2B-black)
 ![Swift 5.0](https://img.shields.io/badge/Swift-5.0-orange)
-![License MIT](https://img.shields.io/badge/License-MIT-green)
+![License AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue)
 
 **音乐、影视、直播，三合一的原生 iOS 播放器。**
 
@@ -149,13 +149,16 @@ version.json                # 当前版本、更新日志、IPA 地址
 - [歌一刀 / KMusic](https://github.com/Mac-XK/KMusic)——播放与解析思路
 - [Pure Live](https://github.com/liuchuancong/pure_live)——直播与播放器
 - [Kumone](https://github.com/missuo/kumone)——界面设计
+- [Coda](https://github.com/Wow-CaiCai/Coda)（GNU AGPL-3.0）——音乐播放器、页面、设置/关于、搜索、菜单栏与迷你播放器、交互设计与实现
 - VidHub、Apple Music——影视、音乐界面设计参照
 - IJKPlayer、mpv（libmpv）——播放内核
 - 豆瓣——影视元数据（评分、演职员、海报、简介）
 
 ## 许可证
 
-[MIT](LICENSE) © 2026 HAo Studio
+[GNU AGPL-3.0](LICENSE) © 2026 HAo Studio
+
+2026-11-25 由 MIT 改为 GNU AGPL-3.0：与 Coda 同许可证，本项目可以直接复用 Coda 的代码（保留其版权与许可证声明）。改用 AGPL 后，任何人分发或联网提供修改版都必须同样开源。
 
 ## 免责声明
 
