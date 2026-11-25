@@ -101,6 +101,9 @@ final class MusicSearchViewModel: ObservableObject {
         var cardPages: [MusicSearchAPI.MusicSearchCategoryKind: Int] = [:]
         var cardHasMore: [MusicSearchAPI.MusicSearchCategoryKind: Bool] = [:]
         var cardErrors: [MusicSearchAPI.MusicSearchCategoryKind: Bool] = [:]
+        /// Kinds the zero-growth guard closed (b49fix7 P2-6) —
+        /// the grid footer reads it for the "没有更多" end state.
+        var cardClosedByGuard: [MusicSearchAPI.MusicSearchCategoryKind: Bool] = [:]
         /// The limit each kind's last successful page used (10 on
         /// 综合, 50 on a single-kind tab) — retryCategory needs it
         /// to tell a real next page from a limit change (P2-34).
@@ -160,6 +163,16 @@ final class MusicSearchViewModel: ObservableObject {
     /// Kinds whose last fetch failed (empty results, retry offered
     /// inside that section — never a whole-page error).
     @Published private(set) var cardErrors: [MusicSearchAPI.MusicSearchCategoryKind: Bool] = [:]
+    /// Kinds the zero-growth guard closed (b49fix7 P2-6): the
+    /// source answered two consecutive next-page requests with
+    /// the same page, so load-more is off — but that must be a
+    /// VISIBLE end state ("没有更多" in the grid footer), not a
+    /// silent disappearance. A fresh first page for the kind
+    /// clears it (finishCategory); a new search clears all of
+    /// them. Persisted in the snapshot with cardHasMore, so a
+    /// tab switch does not lose the end state while keeping the
+    /// closed pagination.
+    @Published private(set) var cardClosedByGuard: [MusicSearchAPI.MusicSearchCategoryKind: Bool] = [:]
 
     // MARK: - Suggestions + hot keywords (b45-d)
 
@@ -233,6 +246,16 @@ final class MusicSearchViewModel: ObservableObject {
     private var lastNextPageRequest: [MusicSearchAPI.MusicSearchCategoryKind: (offset: Int, loadedCount: Int)] = [:]
     private var zeroGrowthStreak: [MusicSearchAPI.MusicSearchCategoryKind: Int] = [:]
 
+    /// Clear one kind's zero-growth guard state (b49fix7 P2-5).
+    /// A fresh first page invalidates the old baseline: the
+    /// source may now answer a new limit / new content, so the
+    /// previous (offset, count) and its streak must not close a
+    /// load-more that has never fired under the new page.
+    private func resetZeroGrowthState(for kind: MusicSearchAPI.MusicSearchCategoryKind) {
+        lastNextPageRequest[kind] = nil
+        zeroGrowthStreak[kind] = nil
+    }
+
     static func freshArtistMerge() -> MusicSearchCategoryMerge<ArtistSummary> {
         MusicSearchCategoryMerge(
             key: { $0.id.isEmpty ? "name|\($0.name.lowercased())" : "\($0.platform.rawValue)|\($0.id)" },
@@ -304,6 +327,7 @@ final class MusicSearchViewModel: ObservableObject {
         cardLimits = [:]
         loadingCards = []
         cardErrors = [:]
+        cardClosedByGuard = [:]
         hasSearched = true
         isSearching = true
         settledBatchCount = 0
@@ -382,6 +406,7 @@ final class MusicSearchViewModel: ObservableObject {
         cardLimits = [:]
         loadingCards = []
         cardErrors = [:]
+        cardClosedByGuard = [:]
         suggestions = []
         lastSuggestionText = ""
         lastNextPageRequest = [:]
@@ -485,6 +510,7 @@ final class MusicSearchViewModel: ObservableObject {
         snapshot.cardPages = cardPages
         snapshot.cardHasMore = cardHasMore
         snapshot.cardErrors = cardErrors
+        snapshot.cardClosedByGuard = cardClosedByGuard
         snapshot.cardLimits = cardLimits
         snapshots[tab] = snapshot
     }
@@ -501,6 +527,7 @@ final class MusicSearchViewModel: ObservableObject {
         cardPages = snapshot.cardPages
         cardHasMore = snapshot.cardHasMore
         cardErrors = snapshot.cardErrors
+        cardClosedByGuard = snapshot.cardClosedByGuard
         cardLimits = snapshot.cardLimits
     }
 
@@ -593,11 +620,21 @@ final class MusicSearchViewModel: ObservableObject {
     /// no total, a full page means "more".
     private func finishCategory(_ kind: MusicSearchAPI.MusicSearchCategoryKind, items: [ArtistSummary], total: Int?, ok: Bool, limit: Int, offset: Int, isFirstPage: Bool, gen: UUID) {
         guard let owner = beginCategoryFinish(kind, ok: ok, gen: gen) else { return }
+        // b49fix7 P2-5: a fresh first page invalidates the old
+        // zero-growth baseline — clear this kind's last request
+        // and streak. The streak is per-kind GLOBAL state (not
+        // per tab), so one reset covers both owner paths: a
+        // stale streak from the 综合 tab must not close the
+        // single tab's load-more, and vice versa.
+        if isFirstPage { resetZeroGrowthState(for: kind) }
         if owner == tab {
             cardLimits[kind] = limit
             if isFirstPage {
                 artistMerge.reset()
                 cardPages[kind] = 0
+                // b49fix7 P2-6: a fresh first page re-opens a
+                // kind the guard had closed.
+                cardClosedByGuard[kind] = false
             } else {
                 cardPages[kind] = offset / max(limit, 1)
             }
@@ -608,7 +645,10 @@ final class MusicSearchViewModel: ObservableObject {
         } else {
             var snap = snapshots[owner] ?? SearchSnapshot()
             var merge = snap.artistMerge ?? Self.freshArtistMerge()
-            if isFirstPage { merge.reset() }
+            if isFirstPage {
+                merge.reset()
+                snap.cardClosedByGuard[kind] = false
+            }
             _ = merge.append(items)
             snap.artistMerge = merge
             snap.artists = merge.items
@@ -623,11 +663,19 @@ final class MusicSearchViewModel: ObservableObject {
 
     private func finishCategory(_ kind: MusicSearchAPI.MusicSearchCategoryKind, items: [AlbumSummary], total: Int?, ok: Bool, limit: Int, offset: Int, isFirstPage: Bool, gen: UUID) {
         guard let owner = beginCategoryFinish(kind, ok: ok, gen: gen) else { return }
+        // b49fix7 P2-5: a fresh first page invalidates the old
+        // zero-growth baseline — clear this kind's last request
+        // and streak (per-kind global state; covers both owner
+        // paths).
+        if isFirstPage { resetZeroGrowthState(for: kind) }
         if owner == tab {
             cardLimits[kind] = limit
             if isFirstPage {
                 albumMerge.reset()
                 cardPages[kind] = 0
+                // b49fix7 P2-6: a fresh first page re-opens a
+                // kind the guard had closed.
+                cardClosedByGuard[kind] = false
             } else {
                 cardPages[kind] = offset / max(limit, 1)
             }
@@ -638,7 +686,10 @@ final class MusicSearchViewModel: ObservableObject {
         } else {
             var snap = snapshots[owner] ?? SearchSnapshot()
             var merge = snap.albumMerge ?? Self.freshAlbumMerge()
-            if isFirstPage { merge.reset() }
+            if isFirstPage {
+                merge.reset()
+                snap.cardClosedByGuard[kind] = false
+            }
             _ = merge.append(items)
             snap.albumMerge = merge
             snap.albums = merge.items
@@ -653,11 +704,19 @@ final class MusicSearchViewModel: ObservableObject {
 
     private func finishCategory(_ kind: MusicSearchAPI.MusicSearchCategoryKind, items: [PlaylistSummary], total: Int?, ok: Bool, limit: Int, offset: Int, isFirstPage: Bool, gen: UUID) {
         guard let owner = beginCategoryFinish(kind, ok: ok, gen: gen) else { return }
+        // b49fix7 P2-5: a fresh first page invalidates the old
+        // zero-growth baseline — clear this kind's last request
+        // and streak (per-kind global state; covers both owner
+        // paths).
+        if isFirstPage { resetZeroGrowthState(for: kind) }
         if owner == tab {
             cardLimits[kind] = limit
             if isFirstPage {
                 playlistMerge.reset()
                 cardPages[kind] = 0
+                // b49fix7 P2-6: a fresh first page re-opens a
+                // kind the guard had closed.
+                cardClosedByGuard[kind] = false
             } else {
                 cardPages[kind] = offset / max(limit, 1)
             }
@@ -668,7 +727,10 @@ final class MusicSearchViewModel: ObservableObject {
         } else {
             var snap = snapshots[owner] ?? SearchSnapshot()
             var merge = snap.playlistMerge ?? Self.freshPlaylistMerge()
-            if isFirstPage { merge.reset() }
+            if isFirstPage {
+                merge.reset()
+                snap.cardClosedByGuard[kind] = false
+            }
             _ = merge.append(items)
             snap.playlistMerge = merge
             snap.playlists = merge.items
@@ -770,6 +832,14 @@ final class MusicSearchViewModel: ObservableObject {
         zeroGrowthStreak[kind] = decision.streak
         guard decision.fire else {
             cardHasMore[kind] = false
+            // b49fix7 P2-6: the guard closing a kind must be a
+            // VISIBLE end state, not a silent disappearance — the
+            // grid footer reads cardClosedByGuard and shows
+            // "没有更多". A fresh first page (or a new search)
+            // re-opens the kind. Persisted with the snapshot, so
+            // a tab switch keeps the end state with the closed
+            // pagination.
+            cardClosedByGuard[kind] = true
             saveSnapshot()
             return
         }

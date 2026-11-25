@@ -289,12 +289,16 @@ struct MusicRankLabel: View {
 /// Coda unplayable-reason tag: 10pt medium, quaternary fill,
 /// r4, padding 5×2.
 struct MusicUnplayableTag: View {
+    @Environment(\.haoTheme) private var theme
     var text: String
 
     var body: some View {
         Text(text)
             .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(Color.secondary)
+            // b49fix7 P2-25: theme.textMuted, not Color.secondary
+            // (the .secondary zero-residue gate) — the weakest
+            // text role matches the tag's de-emphasised intent.
+            .foregroundStyle(theme.textMuted)
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
             .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
@@ -379,8 +383,11 @@ struct MusicPlayCountBadge: View {
         HStack(spacing: 3) {
             Image(systemName: "play.fill")
                 .font(.system(size: 8, weight: .bold))
+            // b49fix7 P2-24: haoCaption2Strong (11 semibold) —
+            // the token already existed; the literal 11 semibold
+            // was a missed tokenisation.
             Text(musicCompactCount(count))
-                .font(.system(size: 11, weight: .semibold))
+                .font(.haoCaption2Strong)
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 8)
@@ -396,6 +403,10 @@ struct MusicVIPBadge: View {
     @Environment(\.haoTheme) private var theme
 
     var body: some View {
+        // b49fix7 P2-24: 11 bold is deliberate — no 11-bold
+        // token exists (haoBadge is 10 bold) and the Coda VIP
+        // badge is specified at 11 bold; do not "fix" this to
+        // haoBadge, which would shrink the badge.
         Text("VIP")
             .font(.system(size: 11, weight: .bold))
             .foregroundStyle(theme.accentText)
@@ -493,7 +504,9 @@ struct MusicDetailHero: View {
         VStack(spacing: 0) {
             MusicCoverView(
                 urlString: coverURL, size: coverSize,
-                cornerRadius: isCircular ? coverSize / 2 : 12
+                // b49fix7 P2-21: HaoLayout.cornerMedium (= 12) —
+                // the literal 12 hid from the number grep.
+                cornerRadius: isCircular ? coverSize / 2 : HaoLayout.cornerMedium
             )
             .shadow(color: .black.opacity(0.18), radius: 18, y: 10)
             Text(title.isEmpty ? "未知" : title)

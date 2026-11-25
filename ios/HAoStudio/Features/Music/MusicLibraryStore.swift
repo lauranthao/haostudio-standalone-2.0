@@ -79,6 +79,13 @@ enum MusicLibraryStore {
     static let resumeCollection = "musicResume"
     static let localMusicCollection = "hao_local_music"
     static let dailyCollection = "hao_daily"
+    /// Pinned ranking pool for the day (b49fix7 P2-3): the
+    /// total-100 ranking, computed once per day and fixed to
+    /// disk. The daily load draws its fills / spares from this
+    /// pool, never from a fresh ranking — so a reload at noon
+    /// (listenLog grown) cannot re-rank the day's picks. Same
+    /// file shape as hao_daily ({ "YYYY-MM-DD": [Song JSON] }).
+    static let dailyPoolCollection = "hao_daily_pool"
     static let loudnessCacheCollection = "hao_music_loudness_cache"
 
     static let maxRecent = 100
@@ -953,6 +960,42 @@ enum MusicLibraryStore {
         guard shouldSaveDailyTracks(currentDiskKeys: current, expectedKeys: expectedKeys, force: force) else { return false }
         saveDailyTracks(tracks, for: dayKey)
         return true
+    }
+
+    /// Pinned ranking pool for the day (b49fix7 P2-3): the
+    /// total-100 ranking, fixed to disk on the day's first
+    /// load. Nil when no pool was ever pinned for the key.
+    /// The pool is stored UNFILTERED by dislikes (the ranking
+    /// is computed with no dislike exclusion) — the load
+    /// filters it by the CURRENT disliked ids at use time, so
+    /// a song disliked after pinning still drops out. A pool
+    /// deeper than the 40-list is deliberate: the list holds
+    /// 40, so a 40-deep pool would have almost no song the
+    /// list does not already hold, and the fills would have
+    /// nowhere to draw from once dislikes eat into it.
+    static func dailyPool(for dayKey: String) -> [MusicSong]? {
+        let dict = readObject(named: dailyPoolCollection)
+        guard let raw = dict[dayKey] as? [[String: Any]] else { return nil }
+        return raw.map(MusicSong.init(json:))
+    }
+
+    /// Save the day's pinned ranking pool. Same 7-day prune
+    /// as saveDailyTracks (keys are YYYY-MM-DD dates; an
+    /// unparseable key is kept, never deleted on a guess).
+    static func saveDailyPool(_ tracks: [MusicSong], for dayKey: String) {
+        var dict = readObject(named: dailyPoolCollection)
+        dict[dayKey] = tracks.map { $0.toJSON() }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        let cutoff = Calendar.current.startOfDay(
+            for: Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date.distantPast)
+        for key in dict.keys where key != dayKey {
+            if let date = formatter.date(from: key), date < cutoff {
+                dict.removeValue(forKey: key)
+            }
+        }
+        writeObject(named: dailyPoolCollection, dict)
     }
 
     // MARK: - FM disliked ids

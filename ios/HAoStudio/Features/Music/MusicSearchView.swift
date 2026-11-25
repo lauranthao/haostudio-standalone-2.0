@@ -726,6 +726,19 @@ struct MusicSearchView: View {
             // b49fix5 P2-23: inline text retries carry top 12
             // (was vertical 16 — the bottom is the container's).
             .padding(.top, 12)
+        } else if searchVM.cardClosedByGuard[kind] == true {
+            // b49fix7 P2-6: the zero-growth guard closed this
+            // kind (the source answered two identical next-page
+            // requests with the same page) — show the end state
+            // instead of silently dropping the load-more button.
+            // A fresh first page re-opens the kind; the footer
+            // is only rendered on the single-kind grids, which
+            // is where the guard can close a kind.
+            Text("没有更多")
+                .font(.haoFootnote)
+                .foregroundStyle(theme.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 12)
         }
     }
 
