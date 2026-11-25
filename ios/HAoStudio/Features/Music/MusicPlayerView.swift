@@ -267,9 +267,11 @@ struct MusicPlayerView: View {
                             .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
                             // b47-player: the root is full-screen now,
                             // so the toast keeps its old distance from
-                            // the SAFE bottom (90pt), not the screen
-                            // bottom, or it would crowd the toolbar.
-                            .padding(.bottom, 90 + geo.safeAreaInsets.bottom)
+                            // the SAFE bottom (toastBottomOffset 90),
+                            // not the screen bottom, or it would crowd
+                            // the toolbar. b49fix3 P2-37: verified 90
+                            // on the music side (live was 96 → 90).
+                            .padding(.bottom, HaoLayout.toastBottomOffset + geo.safeAreaInsets.bottom)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                     .animation(.spring(duration: 0.3), value: playerVM.toast)
@@ -650,6 +652,11 @@ struct MusicPlayerView: View {
                 // touched). In cover mode the Spacers absorb the
                 // +54; in lyrics mode the flexible area shrinks
                 // by it. Budget updated below (292 → 346).
+                // b49fix3 P2-36: 36 STAYS — it is Coda's value,
+                // not drift (copy plan §player: progress 52 + 24,
+                // transport 82 + 36, volume removed, tools 50 =
+                // 244 total; 24 would make it 232). The sweep's
+                // "unify to 24" would break the Coda copy.
                 .padding(.top, 36)
                 .padding(.bottom, 8)
                 .frame(maxWidth: .infinity)

@@ -144,7 +144,7 @@ struct MusicCollectionsView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .haoBottomChromeContentPadding()
             }
         }
@@ -185,11 +185,14 @@ struct MusicCollectionsView: View {
             ForEach(artists, id: \.name) { artist in
                 NavigationLink(destination: MusicArtistDetailView(artist: artist)) {
                     // Coda §3.4: artist card circle 80 compact
-                    // (100 non-compact), name cardTitle 1 line.
+                    // (100 non-compact), name 15 semibold 1 line
+                    // (b49fix3 P1-25 — was 17 semibold, one rung
+                    // above the section-title scale; the My-page
+                    // twin is Shell's file).
                     VStack(spacing: 8) {
                         MusicCoverView(urlString: artist.cover, size: 80, cornerRadius: 40)
                         Text(artist.name)
-                            .font(.haoBodyStrong)
+                            .font(.haoSubheadStrong)
                             .foregroundStyle(theme.textPrimary)
                             .lineLimit(1)
                     }
@@ -422,7 +425,7 @@ struct MusicPlaylistDetailView: View {
             }
         }
         .padding(.horizontal, 16)
-        .frame(height: 44)
+        .frame(height: HaoLayout.detailSearchHeight)
         .background(Color.primary.opacity(0.06), in: Capsule())
     }
 
@@ -442,7 +445,10 @@ struct MusicPlaylistDetailView: View {
                 }
                 Spacer()
             }
-            .padding(20)
+            // b49fix3 P2-39: the sheet's horizontal padding is
+            // the sheet inset (24); the vertical 20 stays.
+            .padding(.horizontal, HaoLayout.sheetHorizontalPadding)
+            .padding(.vertical, 20)
             .navigationTitle("歌单简介")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -659,7 +665,7 @@ struct MusicDownloadsView: View {
                             MusicCoverView(urlString: download.song.cover, size: 48, cornerRadius: 6)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(download.song.title.isEmpty ? "未知歌曲" : download.song.title)
-                                    .font(.system(size: 17, weight: .medium))
+                                    .font(.haoBodyMedium)
                                     .foregroundStyle(theme.textPrimary)
                                     .lineLimit(1)
                                 HStack(spacing: 6) {
@@ -738,7 +744,7 @@ struct MusicDownloadTasksView: View {
                         HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(task.request.title)
-                                    .font(.system(size: 17, weight: .medium))
+                                    .font(.haoBodyMedium)
                                     .foregroundStyle(theme.textPrimary)
                                     .lineLimit(1)
                                 HStack(spacing: 8) {

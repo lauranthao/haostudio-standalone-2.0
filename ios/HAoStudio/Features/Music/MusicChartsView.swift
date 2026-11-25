@@ -184,7 +184,7 @@ struct MusicChartsView: View {
                             .buttonStyle(.plain)
                         }
                     }
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, HaoLayout.pushedPageMargin)
                     .padding(.vertical, 12)
                     .haoBottomChromeContentPadding()
                     // b45-g (Coda §8.2): pull-to-refresh bypasses

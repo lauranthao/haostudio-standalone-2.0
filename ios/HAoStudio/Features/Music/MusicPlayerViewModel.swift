@@ -1577,8 +1577,25 @@ final class MusicPlayerViewModel: ObservableObject {
                     case .completed:
                         var downloads = MusicLibraryStore.getDownloads()
                         downloads.removeAll { $0.key == song.identityKey }
+                        // b49fix3 P2-5: the downloaded file's path
+                        // goes on the SONG too, not just the
+                        // wrapper's filePath — toPlaybackItem()
+                        // builds localFileURL from song.localPath,
+                        // so a bare download.song.toPlaybackItem()
+                        // used to come back nil and play over the
+                        // network. Resolved (not just stored
+                        // relative) to match withLocalFile() /
+                        // playLocal(): the load side re-resolves a
+                        // stale absolute path after a container
+                        // move, and the wrapper filePath stays the
+                        // repair source of truth.
+                        var storedSong = song
+                        if let relative = info.localRelativePath,
+                           let url = LocalFileIndex.resolve(relative, subdir: DownloadEngine.downloadSubdir) {
+                            storedSong.localPath = url.path
+                        }
                         downloads.append(DownloadedSong(
-                            song: song,
+                            song: storedSong,
                             filePath: info.localRelativePath ?? "",
                             sizeBytes: Int(info.downloadedBytes),
                             downloadedAt: Int(Date().timeIntervalSince1970),

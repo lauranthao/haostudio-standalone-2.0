@@ -177,7 +177,7 @@ struct MusicSongRow: View {
                         }
                         VStack(alignment: .leading, spacing: 2) {
                             Text(song.title.isEmpty ? "未知歌曲" : song.title)
-                                .font(.system(size: 17, weight: .medium))
+                                .font(.haoBodyMedium)
                                 .foregroundStyle(isPlaying ? theme.accentText : theme.textPrimary)
                                 .lineLimit(1)
                             HStack(spacing: 6) {
@@ -301,10 +301,10 @@ struct MusicUnplayableTag: View {
     }
 }
 
-/// Coda CoverCard: 178×178, r8 + 0.5pt primary 0.08 stroke,
-/// cover→text 8, title→subtitle 4, title cardTitle max 2 lines,
-/// subtitle secondary max 1 line. Play-count badge overlays the
-/// cover's top-trailing corner (8pt margin).
+/// Coda CoverCard: 178×178, r8 (cornerSmall) + 0.5pt primary 0.08
+/// stroke, cover→text 8, title→subtitle 4, title cardTitle max 2
+/// lines, subtitle secondary max 1 line. Play-count badge overlays
+/// the cover's top-trailing corner (8pt margin).
 struct MusicCoverCard: View {
     var coverURL: String
     var title: String
@@ -332,9 +332,9 @@ struct MusicCoverCard: View {
 
     private var cardContent: some View {
         VStack(alignment: .leading, spacing: 8) {
-            MusicCoverView(urlString: coverURL, size: size, cornerRadius: 8)
+            MusicCoverView(urlString: coverURL, size: size, cornerRadius: HaoLayout.cornerSmall)
                 .overlay {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: HaoLayout.cornerSmall, style: .continuous)
                         .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
                 }
                 .overlay(alignment: .topTrailing) {
@@ -364,8 +364,9 @@ struct MusicCoverCard: View {
     }
 }
 
-/// Coda CoverCardBody (home / grid variant): r22 cover, title
-/// body medium max 2 lines, subtitle caption 13 max 1 line.
+/// Coda CoverCardBody (home / grid variant): r22 (cornerXXLarge)
+/// cover, title body strong max 2 lines, subtitle footnote 13
+/// max 1 line.
 struct MusicCoverCardBody: View {
     var coverURL: String
     var title: String
@@ -399,16 +400,16 @@ struct MusicCoverCardBody: View {
 
     private var cardContent: some View {
         VStack(alignment: .leading, spacing: 8) {
-            MusicCoverView(urlString: coverURL, size: size, cornerRadius: 22)
+            MusicCoverView(urlString: coverURL, size: size, cornerRadius: HaoLayout.cornerXXLarge)
             VStack(alignment: .leading, spacing: 4) {
                 Text(title.isEmpty ? "未知" : title)
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.haoBodyStrong)
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(2)
                     .truncationMode(.tail)
                     .frame(width: size, alignment: .leading)
                 Text(subtitle)
-                    .font(.system(size: 13))
+                    .font(.haoFootnote)
                     .foregroundStyle(theme.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -1058,17 +1059,18 @@ struct MusicPressScaleStyle: ButtonStyle {
     }
 }
 
-/// Collapsible section header (Flutter CollapsibleSection): 22
+/// Collapsible section header (Flutter CollapsibleSection): 20
 /// semibold title, chevron, optional trailing control.
-/// b40: `titleFont` lets one page ask for the visibly larger
-/// header (MusicHomeView passes 28 bold, vibrdrome's section
-/// size) without changing the shared default everywhere else.
+/// b40: `titleFont` is the escape hatch for a visibly larger
+/// header; no current call site overrides it — the home headers
+/// use the 20pt default (b49fix3 P1-19 dropped the 28pt
+/// overrides, which read as page titles, not section titles).
 struct MusicSectionHeader: View {
     var title: String
     var expanded: Bool
     var onToggle: () -> Void
     var trailing: (() -> AnyView)? = nil
-    var titleFont: Font = .haoDetailTitle
+    var titleFont: Font = .haoSectionTitle
 
     @Environment(\.haoTheme) private var theme
 

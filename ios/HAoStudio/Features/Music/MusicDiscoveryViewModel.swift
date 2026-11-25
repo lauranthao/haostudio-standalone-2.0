@@ -99,6 +99,12 @@ final class MusicDiscoveryViewModel: ObservableObject {
     @Published private(set) var exploreSnapshots: [String: [PlaylistSummary]] = [:]
     @Published private(set) var exploreLoading: Set<String> = []
     @Published private(set) var exploreFailed: Set<String> = []
+    /// b49fix3 P2-10: a failed pull-to-refresh used to be silent
+    /// (old snapshots kept, no feedback, no retry). True after a
+    /// refresh fetch returns nothing; cleared when a refresh
+    /// starts or succeeds. The per-category failure state
+    /// (exploreFailed) is separate — it covers the first load.
+    @Published private(set) var exploreRefreshFailed = false
     /// Categories the explore page actually renders (chips +
     /// shelves). Only categories with a non-empty result from
     /// the loaded plaza data are listed — the 26 chips used to
@@ -235,8 +241,15 @@ final class MusicDiscoveryViewModel: ObservableObject {
     /// every already-loaded category from ONE fresh plaza fetch —
     /// not one fetch per shelf. A failed fetch keeps the old
     /// snapshots (with cleared timestamps, so the next shelf
-    /// appear refetches) instead of blanking the page.
+    /// appear refetches) instead of blanking the page — but the
+    /// failure is surfaced now (b49fix3 P2-10 exploreRefreshFailed
+    /// + banner), never silent. A successful fetch also recomputes
+    /// exploreAvailableCategories (loadExploreAll sets it before
+    /// completing), so a category that went empty loses its chip
+    /// and shelf; on failure the old categories stay, consistent
+    /// with the kept snapshots.
     func refreshExplore() {
+        exploreRefreshFailed = false
         let loadedCategories = Set(exploreSnapshots.keys)
         exploreLoadedAt.removeAll()
         exploreAllLoadedAt = nil
@@ -247,7 +260,11 @@ final class MusicDiscoveryViewModel: ObservableObject {
         }
         loadExploreAll { [weak self] all in
             guard let self = self else { return }
-            guard let all = all else { return }
+            guard let all = all else {
+                self.exploreRefreshFailed = true
+                return
+            }
+            self.exploreRefreshFailed = false
             for category in loadedCategories {
                 self.exploreLoadedAt[category] = Date()
                 self.exploreSnapshots[category] = Self.filterExplorePlaylists(all, category: category)

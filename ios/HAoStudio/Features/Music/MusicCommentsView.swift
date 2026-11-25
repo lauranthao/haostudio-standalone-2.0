@@ -86,6 +86,10 @@ struct MusicCommentsView: View {
     @StateObject private var viewModel = MusicCommentsViewModel()
     // b49fix2 P2-21: hot / latest segmented switch (Coda §9.5).
     @State private var commentTab: CommentTab = .hot
+    // b49fix3 P2-9: the default tab is re-evaluated once per song
+    // (see the onChange below) — a song with no hot comments but
+    // with latest ones opens on 最新 instead of "暂无热门评论".
+    @State private var latestDefaultAppliedForSong: String? = nil
 
     @Environment(\.haoTheme) private var theme
 
@@ -215,6 +219,18 @@ struct MusicCommentsView: View {
                 if let song = playerVM.currentSong {
                     viewModel.load(song: song)
                 }
+            }
+            // b49fix3 P2-9: default to 最新 when the song has no
+            // hot comments but has latest ones — otherwise the page
+            // opens on "暂无热门评论" while comments exist. Once
+            // per song: a manual tap back to 热门 is never yanked
+            // by a later refresh of the same song.
+            .onChange(of: viewModel.hot.isEmpty && !viewModel.latest.isEmpty) { _, shouldPreferLatest in
+                guard shouldPreferLatest,
+                      let key = playerVM.currentSong?.identityKey,
+                      latestDefaultAppliedForSong != key else { return }
+                latestDefaultAppliedForSong = key
+                commentTab = .latest
             }
         }
     }

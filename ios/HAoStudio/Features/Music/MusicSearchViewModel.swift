@@ -650,10 +650,15 @@ final class MusicSearchViewModel: ObservableObject {
     }
 
     /// Re-run the current query from scratch — the songs-stream
-    /// retry (b49fix2 P2-4).
+    /// retry (b49fix2 P2-4). b49fix3 P2-11: search() resets the tab
+    /// to .all, so a retry tapped on the 歌曲 tab used to jump the
+    /// user back to 综合. The retry re-runs the same query, so the
+    /// tab is restored right after the reset.
     func retrySongs() {
         guard !currentQuery.isEmpty else { return }
+        let currentTab = tab
         search(currentQuery)
+        tab = currentTab
     }
 
     // MARK: - Suggestions + hot keywords (b45-d)
