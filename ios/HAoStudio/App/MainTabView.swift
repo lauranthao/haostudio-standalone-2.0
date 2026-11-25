@@ -189,12 +189,15 @@ struct MainTabView: View {
             }
         }
         .environment(\.haoTheme, palette)
-        // b40: tells the five tab roots whether a wallpaper is
-        // showing behind them — they go transparent for it
-        // (haoTabBackground), opaque otherwise. Same decision as
-        // backgroundLayer (isWallpaperActive), so the two can
-        // never disagree.
-        .environment(\.haoWallpaperActive, isWallpaperActive)
+        // b41: tells the five tab roots which backdrop to draw
+        // behind their own content (haoBackdropLayer) — resolved
+        // once here from the same background-kind decision, so all
+        // roots draw the same backdrop. The picture / colour no
+        // longer lives in this view's ZStack: b40 drew it behind
+        // the tab roots, where the NavigationStacks' opaque
+        // backgrounds covered it, and the image here also pushed
+        // the bottom chrome off the screen on device.
+        .environment(\.haoBackdrop, backdrop)
         // b36-1: each tab has its own scroll rest offset — forget
         // the previous tab's so the new tab calibrates from scratch
         // (isAtTop for the reselect scroll-to-top guard).
@@ -207,68 +210,28 @@ struct MainTabView: View {
         .onChange(of: settingsStore.wallpaperCurrent) { _ in refreshWallpaperCache() }
     }
 
-    /// Scaffold background, three-layer priority (S5-C):
-    /// wallpaper > background color > theme scaffold. A wallpaper
-    /// that cannot be loaded falls through to the next layer.
-    ///
-    /// b40: the wallpaper decision lives in `isWallpaperActive`
-    /// (below) — backgroundLayer and the `haoWallpaperActive`
-    /// environment flag both read it, so the picture and the tab
-    /// roots' transparency can never disagree.
-    @ViewBuilder
+    /// Scaffold background behind everything (b41): the wallpaper
+    /// photo and the custom background colour are drawn inside the
+    /// tab roots now (haoBackdropLayer), so this layer is just the
+    /// opaque theme scaffold. It can never cover a backdrop, and
+    /// no image sits in this view's ZStack any more — the b40
+    /// image here pushed the bottom chrome off the screen on
+    /// device while the wallpaper was on.
     private func backgroundLayer(palette: HaoThemePalette) -> some View {
-        let wallpaper = cachedWallpaper
-        switch MyBackgroundColor.kind(
-            wallpaperEnabled: settingsStore.wallpaperEnabled,
-            wallpaperAvailable: wallpaper != nil,
-            bgColorEnabled: settingsStore.bgColorEnabled,
-            bgColorHex: settingsStore.bgColorHex
-        ) {
-        case .wallpaper:
-            if let wallpaper = wallpaper {
-                // b40: the image is pinned to the container
-                // (frame maxWidth/maxHeight infinity). An unframed
-                // `resizable().scaledToFill()` photo reports the
-                // photo's own pixel size as its ideal size, and on
-                // chen's phone (build 39, 壁纸 on) the bottom chrome
-                // sat ~106pt too low — mini half off the screen,
-                // tab bar gone entirely — with the wallpaper itself
-                // hidden behind the tab roots' opaque scaffold.
-                // The frame makes the picture fill the screen
-                // without ever sizing its parent.
-                Image(uiImage: wallpaper)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .ignoresSafeArea()
-            } else {
-                palette.scaffoldBackground.ignoresSafeArea()
-            }
-        case .color:
-            if let bgColor = MyBackgroundColor.color(fromHex: settingsStore.bgColorHex) {
-                bgColor.ignoresSafeArea()
-            } else {
-                palette.scaffoldBackground.ignoresSafeArea()
-            }
-        case .theme:
-            palette.scaffoldBackground.ignoresSafeArea()
-        }
+        palette.scaffoldBackground.ignoresSafeArea()
     }
 
-    /// True when a wallpaper is actually showing behind the UI —
-    /// the switch is on AND the image loaded. The single source
-    /// for both backgroundLayer and the `haoWallpaperActive`
-    /// environment flag the tab roots read (b40: before this, the
-    /// flag did not exist and every tab root painted opaque
-    /// scaffold over the picture, so an imported wallpaper could
-    /// never show).
-    private var isWallpaperActive: Bool {
-        MyBackgroundColor.kind(
+    /// The backdrop the tab roots draw (b41): resolved once from
+    /// the background-kind decision, so every tab root draws the
+    /// same backdrop. Wallpaper wins when the switch is on and the
+    /// image loaded; otherwise the custom colour; otherwise theme.
+    private var backdrop: HaoBackdrop {
+        HaoBackdrop.resolve(
             wallpaperEnabled: settingsStore.wallpaperEnabled,
-            wallpaperAvailable: cachedWallpaper != nil,
+            wallpaperImage: cachedWallpaper,
             bgColorEnabled: settingsStore.bgColorEnabled,
             bgColorHex: settingsStore.bgColorHex
-        ) == .wallpaper
+        )
     }
 
     /// Load the wallpaper image into the cache when it is

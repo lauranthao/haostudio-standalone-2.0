@@ -155,7 +155,11 @@ func musicPrevTrackIndex(
             let n = pick()
             if n != current { return n }
         }
-        return (current + 1) % length
+        // b41: this used to fall back to the NEXT track
+        // ((current + 1) % length) — a copy-paste from
+        // musicNextTrackIndex. A previous-step fallback must fall
+        // back to the previous track, as MusicQueue.swift does.
+        return (current - 1 + length) % length
     }
     switch mode {
     case .sequential, .single:
@@ -1521,26 +1525,59 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
 
     // MARK: - Manual next / previous
 
+    /// Restart the loaded track from the beginning (b41: the manual
+    /// next / previous dead-end behaviour — a 1-song queue, or the
+    /// ends in sequential / single mode). No-op when nothing is
+    /// loaded. Seeks to 0, then resumes if paused: a manual tap
+    /// always answers. No re-resolve, no queue change, no crossfade.
+    func restartCurrentTrack() {
+        ensureMain {
+            guard self.currentTrack != nil else { return }
+            self.seek(to: 0) { [weak self] _ in
+                self?.play()
+            }
+        }
+    }
+
     /// Manual next: no crossfade. At the end of a non-looping queue
-    /// this is a no-op (the current track keeps playing).
+    /// this used to be a silent no-op (the current track kept
+    /// playing and the button looked dead — chen 2026-11-25: the
+    /// lock-screen / Dynamic Island / Control Center buttons did
+    /// nothing). Now it restarts the current song instead (b41):
+    /// a manual tap always answers.
     func next() {
         ensureMain {
             guard !self.queue.isEmpty, self.currentTrack != nil else { return }
             let nextIndex = musicNextTrackIndex(mode: self.playMode, current: self.queueIndex, length: self.queue.count, auto: false)
-            guard nextIndex >= 0 else { return }
+            guard nextIndex >= 0, nextIndex != self.queueIndex else {
+                // Dead end (1-song queue, or the end in sequential /
+                // single mode) — or the computed next IS the current
+                // song (a 1-song queue in a looping / shuffle mode):
+                // restart it instead of reopening it (b41).
+                self.restartCurrentTrack()
+                return
+            }
             self.queueIndex = nextIndex
             self.play(item: self.queue[nextIndex])
         }
     }
 
     /// Manual previous: no crossfade. Shuffle picks a random other
-    /// track; loop modes wrap; sequential and single play stop at
-    /// the first track.
+    /// track; loop modes wrap; sequential and single play used to
+    /// stop silently at the first track — now they restart the
+    /// current song instead (b41, same rule as next()).
     func previous() {
         ensureMain {
             guard !self.queue.isEmpty, self.currentTrack != nil else { return }
             let prevIndex = musicPrevTrackIndex(mode: self.playMode, current: self.queueIndex, length: self.queue.count)
-            guard prevIndex >= 0 else { return }
+            guard prevIndex >= 0, prevIndex != self.queueIndex else {
+                // Dead end (first track in sequential / single mode)
+                // — or the computed previous IS the current song (a
+                // 1-song queue in a looping / shuffle mode): restart
+                // it instead of reopening it (b41).
+                self.restartCurrentTrack()
+                return
+            }
             self.queueIndex = prevIndex
             self.play(item: self.queue[prevIndex])
         }
@@ -2072,6 +2109,20 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
 
     // MARK: - Now Playing and remote commands
 
+    /// Remote next / previous handler installed by
+    /// MusicPlayerViewModel (b41, chen 2026-11-25: the lock-screen /
+    /// Dynamic Island / Control Center buttons did nothing). The
+    /// view model is the single app-level owner of the queue, so
+    /// remote commands run its live queue — exactly the in-app
+    /// buttons' path — instead of this player's own queue, which
+    /// goes stale after play-next inserts / removals (only
+    /// startPlayback re-syncs it) and has no currentTrack-nil
+    /// fallback. Nil (no view model yet) falls back to this
+    /// player's own next() / previous(). The view model lives for
+    /// the app lifetime, so the closures never go stale.
+    var onRemoteNext: (() -> Void)?
+    var onRemotePrevious: (() -> Void)?
+
     private func setupNowPlaying() {
         guard !nowPlayingActive else { updateNowPlayingInfo(); return }
         nowPlayingActive = true
@@ -2235,13 +2286,39 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     }
 
     @objc private func remoteNext() -> MPRemoteCommandHandlerStatus {
-        next()
+        handleRemoteNext()
         return .success
     }
 
     @objc private func remotePrevious() -> MPRemoteCommandHandlerStatus {
-        previous()
+        handleRemotePrevious()
         return .success
+    }
+
+    /// Remote-next dispatch (b41, internal for tests): the view
+    /// model's handler when installed — the same live-queue path
+    /// as the in-app buttons — else this player's own next().
+    /// Runs on main: the view model's queue is main-confined.
+    func handleRemoteNext() {
+        ensureMain {
+            if let handler = self.onRemoteNext {
+                handler()
+            } else {
+                self.next()
+            }
+        }
+    }
+
+    /// Remote-previous dispatch (b41): same contract as
+    /// handleRemoteNext.
+    func handleRemotePrevious() {
+        ensureMain {
+            if let handler = self.onRemotePrevious {
+                handler()
+            } else {
+                self.previous()
+            }
+        }
     }
 }
 

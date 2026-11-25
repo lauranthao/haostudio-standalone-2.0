@@ -266,6 +266,16 @@ final class MusicPlayerViewModel: ObservableObject {
             self.favCheckGeneration += 1
             self.isCurrentFav = MusicLibraryStore.isFav(song)
         }
+        // b41: remote next / previous (Dynamic Island / Control
+        // Center / lock screen) run the SAME path as the in-app
+        // buttons below — this view model's live queue — instead
+        // of the player's own queue, which goes stale after
+        // play-next inserts / removals and has no
+        // currentTrack-nil fallback. This view model lives for the
+        // app lifetime, so the closures never go stale; the player
+        // falls back to its own next() / previous() when unset.
+        player.onRemoteNext = { [weak self] in self?.next() }
+        player.onRemotePrevious = { [weak self] in self?.previous() }
     }
 
     // MARK: - Observation
@@ -753,43 +763,52 @@ final class MusicPlayerViewModel: ObservableObject {
     }
 
     func next() {
-        let nextIndex = queue.nextIndex(mode: playMode, auto: false)
-        if nextIndex >= 0 {
-            let nextSong = queue.tracks[nextIndex]
-            expectedItemId = nextSong.identityKey
-            // The engine never loaded a track (the first song failed
-            // to resolve): player.next() guards on currentTrack and
-            // would no-op, leaving a dead button. Drive the next
-            // queue song directly; the normal path below is
-            // untouched.
-            if player.currentTrack == nil {
-                playFromQueue(at: nextIndex)
-                hapticTick()
-                return
-            }
+        // b41: the view-model queue is the source of truth — drive
+        // the next song through it directly (playFromQueue re-syncs
+        // the player's queue), so a play-next insert / removal can
+        // never leave the button playing the player's stale next
+        // song. The old path fell through to player.next() here,
+        // which reads the player's queue. The dead end restarts
+        // the current song (see restartCurrentSong): a manual tap
+        // always answers.
+        switch queue.nextStep(mode: playMode) {
+        case .play(let index):
+            playFromQueue(at: index)
+        case .restartCurrent:
+            restartCurrentSong()
+        case .nothing:
+            break
         }
-        player.next()
         hapticTick()
     }
 
     func previous() {
-        let prevIndex = queue.prevIndex(mode: playMode)
-        if prevIndex >= 0 {
-            let prevSong = queue.tracks[prevIndex]
-            expectedItemId = prevSong.identityKey
-            // A8: same fallback as next() — the engine never loaded
-            // a track (the first song failed to resolve), so
-            // player.previous() would no-op on its currentTrack
-            // guard and leave a dead button. Drive the previous
-            // queue song directly.
-            if player.currentTrack == nil {
-                playFromQueue(at: prevIndex)
-                hapticTick()
-                return
-            }
+        // b41: same contract as next() — the live queue drives,
+        // the dead end restarts the current song.
+        switch queue.prevStep(mode: playMode) {
+        case .play(let index):
+            playFromQueue(at: index)
+        case .restartCurrent:
+            restartCurrentSong()
+        case .nothing:
+            break
         }
-        player.previous()
         hapticTick()
+    }
+
+    /// Restart the current queue song from the beginning (b41
+    /// manual next / previous dead end: a 1-song queue, or the
+    /// ends in sequential / single mode). The engine never loaded
+    /// a track: reopen the queue song (the old currentTrack-nil
+    /// fallback). Otherwise seek to 0 and resume — no re-resolve,
+    /// no queue change. Empty queue: nothing to restart.
+    private func restartCurrentSong() {
+        guard queue.current != nil else { return }
+        if player.currentTrack == nil {
+            playFromQueue(at: queue.index)
+        } else {
+            player.restartCurrentTrack()
+        }
     }
 
     func cycleMode() {

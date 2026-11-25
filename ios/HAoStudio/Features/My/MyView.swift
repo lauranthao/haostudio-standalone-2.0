@@ -170,6 +170,7 @@ struct MyView: View {
                 .haoReselectScrollToTop(tab: .my, proxy: proxy)
                 .listStyle(.insetGrouped)
                 .scrollContentBackground(.hidden)
+                .haoBackdropLayer()
                 .haoTabBackground()
                 .navigationTitle("我的")
                 .navigationDestination(item: $selectedLiveRoom) { room in

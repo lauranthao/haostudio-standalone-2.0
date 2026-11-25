@@ -539,47 +539,157 @@ private struct HaoBottomChromeContentPadding: ViewModifier {
     }
 }
 
-// MARK: - Wallpaper backdrop (b40)
+// MARK: - Tab-root backdrop (b41)
 
-/// Whether a wallpaper is active behind the UI. MainTabView sets
-/// this from the same background-kind decision it renders with
-/// (MyBackgroundColor.kind == .wallpaper), so the flag and the
-/// picture can never disagree: the picture is up exactly when
-/// the tab roots go transparent for it. Default false (no
-/// MainTabView above — previews, sheets): tab roots stay opaque.
-private struct HaoWallpaperActiveKey: EnvironmentKey {
-    static let defaultValue = false
-}
+/// What a tab root draws behind its own content (b41, chen
+/// 2026-11-25 build 40: the wallpaper still did not show and the
+/// menu bar was pushed off the screen).
+///
+/// b40 drew the wallpaper in MainTabView, BEHIND the tab roots —
+/// but every tab root is a NavigationStack, and the stack's
+/// underlying UINavigationController paints its own opaque system
+/// background, so the picture was always covered no matter what
+/// the roots' `.background(Color.clear)` did: that modifier only
+/// clears the ScrollView / List itself, never the stack behind
+/// it. The b40 wallpaper image also sat as a direct child of
+/// MainTabView's ZStack — the same ZStack that carries the
+/// `.safeAreaInset` bottom chrome — and with the wallpaper on,
+/// the chrome sat one stack height too low on device (mini at the
+/// bottom edge, tab bar gone), while it is fine with the wallpaper
+/// off. The b40 frame pin did not change the on-device result.
+///
+/// The backdrop therefore lives INSIDE each tab root now, as the
+/// bottom layer of a ZStack wrapping the root's scroll content
+/// (haoBackdropLayer): above the NavigationStack's background, so
+/// it is always visible, and nowhere near MainTabView's ZStack,
+/// so no image can size the chrome's layout in any way. The
+/// custom background colour had the same defect (it was drawn
+/// behind the stack too), so it rides the same layer. MainTabView
+/// resolves the backdrop once from MyBackgroundColor.kind and
+/// passes it down; the five tab roots only draw it.
+enum HaoBackdrop {
+    case wallpaper(UIImage)
+    case color(Color)
+    case theme
 
-extension EnvironmentValues {
-    var haoWallpaperActive: Bool {
-        get { self[HaoWallpaperActiveKey.self] }
-        set { self[HaoWallpaperActiveKey.self] = newValue }
+    /// Resolve the backdrop from the raw inputs (b41): the same
+    /// priority as MyBackgroundColor.kind — wallpaper (enabled +
+    /// image loaded) > background colour (enabled + valid #RRGGBB)
+    /// > theme scaffold. A layer that is off or unusable falls
+    /// through; nothing here invents a colour.
+    static func resolve(
+        wallpaperEnabled: Bool,
+        wallpaperImage: UIImage?,
+        bgColorEnabled: Bool,
+        bgColorHex: String
+    ) -> HaoBackdrop {
+        switch MyBackgroundColor.kind(
+            wallpaperEnabled: wallpaperEnabled,
+            wallpaperAvailable: wallpaperImage != nil,
+            bgColorEnabled: bgColorEnabled,
+            bgColorHex: bgColorHex
+        ) {
+        case .wallpaper:
+            if let image = wallpaperImage { return .wallpaper(image) }
+            return .theme
+        case .color:
+            if let color = MyBackgroundColor.color(fromHex: bgColorHex) { return .color(color) }
+            return .theme
+        case .theme:
+            return .theme
+        }
+    }
+
+    var isWallpaper: Bool {
+        if case .wallpaper = self { return true }
+        return false
+    }
+
+    var isColor: Bool {
+        if case .color = self { return true }
+        return false
+    }
+
+    var isTheme: Bool {
+        if case .theme = self { return true }
+        return false
     }
 }
 
-/// Tab-root background (b40, chen 2026-11-25: 壁纸导入之后用了
-/// 也不显示): every tab root used to paint the opaque theme
-/// scaffold colour over its whole area, so the wallpaper MainTabView
-/// draws behind the tabs was always covered — it could never show
-/// no matter what was imported. While a wallpaper is active the
-/// root goes clear and the picture shows through; otherwise the
-/// root keeps the opaque scaffold exactly as before. Pushed pages
-/// keep their opaque scaffold (they are transient; the wallpaper
-/// is back when you pop).
-private struct HaoTabBackground: ViewModifier {
-    @Environment(\.haoTheme) private var theme
-    @Environment(\.haoWallpaperActive) private var wallpaperActive
+private struct HaoBackdropKey: EnvironmentKey {
+    static let defaultValue = HaoBackdrop.theme
+}
+
+extension EnvironmentValues {
+    var haoBackdrop: HaoBackdrop {
+        get { self[HaoBackdropKey.self] }
+        set { self[HaoBackdropKey.self] = newValue }
+    }
+}
+
+/// The backdrop layer (b41): the wallpaper photo or the custom
+/// background colour, drawn full-bleed as the bottom layer of the
+/// tab root's own content — above the NavigationStack's opaque
+/// background, so it can never be covered by it. The image is
+/// clipped to the root's bounds; it fills the root, never sizes
+/// it (the root's size comes from the scroll content). Use on the
+/// five tab roots only, next to haoTabBackground.
+private struct HaoBackdropLayer: ViewModifier {
+    @Environment(\.haoBackdrop) private var backdrop
 
     func body(content: Content) -> some View {
-        content.background(wallpaperActive ? Color.clear : theme.scaffoldBackground)
+        ZStack {
+            backdropView
+            content
+        }
+    }
+
+    @ViewBuilder
+    private var backdropView: some View {
+        switch backdrop {
+        case .wallpaper(let image):
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .ignoresSafeArea()
+        case .color(let color):
+            color.ignoresSafeArea()
+        case .theme:
+            EmptyView()
+        }
     }
 }
 
 extension View {
-    /// Tab-root background that lets an active wallpaper show
+    /// Draw this tab root's backdrop (wallpaper / background
+    /// colour) behind its content. No-op for the theme backdrop.
+    func haoBackdropLayer() -> some View {
+        modifier(HaoBackdropLayer())
+    }
+}
+
+/// Tab-root background (b41, chen 2026-11-25: 壁纸导入之后用了
+/// 也不显示): the backdrop layer above already paints the
+/// wallpaper / colour behind the content, so the root background
+/// only needs to be opaque when there is no backdrop at all
+/// (theme): then it paints the opaque theme scaffold exactly as
+/// before. Pushed pages keep their opaque scaffold (they are
+/// transient; the backdrop is back when you pop).
+private struct HaoTabBackground: ViewModifier {
+    @Environment(\.haoTheme) private var theme
+    @Environment(\.haoBackdrop) private var backdrop
+
+    func body(content: Content) -> some View {
+        content.background(backdrop.isTheme ? theme.scaffoldBackground : Color.clear)
+    }
+}
+
+extension View {
+    /// Tab-root background that lets an active backdrop show
     /// through (clear), or paints the opaque theme scaffold when
-    /// no wallpaper is active. Use on the five tab roots only.
+    /// there is no backdrop. Use on the five tab roots only.
     func haoTabBackground() -> some View {
         modifier(HaoTabBackground())
     }

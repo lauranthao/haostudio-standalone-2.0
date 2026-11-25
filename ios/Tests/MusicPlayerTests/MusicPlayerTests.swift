@@ -521,6 +521,87 @@ final class MusicPlayerTests: XCTestCase {
         XCTAssertEqual(sounding, 1)
     }
 
+    // MARK: - Remote next / previous (b41)
+
+    func testRemoteNextInvokesInstalledHandler() {
+        let player = makePlayer(fakes: [FakeEngine()])
+        var called = 0
+        player.onRemoteNext = { called += 1 }
+        player.handleRemoteNext()
+        XCTAssertEqual(called, 1)
+        // Without a handler it falls back to the player's own
+        // next() — no crash, and a no-op on an empty queue.
+        player.onRemoteNext = nil
+        player.handleRemoteNext()
+        XCTAssertEqual(called, 1)
+    }
+
+    func testRemotePreviousInvokesInstalledHandler() {
+        let player = makePlayer(fakes: [FakeEngine()])
+        var called = 0
+        player.onRemotePrevious = { called += 1 }
+        player.handleRemotePrevious()
+        XCTAssertEqual(called, 1)
+        player.onRemotePrevious = nil
+        player.handleRemotePrevious()
+        XCTAssertEqual(called, 1)
+    }
+
+    func testManualNextAtEndRestartsCurrentSong() {
+        // 1-song queue, sequential mode: the old next() silently
+        // did nothing (the lock-screen / Dynamic Island button
+        // looked dead). Now the same song restarts from 0.
+        let engine = FakeEngine()
+        engine.durationSeconds = 200
+        let player = makePlayer(fakes: [engine])
+        let resolver = FakeResolver(urls: [URL(string: "https://example.com/a.mp3")!])
+        wire(player, resolver)
+        player.setQueue([item("a")], startAt: 0)
+        XCTAssertEqual(player.currentTrack?.id, "a")
+        engine.currentTimeSeconds = 120
+        player.next()
+        XCTAssertEqual(player.currentTrack?.id, "a")
+        XCTAssertEqual(engine.seekCalls, [0])
+        XCTAssertTrue(engine.isPlaying)
+    }
+
+    func testManualPreviousAtStartRestartsCurrentSong() {
+        let engine = FakeEngine()
+        engine.durationSeconds = 200
+        let player = makePlayer(fakes: [engine])
+        let resolver = FakeResolver(urls: [URL(string: "https://example.com/a.mp3")!])
+        wire(player, resolver)
+        player.setQueue([item("a")], startAt: 0)
+        XCTAssertEqual(player.currentTrack?.id, "a")
+        engine.currentTimeSeconds = 90
+        player.previous()
+        XCTAssertEqual(player.currentTrack?.id, "a")
+        XCTAssertEqual(engine.seekCalls, [0])
+        XCTAssertTrue(engine.isPlaying)
+    }
+
+    func testManualNextAtEndOfLongQueueRestartsLastSong() {
+        let engine = FakeEngine()
+        engine.durationSeconds = 200
+        let player = makePlayer(fakes: [engine])
+        let resolver = FakeResolver(urls: [
+            URL(string: "https://example.com/a.mp3")!,
+            URL(string: "https://example.com/b.mp3")!,
+            URL(string: "https://example.com/c.mp3")!,
+        ])
+        wire(player, resolver)
+        player.setQueue([item("a"), item("b"), item("c")], startAt: 0)
+        player.next()
+        player.next()
+        XCTAssertEqual(player.currentTrack?.id, "c")
+        engine.currentTimeSeconds = 150
+        player.next()
+        // End of a sequential queue: still on "c", restarted.
+        XCTAssertEqual(player.currentTrack?.id, "c")
+        XCTAssertEqual(engine.seekCalls, [0])
+        XCTAssertTrue(engine.isPlaying)
+    }
+
     // MARK: Watchdog 4 s / 12 s (P0-06), fake clock, no real waits
 
     func testWatchdogWarnsAt4sAndFailsAt12s() {

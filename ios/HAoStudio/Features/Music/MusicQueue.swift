@@ -175,6 +175,57 @@ func musicPrevTrackIndex(
     }
 }
 
+/// What a MANUAL next / previous tap must do (b41, chen 2026-11-25:
+/// the lock-screen / Dynamic Island / Control Center buttons did
+/// nothing). `.play(index)` when a next / previous song exists;
+/// `.restartCurrent` when the queue holds a song but there is no
+/// next / previous one — a 1-song queue in any mode, or the ends in
+/// sequential / single mode; `.nothing` only when the queue is
+/// empty. A computed index that IS the current song (a 1-song
+/// queue in a looping / shuffle mode) normalises to
+/// `.restartCurrent` too: reopening the same song would re-resolve
+/// its URL over the network, while a restart seeks to 0 instantly.
+/// Auto-advance is NOT this function: it still stops at the
+/// ends (musicNextTrackIndex auto: true returns -1). A manual tap
+/// always answers: with no next / previous song it restarts the
+/// current song from the beginning (the iOS-standard prev-at-start
+/// behaviour, extended to next-at-end and 1-song queues).
+enum MusicManualStep: Equatable {
+    case play(Int)
+    case restartCurrent
+    case nothing
+}
+
+/// Manual-next resolution: the next index to play, or restart the
+/// current song when there is none, or nothing when the queue is
+/// empty. `current` outside the queue is nothing (no song to
+/// restart); `randomIndex` is the shuffle source (injectable so
+/// tests are deterministic).
+func manualNextStep(
+    mode: MusicQueueMode,
+    current: Int,
+    length: Int,
+    randomIndex: (Int) -> Int = { Int.random(in: 0..<$0) }
+) -> MusicManualStep {
+    guard length > 0, current >= 0, current < length else { return .nothing }
+    let next = musicNextTrackIndex(mode: mode, current: current, length: length, auto: false, randomIndex: randomIndex)
+    if next < 0 || next == current { return .restartCurrent }
+    return .play(next)
+}
+
+/// Manual-previous resolution: same contract as manualNextStep.
+func manualPrevStep(
+    mode: MusicQueueMode,
+    current: Int,
+    length: Int,
+    randomIndex: (Int) -> Int = { Int.random(in: 0..<$0) }
+) -> MusicManualStep {
+    guard length > 0, current >= 0, current < length else { return .nothing }
+    let prev = musicPrevTrackIndex(mode: mode, current: current, length: length, randomIndex: randomIndex)
+    if prev < 0 || prev == current { return .restartCurrent }
+    return .play(prev)
+}
+
 /// The playback queue: an ordered list plus the current index.
 /// The player owns actual advancing; this struct is what the queue
 /// view shows and what the view model uses to predict the next track
@@ -203,6 +254,17 @@ struct MusicQueue {
 
     func prevIndex(mode: MusicQueueMode) -> Int {
         return musicPrevTrackIndex(mode: mode, current: index, length: tracks.count)
+    }
+
+    /// Manual next / previous resolution for this queue (b41):
+    /// what a tap must do — play a neighbour, restart the current
+    /// song, or nothing when the queue is empty.
+    func nextStep(mode: MusicQueueMode) -> MusicManualStep {
+        return manualNextStep(mode: mode, current: index, length: tracks.count)
+    }
+
+    func prevStep(mode: MusicQueueMode) -> MusicManualStep {
+        return manualPrevStep(mode: mode, current: index, length: tracks.count)
     }
 
     /// Whether natural playback ends after the current track in this

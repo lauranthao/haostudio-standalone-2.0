@@ -153,6 +153,7 @@ struct VideoTabView: View {
                     cmsHome
                 }
             }
+            .haoBackdropLayer()
             .haoTabBackground()
             // b39: no system nav bar on this root — VidHub's home
             // has a custom header, not a large title, and the

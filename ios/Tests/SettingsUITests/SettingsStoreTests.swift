@@ -16,6 +16,7 @@
 
 import Combine
 import Foundation
+import UIKit
 import XCTest
 
 @testable import HAoStudio
@@ -299,5 +300,52 @@ final class SettingsStoreTests: XCTestCase {
         settings.reloadWallpapers()
         XCTAssertTrue(settings.wallpaperPaths.isEmpty)
         XCTAssertNil(settings.wallpaperBackgroundURL)
+    }
+
+    /// b41 (chen 2026-11-25: the wallpaper still did not show on
+    /// build 40): the backdrop decision — wallpaper (enabled +
+    /// image loaded) > background colour (enabled + valid hex) >
+    /// theme. A layer that is off or unusable falls through;
+    /// nothing here invents a colour. The render half (the
+    /// backdrop drawn inside the tab roots, above the
+    /// NavigationStack's opaque background) is device-only to see.
+    func testBackdropResolutionPriority() {
+        let image = UIImage(data: SettingsTestImages.pngData())
+        XCTAssertNotNil(image)
+        // Wallpaper on + image loaded wins over the colour.
+        XCTAssertTrue(HaoBackdrop.resolve(
+            wallpaperEnabled: true, wallpaperImage: image,
+            bgColorEnabled: true, bgColorHex: "#112233"
+        ).isWallpaper)
+        // Wallpaper on but the image failed to load → theme (the
+        // colour was not the chosen layer, so it is not invented).
+        XCTAssertTrue(HaoBackdrop.resolve(
+            wallpaperEnabled: true, wallpaperImage: nil,
+            bgColorEnabled: false, bgColorHex: ""
+        ).isTheme)
+        // Wallpaper off → valid colour.
+        XCTAssertTrue(HaoBackdrop.resolve(
+            wallpaperEnabled: false, wallpaperImage: image,
+            bgColorEnabled: true, bgColorHex: "#112233"
+        ).isColor)
+        // Wallpaper off, invalid hex → theme.
+        XCTAssertTrue(HaoBackdrop.resolve(
+            wallpaperEnabled: false, wallpaperImage: nil,
+            bgColorEnabled: true, bgColorHex: "nope"
+        ).isTheme)
+        // Everything off → theme.
+        XCTAssertTrue(HaoBackdrop.resolve(
+            wallpaperEnabled: false, wallpaperImage: nil,
+            bgColorEnabled: false, bgColorHex: ""
+        ).isTheme)
+        // The resolved wallpaper carries the loaded image.
+        if case .wallpaper(let resolved) = HaoBackdrop.resolve(
+            wallpaperEnabled: true, wallpaperImage: image,
+            bgColorEnabled: false, bgColorHex: ""
+        ) {
+            XCTAssertTrue(resolved === image)
+        } else {
+            XCTFail("expected the wallpaper backdrop")
+        }
     }
 }

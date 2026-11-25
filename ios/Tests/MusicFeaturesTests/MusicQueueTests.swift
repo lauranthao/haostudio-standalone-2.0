@@ -187,4 +187,67 @@ final class MusicQueueTests: XCTestCase {
                                        randomIndex: { _ in 2 })
         XCTAssertEqual(next, 2)
     }
+
+    // MARK: - Manual next / previous step (b41)
+
+    func testManualStepOneSongQueueRestartsInEveryMode() {
+        // A 1-song queue has no next or previous song in any mode:
+        // a manual tap restarts the current song, never nothing.
+        for mode in MusicQueueMode.cycleOrder {
+            XCTAssertEqual(manualNextStep(mode: mode, current: 0, length: 1), .restartCurrent)
+            XCTAssertEqual(manualPrevStep(mode: mode, current: 0, length: 1), .restartCurrent)
+        }
+    }
+
+    func testManualStepEndsRestartInNonLoopingModes() {
+        // Sequential / single: end-of-queue next and start-of-queue
+        // previous restart the current song.
+        XCTAssertEqual(manualNextStep(mode: .sequential, current: 2, length: 3), .restartCurrent)
+        XCTAssertEqual(manualPrevStep(mode: .sequential, current: 0, length: 3), .restartCurrent)
+        XCTAssertEqual(manualNextStep(mode: .single, current: 2, length: 3), .restartCurrent)
+        XCTAssertEqual(manualPrevStep(mode: .single, current: 0, length: 3), .restartCurrent)
+        // Mid-queue still plays the neighbour.
+        XCTAssertEqual(manualNextStep(mode: .sequential, current: 0, length: 3), .play(1))
+        XCTAssertEqual(manualPrevStep(mode: .sequential, current: 2, length: 3), .play(1))
+        XCTAssertEqual(manualNextStep(mode: .single, current: 1, length: 3), .play(2))
+        XCTAssertEqual(manualPrevStep(mode: .single, current: 1, length: 3), .play(0))
+    }
+
+    func testManualStepLoopModesWrapNeverRestart() {
+        XCTAssertEqual(manualNextStep(mode: .listLoop, current: 2, length: 3), .play(0))
+        XCTAssertEqual(manualPrevStep(mode: .listLoop, current: 0, length: 3), .play(2))
+        XCTAssertEqual(manualNextStep(mode: .singleLoop, current: 2, length: 3), .play(0))
+        XCTAssertEqual(manualPrevStep(mode: .singleLoop, current: 0, length: 3), .play(2))
+    }
+
+    func testManualStepShufflePlaysAnotherSongOrRestarts() {
+        // Multi-song shuffle plays a different song (deterministic
+        // source here); 1-song shuffle restarts.
+        XCTAssertEqual(manualNextStep(mode: .shuffle, current: 1, length: 3, randomIndex: { _ in 2 }), .play(2))
+        XCTAssertEqual(manualPrevStep(mode: .shuffle, current: 1, length: 3, randomIndex: { _ in 0 }), .play(0))
+        XCTAssertEqual(manualNextStep(mode: .shuffle, current: 0, length: 1), .restartCurrent)
+        XCTAssertEqual(manualPrevStep(mode: .shuffle, current: 0, length: 1), .restartCurrent)
+    }
+
+    func testManualStepEmptyQueueIsNothing() {
+        XCTAssertEqual(manualNextStep(mode: .sequential, current: 0, length: 0), .nothing)
+        XCTAssertEqual(manualPrevStep(mode: .sequential, current: 0, length: 0), .nothing)
+        XCTAssertEqual(manualNextStep(mode: .listLoop, current: 0, length: 0), .nothing)
+    }
+
+    func testManualStepOutOfRangeCurrentIsNothing() {
+        XCTAssertEqual(manualNextStep(mode: .sequential, current: 5, length: 3), .nothing)
+        XCTAssertEqual(manualPrevStep(mode: .sequential, current: -1, length: 3), .nothing)
+    }
+
+    func testQueueNextPrevStepFollowCurrentIndex() {
+        let queue = MusicQueue(tracks: [song("1")], index: 0)
+        XCTAssertEqual(queue.nextStep(mode: .sequential), .restartCurrent)
+        XCTAssertEqual(queue.prevStep(mode: .sequential), .restartCurrent)
+        let list = MusicQueue(tracks: [song("1"), song("2"), song("3")], index: 1)
+        XCTAssertEqual(list.nextStep(mode: .sequential), .play(2))
+        XCTAssertEqual(list.prevStep(mode: .sequential), .play(0))
+        let ended = MusicQueue(tracks: [song("1"), song("2"), song("3")], index: 2)
+        XCTAssertEqual(ended.nextStep(mode: .sequential), .restartCurrent)
+    }
 }
