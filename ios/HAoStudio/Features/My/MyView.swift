@@ -132,6 +132,11 @@ struct MyView: View {
     @Environment(\.haoTheme) private var theme
     @EnvironmentObject private var settings: SettingsStore
 
+    /// Stateful Settings deep link (b49fix4 P2-37): the pending
+    /// row survives until consumed. Observed so onChange fires
+    /// when a sender sets a row.
+    @ObservedObject private var deepLink = SettingsDeepLink.shared
+
     @State private var counts = MyEntryCounts()
     @State private var selectedLiveRoom: LiveRoom?
     @State private var showMigrationNotice = MigrationStore.migrationNoticeNeeded()
@@ -217,6 +222,11 @@ struct MyView: View {
                     .onAppear {
                         counts = MyEntryCounts.reload()
                         reloadLibrary()
+                        // b49fix4 P2-37: a row set before this tab
+                        // mounted is only seen here, on appear.
+                        if let row = deepLink.pendingRow {
+                            scrollToDeepLinkRow(row, proxy: proxy)
+                        }
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .haoBackupImported)) { _ in
                         // b35-sweep-settings: 导入备份后本页不重进，
@@ -273,23 +283,17 @@ struct MyView: View {
                         // download removed from the pushed list now posts.
                         counts = MyEntryCounts.reload()
                     }
-                    // b49fix3 P2-24: deep link into a settings row
-                    // (backup nudge's "去备份", welcome card's
-                    // "配置歌源/片源"). The row post arrives 0.35 s
-                    // after the tab switch, and SettingsGroupsView
-                    // expands the containing section on the same
-                    // post — scroll after one more beat so the
-                    // expanded rows have laid out.
-                    .onReceive(NotificationCenter.default.publisher(for: .haoOpenSettingsRow)) { note in
-                        guard let row = note.object as? String else { return }
-                        let target: String
-                        switch row {
-                        case "backup": target = "backupImport"
-                        case "sources": target = "musicSources"
-                        default: return
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                            proxy.scrollTo(target, anchor: .top)
+                    // b49fix4 P2-37: stateful deep link into a
+                    // settings row (backup nudge's "去备份",
+                    // welcome card's "配置歌源/片源"). A value set
+                    // while mounted is only seen on change; a value
+                    // set before mount is seen in onAppear above.
+                    // SettingsGroupsView expands the containing
+                    // section on the same change — scroll after one
+                    // beat so the expanded rows have laid out.
+                    .onChange(of: deepLink.pendingRow) { _, row in
+                        if let row {
+                            scrollToDeepLinkRow(row, proxy: proxy)
                         }
                     }
                 }
@@ -308,6 +312,33 @@ struct MyView: View {
                 if reloaded != counts {
                     counts = reloaded
                 }
+            }
+        }
+    }
+
+    /// b49fix4 P2-37: scroll the List to a deep-link row. The
+    /// section expands in SettingsGroupsView's onChange (same
+    /// runloop pass), so the first scroll waits 0.35s for the
+    /// expanded rows to lay out — then one retry, because the
+    /// first scroll can still land before layout settles. After
+    /// the retry, clear the pending row, but only if it is still
+    /// this row: a newer deep link must not be cleared by an
+    /// older one. A cold start cannot drop the link: the row sits
+    /// in the store until this runs.
+    private func scrollToDeepLinkRow(_ row: String, proxy: ScrollViewProxy) {
+        let target: String
+        switch row {
+        case "backup": target = "backupImport"
+        case "sources": target = "musicSources"
+        default: return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            proxy.scrollTo(target, anchor: .top)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            proxy.scrollTo(target, anchor: .top)
+            if SettingsDeepLink.shared.pendingRow == row {
+                SettingsDeepLink.shared.pendingRow = nil
             }
         }
     }
@@ -504,7 +535,7 @@ struct MyView: View {
                 ForEach(lists) { list in
                     NavigationLink(destination: MusicPlaylistDetailView(listId: list.id)) {
                         VStack(alignment: .leading, spacing: 6) {
-                            MusicCoverView(urlString: list.cover, size: 120, cornerRadius: 12)
+                            MusicCoverView(urlString: list.cover, size: 120, cornerRadius: HaoLayout.cornerMedium)
                             Text(list.name.isEmpty ? "未命名歌单" : list.name)
                                 .font(.haoSubheadStrong)
                                 .foregroundStyle(theme.textPrimary)
@@ -528,7 +559,7 @@ struct MyView: View {
                 ForEach(albums) { album in
                     NavigationLink(destination: MusicAlbumDetailView(album: album)) {
                         VStack(alignment: .leading, spacing: 6) {
-                            MusicCoverView(urlString: album.cover, size: 120, cornerRadius: 12)
+                            MusicCoverView(urlString: album.cover, size: 120, cornerRadius: HaoLayout.cornerMedium)
                             Text(album.name)
                                 .font(.haoSubheadStrong)
                                 .foregroundStyle(theme.textPrimary)
@@ -552,7 +583,10 @@ struct MyView: View {
             HStack(alignment: .top, spacing: 16) {
                 ForEach(artists, id: \.name) { artist in
                     NavigationLink(destination: MusicArtistDetailView(artist: artist)) {
-                        VStack(spacing: 6) {
+                        // b49fix4 P2-18: cover→name gap 8, matching
+                        // the Music-side artist card
+                        // (MusicLibraryViews.swift:192).
+                        VStack(spacing: 8) {
                             MusicCoverView(urlString: artist.cover, size: 80, cornerRadius: 40)
                             Text(artist.name)
                                 .font(.haoSubheadStrong)

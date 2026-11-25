@@ -224,7 +224,7 @@ struct LiveRoomRow: View {
             }
         }
         .frame(width: 96, height: 54)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: HaoLayout.cornerSmall, style: .continuous))
     }
 
     private var rowCoverPlaceholder: some View {

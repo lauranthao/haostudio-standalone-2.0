@@ -67,7 +67,7 @@ struct HomeView: View {
                         if !viewModel.isLoading {
                             welcomeCard
                             continueWatchingSection
-                                .padding(.top, 12)
+                                .padding(.top, 16)
                             continueListeningSection
                                 .padding(.top, 16)
                             hotLiveSection
@@ -269,18 +269,17 @@ struct HomeView: View {
                     // b49fix3 P1-14: first-run guidance — one
                     // source-configuration action, no new
                     // onboarding flow. Opens My → 设置 → 来源管理.
-                    Button("配置歌源/片源") {
+                    // b49fix4 P2-26: a capsule like the row above —
+                    // the plain-text button read weaker than the
+                    // action it is. "不再显示" stays text (it is a
+                    // dismiss, not an action). b49fix4 P2-37:
+                    // stateful deep link — set the row BEFORE the
+                    // tab switch; the old 0.35s delayed post could
+                    // land before the My tab mounted and be lost.
+                    MusicCapsuleButton(icon: "slider.horizontal.3", label: "配置歌源/片源") {
+                        SettingsDeepLink.shared.open(row: "sources")
                         NotificationCenter.default.post(name: .haoSwitchTab, object: HaoTab.my)
-                        // Delayed: the My tab mounts on the next
-                        // render pass — a synchronous row post
-                        // would land before any listener exists
-                        // (same as the backup nudge in MainTabView).
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                            NotificationCenter.default.post(name: .haoOpenSettingsRow, object: "sources")
-                        }
                     }
-                    .font(.haoFootnote)
-                    .foregroundStyle(theme.accentText)
                     Button("不再显示") {
                         welcomeDismissed = true
                     }
@@ -437,10 +436,13 @@ struct HomeView: View {
                     Button("直播状态查不到，重试") {
                         viewModel.reload(forceLiveRecheck: true)
                     }
-                    .font(.haoFootnote)
+                    // b49fix4 P2-6: 13 medium inline retry, top 12
+                    // — the same as every other inline text retry
+                    // (Live's merged lane set the shared top to 12).
+                    .font(.haoFootnoteMedium)
                     .foregroundStyle(theme.accentText)
                     .padding(.horizontal, 24)
-                    .padding(.top, 4)
+                    .padding(.top, 12)
                     .accessibilityLabel("重试检查直播状态")
                 }
             }
@@ -705,7 +707,7 @@ struct HomeSongCard: View {
         MusicSongMenuHost(song: song) { menu in
             Button(action: onTap) {
                 VStack(alignment: .leading, spacing: 6) {
-                    MusicCoverView(urlString: song.cover, size: 120, cornerRadius: 12)
+                    MusicCoverView(urlString: song.cover, size: 120, cornerRadius: HaoLayout.cornerMedium)
                     Text(song.title.isEmpty ? "未知歌曲" : song.title)
                         .font(.haoDenseTitle)
                         .foregroundStyle(theme.textPrimary)

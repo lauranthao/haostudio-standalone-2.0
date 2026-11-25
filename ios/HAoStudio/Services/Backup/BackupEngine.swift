@@ -134,6 +134,44 @@ struct BackupImportDetail {
     /// True when the backup carried an Emby config but no
     /// credential is stored now, so the user must log in again.
     let embyCredentialsMissing: Bool
+    /// b49fix4 P2-36: a failed import used to report "已全量回滚"
+    /// on every path, including paths where the rollback itself
+    /// could not put a file back (copy failure, removal failure,
+    /// or an unreadable snapshot manifest). The engine now
+    /// collects the relative paths it could not restore, so the
+    /// UI can say "回滚未完成，请检查 X" instead of lying.
+    let rollbackFailures: [String]
+    /// True when nothing was ever written — the plan was
+    /// rejected before any write, or the pre-import snapshot
+    /// failed. There was nothing to roll back, so the UI must
+    /// not say "已全部回滚" (it must say nothing was touched).
+    let nothingWritten: Bool
+
+    init(
+        outcome: BackupImportOutcome,
+        appliedKeys: Int,
+        appliedCollections: Int,
+        appliedFiles: Int,
+        skippedKeyNames: [String],
+        unknownKeyNames: [String],
+        warnings: [String],
+        detail: String,
+        embyCredentialsMissing: Bool,
+        rollbackFailures: [String] = [],
+        nothingWritten: Bool = false
+    ) {
+        self.outcome = outcome
+        self.appliedKeys = appliedKeys
+        self.appliedCollections = appliedCollections
+        self.appliedFiles = appliedFiles
+        self.skippedKeyNames = skippedKeyNames
+        self.unknownKeyNames = unknownKeyNames
+        self.warnings = warnings
+        self.detail = detail
+        self.embyCredentialsMissing = embyCredentialsMissing
+        self.rollbackFailures = rollbackFailures
+        self.nothingWritten = nothingWritten
+    }
 }
 
 enum BackupEngineCore {
@@ -282,6 +320,21 @@ enum BackupEngineCore {
         out["hao.currentPlayContext"] = .data
         out["hao.lyricsCacheOrder"] = .json
         out["hao.lyricsCacheVersion"] = .int
+        // b49fix4 P2-39: five keys the app writes but the export
+        // never collected — a restore silently dropped them
+        // (welcome card re-appeared, backup nudge re-appeared,
+        // last manifest / confirmed quality forgotten). One
+        // catalogue feeds both export and import, so adding
+        // them here makes them round-trip. Deliberately NOT
+        // here: hao_store_quarantine.json — that is a Documents
+        // file, and collectCollectionFiles already exports every
+        // Documents/*.json except migration_snapshot, so it was
+        // never missing (the sweep's sub-claim was wrong).
+        out["hao_home_welcome_dismissed"] = .bool
+        out["hao_backup_nudge_shown"] = .bool
+        out["hao_backup_exported_once"] = .bool
+        out["hao_last_primary_manifest"] = .string
+        out["hao_last_confirmed_quality"] = .json
         return out
     }
 
@@ -659,10 +712,14 @@ extension BackupEngineCore {
         let plan = planImport(data: data, entries: entries, zipURL: zipURL, documentsURL: docs)
         switch plan {
         case .failure(let reason):
+            // b49fix4 P2-36: the plan runs before any write, so
+            // a plan failure wrote nothing — there was nothing
+            // to roll back, and the UI must not claim a rollback.
             return BackupImportDetail(
                 outcome: .failed, appliedKeys: 0, appliedCollections: 0,
                 appliedFiles: 0, skippedKeyNames: [], unknownKeyNames: [],
-                warnings: [], detail: reason, embyCredentialsMissing: false
+                warnings: [], detail: reason, embyCredentialsMissing: false,
+                nothingWritten: true
             )
         case .planned(let planned):
             return applyPlannedImport(
@@ -934,7 +991,8 @@ extension BackupEngineCore {
                 appliedFiles: 0, skippedKeyNames: planned.skipped.sorted(),
                 unknownKeyNames: Array(planned.unknown.keys).sorted(),
                 warnings: planned.warnings,
-                detail: "导入前快照失败，未写入任何内容", embyCredentialsMissing: false
+                detail: "导入前快照失败，未写入任何内容", embyCredentialsMissing: false,
+                nothingWritten: true
             )
         }
 
@@ -1076,16 +1134,27 @@ extension BackupEngineCore {
         }
 
         if let reason = failureReason {
-            rollback(
+            let rollbackFailures = rollback(
                 journal: journal, snapshotDir: snapshotDir,
                 documentsURL: documentsURL, defaults: defaults
             )
+            // b49fix4 P2-36: "已全量回滚" is only true when the
+            // rollback itself restored everything. When it did
+            // not, say so and name what was not put back.
+            let detail: String
+            if rollbackFailures.isEmpty {
+                detail = reason + "，已全量回滚"
+            } else {
+                detail = reason + "，回滚未完成，未恢复："
+                    + rollbackFailures.joined(separator: "、")
+            }
             return BackupImportDetail(
                 outcome: .failed, appliedKeys: 0, appliedCollections: 0,
                 appliedFiles: 0, skippedKeyNames: planned.skipped.sorted(),
                 unknownKeyNames: Array(planned.unknown.keys).sorted(),
                 warnings: planned.warnings,
-                detail: reason + "，已全量回滚", embyCredentialsMissing: false
+                detail: detail, embyCredentialsMissing: false,
+                rollbackFailures: rollbackFailures
             )
         }
 
@@ -1151,10 +1220,12 @@ extension BackupEngineCore {
                     // b49fix2 P1-4: Data / Date values are not
                     // JSON-safe, and isValidJSONObject below would
                     // fail the whole snapshot — refusing an import
-                    // over a key the user never touched. The
-                    // manifest's defaults are diagnostic only
-                    // (rollback reads the in-memory journal for
-                    // defaults), so store them in a JSON-safe form.
+                    // over a key the user never touched. Store them
+                    // in a JSON-safe form (Data as base64, Date as
+                    // a timestamp). b49fix4 P1-4: the manifest is
+                    // now also the durable restore source, and
+                    // restoreSnapshot decodes these back per key
+                    // kind — so the encoding must stay reversible.
                     if let data = value as? Data {
                         presentDefaults[key] = data.base64EncodedString()
                     } else if let date = value as? Date {
@@ -1206,10 +1277,9 @@ extension BackupEngineCore {
     /// Lists the import snapshots under
     /// `Documents/backup_snapshots/`, newest first (the folder
     /// name starts with a yyyyMMdd-HHmmss stamp). Empty when no
-    /// import ever ran. A snapshot is a rollback artifact of a
-    /// finished import — it is NOT a user-restorable backup
-    /// (restore runs through the import's own journal), so the
-    /// settings row offers list + delete only, never restore.
+    /// import ever ran. b49fix4 P1-4: a snapshot is now
+    /// user-restorable — the settings row offers restore per
+    /// snapshot (restoreSnapshot below), on top of list + delete.
     static func listSnapshots(documentsURL: URL? = nil) -> [URL] {
         let docs = documentsURL ?? LocalStore.documentsDirectory()
         let dir = docs.appendingPathComponent(snapshotDirectoryName)
@@ -1224,6 +1294,133 @@ extension BackupEngineCore {
     /// for that import — never live data.
     static func deleteSnapshot(at url: URL) {
         try? FileManager.default.removeItem(at: url)
+    }
+
+    // MARK: - Snapshot restore (b49fix4 P1-4)
+
+    /// What a user-triggered snapshot restore did. `succeeded`
+    /// is false when anything failed — the UI reports the failed
+    /// keys/files by name instead of claiming a full restore.
+    struct SnapshotRestoreResult {
+        /// Manifest-level failure (unreadable / corrupt
+        /// manifest); nothing was restored. `nil` means the
+        /// manifest parsed.
+        var manifestError: String?
+        var restoredKeys: Int = 0
+        var restoredFiles: Int = 0
+        var failedKeys: [String] = []
+        var failedFiles: [String] = []
+        var succeeded: Bool {
+            manifestError == nil && failedKeys.isEmpty && failedFiles.isEmpty
+        }
+    }
+
+    /// One row of the snapshot list: when it was taken and what
+    /// it holds. Counts come from the manifest; nil counts mean
+    /// the manifest could not be read (the row still shows its
+    /// date from the folder name).
+    struct SnapshotInfo {
+        var url: URL
+        var folderName: String
+        var date: Date
+        var keyCount: Int?
+        var fileCount: Int?
+    }
+
+    /// Reads one snapshot folder's row info: the date from the
+    /// yyyyMMdd-HHmmss stamp (creation date as fallback) and
+    /// the key/file counts from its manifest.
+    static func snapshotInfo(at url: URL) -> SnapshotInfo {
+        let name = url.lastPathComponent
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        var date = formatter.date(from: String(name.prefix(15)))
+        if date == nil {
+            date = (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate
+        }
+        var keyCount: Int?
+        var fileCount: Int?
+        if let manifestData = try? Data(contentsOf: url.appendingPathComponent("snapshot-manifest.json")),
+           let parsed = try? JSONSerialization.jsonObject(with: manifestData, options: []),
+           let manifest = parsed as? [String: Any] {
+            let present = manifest["defaultsPresent"] as? [String: Any] ?? [:]
+            let absent = manifest["defaultsAbsent"] as? [String] ?? []
+            keyCount = present.count + absent.count
+            fileCount = (manifest["filesPresent"] as? [String] ?? []).count
+        }
+        return SnapshotInfo(
+            url: url, folderName: name, date: date ?? Date(),
+            keyCount: keyCount, fileCount: fileCount
+        )
+    }
+
+    /// Restores the pre-import state captured in one snapshot
+    /// folder: defaults values from the manifest (decoded per
+    /// key kind — Data from base64, section-expanded keys as
+    /// bool, the rest from the export catalogue), file bytes
+    /// from the folder. The snapshot folder is kept, so the same
+    /// snapshot can be restored again. Posts
+    /// `.haoBackupImported` when anything was restored, so the
+    /// app layer re-reads. Runs synchronously; the caller puts
+    /// it on a background queue.
+    static func restoreSnapshot(
+        at snapshotDir: URL,
+        documentsURL: URL,
+        defaults: UserDefaults = .standard
+    ) -> SnapshotRestoreResult {
+        guard let manifestData = try? Data(contentsOf: snapshotDir.appendingPathComponent("snapshot-manifest.json")),
+              let parsed = try? JSONSerialization.jsonObject(with: manifestData, options: []),
+              let manifest = parsed as? [String: Any]
+        else { return SnapshotRestoreResult(manifestError: "该快照的清单损坏，无法恢复") }
+        var result = SnapshotRestoreResult()
+        // The kind comes from the EXPORT catalogue
+        // (userDefaultsKeyKinds), not from
+        // MigrationStore.kindForDefaultKey: the catalogue is the
+        // union of the migration mappings + the extras (audio
+        // cache, play context, lyrics keys, the five P2-39 keys),
+        // and kindForDefaultKey defaults every extra to .string —
+        // a bool/int/double/json/data value does not coerce as a
+        // string, so the restore would fail every non-string key.
+        // (Caught by the Linux harness, which failed 7 of 9
+        // present keys before this fix.)
+        let kinds = userDefaultsKeyKinds()
+        let present = manifest["defaultsPresent"] as? [String: Any] ?? [:]
+        for key in present.keys.sorted() {
+            guard let raw = present[key] else {
+                result.failedKeys.append(key)
+                continue
+            }
+            // The import plan coerces section-expanded keys as
+            // bool; the export catalogue has no entry for them
+            // (they are discovered by scanning), so the prefix
+            // branch comes first, same as planImport.
+            let kind: MigrationKeyKind = key.hasPrefix(sectionExpandedPrefix)
+                ? .bool : (kinds[key] ?? .string)
+            guard let value = MigrationStore.coerce(raw, as: kind) else {
+                result.failedKeys.append(key)
+                continue
+            }
+            defaults.set(value, forKey: key)
+            if MigrationStore.verifyDefault(key: key, kind: kind, defaults: defaults) {
+                result.restoredKeys += 1
+            } else {
+                defaults.removeObject(forKey: key)
+                result.failedKeys.append(key)
+            }
+        }
+        for key in (manifest["defaultsAbsent"] as? [String] ?? []).sorted() {
+            defaults.removeObject(forKey: key)
+            result.restoredKeys += 1
+        }
+        let filesPresent = manifest["filesPresent"] as? [String] ?? []
+        result.failedFiles = restoreFilesFromSnapshot(
+            snapshotDir: snapshotDir, documentsURL: documentsURL
+        )
+        result.restoredFiles = filesPresent.filter { !result.failedFiles.contains($0) }.count
+        if result.restoredKeys + result.restoredFiles > 0 {
+            NotificationCenter.default.post(name: .haoBackupImported, object: nil)
+        }
+        return result
     }
 
     /// Keeps only the newest `keeping` snapshots. Called on
@@ -1241,17 +1438,39 @@ extension BackupEngineCore {
     /// it: defaults from the in-memory journal, files from the
     /// snapshot folder (restored, or removed when they did not
     /// exist before). The snapshot folder itself is kept.
+    /// b49fix4 P2-36: returns the relative paths the file
+    /// restore could not put back, so the caller can report an
+    /// incomplete rollback instead of claiming "已全量回滚".
     private static func rollback(
         journal: BackupJournal,
         snapshotDir: URL,
         documentsURL: URL,
         defaults: UserDefaults
-    ) {
+    ) -> [String] {
         journal.restore(defaults: defaults)
+        return restoreFilesFromSnapshot(
+            snapshotDir: snapshotDir, documentsURL: documentsURL
+        )
+    }
+
+    /// Restores the files captured in a snapshot folder, from
+    /// the manifest. Returns the relative paths it could NOT
+    /// restore (copy failure, removal failure, or an unreadable
+    /// manifest — in that last case a single descriptive entry,
+    /// since the manifest is the only record of what was
+    /// captured). b49fix4 P1-4/P2-36: the old rollback swallowed
+    /// every failure with `catch { continue }` / `try?` and
+    /// still reported "已全量回滚". Shared by the in-import
+    /// rollback and by the user-triggered snapshot restore.
+    static func restoreFilesFromSnapshot(
+        snapshotDir: URL,
+        documentsURL: URL
+    ) -> [String] {
         guard let manifestData = try? Data(contentsOf: snapshotDir.appendingPathComponent("snapshot-manifest.json")),
               let parsed = try? JSONSerialization.jsonObject(with: manifestData, options: []),
               let manifest = parsed as? [String: Any]
-        else { return }
+        else { return ["快照清单（snapshot-manifest.json）无法读取"] }
+        var failures: [String] = []
         for relativePath in (manifest["filesPresent"] as? [String] ?? []) {
             let source = snapshotDir.appendingPathComponent(relativePath)
             let target = documentsURL.appendingPathComponent(relativePath)
@@ -1265,13 +1484,22 @@ extension BackupEngineCore {
                 }
                 try FileManager.default.copyItem(at: source, to: target)
             } catch {
-                continue
+                failures.append(relativePath)
             }
         }
         for relativePath in (manifest["filesAbsent"] as? [String] ?? []) {
             let target = documentsURL.appendingPathComponent(relativePath)
-            try? FileManager.default.removeItem(at: target)
+            // Only a removal that actually fails counts: a file
+            // that was never there needs no restoring.
+            if FileManager.default.fileExists(atPath: target.path) {
+                do {
+                    try FileManager.default.removeItem(at: target)
+                } catch {
+                    failures.append(relativePath)
+                }
+            }
         }
+        return failures
     }
 }
 
@@ -1430,7 +1658,9 @@ final class FileBackupEngine: BackupEngine {
                     skippedKeys: (detail.skippedKeyNames + detail.unknownKeyNames).sorted(),
                     rolledBack: true,
                     embyCredentialsMissing: false,
-                    warnings: detail.warnings
+                    warnings: detail.warnings,
+                    rollbackFailures: detail.rollbackFailures,
+                    nothingWritten: detail.nothingWritten
                 ))
             case .imported:
                 result = .success(BackupImportReport(

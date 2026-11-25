@@ -170,6 +170,14 @@ final class BackupUpdateFlow: ObservableObject {
         guard !isImporting else {
             return
         }
+        // b49fix4 P2-35: a second pick while the preview sheet is
+        // up would orphan the first pending import (its
+        // security-scoped access held, its envelope replaced).
+        // Cancel the pending one first — the sheet re-presents
+        // with the new file below.
+        if showingImportPreview {
+            cancelPendingImport()
+        }
         if url.pathExtension.lowercased() == "json" {
             importFlutterJSON(url: url)
             return
@@ -230,9 +238,16 @@ final class BackupUpdateFlow: ObservableObject {
                     // double work, and the engine is the one
                     // that knows commit vs rollback.
                 case .failure(let error):
+                    // b49fix4 P2-36: .failure means the file was
+                    // refused before anything was written — there
+                    // was nothing to roll back, so the old
+                    // "导入失败时会自动回滚，现有数据不受影响"
+                    // sentence was wrong here. The engine's own
+                    // .failed path (a write that landed) reports
+                    // its rollback state in the success branch.
                     self.alert = BackupUpdateAlert(
                         title: "导入失败",
-                        message: error.localizedDescription + "\n\n导入失败时会自动回滚，现有数据不受影响。")
+                        message: error.localizedDescription)
                 }
             }
         }
@@ -752,6 +767,11 @@ struct AutoShareSheet: UIViewControllerRepresentable {
 /// touched). Import is a merge, not a replace: keys absent from
 /// the backup keep their current values, and the engine snapshots
 /// the current data first (see 导入快照).
+/// b49fix4 P2-8: close / cancel across the three update sheets
+/// is 17 regular accentText (.haoBody + accentText) — the status
+/// sheet's 关闭, the prompt sheet's 关闭, the preview sheet's
+/// 取消. The preview's 确认导入 stays 17 semibold accentText;
+/// the prompt's primary stays a full-width gradient capsule.
 struct ImportPreviewSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.haoTheme) private var theme
@@ -766,8 +786,8 @@ struct ImportPreviewSheet: View {
             if let envelope = flow.pendingImportEnvelope {
                 VStack(alignment: .leading, spacing: 8) {
                     previewRow(label: "备份版本", value: "\(envelope.appVersion) (build \(envelope.appBuild))")
-                    previewRow(label: "导出时间", value: envelope.exportedAt)
-                    previewRow(label: "内容", value: "\(envelope.contents.count) 项")
+                    previewRow(label: "导出时间", value: envelope.formattedExportedAt)
+                    previewRow(label: "内容", value: envelope.contentsSummary)
                     if !envelope.warnings.isEmpty {
                         ForEach(envelope.warnings, id: \.self) { warning in
                             Text(warning)
@@ -777,7 +797,7 @@ struct ImportPreviewSheet: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Text("导入是合并，不是替换：备份里没有的项会保留现在的值；导入时会先保存一份当前数据的快照（见设置里的“导入快照”）。")
+                Text("导入是合并，不是替换：备份里没有的项会保留现在的值；导入时会先保存一份当前数据的快照（见设置里的“导入快照”），导入成功后如需撤销，可在那里恢复快照。")
                     .font(.haoSubhead)
                     .foregroundStyle(theme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -788,7 +808,7 @@ struct ImportPreviewSheet: View {
                     dismiss()
                 }
                 .font(.haoBody)
-                .foregroundStyle(theme.textSecondary)
+                .foregroundStyle(theme.accentText)
                 Button("确认导入") {
                     flow.confirmPendingImport()
                     dismiss()
@@ -1003,11 +1023,14 @@ struct UpdatePromptSheet: View {
                 .font(.haoSubhead)
                 .foregroundStyle(theme.textSecondary)
                 .multilineTextAlignment(.center)
-            // b49fix3 P2-14: the version info came from the
-            // fallback manifest and disagreed with the last-seen
-            // primary — say so, don't present it as primary.
+            // b49fix4 P2-43: the version info came from the
+            // fallback manifest — say so, don't present it as
+            // primary. When the fallback also disagreed with the
+            // last-seen primary manifest, say that too.
             if result.fromFallback {
-                Text("版本信息来自备用源")
+                Text(result.fallbackDisagreed
+                    ? "版本信息来自备用源，与上次主站版本不一致"
+                    : "版本信息来自备用源")
                     .font(.haoFootnote)
                     .foregroundStyle(theme.textMuted)
                     .multilineTextAlignment(.center)
@@ -1066,16 +1089,21 @@ struct UpdatePromptSheet: View {
             Text("安装步骤")
                 .font(.haoCallout)
                 .foregroundStyle(theme.textPrimary)
-            // b49fix3 P1-13: the two steps a first-time
-            // sideload needs — where the signing tool comes from,
-            // and the certificate trust after install (without
-            // it the icon will not open). No download URL is
-            // claimed here: none is verified in the repo or docs.
-            Text("1. 如果还没装签名工具，先下载安装 LCSign（或 TrollStore、AltStore 等签名工具）。")
-            Text("2. 点下面的按钮，在分享表单里选择你的签名工具（如 LCSign）。")
-            Text("3. 在签名工具里导入这个 IPA，按它的提示完成签名。")
-            Text("4. 回到桌面，打开新装的 HAo Studio。")
-            Text("5. 如果点图标打不开，先到“设置 → 通用 → VPN 与设备管理”，信任开发者证书，再重新打开。")
+            // b49fix3 P1-13: the steps a first-time sideload
+            // needs — where the signing tool comes from, and the
+            // certificate trust after install (without it the
+            // icon will not open). No download URL is claimed
+            // here: none is verified in the repo or docs (b49fix4
+            // P1-5: LCSign is distributed through its certificate
+            // bot, not a public download page). b49fix4 P1-6:
+            // never delete the old build first — sideloading over
+            // it keeps the data; deleting it wipes everything.
+            Text("1. 如果还没装签名工具，先下载安装 LCSign（或 TrollStore、AltStore 等签名工具）。没有签名工具先不要下载 IPA，下载了也装不上。")
+            Text("2. 不要先删除旧版，直接覆盖安装，否则歌单、收藏和设置都会丢。")
+            Text("3. 点下面的按钮，在分享表单里选择你的签名工具（如 LCSign）。")
+            Text("4. 在签名工具里导入这个 IPA，按它的提示完成签名。")
+            Text("5. 回到桌面，打开新装的 HAo Studio。")
+            Text("6. 如果点图标打不开，先到“设置 → 通用 → VPN 与设备管理”，信任开发者证书，再重新打开。")
         }
         .font(.haoSubhead)
         .foregroundStyle(theme.textSecondary)
@@ -1145,7 +1173,7 @@ struct UpdatePromptSheet: View {
                 Button("关闭") {
                     onLater()
                 }
-                .font(.haoCallout)
+                .font(.haoBody)
                 .foregroundStyle(theme.accentText)
                 .buttonStyle(.plain)
             case .handedOff:
@@ -1169,7 +1197,7 @@ struct UpdatePromptSheet: View {
                 Button("关闭") {
                     onLater()
                 }
-                .font(.haoCallout)
+                .font(.haoBody)
                 .foregroundStyle(theme.accentText)
                 .buttonStyle(.plain)
             default:

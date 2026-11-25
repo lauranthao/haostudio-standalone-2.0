@@ -97,6 +97,11 @@ struct SettingsGroupsView: View {
     /// notice so both drive the same picker / sheet / alert).
     @ObservedObject private var backupFlow = BackupUpdateFlow.shared
 
+    /// Stateful Settings deep link (b49fix4 P2-37): the pending
+    /// row survives until a consumer reads it. Observed so the
+    /// onChange below fires when a sender sets a row.
+    @ObservedObject private var deepLink = SettingsDeepLink.shared
+
     /// Last engine that really played (VideoEngineReporter). Read
     /// through an @ObservedObject — not `VideoEngineReporter.shared`
     /// inline — so the "上次实际" row refreshes when a playback
@@ -211,21 +216,20 @@ struct SettingsGroupsView: View {
         .onAppear {
             backupFlow.refreshUpdateState()
             snapshotCount = BackupEngineCore.listSnapshots().count
+            // b49fix4 P2-37: stateful deep link — a row set before
+            // this page mounted is only seen here, on appear.
+            if let row = deepLink.pendingRow {
+                expandDeepLinkRow(row)
+            }
         }
-        // b49fix3 P2-24 / P1-14: deep link into a settings row.
-        // The sender posts .haoSwitchTab (.my) first, then this
-        // notification with the row id — expand the containing
-        // section here; MyView's ScrollViewReader scrolls to
-        // the row id (the List lives there, not here).
-        .onReceive(NotificationCenter.default.publisher(for: .haoOpenSettingsRow)) { note in
-            guard let row = note.object as? String else { return }
-            switch row {
-            case "backup":
-                settings.setSectionExpanded(true, for: SettingsSection.data.rawValue)
-            case "sources":
-                settings.setSectionExpanded(true, for: SettingsSection.sources.rawValue)
-            default:
-                break
+        // b49fix4 P2-37: stateful deep link into a settings row.
+        // A value set while mounted is only seen on change. This
+        // side only expands the containing section — MyView
+        // scrolls to the row and clears the pending row after its
+        // scroll + retry, so clearing here would starve it.
+        .onChange(of: deepLink.pendingRow) { _, row in
+            if let row {
+                expandDeepLinkRow(row)
             }
         }
         // b45-coda 包 C: sheets hang on the Form (this Group),
@@ -237,7 +241,18 @@ struct SettingsGroupsView: View {
         .sheet(isPresented: $backupFlow.showingUpdateStatus) {
             UpdateStatusSheet()
         }
-        .sheet(isPresented: $backupFlow.showingImportPreview) {
+        .sheet(isPresented: $backupFlow.showingImportPreview, onDismiss: {
+            // b49fix4 P2-35: a swipe-down used to close the sheet
+            // without cancelling — the pending import's
+            // security-scoped access stayed held and its envelope
+            // stayed pending. Cancel on dismiss, EXCEPT when the
+            // confirm button already started the import: the
+            // sheet dismisses then too, and cancelling would
+            // release the file access mid-import.
+            if !backupFlow.isImporting {
+                backupFlow.cancelPendingImport()
+            }
+        }) {
             ImportPreviewSheet()
         }
     }
@@ -256,6 +271,20 @@ struct SettingsGroupsView: View {
     }
 
     // MARK: - Section scaffolding
+
+    /// b49fix4 P2-37: expand the section containing a deep-link
+    /// row. Called from onAppear + onChange; never clears the
+    /// pending row (MyView owns clearing).
+    private func expandDeepLinkRow(_ row: String) {
+        switch row {
+        case "backup":
+            settings.setSectionExpanded(true, for: SettingsSection.data.rawValue)
+        case "sources":
+            settings.setSectionExpanded(true, for: SettingsSection.sources.rawValue)
+        default:
+            break
+        }
+    }
 
     private func isExpanded(_ section: SettingsSection) -> Bool {
         settings.sectionExpanded(section.rawValue)
@@ -830,7 +859,7 @@ struct SettingsGroupsView: View {
                     LXSourceManagementView()
                 }
                 // b49fix3 P1-14: deep-link target for the welcome
-                // card's "配置歌源/片源" (see haoOpenSettingsRow).
+                // card's "配置歌源/片源" (see SettingsDeepLink).
                 .id("musicSources")
                 NavigationLink("影视源管理") {
                     CmsSourceManagementView()
@@ -881,7 +910,7 @@ struct SettingsGroupsView: View {
                 backupExportRow
                 backupImportRow
                     // b49fix3 P2-24: deep-link target for the
-                    // backup nudge's "去备份" (see haoOpenSettingsRow).
+                    // backup nudge's "去备份" (see SettingsDeepLink).
                     .id("backupImport")
                 backupSnapshotRow
             }
@@ -1337,8 +1366,8 @@ struct SettingsGroupsView: View {
 
     /// Hero (§4.2): VStack spacing 10, centred, vertical
     /// padding 8; our logo 72×72, iOS bundle-icon corner 16
-    /// continuous, no shadow / border; name .title2.bold()
-    /// (22pt). b49fix2 A26: the slogan is deleted (clean rule —
+    /// continuous, no shadow / border; name .haoDetailTitle
+    /// (22 bold). b49fix2 A26: the slogan is deleted (clean rule —
     /// the name + logo say what the app is).
     private var aboutHero: some View {
         VStack(spacing: 10) {
@@ -1347,7 +1376,7 @@ struct SettingsGroupsView: View {
                 .frame(width: 72, height: 72)
                 .clipShape(RoundedRectangle(cornerRadius: HaoLayout.cornerLarge, style: .continuous))
             Text("HAo Studio")
-                .font(.title2.bold())
+                .font(.haoDetailTitle)
                 .foregroundStyle(theme.textPrimary)
                 .multilineTextAlignment(.center)
         }
@@ -1530,8 +1559,12 @@ struct SettingsGroupsView: View {
     /// one; the 数据与来源 page (above) names the destinations.
     private var aboutFooter: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("HAo Studio 是一款免费的独立站应用，音乐、视频与直播内容均来自公开的第三方来源，版权归原权利人所有。")
+            Text("HAo Studio 是一款免费的独立应用，音乐、视频与直播内容均来自公开的第三方来源，版权归原权利人所有。")
             Text("不设账号；搜索与播放会直接向所选来源的服务器发请求（不经过我们）。详情见「数据与来源」。")
+            // b49fix4 P2-51: interface type sizes are fixed on
+            // purpose (HaoTheme header) — say so here instead of
+            // letting the fixed sizes look like a bug.
+            Text("界面字号固定，不跟随系统文字大小设置。")
         }
         .font(.haoFootnote)
         .foregroundStyle(theme.textMuted)
@@ -1540,15 +1573,21 @@ struct SettingsGroupsView: View {
 
 /// Import-snapshot list (b49fix3 P1-6 / P2-17): every import
 /// snapshots the pre-import data under
-/// Documents/backup_snapshots/. List + delete only — restore is
-/// deliberately not offered: a snapshot is a rollback artifact
-/// of a finished import (journal-based, partial), not a
-/// user-restorable backup (see BackupEngineCore.listSnapshots).
+/// Documents/backup_snapshots/. b49fix4 P1-4: a snapshot is now
+/// user-restorable — each row offers 恢复 (restoreSnapshot in
+/// the engine decodes the manifest per key kind and copies the
+/// file bytes back) on top of list + delete. Restoring loses
+/// whatever changed after that import, so it asks first.
 struct BackupSnapshotView: View {
     @Environment(\.haoTheme) private var theme
     var onChange: () -> Void = {}
 
-    @State private var snapshots: [URL] = []
+    @State private var snapshots: [BackupEngineCore.SnapshotInfo] = []
+    @State private var restoreTarget: BackupEngineCore.SnapshotInfo?
+    @State private var showingRestoreConfirm = false
+    @State private var isRestoring = false
+    @State private var restoreResultText: String?
+    @State private var showingRestoreResult = false
 
     var body: some View {
         List {
@@ -1558,23 +1597,35 @@ struct BackupSnapshotView: View {
                         .font(.haoFootnote)
                         .foregroundStyle(theme.textSecondary)
                 } else {
-                    ForEach(snapshots, id: \.path) { url in
+                    ForEach(snapshots, id: \.url) { info in
                         HStack {
-                            Text(url.lastPathComponent)
-                                .font(.haoBody)
-                                .foregroundStyle(theme.textPrimary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(dateLabel(for: info))
+                                    .font(.haoBody)
+                                    .foregroundStyle(theme.textPrimary)
+                                Text(countLabel(for: info))
+                                    .font(.haoFootnote)
+                                    .foregroundStyle(theme.textSecondary)
+                            }
                             Spacer()
+                            Button("恢复") {
+                                restoreTarget = info
+                                showingRestoreConfirm = true
+                            }
+                            .font(.haoBody)
+                            .foregroundStyle(theme.accentText)
                             Button("删除", role: .destructive) {
-                                BackupEngineCore.deleteSnapshot(at: url)
+                                BackupEngineCore.deleteSnapshot(at: info.url)
                                 reload()
                             }
                             .font(.haoBody)
                         }
+                        .buttonStyle(.borderless)
                     }
                 }
             } footer: {
-                Text("快照只保留最近 5 份，超出自动清理；删除快照只去掉该次导入的安全网，不动现有数据。")
-                    .font(.haoCaption)
+                Text("快照只保留最近 5 份，超出自动清理；恢复会把数据恢复到导入前的状态，导入之后改动的内容会丢失；删除快照只去掉该次导入的安全网，不动现有数据。")
+                    .font(.haoFootnote)
                     .foregroundStyle(theme.textSecondary)
             }
         }
@@ -1583,11 +1634,80 @@ struct BackupSnapshotView: View {
         .background(theme.scaffoldBackground)
         .navigationTitle("导入快照")
         .onAppear { reload() }
+        .disabled(isRestoring)
+        .alert("恢复此快照？", isPresented: $showingRestoreConfirm) {
+            Button("恢复", role: .destructive) {
+                performRestore()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("恢复后会回到导入前的状态，导入之后改动的内容会丢失。")
+        }
+        .alert("恢复快照", isPresented: $showingRestoreResult) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(restoreResultText ?? "")
+        }
     }
 
     private func reload() {
-        snapshots = BackupEngineCore.listSnapshots()
+        snapshots = BackupEngineCore.listSnapshots().map {
+            BackupEngineCore.snapshotInfo(at: $0)
+        }
         onChange()
+    }
+
+    private func dateLabel(for info: BackupEngineCore.SnapshotInfo) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: info.date)
+    }
+
+    private func countLabel(for info: BackupEngineCore.SnapshotInfo) -> String {
+        guard let keys = info.keyCount, let files = info.fileCount else {
+            return "清单无法读取"
+        }
+        return "\(keys) 项设置、\(files) 个文件"
+    }
+
+    private func performRestore() {
+        guard let target = restoreTarget else { return }
+        isRestoring = true
+        let docs = LocalStore.documentsDirectory()
+        // The restore copies file bytes; run it off the main
+        // queue and report back on it.
+        Task.detached {
+            let result = BackupEngineCore.restoreSnapshot(
+                at: target.url, documentsURL: docs
+            )
+            await MainActor.run {
+                isRestoring = false
+                restoreResultText = Self.restoreMessage(for: result)
+                showingRestoreResult = true
+                reload()
+            }
+        }
+    }
+
+    private static func restoreMessage(for result: BackupEngineCore.SnapshotRestoreResult) -> String {
+        if let error = result.manifestError {
+            return error
+        }
+        if result.succeeded {
+            return "已恢复 \(result.restoredKeys) 个设置、\(result.restoredFiles) 个文件。"
+        }
+        var lines = ["恢复未完成："]
+        if result.restoredKeys + result.restoredFiles > 0 {
+            lines.append("已恢复 \(result.restoredKeys) 个设置、\(result.restoredFiles) 个文件。")
+        }
+        if !result.failedKeys.isEmpty {
+            lines.append("未恢复的设置：\(result.failedKeys.joined(separator: "、"))。")
+        }
+        if !result.failedFiles.isEmpty {
+            lines.append("未恢复的文件：\(result.failedFiles.joined(separator: "、"))。")
+        }
+        return lines.joined(separator: "\n")
     }
 }
 
@@ -1618,7 +1738,7 @@ struct DataSourcesView: View {
                 Text("更新服务器：主站 chen-hao-shop-production.up.railway.app/version.json，备用 raw.githubusercontent.com/lauranthao/haostudio-standalone-2.0/main/version.json。歌词随歌曲来源取自各平台的歌词接口（网易云、QQ、酷我等）——歌词不经过我们。")
                     .font(.haoFootnote)
                     .foregroundStyle(theme.textSecondary)
-                Text("你自己配置的 Emby 服务器除外：开启上报后，播放进度会同步到你的 Emby。")
+                Text("你自己配置的 Emby 服务器除外：播放进度上报默认开启，可在 Emby 设置里关闭；开启时，播放进度会同步到你的 Emby。")
                     .font(.haoFootnote)
                     .foregroundStyle(theme.textSecondary)
             }
@@ -1666,7 +1786,7 @@ struct AboutLinkRow: View {
                 Spacer(minLength: 8)
                 if let detail = detail, !detail.isEmpty {
                     Text(detail)
-                        .font(.subheadline)
+                        .font(.haoSubhead)
                         .foregroundStyle(theme.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -1770,16 +1890,16 @@ struct DocumentSheetView: View {
 
 // MARK: - 免责声明 (b45-coda 包 C, §4.3)
 
-/// Disclaimer page, version 4 (DisclaimerGate). Read-only mode
+/// Disclaimer page, version 6 (DisclaimerGate). Read-only mode
 /// = bordered "关闭"; first-launch gate mode = prominent
 /// "同意并继续" (accent tint) + plain "不同意". The gate is
 /// presented by MainTabView (fullScreenCover, themed palette)
 /// after HAoStudioApp posts `.haoShowDisclaimerGate` when the
-/// splash finishes and the stored version is not current; the
-/// exit-on-decline lives in MainTabView's gate binding (a
-/// dismiss without acceptance exits the app — Coda's
-/// OnboardingView behaviour), so this view only records the
-/// consent and confirms the decline first.
+/// splash finishes and the stored version is not current.
+/// Declining does NOT exit the app: the gate simply stays
+/// presented until the user accepts — only an explicit
+/// "退出应用" tap exits (exit(0)). So this view only records
+/// the consent and confirms the decline first.
 struct DisclaimerView: View {
     enum Mode {
         case readOnly
@@ -1811,20 +1931,20 @@ struct DisclaimerView: View {
                             .font(.system(size: 34, weight: .medium))
                             .foregroundStyle(theme.accentText)
                         Text("免责声明")
-                            .font(.system(size: 28, weight: .bold))
+                            .font(.haoPageTitle)
                             .foregroundStyle(theme.textPrimary)
                         Text(DisclaimerContent.summary)
-                            .font(.subheadline)
+                            .font(.haoSubhead)
                             .foregroundStyle(theme.textSecondary)
                             .multilineTextAlignment(.center)
                     }
                     ForEach(DisclaimerContent.clauses, id: \.title) { clause in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(clause.title)
-                                .font(.headline)
+                                .font(.haoBodyStrong)
                                 .foregroundStyle(theme.textPrimary)
                             Text(clause.body)
-                                .font(.callout)
+                                .font(.haoCallout)
                                 .foregroundStyle(theme.textSecondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)

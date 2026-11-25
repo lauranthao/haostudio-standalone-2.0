@@ -360,15 +360,14 @@ struct MainTabView: View {
             Button("去备份") {
                 // b49fix3 P2-23: the user has now seen the nudge.
                 UserDefaults.standard.set(true, forKey: "hao_backup_nudge_shown")
+                // b49fix4 P2-37: stateful deep link — set the row
+                // BEFORE switching tab. The old 0.35s delayed
+                // post could land before the My tab mounted and
+                // be lost silently; the store keeps the row until
+                // MyView / SettingsGroupsView consume it.
+                SettingsDeepLink.shared.open(row: "backup")
                 mountedTabs.insert(.my)
                 selectedTab = .my
-                // b49fix3 P2-24: direct to the 导入备份 row.
-                // Delayed: the My tab (and its settings page)
-                // mounts on the next render pass, so a synchronous
-                // post would land before any listener exists.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    NotificationCenter.default.post(name: .haoOpenSettingsRow, object: "backup")
-                }
             }
             Button("以后再说", role: .cancel) {
                 // b49fix3 P2-23: dismissed counts as seen — the

@@ -201,7 +201,7 @@ struct MusicChartsView: View {
 
     private func chartCard(_ chart: PlaylistSummary) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            MusicCoverView(urlString: chart.cover, size: 110, cornerRadius: 8)
+            MusicCoverView(urlString: chart.cover, size: 110, cornerRadius: HaoLayout.cornerSmall)
             VStack(alignment: .leading, spacing: 6) {
                 Text(chart.name)
                     .font(.haoSubheadStrong)
@@ -239,7 +239,7 @@ struct MusicChartsView: View {
             Spacer()
         }
         .padding(12)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
         .contentShape(Rectangle())
         .onAppear { viewModel.loadTopTracks(chart: chart) }
     }

@@ -267,7 +267,7 @@ struct VodSettingsSheet: View {
                                             .background(
                                                 index == episodeIndex
                                                     ? theme.accent : theme.surface,
-                                                in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                                in: RoundedRectangle(cornerRadius: HaoLayout.selectionCellCornerRadius, style: .continuous))
                                     }
                                     .buttonStyle(.plain)
                                 }

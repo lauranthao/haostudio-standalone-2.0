@@ -433,7 +433,7 @@ struct MusicFMView: View {
             VStack(spacing: 0) {
                 Spacer()
                 if let song = fmSong {
-                    MusicCoverView(urlString: song.cover, size: coverSize, cornerRadius: 16)
+                    MusicCoverView(urlString: song.cover, size: coverSize, cornerRadius: HaoLayout.cornerLarge)
                         .shadow(color: .black.opacity(0.35), radius: 28, y: 14)
                         .scaleEffect(playerVM.isPlaying ? 1.0 : 0.94)
                         .animation(.spring(response: 0.4, dampingFraction: 0.6), value: playerVM.isPlaying)

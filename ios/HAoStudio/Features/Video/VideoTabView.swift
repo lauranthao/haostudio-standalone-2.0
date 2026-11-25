@@ -577,9 +577,9 @@ struct VideoTabView: View {
             }
             .padding(.horizontal, 16)
             .frame(height: HaoLayout.searchFieldHeight)
-            .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(theme.surface, in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous)
                     .strokeBorder(theme.hairline, lineWidth: 0.5)
             }
         }
@@ -750,9 +750,9 @@ struct VideoContinueCard: View {
             }
             .padding(12)
             .frame(width: 260, alignment: .leading)
-            .background(theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(theme.surface, in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous)
                     .strokeBorder(theme.hairline, lineWidth: 0.5)
             }
         }
@@ -776,7 +776,7 @@ struct VideoPosterCardImage: View {
             // none, so continue-watching cards and history rows
             // showed placeholder tiles for every Emby title.
             if item.detailSource == .emby {
-                EmbyPosterImage(urlString: item.coverURL?.absoluteString ?? "", cornerRadius: 8)
+                EmbyPosterImage(urlString: item.coverURL?.absoluteString ?? "", cornerRadius: HaoLayout.cornerSmall)
             } else if let url = item.coverURL {
                 // Shared loader (build 36 item 10 leg 6): thumb is
                 // size x 2/3 wide — decode that, not the original.
@@ -794,11 +794,11 @@ struct VideoPosterCardImage: View {
             }
         }
         .frame(width: size * 2 / 3, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: HaoLayout.cornerSmall, style: .continuous))
     }
 
     private var placeholder: some View {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
+        RoundedRectangle(cornerRadius: HaoLayout.cornerSmall, style: .continuous)
             .fill(theme.surfaceStrong)
             .overlay {
                 Image(systemName: "film")

@@ -408,9 +408,9 @@ struct EmbyTabView: View {
             }
             .padding(.horizontal, 16)
             .frame(height: HaoLayout.searchFieldHeight)
-            .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(theme.surface, in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous)
                     .strokeBorder(theme.hairline, lineWidth: 0.5)
             }
         }

@@ -164,7 +164,7 @@ struct MusicHomeView: View {
             }
             .padding(.horizontal, 16)
             .frame(height: HaoLayout.searchFieldHeight)
-            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("搜索")
@@ -189,9 +189,9 @@ struct MusicHomeView: View {
             }
             .padding(.horizontal, 16)
             .frame(height: HaoLayout.detailSearchHeight)
-            .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(theme.surface, in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous)
                     .strokeBorder(theme.hairline, lineWidth: 0.5)
             }
         }
@@ -244,7 +244,7 @@ struct MusicHomeView: View {
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 56, height: 56)
-                    .background(tint, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .background(tint, in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.haoBodyStrong)
@@ -260,9 +260,9 @@ struct MusicHomeView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 12)
-            .background(theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(theme.surface, in: RoundedRectangle(cornerRadius: HaoLayout.cornerXLarge, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: HaoLayout.cornerXLarge, style: .continuous)
                     .strokeBorder(theme.hairline, lineWidth: 0.5)
             }
             .contentShape(Rectangle())
@@ -323,7 +323,7 @@ struct MusicHomeView: View {
                 playerVM.play(song: song, in: homeVM.recent, startAt: index, source: PlaySource(kind: .recent, id: "recent"), sourceDisplayName: "最近播放")
             }) {
                 VStack(alignment: .leading, spacing: 6) {
-                    MusicCoverView(urlString: song.cover, size: 148, cornerRadius: 12)
+                    MusicCoverView(urlString: song.cover, size: 148, cornerRadius: HaoLayout.cornerMedium)
                         .overlay(alignment: .bottomLeading) {
                             if isPlaying {
                                 MusicPlayingEQView()
@@ -467,9 +467,9 @@ struct MusicRecommendView: View {
             }
             .padding(.horizontal, 16)
             .frame(height: HaoLayout.detailSearchHeight)
-            .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(theme.surface, in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous)
                     .strokeBorder(theme.hairline, lineWidth: 0.5)
             }
         }
@@ -595,7 +595,7 @@ struct MusicRecommendView: View {
 
     private func playlistMiniRow(_ summary: PlaylistSummary) -> some View {
         HStack(spacing: 12) {
-            MusicCoverView(urlString: summary.cover, size: 56, cornerRadius: 8)
+            MusicCoverView(urlString: summary.cover, size: 56, cornerRadius: HaoLayout.cornerSmall)
             VStack(alignment: .leading, spacing: 2) {
                 Text(summary.name)
                     .font(.system(size: 17, weight: .medium))
@@ -757,7 +757,7 @@ struct MusicRecommendView: View {
                 }
             }) {
                 HStack(spacing: 12) {
-                    MusicCoverView(urlString: chart.cover, size: 48, cornerRadius: 8)
+                    MusicCoverView(urlString: chart.cover, size: 48, cornerRadius: HaoLayout.cornerSmall)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(chart.name)
                             .font(.haoBodyStrong)

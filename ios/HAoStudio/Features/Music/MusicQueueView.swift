@@ -109,7 +109,7 @@ struct MusicQueueView: View {
             playerVM.playFromQueue(at: index, manual: true)
         }) {
             HStack(spacing: 12) {
-                MusicCoverView(urlString: song.cover, size: 48, cornerRadius: 5)
+                MusicCoverView(urlString: song.cover, size: 48, cornerRadius: 6)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(song.title)
                         .font(.haoBodyMedium)

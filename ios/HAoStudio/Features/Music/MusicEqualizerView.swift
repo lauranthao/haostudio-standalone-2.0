@@ -167,10 +167,10 @@ struct MusicEqualizerView: View {
                             .frame(height: 30)
                             .background(
                                 selected ? theme.accentSoft : theme.surfaceStrong,
-                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                in: RoundedRectangle(cornerRadius: HaoLayout.cornerSmall, style: .continuous)
                             )
                             .overlay {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                RoundedRectangle(cornerRadius: HaoLayout.cornerSmall, style: .continuous)
                                     .strokeBorder(selected ? theme.accent : theme.hairline, lineWidth: selected ? 0.8 : 0.5)
                             }
                     }

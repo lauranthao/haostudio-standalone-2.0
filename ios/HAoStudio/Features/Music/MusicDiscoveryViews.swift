@@ -232,7 +232,7 @@ struct MusicExploreView: View {
         .foregroundStyle(theme.textSecondary)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
         .padding(.bottom, 8)
     }
 
@@ -710,7 +710,7 @@ struct MusicListenReportView: View {
             summaryStat(value: "\(report.topSongs.count)", label: "听过的歌")
         }
         .padding(.vertical, 16)
-        .background(theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: HaoLayout.cornerXLarge, style: .continuous))
     }
 
     private func summaryStat(value: String, label: String) -> some View {

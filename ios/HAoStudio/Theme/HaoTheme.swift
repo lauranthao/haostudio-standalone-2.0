@@ -643,28 +643,14 @@ extension EnvironmentValues {
 // red kept is the favourite heart #FF3B30 — a "meaningful red"
 // (a liked song), same as Coda's PlayerBar.
 enum HaoDesignTokens {
-    // Spacing (pt): micro 2 / tight 4 / small 8 / control 12 /
-    // component 16 / group 24 / phonePage 20 / page 24 /
-    // section 20 / largeSection 24 / discoverySection 32.
-    static let micro: CGFloat = 2
-    static let tight: CGFloat = 4
-    static let small: CGFloat = 8
-    static let control: CGFloat = 12
-    static let component: CGFloat = 16
-    static let group: CGFloat = 24
-    static let phonePage: CGFloat = 20
-    static let page: CGFloat = 24
-    static let section: CGFloat = 20
-    static let largeSection: CGFloat = 24
-    static let discoverySection: CGFloat = 32
-    // Corner radii (pt): badge 4 / small 6 / standard 8 /
-    // large 12 / cover 22 / panel 20.
-    static let cornerBadge: CGFloat = 4
-    static let cornerSmall: CGFloat = 6
-    static let cornerStandard: CGFloat = 8
-    static let cornerLarge: CGFloat = 12
-    static let cornerCover: CGFloat = 22
-    static let cornerPanel: CGFloat = 20
+    // b49fix4 P2-28: the spacing + corner members are deleted —
+    // they duplicated HaoLayout (pageMargin / pushedPageMargin /
+    // cornerSmall / cornerMedium / cornerLarge / cornerXLarge /
+    // cornerXXLarge / selectionCellCornerRadius) with different
+    // names and values, so two token systems drifted apart.
+    // Spacing and corners live in HaoLayout only now; this enum
+    // keeps animations + heartRed, which are the only members
+    // any view reads.
     // Animations: quick 0.15 easeOut / standard 0.25 easeInOut /
     // smooth 0.35 easeInOut / spring(0.35, 0.7) /
     // bouncy spring(0.4, 0.6) / snappy spring(0.25, 0.8) /

@@ -98,7 +98,7 @@ struct MusicSearchView: View {
         .padding(.leading, 16)
         .padding(.trailing, query.isEmpty ? 16 : 4)
         .frame(minHeight: HaoLayout.searchFieldHeight)
-        .background(theme.surfaceStrong, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(theme.surfaceStrong, in: RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
     }
 
     // MARK: - Suggestion / hot-word chips (Coda §5.3)
@@ -126,7 +126,7 @@ struct MusicSearchView: View {
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 7)
                                 .overlay {
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous)
                                         .strokeBorder(theme.hairline, lineWidth: 1)
                                 }
                         }
@@ -324,7 +324,7 @@ struct MusicSearchView: View {
             searchVM.selectTab(.albums)
         }
         if searchVM.loadingCards.contains(.albums) && searchVM.albums.isEmpty {
-            shelfSkeletonCards(count: 3, size: 178, cornerRadius: 12)
+            shelfSkeletonCards(count: 3, size: 178, cornerRadius: HaoLayout.cornerMedium)
         } else if searchVM.cardErrors[.albums] == true && searchVM.albums.isEmpty {
             categoryErrorRow(kind: .albums)
         } else if searchVM.albums.isEmpty {
@@ -354,7 +354,7 @@ struct MusicSearchView: View {
             searchVM.selectTab(.playlists)
         }
         if searchVM.loadingCards.contains(.playlists) && searchVM.playlists.isEmpty {
-            shelfSkeletonCards(count: 3, size: 178, cornerRadius: 12)
+            shelfSkeletonCards(count: 3, size: 178, cornerRadius: HaoLayout.cornerMedium)
         } else if searchVM.cardErrors[.playlists] == true && searchVM.playlists.isEmpty {
             categoryErrorRow(kind: .playlists)
         } else if searchVM.playlists.isEmpty {
