@@ -119,6 +119,57 @@ final class LXResolverPolicyTests: XCTestCase {
         XCTAssertTrue(reloaded.isCoolingDown("tang"))
     }
 
+    // MARK: - b49fix22 D24-1: newest-wins speed merge
+
+    private func plantDiskSpeeds(_ map: [String: ResolverSpeedRecord]) {
+        let data = try! JSONEncoder().encode(map)
+        try! data.write(to: docs.appendingPathComponent("hao_resolver_speed.json"), options: [.atomic])
+    }
+
+    func testNewerImportedSpeedSurvivesSave() {
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        let (cooldown, _) = makeCooldown(now: t0)
+        cooldown.record("qq", outcome: .success, milliseconds: 300)
+        // The backup's record is one minute newer than the live
+        // recording — newest-wins keeps it, and the backfill
+        // makes averageMs() see it at once, no restart.
+        plantDiskSpeeds(["qq": ResolverSpeedRecord(avg: 120, updatedAtMs: Int(t0.addingTimeInterval(60).timeIntervalSince1970 * 1000))])
+        cooldown.saveNow()
+        XCTAssertEqual(cooldown.averageMs("qq"), 120)
+    }
+
+    func testOlderImportedSpeedDoesNotOverwriteLiveRecording() {
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        let (cooldown, _) = makeCooldown(now: t0)
+        cooldown.record("qq", outcome: .success, milliseconds: 300)
+        // The backup's record is one minute older — memory wins.
+        plantDiskSpeeds(["qq": ResolverSpeedRecord(avg: 120, updatedAtMs: Int(t0.addingTimeInterval(-60).timeIntervalSince1970 * 1000))])
+        cooldown.saveNow()
+        XCTAssertEqual(cooldown.averageMs("qq"), 300)
+        // ...and the disk file keeps the live value, not the import.
+        let reloaded = ResolverCooldown(documentsDirectory: docs)
+        XCTAssertEqual(reloaded.averageMs("qq"), 300)
+    }
+
+    func testUnstampedImportedSpeedLosesToLiveRecording() {
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        let (cooldown, _) = makeCooldown(now: t0)
+        cooldown.record("qq", outcome: .success, milliseconds: 300)
+        // A pre-fix22 record carries no `updated` — it counts as
+        // epoch, older than any stamped live recording.
+        plantDiskSpeeds(["qq": ResolverSpeedRecord(avg: 120)])
+        cooldown.saveNow()
+        XCTAssertEqual(cooldown.averageMs("qq"), 300)
+    }
+
+    func testRecordStampsUpdatedAt() {
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        let (cooldown, _) = makeCooldown(now: t0)
+        XCTAssertNil(cooldown.updatedAt["qq"])
+        cooldown.record("qq", outcome: .success, milliseconds: 300)
+        XCTAssertEqual(cooldown.updatedAt["qq"], t0)
+    }
+
     // MARK: - Play-URL cache
 
     func testCacheHitAndOneHourExpiry() {

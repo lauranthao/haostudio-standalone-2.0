@@ -2387,6 +2387,17 @@ enum MigrationStore {
         out["lineName"] = looseString(entry["lineName"])
         out["positionSeconds"] = numberValue(entry["positionSeconds"])?.doubleValue ?? 0
         out["durationSeconds"] = numberValue(entry["durationSeconds"])?.doubleValue ?? 0
+        // b49fix22 R1 (O-1 adjudicated, sweep-24): an
+        // unparseable / missing date installs now ON PURPOSE —
+        // the normaliser drops only entries with no usable
+        // identity and fills the rest with live defaults (date
+        // now is the same class as episodeIndex 0 /
+        // positionSeconds 0); dropping the whole entry would
+        // throw away positionSeconds, the resume position.
+        // Only true garbage strings reach here —
+        // historyDateSeconds already covers ISO / ms / s / µs /
+        // yyyy-MM-dd — and the value is stored as seconds,
+        // never re-stamped.
         out["updatedAt"] = historyDateSeconds(from: entry["updatedAt"]) ?? Date().timeIntervalSince1970
         return out
     }
@@ -2409,6 +2420,10 @@ enum MigrationStore {
             "title": looseString(entry["title"]),
             "nick": looseString(entry["nick"]),
             "cover": looseString(entry["cover"]),
+            // b49fix22 R1 (O-1 adjudicated, sweep-24): same
+            // install-now rule as the video normaliser above —
+            // an unparseable date is a live default, not a
+            // reason to drop the entry and its resume position.
             "watchedAt": historyDateSeconds(from: entry["watchedAt"]) ?? Date().timeIntervalSince1970,
         ]
         if let urls = entry["playUrlsJSON"] as? String { out["playUrlsJSON"] = urls }
@@ -3010,12 +3025,16 @@ enum MigrationStore {
             // pre-import value, not the prior value, so a live
             // change to a cap-dropped entry is preserved), and
             // stays deleted when live had it at neither time.
-            // Residual, accepted: (b)'s "restore the merge-time
-            // entry" cannot tell a merge cap-drop from a live
-            // re-add-then-delete of the same entry inside the
-            // import — that double live action resurrects one
-            // entry the user can remove again; the single-action
-            // cap-drop case is the filed finding and must work.
+            // Residual, accepted (b49fix22 D24-6): (b)'s
+            // "restore the merge-time entry" cannot tell a merge
+            // cap-drop from a live re-add-then-delete of the same
+            // entry inside the import — that double live action
+            // resurrects one entry the user can remove again;
+            // the single-action cap-drop case is the filed
+            // finding and must work. A single snapshot
+            // fundamentally cannot distinguish the two — only
+            // an event journal could — so this stays a
+            // documented residual, not a fix.
             var restored: [[String: Any]] = []
             restored.reserveCapacity(priorList.count)
             for entry in priorList {
@@ -3087,6 +3106,17 @@ enum MigrationStore {
             // preserved either way) and stays deleted when
             // live no longer has it. Without liveAtMerge (nil),
             // both cases keep the old rule.
+            // Residual, accepted (b49fix22 D24-6): the mirror
+            // case — a written key live-deleted before the merge
+            // read, re-installed by the import, then live
+            // re-added with the SAME value during the import:
+            // liveDict has no such key, so the restore deletes
+            // the user's re-add (current == written looks like
+            // untouched import content). A single snapshot
+            // fundamentally cannot distinguish "re-installed by
+            // the import" from "re-added by live with the same
+            // value" — only an event journal could — so this
+            // stays a documented residual, not a fix.
             for (key, writtenValue) in writtenDict {
                 guard priorDict[key] != nil else { continue }
                 guard let currentValue = currentDict[key] else {
@@ -3150,6 +3180,16 @@ enum MigrationStore {
             // the identical string is indistinguishable from
             // that install. Without liveAtMerge (nil), the old
             // rule applies unchanged.
+            // Residual, accepted (b49fix22 D24-6): the same
+            // double live action as the list branch — "cap
+            // dropped, live untouched" and "cap dropped, then
+            // live re-added, then deleted" are identical on
+            // (liveAtMerge has it, current lacks it), so the
+            // latter resurrects one string the user deleted;
+            // the user can delete it again. A single snapshot
+            // fundamentally cannot distinguish the two — only
+            // an event journal could — so this stays a
+            // documented residual, not a fix.
             let restored = priorList.filter { string in
                 if writtenSet.contains(string) {
                     guard currentSet.contains(string) else { return false }
@@ -3451,6 +3491,15 @@ enum MigrationStore {
     /// subset is the correct check for them too, not an
     /// exception. A scalar expected value still falls back to
     /// canonical byte equality — there is nothing to subset.
+    /// Dicts verify key-only ON PURPOSE (b49fix22 D24-1): a
+    /// dict value may legitimately be superseded by a NEWER
+    /// live recording after the import — ResolverSpeedRecord
+    /// carries an `updated` stamp and saveLocked merges
+    /// newest-wins, so an older imported speed is correctly
+    /// replaced, and value equality here would re-introduce
+    /// the D23-1 false-fail through the back door. The sweep
+    /// proves the imported keys survived, not that no newer
+    /// live write superseded a value.
     static func wholeFileSubsetVerifies(name: String, expected: Any, documentsURL: URL) -> Bool {
         let url = documentsURL.appendingPathComponent("\(name).json")
         guard let rawData = try? Data(contentsOf: url),

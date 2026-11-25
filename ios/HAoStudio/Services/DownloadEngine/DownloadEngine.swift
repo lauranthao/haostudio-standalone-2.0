@@ -269,6 +269,9 @@ final class DownloadEngine: NSObject {
     private var records: [String: TaskRecord] = [:]
     /// Enqueue order, for a stable snapshot.
     private var order: [String] = []
+    /// Retained .haoBackupImported observer token (b49fix22
+    /// D24-4) — a block-based observer dies with its token.
+    private var backupImportedObserver: NSObjectProtocol?
 
     /// Monotonic revision of `downloads.json` (plan §9.3).
     private var catalogRevision = 0
@@ -321,6 +324,16 @@ final class DownloadEngine: NSObject {
         super.init()
         restorePersistedTasks()
         startPathMonitor()
+        // b49fix22 D24-4: reconcile tasks an import installed
+        // after launch — see reconcileImportedTasksLocked. The
+        // block hops to syncQueue, the only queue that touches
+        // records/order. The tasks page re-reads allTasks()
+        // every second while visible, so reconciled tasks
+        // appear within ~1 s, no restart.
+        backupImportedObserver = NotificationCenter.default.addObserver(forName: .haoBackupImported, object: nil, queue: nil) { [weak self] _ in
+            guard let self = self else { return }
+            self.syncQueue.async { self.reconcileImportedTasksLocked() }
+        }
     }
 
     /// Max concurrent downloads for the current network
@@ -703,9 +716,17 @@ final class DownloadEngine: NSObject {
 
     /// Remove a task record (and its file when completed). The
     /// downloads list uses this for its delete action.
-    func delete(key: String) {
+    /// b49fix22 D24-5: returns whether the deletion landed on
+    /// disk — false means the catalog save failed even after
+    /// one retry, and the caller can surface it instead of the
+    /// failure being swallowed. The mirror stays pruned on
+    /// failure, so the next persist re-aligns the catalog
+    /// instead of resurrecting the key (the catalog can only
+    /// resurrect it when no persist runs before a restart).
+    @discardableResult
+    func delete(key: String) -> Bool {
         syncQueue.sync {
-            guard let record = records[key] else { return }
+            guard let record = records[key] else { return true }
             if record.info.state == .downloading || record.info.state == .queued {
                 record.stopRequested = true
                 record.sessionTask?.cancel()
@@ -718,23 +739,16 @@ final class DownloadEngine: NSObject {
             }
             records.removeValue(forKey: key)
             order.removeAll { $0 == key }
-            // b49fix21 D23-4: prune the deleted key from the
-            // disk mirror BEFORE persistLocked — the mirror
-            // merge re-adds any disk task memory doesn't know,
-            // so a just-deleted task would resurrect into the
-            // mirror (and, since this round, into the catalog
-            // at the next restore) if it were left there. The
-            // old comment's "a deleted task is already absent
-            // from disk" was only true before the fix20 merge
-            // existed: shipped 0.0.2 has no merge, so shipped
-            // mirrors are clean — but the merge is live in this
-            // tree, so the prune must land with it.
-            MigrationStore.collectionWriteQueue.sync {
-                var diskTasks: [DownloadTaskInfo] = LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: [DownloadTaskInfo]())
-                diskTasks.removeAll { $0.request.key == key }
-                LocalStore.saveCollection(named: DownloadEngine.tasksCollection, value: diskTasks)
-            }
-            persistLocked()
+            // b49fix22 D24-5: the mirror prune rides inside
+            // persistLocked(pruning:) — see there. It used to be
+            // a separate collectionWriteQueue.sync just before
+            // persistLocked, and an import writing downloadTasks
+            // in the one-line gap between the two syncs put the
+            // just-deleted key back into the mirror, from where
+            // the persist merge wrote it into the catalog — the
+            // delete permanently undone.
+            if persistLocked(pruning: key) { return true }
+            return persistLocked(pruning: key)
         }
     }
 
@@ -1292,7 +1306,25 @@ final class DownloadEngine: NSObject {
         }
     }
 
-    private func persistLocked() {
+    /// Persists the live task list. Returns whether the catalog
+    /// (downloads.json, the primary index) was written.
+    /// b49fix22 D24-5: the whole reconcile — mirror merge,
+    /// mirror write, catalog write — happens in ONE
+    /// collectionWriteQueue critical section. It used to be two
+    /// syncs (merge inside, catalog outside), and delete()'s
+    /// mirror prune was a third sync just before — an import
+    /// writing downloadTasks between them re-installed a
+    /// just-deleted key into the mirror, from where the merge
+    /// wrote it into the catalog. A failed catalog save is no
+    /// longer swallowed either: the Bool goes back to the
+    /// caller (delete() retries once and reports it). Other
+    /// call sites ignore the result by design — the next
+    /// persist rewrites the whole catalog from memory +
+    /// mirror, so a transient failure heals itself there; the
+    /// catalog is a cache of live state, not its source of
+    /// truth.
+    @discardableResult
+    private func persistLocked(pruning prunedKey: String? = nil) -> Bool {
         let infos = order.compactMap { records[$0]?.info }
         // b49fix21 D23-4: reconcile the disk mirror into the
         // catalog too. The mirror merge below used to keep
@@ -1308,15 +1340,16 @@ final class DownloadEngine: NSObject {
         // second import without downloadTasks can no longer
         // wipe previously imported tasks either: they already
         // live in the catalog by then. Imported tasks become
-        // visible in the UI after the next relaunch (the
-        // engine's live records are rebuilt at restore — see
-        // restorePersistedTasks); a persist-time record
-        // creation would need the restore loop's file-state
-        // normalisation (completed-with-missing-file -> failed,
-        // final-file claim, legacy .part adoption) duplicated
-        // here, which is not done — the restore-time merge is
+        // visible in the UI without a restart (b49fix22 D24-4:
+        // the .haoBackupImported observer reconciles them into
+        // live records) — the restore-time merge below stays
         // the single normalisation point.
-        let merged: [DownloadTaskInfo] = MigrationStore.collectionWriteQueue.sync {
+        // b45-F: downloads.json with a monotonic revision — a slow
+        // old save can never overwrite a newer pause / cancel.
+        // The LocalStore collection stays as a compatibility mirror.
+        catalogRevision += 1
+        let revision = catalogRevision
+        let catalogSaved: Bool = MigrationStore.collectionWriteQueue.sync {
             // b49fix18 D-7: the mirror write takes
             // MigrationStore.collectionWriteQueue, the same queue
             // the backup import / rollback takes for downloadTasks
@@ -1333,22 +1366,25 @@ final class DownloadEngine: NSObject {
             // primary downloads.json, so the only source of
             // disk-only tasks is the import itself).
             var merged = infos
-            let diskTasks: [DownloadTaskInfo] = LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: [DownloadTaskInfo]())
+            var diskTasks: [DownloadTaskInfo] = LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: [DownloadTaskInfo]())
+            // b49fix22 D24-5: delete()'s prune lands here,
+            // inside the same critical section as the merge —
+            // a deleted key is gone from the disk list before
+            // the merge can re-add it.
+            if let prunedKey = prunedKey {
+                diskTasks.removeAll { $0.request.key == prunedKey }
+            }
             let memoryKeys = Set(infos.map { $0.request.key })
             for task in diskTasks where !memoryKeys.contains(task.request.key) {
                 merged.append(task)
             }
             LocalStore.saveCollection(named: DownloadEngine.tasksCollection, value: merged)
-            return merged
+            return DownloadCatalogStore.save(DownloadCatalogFile(revision: revision, tasks: merged))
         }
-        // b45-F: downloads.json with a monotonic revision — a slow
-        // old save can never overwrite a newer pause / cancel.
-        // The LocalStore collection stays as a compatibility mirror.
-        catalogRevision += 1
-        DownloadCatalogStore.save(DownloadCatalogFile(revision: catalogRevision, tasks: merged))
         // b49fix2 P2-59: every state mutation re-derives activity
         // (start/stop of the app-root background task).
         refreshActivityLocked()
+        return catalogSaved
     }
 
     /// Restore the persisted index. In-flight tasks come back as
@@ -1357,121 +1393,155 @@ final class DownloadEngine: NSObject {
     private func restorePersistedTasks() {
         // b45-F: downloads.json is primary; the LocalStore
         // collection is the fallback for pre-b45 indexes.
-        let catalog = DownloadCatalogStore.load()
-        let infos: [DownloadTaskInfo]
-        if let catalog = catalog {
-            catalogRevision = catalog.revision
-            var catalogTasks = catalog.tasks
-            // b49fix21 D23-4: reconcile mirror-only tasks into
-            // the restored set — the import writes the
-            // downloadTasks mirror, never the catalog, so a
-            // mirror-only task is an imported task, and the
-            // mirror used to be ignored outright whenever a
-            // catalog existed. Catalog tasks win on key
-            // collision; mirror-only tasks go through the same
-            // normalisation loop below (in-flight -> paused,
-            // filename re-sanitised, completed-with-missing-file
-            // -> failed). A deleted task cannot resurrect here:
-            // delete() prunes the disk mirror before persisting
-            // (see delete), so a deleted key is absent from
-            // both the catalog and the mirror.
-            let mirrorTasks: [DownloadTaskInfo] = LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: [])
-            let catalogKeys = Set(catalogTasks.map { $0.request.key })
-            catalogTasks += mirrorTasks.filter { !catalogKeys.contains($0.request.key) }
-            infos = catalogTasks
-        } else {
-            infos = LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: [])
-        }
+        let (infos, revision) = persistedTaskInfos()
+        if let revision = revision { catalogRevision = revision }
         for info in infos {
             let key = info.request.key
             // Dedupe: a crafted index can repeat a key; the second
             // copy must not duplicate the snapshot.
             guard records[key] == nil else { continue }
-            var restored = info
-            if restored.state == .downloading || restored.state == .queued
-                || restored.state == .fetchingURL || restored.state == .validating
-                || restored.state == .waitingNetwork {
-                restored.state = .paused
-                // b45-h: a held task restarts paused, never
-                // auto-held — the hold flag is only meaningful
-                // while the task sits in waitingNetwork.
-                restored.waitingForUnmetered = false
-            }
-            restored.errorMessage = restored.state == .failed ? restored.errorMessage : nil
-            // Re-sanitise the stored file name: a crafted/migrated
-            // index must not smuggle a traversal past the use-site
-            // sanitiser (the part/final URLs re-sanitise anyway).
-            let cleanName = DownloadEngine.sanitisedFileName(restored.request.fileName, fallbackKey: key)
-            if cleanName != restored.request.fileName {
-                restored.request = DownloadRequest(
-                    key: key,
-                    title: restored.request.title,
-                    sourceURL: restored.request.sourceURL,
-                    fileName: cleanName,
-                    kind: restored.request.kind,
-                    qualityCode: restored.request.qualityCode)
-            }
-            // b45-F: a completed entry whose file is gone is a
-            // FAILED task with a message — not a silent drop.
-            // ("本地文件缺失，请重新下载")
-            if restored.state == .completed {
-                let missing: Bool
-                if let relative = restored.localRelativePath,
-                   let url = LocalFileIndex.resolve(relative, subdir: DownloadEngine.downloadSubdir) {
-                    missing = !FileManager.default.fileExists(atPath: url.path)
-                } else {
-                    missing = true
-                }
-                if missing {
-                    restored.state = .failed
-                    restored.errorMessage = "本地文件缺失，请重新下载"
-                    restored.localRelativePath = nil
-                    let record = TaskRecord(info: restored)
-                    records[key] = record
-                    order.append(key)
-                    continue
-                }
+            records[key] = TaskRecord(info: normalizedRestoredInfo(info))
+            order.append(key)
+        }
+    }
+
+    /// The persisted task index as one merged list (b49fix21
+    /// D23-4, shared with the post-import reconcile by b49fix22
+    /// D24-4 so the two cannot drift): the catalog is primary,
+    /// mirror-only tasks join it — the import writes the
+    /// downloadTasks mirror, never the catalog, so a mirror-only
+    /// task is an imported task, and the mirror used to be
+    /// ignored outright whenever a catalog existed. Catalog
+    /// tasks win on key collision. A deleted task cannot
+    /// resurrect here: delete() prunes the disk mirror before
+    /// persisting (see delete), so a deleted key is absent from
+    /// both the catalog and the mirror.
+    private func persistedTaskInfos() -> (infos: [DownloadTaskInfo], catalogRevision: Int?) {
+        guard let catalog = DownloadCatalogStore.load() else {
+            return (LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: []), nil)
+        }
+        var catalogTasks = catalog.tasks
+        let mirrorTasks: [DownloadTaskInfo] = LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: [])
+        let catalogKeys = Set(catalogTasks.map { $0.request.key })
+        catalogTasks += mirrorTasks.filter { !catalogKeys.contains($0.request.key) }
+        return (catalogTasks, catalog.revision)
+    }
+
+    /// Normalises one persisted task into its live shape — the
+    /// restore loop's file-state normalisation, factored out
+    /// (b49fix22 D24-4) so the post-import reconcile uses the
+    /// exact same rules: in-flight -> paused (nothing
+    /// auto-starts), failed keeps its message, file name
+    /// re-sanitised, completed-with-missing-file -> failed,
+    /// final-file claim, legacy .part adoption, downloadedBytes
+    /// clamped to the part size on disk. The restore-time merge
+    /// stays the single normalisation point; this is just the
+    /// loop body, so a fix here fixes both paths.
+    private func normalizedRestoredInfo(_ info: DownloadTaskInfo) -> DownloadTaskInfo {
+        let key = info.request.key
+        var restored = info
+        if restored.state == .downloading || restored.state == .queued
+            || restored.state == .fetchingURL || restored.state == .validating
+            || restored.state == .waitingNetwork {
+            restored.state = .paused
+            // b45-h: a held task restarts paused, never
+            // auto-held — the hold flag is only meaningful
+            // while the task sits in waitingNetwork.
+            restored.waitingForUnmetered = false
+        }
+        restored.errorMessage = restored.state == .failed ? restored.errorMessage : nil
+        // Re-sanitise the stored file name: a crafted/migrated
+        // index must not smuggle a traversal past the use-site
+        // sanitiser (the part/final URLs re-sanitise anyway).
+        let cleanName = DownloadEngine.sanitisedFileName(restored.request.fileName, fallbackKey: key)
+        if cleanName != restored.request.fileName {
+            restored.request = DownloadRequest(
+                key: key,
+                title: restored.request.title,
+                sourceURL: restored.request.sourceURL,
+                fileName: cleanName,
+                kind: restored.request.kind,
+                qualityCode: restored.request.qualityCode)
+        }
+        // b45-F: a completed entry whose file is gone is a
+        // FAILED task with a message — not a silent drop.
+        // ("本地文件缺失，请重新下载")
+        if restored.state == .completed {
+            let missing: Bool
+            if let relative = restored.localRelativePath,
+               let url = LocalFileIndex.resolve(relative, subdir: DownloadEngine.downloadSubdir) {
+                missing = !FileManager.default.fileExists(atPath: url.path)
             } else {
-                // b45-F: a crash between "file finished" and
-                // "catalog entry written" leaves an in-flight task
-                // whose FINAL file is already on disk — claim it
-                // instead of re-downloading.
-                let final = finalURL(for: restored.request)
-                if FileManager.default.fileExists(atPath: final.path),
-                   restored.downloadedBytes > 0 || restored.totalBytes > 0 {
-                    restored.state = .completed
-                    restored.localRelativePath = DownloadEngine.relativePath(for: final.lastPathComponent)
-                    restored.downloadedBytes = restored.totalBytes >= 0
-                        ? restored.totalBytes
-                        : ((try? FileManager.default.attributesOfItem(atPath: final.path)[.size] as? NSNumber)?.int64Value ?? restored.downloadedBytes)
-                    let record = TaskRecord(info: restored)
-                    records[key] = record
-                    order.append(key)
-                    continue
-                }
-                // Adopt a legacy `<name>.part` (pre-2.1 layout, shared
-                // per file name) into this task's per-key part name,
-                // so an in-flight download from before the upgrade
-                // resumes instead of restarting from 0.
-                let part = partURL(for: restored.request)
-                if !FileManager.default.fileExists(atPath: part.path) {
-                    let legacy = downloadsDirectory()
-                        .appendingPathComponent(DownloadEngine.sanitisedFileName(restored.request.fileName, fallbackKey: key))
-                        .appendingPathExtension("part")
-                    if FileManager.default.fileExists(atPath: legacy.path) {
-                        try? FileManager.default.moveItem(at: legacy, to: part)
-                    }
-                }
-                // Clamp downloadedBytes to the part size on disk —
-                // the persisted count is stale after a kill (Finding E).
-                let partSize = (try? FileManager.default.attributesOfItem(atPath: part.path)[.size] as? NSNumber)?.int64Value ?? 0
-                restored.downloadedBytes = partSize
-                if restored.totalBytes >= 0 && restored.downloadedBytes > restored.totalBytes {
-                    restored.totalBytes = restored.downloadedBytes
-                }
+                missing = true
             }
-            let record = TaskRecord(info: restored)
-            records[key] = record
+            if missing {
+                restored.state = .failed
+                restored.errorMessage = "本地文件缺失，请重新下载"
+                restored.localRelativePath = nil
+                return restored
+            }
+            return restored
+        }
+        // b45-F: a crash between "file finished" and
+        // "catalog entry written" leaves an in-flight task
+        // whose FINAL file is already on disk — claim it
+        // instead of re-downloading.
+        let final = finalURL(for: restored.request)
+        if FileManager.default.fileExists(atPath: final.path),
+           restored.downloadedBytes > 0 || restored.totalBytes > 0 {
+            restored.state = .completed
+            restored.localRelativePath = DownloadEngine.relativePath(for: final.lastPathComponent)
+            restored.downloadedBytes = restored.totalBytes >= 0
+                ? restored.totalBytes
+                : ((try? FileManager.default.attributesOfItem(atPath: final.path)[.size] as? NSNumber)?.int64Value ?? restored.downloadedBytes)
+            return restored
+        }
+        // Adopt a legacy `<name>.part` (pre-2.1 layout, shared
+        // per file name) into this task's per-key part name,
+        // so an in-flight download from before the upgrade
+        // resumes instead of restarting from 0.
+        let part = partURL(for: restored.request)
+        if !FileManager.default.fileExists(atPath: part.path) {
+            let legacy = downloadsDirectory()
+                .appendingPathComponent(DownloadEngine.sanitisedFileName(restored.request.fileName, fallbackKey: key))
+                .appendingPathExtension("part")
+            if FileManager.default.fileExists(atPath: legacy.path) {
+                try? FileManager.default.moveItem(at: legacy, to: part)
+            }
+        }
+        // Clamp downloadedBytes to the part size on disk —
+        // the persisted count is stale after a kill (Finding E).
+        let partSize = (try? FileManager.default.attributesOfItem(atPath: part.path)[.size] as? NSNumber)?.int64Value ?? 0
+        restored.downloadedBytes = partSize
+        if restored.totalBytes >= 0 && restored.downloadedBytes > restored.totalBytes {
+            restored.totalBytes = restored.downloadedBytes
+        }
+        return restored
+    }
+
+    /// Builds live records for tasks an import installed after
+    /// launch (b49fix22 D24-4; syncQueue only): the import
+    /// writes the downloadTasks mirror, never the engine's live
+    /// records, so an imported task used to appear in the UI
+    /// only after the next relaunch — restorePersistedTasks was
+    /// the only place records/order were rebuilt. The
+    /// .haoBackupImported observer calls this after every
+    /// successful import (and snapshot restore): disk tasks
+    /// with no live record are normalised through the same loop
+    /// as launch restore and appended, paused — never
+    /// auto-started, never touching a live task. No persist:
+    /// the disk index already holds them, and the next persist
+    /// writes them into the catalog from the merged list.
+    /// Idempotent: a task already in records is skipped, so a
+    /// restore that just deleted a task cannot resurrect it —
+    /// the disk no longer holds it by the time the notification
+    /// posts.
+    private func reconcileImportedTasksLocked() {
+        let (infos, _) = persistedTaskInfos()
+        for info in infos {
+            let key = info.request.key
+            guard records[key] == nil else { continue }
+            records[key] = TaskRecord(info: normalizedRestoredInfo(info))
             order.append(key)
         }
     }
