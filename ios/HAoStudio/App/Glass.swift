@@ -19,24 +19,25 @@ import UIKit
 enum HaoLayout {
     /// Glass tab bar content height (56).
     static let tabBarContentHeight: CGFloat = 56
-    /// Vertical breathing room inside the tab bar's 64pt frame
-    /// (4 top / 4 bottom; total 64pt). b40: this is NOT SwiftUI
-    /// padding any more — GlassTabBar used to wrap the bar in
-    /// `.padding(.vertical, 4)`, which left a transparent band
-    /// above the bar (the system UITabBar only paints glass over
-    /// its own 56pt frame) and read as a seam between the mini
-    /// and the bar (chen 2026-11-25 build 39). The bar now fills
-    /// the full 64pt frame; the 4pt survives only as the
-    /// arithmetic that sizes the frame (content 56 centred in
-    /// 64). Horizontal padding was never here: the system tab bar
-    /// paints its background over its own frame, so horizontal
-    /// padding would shrink the visible bar 4pt per side and it
-    /// would read 8pt narrower than the mini player above it
-    /// (chen 2026-11-24 build 33: mini must be exactly as wide
-    /// as the bar). The visible bar spans exactly the mini
-    /// player's width (screen minus the shared 12pt side margins
-    /// in MainTabView).
-    static let tabBarInnerInset: CGFloat = 4
+    /// Total height of the glass tab bar as laid out in the
+    /// floating stack: 56pt — exactly the system UITabBar's own
+    /// glass height (tabBarContentHeight). b42 (chen 2026-11-25
+    /// build 41: the mini overlaps the bar's top by ~4pt, the
+    /// mini's bottom edge + progress line disappearing behind the
+    /// bar's glass): the b40 frame was 64pt (content 56 + 4pt
+    /// inset top and bottom), on the assumption that a taller
+    /// frame makes the glass "run edge to edge". It does not —
+    /// the system bar paints glass over its own 56pt frame only,
+    /// and inside the 64pt frame that 56pt glass sits ~4pt ABOVE
+    /// the frame's top edge (measured on chen's build-41
+    /// screenshot: mini glass 2316–2423, bar glass 2423–2592 in
+    /// a 1260x2736 shot — the bar's glass starts ~13px above
+    /// the mini's bottom edge, so the two pills overlap instead
+    /// of touching). The frame must equal the rendered glass,
+    /// so the mini's bottom edge IS the bar's top edge at
+    /// VStack spacing 0. The 4pt inset is deleted (it was only
+    /// ever the b40 arithmetic, never a real inset).
+    static let tabBarTotalHeight: CGFloat = tabBarContentHeight
     /// Distance from the safe-area bottom edge: 2. The bar sits
     /// 2pt above the safe-area boundary — fully inside the
     /// hit-testable safe area, never dropped below it (b39: the
@@ -99,17 +100,11 @@ enum HaoLayout {
     /// player cover: tapping the mini morphs this one cover from 32
     /// to the full player's cover (up to 340).
     static let playerCoverMorphID = "haoPlayerCover"
-    /// Total height of the glass tab bar as laid out in the floating
-    /// stack: content 56 + 4pt inset top and bottom (64). The bar
-    /// fills this whole height (b40: no SwiftUI vertical padding —
-    /// the glass must run edge to edge so it touches the mini
-    /// above it with no seam).
-    static let tabBarTotalHeight: CGFloat = tabBarContentHeight + tabBarInnerInset * 2
     /// Height of the floating stack above the safe-area bottom edge:
     /// bottom margin + tab bar + (gap + mini player while one is
     /// showing). This is the clearance a scroll page under the stack
     /// must add so its last row can scroll fully above the stack —
-    /// 66pt idle, 106pt while playing (b39: margin restored to 2).
+    /// 58pt idle, 98pt while playing (b42: the bar is 56, not 64).
     /// The stack is never dropped below the safe-area edge, so the
     /// clearance is the full stack height — nothing is subtracted.
     /// See haoBottomChromePadding(). (Build 37: the scroll-minimize
@@ -232,6 +227,20 @@ private struct HaoChromeScrollOffsetKey: PreferenceKey {
 /// (clear, zero height, hidden from VoiceOver) and outside the tab's
 /// content spacing, so it never shifts a row by a point.
 ///
+/// b42 (chen 2026-11-25 build 41, My tab: ~370px of nothing
+/// between the "我的" large title and the first section): the
+/// anchor used to BE a GeometryReader, and a GeometryReader as
+/// a List row does not collapse to zero height — the List falls
+/// back to a default row height (~44pt) for it, and with the
+/// insetGrouped first-section spacing the My tab opened with a
+/// ~73pt hole above its first card. The anchor's root is now a
+/// plain Color.clear with an explicit zero frame (which a List
+/// row honours), and the GeometryReader lives in its background
+/// — background content never sizes its parent, but it still
+/// sits at the content's top edge, so the offset it reports is
+/// exactly the same. ScrollView roots are unaffected (a zero
+/// frame was already zero there); the List root is fixed.
+///
 /// Only the five tab roots carry one. A page pushed inside a tab has
 /// no anchor: scrolling it leaves the chrome as it was when the page
 /// was pushed, and the state self-corrects from the root anchor when
@@ -239,14 +248,17 @@ private struct HaoChromeScrollOffsetKey: PreferenceKey {
 /// pass, not this leg.
 struct HaoChromeScrollAnchor: View {
     var body: some View {
-        GeometryReader { proxy in
-            Color.clear.preference(
-                key: HaoChromeScrollOffsetKey.self,
-                value: proxy.frame(in: .named(HaoLayout.chromeScrollSpace)).minY
-            )
-        }
-        .frame(height: 0)
-        .accessibilityHidden(true)
+        Color.clear
+            .frame(height: 0)
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: HaoChromeScrollOffsetKey.self,
+                        value: proxy.frame(in: .named(HaoLayout.chromeScrollSpace)).minY
+                    )
+                }
+            }
+            .accessibilityHidden(true)
     }
 }
 
@@ -484,7 +496,7 @@ extension View {
     /// scrolled fully above the chrome. Apply to the tab root's
     /// content, and remove haoBottomChromePadding from that root's
     /// ScrollView / List — keeping both would double the gap
-    /// (106 + 106).
+    /// (98 + 98).
     func haoBottomChromeContentPadding() -> some View {
         modifier(HaoBottomChromeContentPadding())
     }
@@ -497,7 +509,7 @@ extension View {
 /// coordinator has a current item OR a music song is still loaded
 /// (MusicPlayerViewModel.miniFallbackSong — a failed / stopped track
 /// the full player keeps showing). Using only `currentItem` here
-/// would leave 64pt of clearance under a visible 104pt stack.
+/// would leave 58pt of clearance under a visible 98pt stack.
 private struct HaoBottomChromePadding: ViewModifier {
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var musicPlayer: MusicPlayerViewModel
@@ -634,8 +646,22 @@ extension EnvironmentValues {
 /// clipped to the root's bounds; it fills the root, never sizes
 /// it (the root's size comes from the scroll content). Use on the
 /// five tab roots only, next to haoTabBackground.
+///
+/// b42 (chen 2026-11-25 build 41, wallpaper on): black section
+/// titles and 0.55-alpha cards drawn straight on a busy photo
+/// are unreadable — the photo shows through the cards and the
+/// grey subtitle text washes out. The wallpaper case therefore
+/// carries a legibility veil: a scaffold-coloured gradient over
+/// the photo (behind the content), strong enough at the top
+/// that the large titles read on any photo, lighter toward the
+/// bottom so the photo still shows. One treatment, in this one
+/// shared layer, so all five roots read the same — no per-page
+/// scrims, no extra labels, no redesign. The solid-colour
+/// backdrop needs no veil (a flat colour already reads), and
+/// the theme backdrop has nothing behind the content.
 private struct HaoBackdropLayer: ViewModifier {
     @Environment(\.haoBackdrop) private var backdrop
+    @Environment(\.haoTheme) private var theme
 
     func body(content: Content) -> some View {
         ZStack {
@@ -648,12 +674,28 @@ private struct HaoBackdropLayer: ViewModifier {
     private var backdropView: some View {
         switch backdrop {
         case .wallpaper(let image):
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFill()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
+            ZStack {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .ignoresSafeArea()
+                // Legibility veil (b42): scaffold colour (near-white
+                // light mode, black dark mode) as a top-to-bottom
+                // gradient — the titles at the top get the strongest
+                // veil, the cards below get a lighter one. The photo
+                // still shows through everywhere; the text and the
+                // semi-transparent cards just stop fighting it.
+                LinearGradient(
+                    colors: [
+                        theme.scaffoldBackground.opacity(0.55),
+                        theme.scaffoldBackground.opacity(0.42),
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
                 .ignoresSafeArea()
+            }
         case .color(let color):
             color.ignoresSafeArea()
         case .theme:

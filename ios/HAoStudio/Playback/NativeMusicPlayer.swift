@@ -2131,10 +2131,18 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         center.pauseCommand.addTarget(self, action: #selector(remotePause))
         center.togglePlayPauseCommand.addTarget(self, action: #selector(remoteToggle))
         center.changePlaybackPositionCommand.addTarget(self, action: #selector(remoteSeek(_:)))
-        center.skipForwardCommand.preferredIntervals = [NSNumber(value: 10)]
-        center.skipForwardCommand.addTarget(self, action: #selector(remoteSkipForward(_:)))
-        center.skipBackwardCommand.preferredIntervals = [NSNumber(value: 10)]
-        center.skipBackwardCommand.addTarget(self, action: #selector(remoteSkipBackward(_:)))
+        // b42 (chen 2026-11-25 build 41: Control Center shows ONLY
+        // [10s-back] [pause] [10s-forward], no prev/next buttons):
+        // registering skipForward/skipBackward alongside next/prev
+        // makes iOS pick the SKIP layout instead of the TRACK layout
+        // — the two command sets are alternatives, not additive
+        // (RxMusicPlayer: .moveTrack vs .skip(second:) are mutually
+        // exclusive remote-control modes, switched by removing and
+        // re-adding targets). The b41 queue fix never got a chance
+        // to run because the buttons did not exist. Only the track
+        // commands are registered now, so the system UI shows the
+        // Apple Music prev/next layout. The in-app ±10s seek buttons
+        // are SwiftUI buttons in the player view and are untouched.
         center.nextTrackCommand.addTarget(self, action: #selector(remoteNext))
         center.previousTrackCommand.addTarget(self, action: #selector(remotePrevious))
         updateNowPlayingInfo()
@@ -2148,8 +2156,8 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         center.pauseCommand.removeTarget(self)
         center.togglePlayPauseCommand.removeTarget(self)
         center.changePlaybackPositionCommand.removeTarget(self)
-        center.skipForwardCommand.removeTarget(self)
-        center.skipBackwardCommand.removeTarget(self)
+        // b42: skipForward/skipBackward are no longer registered
+        // (see setupNowPlaying) — nothing to remove here.
         center.nextTrackCommand.removeTarget(self)
         center.previousTrackCommand.removeTarget(self)
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
@@ -2272,16 +2280,6 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
 
     @objc private func remoteSeek(_ event: MPChangePlaybackPositionCommandEvent) -> MPRemoteCommandHandlerStatus {
         seek(to: event.positionTime) { _ in }
-        return .success
-    }
-
-    @objc private func remoteSkipForward(_ event: MPSkipIntervalCommandEvent) -> MPRemoteCommandHandlerStatus {
-        seek(to: position + event.interval) { _ in }
-        return .success
-    }
-
-    @objc private func remoteSkipBackward(_ event: MPSkipIntervalCommandEvent) -> MPRemoteCommandHandlerStatus {
-        seek(to: max(0, position - event.interval)) { _ in }
         return .success
     }
 

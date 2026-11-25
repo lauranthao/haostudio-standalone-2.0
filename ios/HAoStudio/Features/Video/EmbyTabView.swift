@@ -255,8 +255,15 @@ struct EmbyTabView: View {
                             }
                             Spacer(minLength: 16)
                         }
+                        // b42: bottom clearance lives INSIDE the
+                        // scroll content (same as the other tab
+                        // roots) — the ScrollView's safeAreaPadding
+                        // (.haoBottomChromePadding) never reached
+                        // the rows inside a NavigationStack, so the
+                        // Emby grid's last row stayed under the
+                        // chrome on device.
+                        .haoBottomChromeContentPadding()
                     }
-                    .haoBottomChromePadding()
                     .haoChromeScrollTracking()
                     .haoReselectScrollToTop(tab: .movies, proxy: proxy)
                     .refreshable { viewModel.reload() }
