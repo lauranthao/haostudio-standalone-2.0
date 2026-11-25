@@ -65,6 +65,43 @@ keys) + 23 more added in BackupEngine.userDefaultsKeyKinds()
 overlap. The "116 keys" figure in the sweep-9/10 summaries
 was wrong (no source anywhere in the code) — do not reuse it;
 re-count from these two sources if the catalogue ever changes.
+
+Two-stage release flow (2026-11-26, b49-sweep12 release
+P2-3): the build# + triggering-commit rule has NEVER been
+executed — it only landed in a94f0cf (b49fix8-infra), and
+the 0.0.2 release commit 42963ab carries neither a build
+number nor a triggering commit, so 0.0.3 is the first
+execution and the next sweep must verify its release commit
+against README:100. The flow, in order:
+  1. bump commit (version.json + Info.plist + preflight
+     4b/4i + README, all four together) — this is the commit
+     that TRIGGERS the Bitrise build;
+  2. Bitrise build from that bump commit (workflow primary,
+     branch main), download the IPA and verify the in-package
+     version/build;
+  3. release commit (README version-table row + version.json
+     size/sha256 + a commit message naming the build number
+     and the triggering commit's full 40-hex hash).
+Precedent from 0.0.2 (same two-stage shape, before the rule
+existed): bump commit 5b67e3c -> build -> release commit
+42963ab. The triggering commit is the bump commit, never
+the release commit itself — the release commit's own hash
+does not exist yet when its message is written.
+
+0.0.3 changelog TODO (2026-11-26, b49-sweep12 release
+P2-4; write at ship time into version.json's changelog in
+all three languages AND the README version-table 0.0.3 row):
+  - 弹幕字号设置同时适用于点播弹幕；未调过设置的用户点
+    播弹幕由 16 变为默认 14 (round 9: LiveDanmakuSettings
+    defaultFontSize 16 -> 14; so far only in a code comment
+    at VodDanmakuLayer.swift:43-53).
+  - 综合搜索页各 shelf 在种类收起/加载中/加载失败时显示
+    footer，不再无声结束 (round 9 Music P2-1).
+  - 每日推荐换歌时从已筛选备选回填至 20 首 (round 9
+    Music P2-4).
+Other round-9 changes are visual micro-adjustments or
+internal behaviour — either leave them out or fold them
+into one line: 「细节间距与备份行为微调」.
 """
 import argparse
 import hashlib
