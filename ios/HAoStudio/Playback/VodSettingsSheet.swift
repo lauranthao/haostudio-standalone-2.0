@@ -162,7 +162,9 @@ struct VodSettingsSheet: View {
                 } header: {
                     Text("倍速")
                 } footer: {
-                    Text("仅影视可用；长按画面可临时 2x 播放，松开恢复这里的速度。")
+                    // sweep-3 A25: "仅影视可用" was a tautology —
+                    // this whole sheet is the VOD player.
+                    Text("长按画面可临时 2x 播放，松开恢复这里的速度。")
                 }
 
                 if danmakuAvailability != .unavailable {
@@ -312,13 +314,14 @@ struct VodSettingsSheet: View {
                 }
 
                 if engine == .mpv {
+                    // sweep-3 A25: the "仅 MPV 引擎支持" footer was
+                    // a tautology — this whole section only renders
+                    // when the engine is MPV.
                     Section {
                         Toggle("对白增强", isOn: $state.dialogueBoostEnabled)
                             .tint(theme.accent)
                     } header: {
                         Text("音频")
-                    } footer: {
-                        Text("仅 MPV 引擎支持")
                     }
                 }
 
