@@ -458,7 +458,7 @@ struct MusicRecommendView: View {
 
     /// Explore entry: the 26-category explore page (Coda §3.9).
     private var exploreEntry: some View {
-        Button(action: { path.wrappedValue.append(.explore) }) {
+        Button(action: { path.append(.explore) }) {
             HStack(spacing: 8) {
                 Image(systemName: "square.grid.2x2")
                     .foregroundStyle(theme.accentText)
@@ -501,7 +501,7 @@ struct MusicRecommendView: View {
                 MusicFeatureCollageCard(
                     icon: "calendar", title: "每日推荐", subtitle: "每天 6:00 更新",
                     palette: [.orange, .yellow], size: cardSize, isDateCard: true
-                ) { path.wrappedValue.append(.daily) }
+                ) { path.append(.daily) }
                 MusicFeatureCollageCard(
                     icon: "waveform", title: "私人漫游", subtitle: "本地漫游",
                     palette: [.blue, .teal], size: cardSize
@@ -513,7 +513,7 @@ struct MusicRecommendView: View {
                 MusicFeatureCollageCard(
                     icon: "chart.bar", title: "我的雷达", subtitle: "听歌报告",
                     palette: [.green, .teal], size: cardSize
-                ) { path.wrappedValue.append(.report) }
+                ) { path.append(.report) }
             }
             .padding(.vertical, 6)
         }
@@ -528,10 +528,10 @@ struct MusicRecommendView: View {
             dislikedIds: MusicLibraryStore.fmDislikedIds(),
             seed: musicDayKey(of: Date())
         ).isEmpty {
-            fmEmptyNote.wrappedValue = true
+            fmEmptyNote = true
             return
         }
-        path.wrappedValue.append(.fm)
+        path.append(.fm)
     }
 
     private func startHeartbeat() {
@@ -539,10 +539,10 @@ struct MusicRecommendView: View {
             favourites: MusicLibraryStore.favSongs(),
             seed: musicDayKey(of: Date())
         ).isEmpty {
-            fmEmptyNote.wrappedValue = true
+            fmEmptyNote = true
             return
         }
-        path.wrappedValue.append(.heartbeat)
+        path.append(.heartbeat)
     }
 
     // MARK: - Recommended playlists (Coda §3.1)
@@ -552,7 +552,7 @@ struct MusicRecommendView: View {
     /// Home preview caps at 18 cards; the plaza page shows all.
     private func recommendedPlaylistsSection(width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            MusicCodaSectionHeader(title: "推荐歌单") { path.wrappedValue.append(.plaza) }
+            MusicCodaSectionHeader(title: "推荐歌单") { path.append(.plaza) }
             if homeVM.recommendedLoading && homeVM.recommendedPlaylists.isEmpty {
                 HStack(spacing: 16) {
                     ForEach(0..<3, id: \.self) { _ in MusicSkeletonCard() }
@@ -715,7 +715,7 @@ struct MusicRecommendView: View {
     /// them.
     private var chartsSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            MusicCodaSectionHeader(title: "榜单") { path.wrappedValue.append(.charts) }
+            MusicCodaSectionHeader(title: "榜单") { path.append(.charts) }
             if homeVM.chartsLoading && homeVM.charts.isEmpty {
                 VStack(spacing: 1) {
                     ForEach(0..<10, id: \.self) { _ in MusicSkeletonRow() }
@@ -850,7 +850,7 @@ struct MusicRecommendView: View {
     /// plaza merged. Preview caps at 18 cards.
     private func discoveredPlaylistsSection(width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            MusicCodaSectionHeader(title: "发现歌单") { path.wrappedValue.append(.plaza) }
+            MusicCodaSectionHeader(title: "发现歌单") { path.append(.plaza) }
             if homeVM.discoveredLoading && homeVM.discoveredPlaylists.isEmpty {
                 HStack(spacing: 16) {
                     ForEach(0..<3, id: \.self) { _ in MusicSkeletonCard() }
