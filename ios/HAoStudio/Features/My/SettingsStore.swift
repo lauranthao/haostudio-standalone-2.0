@@ -71,11 +71,19 @@ final class SettingsStore: ObservableObject {
     static let subtitlePositionKey = "hao_vod_subtitle_position"
     static let lowMemoryModeKey = "hao_low_memory_mode"
     static let cellularDowngradeKey = "hao_live_cellular_downgrade"
-    /// Song-cache switch + cap (b45-coda 包 C, §4.4). Storage-only
-    /// here: enforcing the cap is the audio cache engine's job
-    /// (包 F). 0 MB = 自动.
-    static let songCacheEnabledKey = "hao_song_cache_enabled"
-    static let songCacheLimitMBKey = "hao_song_cache_limit_mb"
+    /// Song-cache switch + cap (b45-coda 包 C, §4.4). These ARE
+    /// the audio cache engine's keys (HaoAudioCache.enabledKey /
+    /// limitMBKey, CacheManager.swift:134-135) — the earlier
+    /// hao_song_cache_* keys were never read by the engine, so
+    /// the toggle + picker were dead (b49 sweep P0). 0 MB = 自动.
+    static let audioCacheEnabledKey = "hao_audio_cache_enabled"
+    static let audioCacheLimitMBKey = "hao_audio_cache_limit_mb"
+    /// Legacy song-cache keys, written by 0.0.2 and earlier.
+    /// Migrated once into the hao_audio_cache_* keys on first
+    /// read (migrateLegacySongCacheKeys), then removed — no code
+    /// reads them after the migration.
+    static let legacySongCacheEnabledKey = "hao_song_cache_enabled"
+    static let legacySongCacheLimitMBKey = "hao_song_cache_limit_mb"
     /// Accepted disclaimer version (b45-coda 包 C, §4.3). Must
     /// equal DisclaimerGate.currentVersion (3) to count.
     static let disclaimerAcceptedVersionKey = "hao_disclaimer_accepted_version"
@@ -274,7 +282,7 @@ final class SettingsStore: ObservableObject {
     /// Song cache on/off. Default true. Storage-only: the audio
     /// cache engine (包 F) reads this key to enforce it.
     @Published var songCacheEnabled: Bool {
-        didSet { defaults.set(songCacheEnabled, forKey: Self.songCacheEnabledKey) }
+        didSet { defaults.set(songCacheEnabled, forKey: Self.audioCacheEnabledKey) }
     }
 
     /// Song cache cap in MB. 0 = 自动. Unknown stored values fall
@@ -285,7 +293,7 @@ final class SettingsStore: ObservableObject {
                 songCacheLimitMB = 0
                 return
             }
-            defaults.set(songCacheLimitMB, forKey: Self.songCacheLimitMBKey)
+            defaults.set(songCacheLimitMB, forKey: Self.audioCacheLimitMBKey)
         }
     }
 
@@ -451,6 +459,7 @@ final class SettingsStore: ObservableObject {
         self.audioOnlyBackground = SettingsStore.boolValue(defaults, key: Self.audioOnlyBackgroundKey, default: false)
         let savedFit = defaults.string(forKey: Self.videoFitKey)
         self.videoFit = VideoFit(rawValue: savedFit ?? "") ?? .aspectFit
+        Self.clearOrphanedSuperResolution(defaults: defaults)
         self.superResolution = SettingsStore.boolValue(defaults, key: Self.superResolutionKey, default: false)
         self.interpolation = SettingsStore.boolValue(defaults, key: Self.interpolationKey, default: false)
         self.sdrToHDR = SettingsStore.boolValue(defaults, key: Self.sdrToHDRKey, default: false)
@@ -464,8 +473,11 @@ final class SettingsStore: ObservableObject {
 
         self.cellularDowngrade = SettingsStore.boolValue(defaults, key: Self.cellularDowngradeKey, default: true)
 
-        self.songCacheEnabled = SettingsStore.boolValue(defaults, key: Self.songCacheEnabledKey, default: true)
-        let savedLimit = defaults.object(forKey: Self.songCacheLimitMBKey) as? NSNumber
+        // b49 sweep P0: adopt any stored hao_song_cache_* values
+        // into the hao_audio_cache_* keys the engine reads, once.
+        Self.migrateLegacySongCacheKeys(defaults: defaults)
+        self.songCacheEnabled = SettingsStore.boolValue(defaults, key: Self.audioCacheEnabledKey, default: true)
+        let savedLimit = defaults.object(forKey: Self.audioCacheLimitMBKey) as? NSNumber
         self.songCacheLimitMB = SongCacheLimitOptions.isValid(savedLimit?.intValue ?? 0) ? (savedLimit?.intValue ?? 0) : 0
         self.disclaimerAcceptedVersion = (defaults.object(forKey: Self.disclaimerAcceptedVersionKey) as? NSNumber)?.intValue ?? 0
 
@@ -533,6 +545,7 @@ final class SettingsStore: ObservableObject {
         audioOnlyBackground = SettingsStore.boolValue(defaults, key: Self.audioOnlyBackgroundKey, default: false)
         let savedFit = defaults.string(forKey: Self.videoFitKey)
         videoFit = VideoFit(rawValue: savedFit ?? "") ?? .aspectFit
+        Self.clearOrphanedSuperResolution(defaults: defaults)
         superResolution = SettingsStore.boolValue(defaults, key: Self.superResolutionKey, default: false)
         interpolation = SettingsStore.boolValue(defaults, key: Self.interpolationKey, default: false)
         sdrToHDR = SettingsStore.boolValue(defaults, key: Self.sdrToHDRKey, default: false)
@@ -546,8 +559,9 @@ final class SettingsStore: ObservableObject {
 
         cellularDowngrade = SettingsStore.boolValue(defaults, key: Self.cellularDowngradeKey, default: true)
 
-        songCacheEnabled = SettingsStore.boolValue(defaults, key: Self.songCacheEnabledKey, default: true)
-        let savedLimit = defaults.object(forKey: Self.songCacheLimitMBKey) as? NSNumber
+        Self.migrateLegacySongCacheKeys(defaults: defaults)
+        songCacheEnabled = SettingsStore.boolValue(defaults, key: Self.audioCacheEnabledKey, default: true)
+        let savedLimit = defaults.object(forKey: Self.audioCacheLimitMBKey) as? NSNumber
         songCacheLimitMB = SongCacheLimitOptions.isValid(savedLimit?.intValue ?? 0) ? (savedLimit?.intValue ?? 0) : 0
         disclaimerAcceptedVersion = (defaults.object(forKey: Self.disclaimerAcceptedVersionKey) as? NSNumber)?.intValue ?? 0
 
@@ -561,6 +575,43 @@ final class SettingsStore: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    /// One-time migration of the legacy hao_song_cache_* values
+    /// into the hao_audio_cache_* keys the audio cache engine
+    /// reads (b49 sweep P0: the old keys were never read, so the
+    /// 歌曲缓存 toggle + 上限 picker were dead). The new key wins
+    /// when both exist; the legacy key is removed either way, so
+    /// a second call is a no-op. Called from init and from
+    /// reloadFromDefaults (a backup import can restore legacy
+    /// keys) — same shape as the `videoPlayerKey` bridge above.
+    static func migrateLegacySongCacheKeys(defaults: UserDefaults) {
+        if defaults.object(forKey: Self.audioCacheEnabledKey) == nil,
+           let legacy = defaults.object(forKey: Self.legacySongCacheEnabledKey) as? NSNumber {
+            defaults.set(legacy.boolValue, forKey: Self.audioCacheEnabledKey)
+        }
+        if defaults.object(forKey: Self.audioCacheLimitMBKey) == nil,
+           let legacy = defaults.object(forKey: Self.legacySongCacheLimitMBKey) as? NSNumber {
+            defaults.set(legacy.intValue, forKey: Self.audioCacheLimitMBKey)
+        }
+        if defaults.object(forKey: Self.legacySongCacheEnabledKey) != nil {
+            defaults.removeObject(forKey: Self.legacySongCacheEnabledKey)
+        }
+        if defaults.object(forKey: Self.legacySongCacheLimitMBKey) != nil {
+            defaults.removeObject(forKey: Self.legacySongCacheLimitMBKey)
+        }
+    }
+
+    /// One-time clear of a stored Anime4K 超分 = true (b49 sweep
+    /// P2: the row is removed — the shaders never shipped and the
+    /// branch is a documented no-op — so a stored true would keep
+    /// resolving to the no-op branch with no UI left to turn it
+    /// off). Absent key = no-op. No playback code changes: the
+    /// driver still reads the same key, it just never sees true.
+    static func clearOrphanedSuperResolution(defaults: UserDefaults) {
+        if defaults.object(forKey: Self.superResolutionKey) != nil {
+            defaults.removeObject(forKey: Self.superResolutionKey)
+        }
+    }
 
     private static func boolValue(_ defaults: UserDefaults, key: String, default defaultValue: Bool) -> Bool {
         guard defaults.object(forKey: key) != nil else { return defaultValue }
