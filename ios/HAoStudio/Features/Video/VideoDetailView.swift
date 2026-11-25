@@ -513,23 +513,26 @@ struct VideoDetailContentView: View {
                     }
                     Spacer(minLength: 24)
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.top, 16)
             }
         }
         .safeAreaInset(edge: .bottom) {
             // Pinned retry for the failed-load state: always above
-            // the floating mini / tab bar (the inset sits inside
-            // the bottom-chrome clearance), so it never needs a
+            // the floating mini / tab bar, so it never needs a
             // scroll to be found. Hidden while loading and once
-            // lines arrive.
-            if viewModel.lines.isEmpty && !viewModel.isLoading {
+            // lines arrive. sweep-5 P1-26: the clearance rides
+            // INSIDE this inset (bottomChromeClearance below) —
+            // the inset and the scroll view's haoBottomChromePadding
+            // used to both own the bottom space.
+            if showRetryButton {
                 retryButton
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, HaoLayout.pushedPageMargin)
                     .padding(.bottom, 12)
+                    .padding(.bottom, bottomChromeClearance)
             }
         }
-        .haoBottomChromePadding()
+        .modifier(DetailBottomChromePadding(showRetry: showRetryButton))
         .background(theme.scaffoldBackground)
         .navigationTitle(viewModel.item.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -537,6 +540,26 @@ struct VideoDetailContentView: View {
             withAnimation(HaoLayout.settleSpring) { coverRevealed = true }
         }
     }
+    /// Whether the pinned retry button is showing (sweep-5
+    /// P1-26): the failed-load state only — hidden while loading
+    /// and once lines arrive.
+    private var showRetryButton: Bool {
+        viewModel.lines.isEmpty && !viewModel.isLoading
+    }
+
+    /// Bottom-chrome clearance for this page, from the same rule
+    /// haoBottomChromePadding uses: the mini shows while the
+    /// coordinator has a current item OR a music song is still
+    /// loaded — 82pt idle, 142pt while playing.
+    @EnvironmentObject private var coordinator: PlaybackCoordinator
+    @EnvironmentObject private var musicPlayer: MusicPlayerViewModel
+    private var bottomChromeClearance: CGFloat {
+        HaoLayout.floatingStackClearance(
+            miniPlayerVisible: coordinator.currentItem != nil
+                || musicPlayer.miniFallbackSong != nil
+        )
+    }
+
     /// Retry the detail fetch. A failed detail fetch used to leave
     /// the page with no way back except leaving it (load() only
     /// runs on appear).
@@ -933,5 +956,26 @@ extension PlayEpisode {
     var displayName: String {
         if !name.isEmpty { return name }
         return "第\(index + 1)集"
+    }
+}
+
+/// Bottom-chrome clearance for the detail page (sweep-5 P1-26):
+/// the pinned retry button's safeAreaInset AND
+/// haoBottomChromePadding BOTH owned the bottom space — the
+/// content's bottom clearance was the chrome clearance PLUS the
+/// button height. Now exactly one mechanism owns it per state:
+/// while the retry button shows, the inset carries the clearance
+/// as bottom padding under the button (see the safeAreaInset
+/// above); while the button is hidden the inset is empty and the
+/// scroll view keeps haoBottomChromePadding. Device check pending
+/// — chen's phone is the judge (未验).
+private struct DetailBottomChromePadding: ViewModifier {
+    var showRetry: Bool
+    func body(content: Content) -> some View {
+        if showRetry {
+            content
+        } else {
+            content.haoBottomChromePadding()
+        }
     }
 }

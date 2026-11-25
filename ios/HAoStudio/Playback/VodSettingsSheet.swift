@@ -109,6 +109,12 @@ struct VodSettingsState: Equatable {
 struct VodSettingsSheet: View {
     @Environment(\.haoTheme) private var theme
     @Environment(\.dismiss) private var dismiss
+    /// Single source of truth for the two rows shared with the
+    /// Settings page (sweep-5 P1-8): binding the store makes a
+    /// change here update the Settings page live (@Published)
+    /// and vice versa — the sheet used to read/write the raw
+    /// UserDefaults keys, so the two could disagree.
+    @EnvironmentObject private var settingsStore: SettingsStore
     @Binding var state: VodSettingsState
     var engine: VideoEngine
     var diagnostics: VideoPlaybackDiagnostics
@@ -276,7 +282,10 @@ struct VodSettingsSheet: View {
                 }
 
                 Section {
-                    Picker("画面比例", selection: $state.videoFit) {
+                    // sweep-5 P1-8: picture fit lives in
+                    // SettingsStore — bound here, not via the
+                    // snapshot's raw UserDefaults key.
+                    Picker("画面比例", selection: $settingsStore.videoFit) {
                         ForEach(VideoFit.allCases, id: \.self) { fit in
                             Text(fit.label).tag(fit)
                         }
@@ -318,7 +327,9 @@ struct VodSettingsSheet: View {
                     // a tautology — this whole section only renders
                     // when the engine is MPV.
                     Section {
-                        Toggle("对白增强", isOn: $state.dialogueBoostEnabled)
+                        // sweep-5 P1-8: same as picture fit — the
+                        // store is the single source of truth.
+                        Toggle("对白增强", isOn: $settingsStore.dialogueBoost)
                             .tint(theme.accent)
                     } header: {
                         Text("音频")

@@ -430,7 +430,7 @@ struct VideoBrowseView: View {
                     Text("Emby").tag("emby")
                 }
                 .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.top, 8)
                 .onChange(of: viewModel.mode) { newMode in
                     VideoLibraryStore.setTabMode(newMode)
@@ -442,7 +442,7 @@ struct VideoBrowseView: View {
                         title: "未配置 Emby 服务器",
                         note: "在设置 → Emby 连接里添加服务器地址并登录后，这里会显示你的媒体库。"
                     )
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, HaoLayout.pushedPageMargin)
                     .padding(.top, 24)
                     Spacer()
                 } else if viewModel.mode == "emby" {
@@ -508,7 +508,7 @@ struct VideoBrowseView: View {
                     }
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, HaoLayout.pushedPageMargin)
         }
     }
 
@@ -557,7 +557,7 @@ struct VideoBrowseView: View {
                         .padding(.vertical, 12)
                         .background(theme.accent, in: Capsule())
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
             } else if let error = viewModel.errorMessage, viewModel.items.isEmpty {
                 VStack(spacing: 12) {
                     MusicEmptyState(
@@ -572,7 +572,7 @@ struct VideoBrowseView: View {
                         .padding(.vertical, 12)
                         .background(theme.accent, in: Capsule())
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
             } else if viewModel.items.isEmpty {
                 MusicEmptyState(
                     icon: "film",
@@ -581,7 +581,7 @@ struct VideoBrowseView: View {
                         ? "Emby 没有返回该分类的影片。"
                         : "影视源没有返回该分类的数据。"
                 )
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
             } else {
                 // A failed refresh kept the old grid: show the error
                 // as a compact banner instead of hiding the results
@@ -607,14 +607,14 @@ struct VideoBrowseView: View {
                             .foregroundStyle(theme.accentText)
                     }
                     .foregroundStyle(theme.textSecondary)
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, HaoLayout.pushedPageMargin)
                     .padding(.top, 12)
                 }
                 if viewModel.mode == "emby", let filter = viewModel.activeEmbyFilterText {
                     Text(filter)
                         .font(.haoFootnote)
                         .foregroundStyle(theme.textMuted)
-                        .padding(.horizontal, 16)
+                        .padding(.horizontal, HaoLayout.pushedPageMargin)
                         .padding(.top, 12)
                 }
                 VideoPosterGrid(items: viewModel.items, isEmby: viewModel.mode == "emby") { item in
@@ -624,7 +624,7 @@ struct VideoBrowseView: View {
                         onSelectCMS(item)
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.top, 12)
                 if viewModel.hasMore {
                     ProgressView()
@@ -661,7 +661,7 @@ struct VideoBrowseView: View {
                 }
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, HaoLayout.pushedPageMargin)
     }
 
     private func filterChip(label: String, selected: Bool, action: @escaping () -> Void) -> some View {
