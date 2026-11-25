@@ -326,19 +326,27 @@ final class LiveRecoveryLinesTests: XCTestCase {
 // MARK: - Watchdog
 
 final class LiveStallWatchdogTests: XCTestCase {
+    /// New contract (b49fix2 T3 — the progressSeen gate,
+    /// deliberate sweep-1 fix #15, NOT dropped): the fail leg
+    /// arms only after the first position movement, so a stream
+    /// that never moved at all warns but never fails. Move the
+    /// position once first (mirroring testMovementResetsClock),
+    /// then stall: warn at +4, failed at +12.
     func testWarnAt4FailAt12() {
         var fakeNow = Date(timeIntervalSince1970: 1_000_000)
         let watchdog = LiveStallWatchdog()
         watchdog.now = { fakeNow }
         watchdog.reset()
         XCTAssertEqual(watchdog.tick(position: 0, isPlaying: true), .none)
+        // First movement arms the fail leg.
+        XCTAssertEqual(watchdog.tick(position: 10, isPlaying: true), .none)
         fakeNow = fakeNow.addingTimeInterval(4)
-        XCTAssertEqual(watchdog.tick(position: 0, isPlaying: true), .warn)
+        XCTAssertEqual(watchdog.tick(position: 10, isPlaying: true), .warn)
         // Warn fires once per stall episode.
         fakeNow = fakeNow.addingTimeInterval(1)
-        XCTAssertEqual(watchdog.tick(position: 0, isPlaying: true), .none)
+        XCTAssertEqual(watchdog.tick(position: 10, isPlaying: true), .none)
         fakeNow = fakeNow.addingTimeInterval(7)
-        XCTAssertEqual(watchdog.tick(position: 0, isPlaying: true), .failed)
+        XCTAssertEqual(watchdog.tick(position: 10, isPlaying: true), .failed)
     }
 
     func testMovementResetsClock() {
