@@ -7,7 +7,7 @@
 //
 // Sizing / spring values (spring response 0.35, dampingFraction 0.82;
 // stroke white 0.22 light / 0.08 dark, 0.5pt; shadow black 0.10 / 0.28,
-// radius 12, y 4; bottomMargin 0; content height 56 + 4pt inset).
+// radius 12, y 4; bottomMargin 6; content height 56 + 4pt inset).
 
 import SwiftUI
 import UIKit
@@ -17,106 +17,103 @@ import UIKit
 /// from these in one place so the bar and the mini player can never
 /// overlap each other or the content.
 enum HaoLayout {
-    /// Glass tab bar content height (56).
+    /// Glass tab bar content height (56, Coda §6.2: the bar's
+    /// content is 56pt with a 4pt inset top and bottom, so the
+    /// laid-out total is 64).
     static let tabBarContentHeight: CGFloat = 56
     /// Total height of the glass tab bar as laid out in the
-    /// floating stack: 56pt — exactly the system UITabBar's own
-    /// glass height (tabBarContentHeight). b43 CORRECTS b42 (chen
-    /// 2026-11-25 build 42: the mini still overlaps the bar, the
-    /// singer line under "爱情转移" sliced): the b42 theory — "the
-    /// frame must equal the rendered glass, so the mini's bottom
-    /// edge IS the bar's top edge at spacing 0" — is DISPROVEN on
-    /// device. The bar's glass top is frame-independent: it sits
-    /// at ~2420 on chen's 11:51 build-42 screenshot whether the
-    /// frame is 64 (build 41: glass top ~2423) or 56 (build 42:
-    /// glass top ~2420), while the frame top moved 24px. The
-    /// 64 -> 56 change therefore moved the mini DOWN 23px (the
-    /// stack is bottom-anchored) and the overlap grew from ~4pt
-    /// to ~13pt. The overlap is fixed by floatingStackSpacing
-    /// (13), not by the frame. The frame stays 56 (the system
-    /// bar's content height) and the 4pt inset stays deleted (it
-    /// was only ever the b40 arithmetic, never a real inset).
-    static let tabBarTotalHeight: CGFloat = tabBarContentHeight
-    /// Distance from the safe-area bottom edge: 2. The bar sits
-    /// 2pt above the safe-area boundary — fully inside the
-    /// hit-testable safe area, never dropped below it (b39: the
-    /// b38 chromeBottomOffset drop pushed the bar 26pt below the
-    /// safe-area edge on Face ID iPhones and taps fell through).
-    /// The gap to the screen edge is the home-indicator zone
-    /// itself.
-    static let tabBarBottomMargin: CGFloat = 2
-    /// Horizontal margin of the floating capsule.
-    static let tabBarHorizontalMargin: CGFloat = 12
-    /// Mini player strip height (Kumone MiniPlayerView: cover 32 +
-    /// 2 x 4pt vertical padding = 40pt rendered; buttons 40 x 40,
-    /// title 13 semibold, subtitle 10). Build 38, chen 2026-11-24:
-    /// "mini 播放器做短一点" — the strip is shortened 44 -> 40pt
-    /// (HEIGHT, not width: the width stays screen − 24, equal to
-    /// the tab bar's). The b37 44pt was 6pt under the b36 50pt and
-    /// invisible to him; 40pt with the 32 cover, 13/11 text and
-    /// 40pt buttons reads clearly slimmer. 40 is the floor with
-    /// the current controls: the 32 cover + 4pt padding each side,
-    /// and the 40pt play / pause hit targets fill the strip
-    /// exactly.
-    static let miniPlayerHeight: CGFloat = 40
+    /// floating stack: 64pt (b46-chrome, Coda §6.2 whole set —
+    /// 64/52/8/6, chen 2026-11-25 14:36 ordered the Coda menu +
+    /// mini sizes). The b43 set was 56/13/40, device-verified on
+    /// build 43 — it is the rollback if this set fails the device
+    /// check. The system UITabBar's Liquid Glass renders a few
+    /// points above its frame top, so the visual gap to the mini
+    /// is the 8pt frame spacing plus that overhang (~12pt total):
+    /// two separate pills, as in Coda's screenshot — not the one
+    /// touching block b43 made (there the 13pt frame gap was a
+    /// glass compensation: the bar's glass top sat ~13pt above
+    /// a 56pt frame, and the gap put the mini's glass bottom back
+    /// on it; with a 64pt frame the overhang is ~4pt, so the
+    /// compensation must not survive — the whole set replaces it).
+    static let tabBarTotalHeight: CGFloat = tabBarContentHeight + 8
+    /// Distance from the safe-area bottom edge: 6 (b46-chrome,
+    /// Coda §6.2 — the bottom margin is 6, inside the safe area).
+    /// The bar sits 6pt above the safe-area boundary — fully
+    /// inside the hit-testable safe area, never dropped below it
+    /// (b39: the b38 chromeBottomOffset drop pushed the bar 26pt
+    /// below the safe-area edge on Face ID iPhones and taps fell
+    /// through). The gap to the screen edge is the home-indicator
+    /// zone itself.
+    static let tabBarBottomMargin: CGFloat = 6
+    /// Horizontal margin of the floating chrome (b46-chrome:
+    /// chen's Coda screenshot reads ~16pt side margins; the Coda
+    /// copy plan §6.2 reads 12 from Coda's source — 16 is the
+    /// brief's value, one constant to revert if the device check
+    /// says the chrome reads too narrow next to Coda).
+    static let tabBarHorizontalMargin: CGFloat = 16
+    /// Mini player strip height: 52 (b46-chrome, Coda §6.2/§2.10:
+    /// cover 40 + 2 x 6pt vertical padding; the transport buttons'
+    /// 36pt hit targets sit inside it). The b43 40pt strip (chen
+    /// 2026-11-24 "mini 播放器做短一点", 44 -> 40) is the rollback
+    /// with the 56/13 set if the Coda geometry fails the device
+    /// check. 52 is the floor with the Coda controls: the 40 cover
+    /// + 6pt padding each side, and the 36pt buttons.
+    static let miniPlayerHeight: CGFloat = 52
     /// Corner radius of the floating chrome (mini player + tab bar):
     /// a rounded rectangle, NOT a capsule. chen's Apple Music
     /// reference (2026-11-24 build 34): the mini and the bar share
-    /// one shape, one width, stacked with an 8pt gap. 24pt, on the
-    /// 4pt grid (raised from 12 in the build-35 polish pass): the
-    /// iOS 26 reference measures the mini and the floating tab bar
-    /// at ~20–28pt — near half the 44pt strip height, almost a
-    /// capsule — so 12 read square next to the system bar, whose
-    /// radius is Apple's own (~20–30pt). One constant: if the two
-    /// still read as different shapes on device, this is the
-    /// single place to adjust — never a second hand-written number
-    /// in the mini. True-device confirmation still pending (chen's
-    /// phone is the judge: "看着像同一套").
-    static let floatingChromeCornerRadius: CGFloat = 24
+    /// one shape, one width, stacked with an 8pt gap. 26pt (b46-chrome,
+    /// Coda §6.2: the mini is a capsule — 26 is half the 52pt strip,
+    /// the capsule-equivalent radius): the iOS 26 reference measures
+    /// the mini and the floating tab bar at ~20–28pt — near half the
+    /// strip height, almost a capsule — so 12 read square next to
+    /// the system bar, whose radius is Apple's own (~20–30pt). One
+    /// constant: if the two still read as different shapes on device,
+    /// this is the single place to adjust — never a second hand-written
+    /// number in the mini. True-device confirmation still pending
+    /// (chen's phone is the judge: "看着像同一套").
+    static let floatingChromeCornerRadius: CGFloat = 26
     /// Horizontal content padding inside the mini player strip,
     /// symmetric both sides (was 10 leading / 6 trailing — the
-    /// strip read lopsided). Same 12pt step as the tab bar's side
-    /// margins, so the cover's left edge and the buttons' right
-    /// edge sit on the same rhythm as the bar.
+    /// strip read lopsided). Same 12pt step as Coda's mini side
+    /// padding (§6.2), so the cover's left edge and the buttons'
+    /// right edge sit on the same rhythm as the bar.
     static let miniPlayerContentPadding: CGFloat = 12
-    /// Gap between the mini player strip and the tab bar: 13 (b43).
-    /// The two are ONE connected floating unit — the mini's GLASS
-    /// bottom edge touches the bar's GLASS top edge, no seam, no
-    /// overlap, same width, same margins (chen 2026-11-24: "你看布局啊"
-    /// — Apple Music's mini and bar read as a single block). The
-    /// gap is a GLASS compensation, not a frame gap: the system
-    /// tab bar's Liquid Glass renders ~13pt ABOVE its SwiftUI
-    /// frame's top edge (measured on chen's build-42 screenshot,
-    /// 1260x2736: mini glass bottom ~2459, bar glass top ~2420 —
-    /// the singer line under "爱情转移" is sliced at the glass
-    /// top, and a 638px-wide specular band sits at 2420-2422),
-    /// so the glass top is frame-independent. b42's frame change
-    /// (64 -> 56) therefore did NOT move the glass — it moved the
-    /// mini DOWN 23px (the stack is bottom-anchored) and the
-    /// overlap grew from ~4pt to ~13pt. The 13pt frame gap puts
-    /// the mini's glass bottom back on the bar's glass top. Was 0
-    /// (b38-b42), 8 before that: two separate capsules with a gap,
-    /// each floating on its own.
-    static let floatingStackSpacing: CGFloat = 13
+    /// Gap between the mini player strip and the tab bar: 8
+    /// (b46-chrome, Coda §6.2). The two are separate floating
+    /// pills with an 8pt frame gap between them — NOT one touching
+    /// block (b43's look, where a 13pt glass compensation made the
+    /// glasses touch). The 13pt compensation is deleted with this
+    /// set: it was a patch for the 56pt frame's ~13pt glass
+    /// overhang, and Coda's 64/52/6/12 set is self-consistent
+    /// without it. If the device check shows overlap or a gap
+    /// that reads wrong, the rollback is the whole b43 set
+    /// (56/13/40), never a single-number tweak.
+    static let floatingStackSpacing: CGFloat = 8
     /// Name of the coordinate space a tab root's scroll view publishes
     /// for the chrome scroll anchor (HaoChromeScrollAnchor): the
     /// anchor reports its top offset in this space, 0 at the top,
     /// negative while the content is scrolled down.
     static let chromeScrollSpace = "haoChromeScroll"
-    /// Cover size in the mini player (Kumone MiniPlayerView: 32,
-    /// radius 6 — b38, down from Beans' 36 so the 40pt strip reads
-    /// visibly slimmer).
-    static let miniCoverSize: CGFloat = 32
+    /// Cover size in the mini player (b46-chrome, Coda §2.10:
+    /// 40x40 r6 — up from 32 for the 40pt strip, so the 52pt strip
+    /// keeps Coda's 6pt vertical padding).
+    static let miniCoverSize: CGFloat = 40
     /// matchedGeometryEffect id shared by the mini cover and the full
-    /// player cover: tapping the mini morphs this one cover from 32
+    /// player cover: tapping the mini morphs this one cover from 40
     /// to the full player's cover (up to 340).
     static let playerCoverMorphID = "haoPlayerCover"
-    /// Height of the floating stack above the safe-area bottom edge:
-    /// bottom margin + tab bar + (gap + mini player while one is
-    /// showing). This is the clearance a scroll page under the stack
-    /// must add so its last row can scroll fully above the stack —
-    /// 58pt idle, 111pt while playing (b43: the 13pt glass-
-    /// compensation spacing joins the stack while playing).
+    /// Breathing room between the floating stack and the scroll
+    /// content (b46-chrome, Coda §6.2 extraPadding 12 — counted in
+    /// the content clearance only, never in the chrome's own height):
+    /// the last row stops 12pt above the chrome instead of touching it.
+    static let contentBreathingRoom: CGFloat = 12
+    /// Height of the floating stack above the safe-area bottom edge,
+    /// plus the breathing room: bottom margin + tab bar + (gap +
+    /// mini player while one is showing) + 12. This is the clearance
+    /// a scroll page under the stack must add so its last row can
+    /// scroll fully above the stack — 82pt idle, 142pt while playing
+    /// (Coda §6.2: 64+6+12 / 52+8+64+6+12).
     /// The stack is never dropped below the safe-area edge, so the
     /// clearance is the full stack height — nothing is subtracted.
     /// See haoBottomChromePadding(). (Build 37: the scroll-minimize
@@ -126,6 +123,7 @@ enum HaoLayout {
     static func floatingStackClearance(miniPlayerVisible: Bool) -> CGFloat {
         return tabBarBottomMargin + tabBarTotalHeight
             + (miniPlayerVisible ? floatingStackSpacing + miniPlayerHeight : 0)
+            + contentBreathingRoom
     }
     /// Settle spring for chrome transitions (full-player fade,
     /// sidebar, rows).
@@ -534,8 +532,8 @@ extension View {
     /// clearance is the full stack height — nothing is subtracted
     /// (b39: the b38 subtraction of chromeBottomOffset left the
     /// last rows 26pt under the bar on Face ID iPhones). It tracks
-    /// the mini player — 40pt taller while something is playing,
-    /// so there is no dead gap while idle.
+    /// the mini player — 60pt taller while something is playing
+    /// (8 spacing + 52 mini), so there is no dead gap while idle.
     /// One source of truth: HaoLayout.floatingStackClearance.
     /// NOTE (b40): the five tab roots no longer use this — their
     /// clearance moved INSIDE the scroll content
@@ -559,7 +557,7 @@ extension View {
     /// scrolled fully above the chrome. Apply to the tab root's
     /// content, and remove haoBottomChromePadding from that root's
     /// ScrollView / List — keeping both would double the gap
-    /// (111 + 111).
+    /// (142 + 142).
     func haoBottomChromeContentPadding() -> some View {
         modifier(HaoBottomChromeContentPadding())
     }
@@ -572,7 +570,7 @@ extension View {
 /// coordinator has a current item OR a music song is still loaded
 /// (MusicPlayerViewModel.miniFallbackSong — a failed / stopped track
 /// the full player keeps showing). Using only `currentItem` here
-/// would leave 58pt of clearance under a visible 111pt stack.
+/// would leave 82pt of clearance under a visible 142pt stack.
 private struct HaoBottomChromePadding: ViewModifier {
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @EnvironmentObject private var musicPlayer: MusicPlayerViewModel
