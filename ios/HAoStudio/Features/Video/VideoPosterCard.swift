@@ -180,6 +180,11 @@ struct VideoPosterGrid: View {
     }
 
     var body: some View {
+        // b49fix11 (sweep 13 alignment P2-3): row spacing 20 is this
+        // grid's own registered value — not the music-search grids'
+        // 24 and not sectionTopSpacing 16. The poster grid (3/4/5
+        // flexible columns, 12 column spacing) is its own layout,
+        // so its row gap is set here, not borrowed from elsewhere.
         LazyVGrid(columns: columns, spacing: 20) {
             ForEach(items) { item in
                 VideoPosterCard(
