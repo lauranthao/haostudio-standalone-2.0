@@ -121,7 +121,19 @@ enum VideoLibraryStore {
     }
 
     static func saveHistory(_ entries: [VideoHistoryEntry]) {
-        LocalStore.saveCollection(named: historyCollection, value: entries)
+        // b49fix18 D-7: the write takes
+        // MigrationStore.collectionWriteQueue, the same queue
+        // the backup import's history merge and the rollback
+        // take — a history write landing inside the merge's
+        // re-read → write gap, or the restore's remove → copy
+        // gap, is serialised after it instead of cancelling
+        // the merge / rollback. The import never calls back
+        // into this store, so taking the queue here cannot
+        // deadlock. The in-memory cache + notification stay
+        // outside the queue: they are not file state.
+        MigrationStore.collectionWriteQueue.sync {
+            LocalStore.saveCollection(named: historyCollection, value: entries)
+        }
         // Keep the in-memory watched set in step (build 36,
         // item 10): saveHistory is the single funnel for
         // video-history writes, so the cache never lags a

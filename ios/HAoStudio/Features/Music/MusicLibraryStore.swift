@@ -207,10 +207,22 @@ enum MusicLibraryStore {
     /// player view model goes through here so rapid switches and
     /// queue edits serialize in call order on the one queue — a
     /// later edit can never be overwritten by an earlier switch's
-    /// still-pending write.
+    /// still-pending write. b49fix18 D-3: the work runs directly
+    /// on MigrationStore.musicQueueWriteQueue (not via
+    /// songSwitchIOQueue) — the import's mergeMusicQueue reads
+    /// the live queue under that same queue, so a switch that
+    /// already happened is always visible to the import's
+    /// live-empty check (FIFO: the import's sync runs after
+    /// every previously-enqueued queue write, closing the
+    /// TOCTOU that used to report the backup queue as imported
+    /// while the queued save then overwrote it). A switch
+    /// enqueued AFTER the import's read is a genuinely later
+    /// event and still wins by design (live-wins). The queue
+    /// edits' call-order guarantee is unchanged — it now
+    /// holds on musicQueueWriteQueue instead.
     static func saveQueueAsync(_ queue: MusicQueueData) {
-        let work = DispatchWorkItem { saveQueue(queue) }
-        songSwitchIOQueue.async(execute: work)
+        let work = DispatchWorkItem { saveQueueLocked(queue) }
+        MigrationStore.musicQueueWriteQueue.async(execute: work)
     }
 
     // MARK: - UserDefaults accessors
@@ -979,8 +991,16 @@ enum MusicLibraryStore {
         // serialised after it instead of silently replacing
         // the queue being listened to.
         MigrationStore.musicQueueWriteQueue.sync {
-            writeObject(named: queueCollection, queue.toJSON())
+            saveQueueLocked(queue)
         }
+    }
+
+    /// The queue write itself, assuming the caller's queue is
+    /// held (b49fix18 D-3): saveQueueAsync dispatches here
+    /// directly onto musicQueueWriteQueue, so the body must
+    /// not sync on that queue again — that would deadlock.
+    private static func saveQueueLocked(_ queue: MusicQueueData) {
+        writeObject(named: queueCollection, queue.toJSON())
     }
 
     // MARK: - Downloads

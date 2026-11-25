@@ -303,7 +303,19 @@ enum LiveLibraryStore {
     }
 
     static func saveHistory(_ entries: [LiveHistoryEntry]) {
-        LocalStore.saveCollection(named: historyCollection, value: entries)
+        // b49fix18 D-7: the write takes
+        // MigrationStore.collectionWriteQueue, the same queue
+        // the backup import's history merge and the rollback
+        // take — a history write landing inside the merge's
+        // re-read → write gap, or the restore's remove → copy
+        // gap, is serialised after it instead of cancelling
+        // the merge / rollback. The import never calls back
+        // into this store, so taking the queue here cannot
+        // deadlock. The notification stays outside the queue:
+        // it is not file state.
+        MigrationStore.collectionWriteQueue.sync {
+            LocalStore.saveCollection(named: historyCollection, value: entries)
+        }
         // A2: history changed — home 热门直播 and 我的's 直播历史
         // count reload on this (they used to refresh only on
         // appear / pop-back).
