@@ -29,6 +29,15 @@
 // heartbeat / liked recommendations) are replaced by local
 // equivalents (local playlists / likes / recent / local seeds).
 
+// b47-home (chen 2026-11-25: "这些推荐什么的不可以单独放
+// 一个页面吗" / "不然点我的歌单都要翻到最下面"): the home keeps
+// search + 我的歌单 + 最近播放 at the top; every recommendation
+// section lives on its own 推荐 page (MusicRecommendView, below),
+// reached from the home with one tap on the 推荐 row. Nothing was
+// removed — the tiles, 推荐歌单， 发现歌曲， 榜单， 分地区热门，
+// 发现歌单， 新专辑， 推荐歌手 and the 探索歌单分类 entry all
+// moved there verbatim, same destinations.
+
 import SwiftUI
 
 /// Music navigation destinations (NavigationStack path).
@@ -46,6 +55,7 @@ enum MusicDestination: Hashable {
     case fm
     case heartbeat
     case explore
+    case recommend
 }
 
 struct MusicHomeView: View {
@@ -85,24 +95,8 @@ struct MusicHomeView: View {
                             musicHeader
                             searchEntry
                                 .padding(.top, 12)
-                            exploreEntry
+                            recommendEntry
                                 .padding(.top, 8)
-                            featureCards(width: availableWidth)
-                                .padding(.top, 32)
-                            recommendedPlaylistsSection(width: availableWidth)
-                                .padding(.top, 32)
-                            discoveredSongsSection(width: availableWidth)
-                                .padding(.top, 32)
-                            chartsSection
-                                .padding(.top, 32)
-                            regionalHotSection(width: availableWidth)
-                                .padding(.top, 32)
-                            discoveredPlaylistsSection(width: availableWidth)
-                                .padding(.top, 32)
-                            newAlbumsSection(width: availableWidth)
-                                .padding(.top, 32)
-                            recommendedArtistsSection
-                                .padding(.top, 32)
                             playlistsSection
                                 .padding(.top, 32)
                             recentSection
@@ -117,6 +111,22 @@ struct MusicHomeView: View {
                     .haoBackdropLayer()
                     .haoTabBackground()
                     .refreshable { homeVM.refresh() }
+                    // b47-home: the nav bar is hidden on this root
+                    // (in-content title, b42), so nothing covers the
+                    // status-bar strip when the list scrolls — rows
+                    // slid up under the time/battery and overlapped
+                    // them (chen's 16:11 frames). A fixed material
+                    // veil exactly over the top safe area hides the
+                    // scrolling content before it reaches the status
+                    // text; it never scrolls, never takes a tap
+                    // (status-bar tap-to-top still reaches the list),
+                    // and reads as the page background at rest.
+                    .overlay(alignment: .top) {
+                        Rectangle()
+                            .fill(.ultraThinMaterial)
+                            .frame(height: geo.safeAreaInsets.top)
+                            .allowsHitTesting(false)
+                    }
                 }
             }
             // b42: no system nav bar on this root (see
@@ -171,13 +181,16 @@ struct MusicHomeView: View {
         .accessibilityLabel("搜索")
     }
 
-    /// Explore entry: the 26-category explore page (Coda §3.9).
-    private var exploreEntry: some View {
-        Button(action: { path.append(.explore) }) {
+    /// Entry to the 推荐 page (b47-home): all recommendation content
+    /// lives there now, so the home stays short — search, 我的歌单，
+    /// 最近播放. Same card grammar as the old 探索歌单分类 row, which
+    /// moved into the 推荐 page.
+    private var recommendEntry: some View {
+        Button(action: { path.append(.recommend) }) {
             HStack(spacing: 8) {
-                Image(systemName: "square.grid.2x2")
+                Image(systemName: "sparkles")
                     .foregroundStyle(theme.accentText)
-                Text("探索歌单分类")
+                Text("推荐")
                     .font(.haoSubheadStrong)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
@@ -194,460 +207,7 @@ struct MusicHomeView: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("探索歌单分类")
-    }
-
-    // MARK: - Feature cards (Coda §3.1, local only)
-
-    /// Feature cards: 每日推荐 / 私人漫游 / 心动模式 / 我的雷达
-    /// (local listen report). Horizontal paging shelf, 2 rows,
-    /// cards 178² (computed down to fit the real width),
-    /// spacing 16. Every card is local — no login-gated block.
-    private func featureCards(width: CGFloat) -> some View {
-        let cardSize = min(178, (width - 16) / 2)
-        return ScrollView(.horizontal, showsIndicators: false) {
-            LazyHGrid(
-                rows: [
-                    GridItem(.fixed(cardSize), spacing: 16),
-                    GridItem(.fixed(cardSize), spacing: 16),
-                ],
-                spacing: 16
-            ) {
-                MusicFeatureCollageCard(
-                    icon: "calendar", title: "每日推荐", subtitle: "每天 6:00 更新",
-                    palette: [.orange, .yellow], size: cardSize, isDateCard: true
-                ) { path.append(.daily) }
-                MusicFeatureCollageCard(
-                    icon: "waveform", title: "私人漫游", subtitle: "本地漫游",
-                    palette: [.blue, .teal], size: cardSize
-                ) { startFM() }
-                MusicFeatureCollageCard(
-                    icon: "heart.fill", title: "心动模式", subtitle: "从喜欢出发",
-                    palette: [.pink, .orange], size: cardSize
-                ) { startHeartbeat() }
-                MusicFeatureCollageCard(
-                    icon: "chart.bar", title: "我的雷达", subtitle: "听歌报告",
-                    palette: [.green, .teal], size: cardSize
-                ) { path.append(.report) }
-            }
-            .padding(.vertical, 6)
-        }
-        .frame(height: cardSize * 2 + 16 + 12)
-    }
-
-    private func startFM() {
-        if MusicRadio.fmQueue(
-            favourites: MusicLibraryStore.favSongs(),
-            recent: MusicLibraryStore.getRecent(),
-            listenTop: MusicRadio.mostPlayedSongs(from: MusicLibraryStore.getListenLog(), limit: 20),
-            dislikedIds: MusicLibraryStore.fmDislikedIds(),
-            seed: musicDayKey(of: Date())
-        ).isEmpty {
-            fmEmptyNote = true
-            return
-        }
-        path.append(.fm)
-    }
-
-    private func startHeartbeat() {
-        if MusicRadio.heartbeatQueue(
-            favourites: MusicLibraryStore.favSongs(),
-            seed: musicDayKey(of: Date())
-        ).isEmpty {
-            fmEmptyNote = true
-            return
-        }
-        path.append(.heartbeat)
-    }
-
-    // MARK: - Recommended playlists (Coda §3.1)
-
-    /// 3 rows per column, column width from the real width
-    /// (available width − 20 peek, never a hardcoded 357).
-    /// Home preview caps at 18 cards; the plaza page shows all.
-    private func recommendedPlaylistsSection(width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MusicCodaSectionHeader(title: "推荐歌单") { path.append(.plaza) }
-            if homeVM.recommendedLoading && homeVM.recommendedPlaylists.isEmpty {
-                HStack(spacing: 16) {
-                    ForEach(0..<3, id: \.self) { _ in MusicSkeletonCard() }
-                }
-            } else if homeVM.recommendedPlaylists.isEmpty {
-                MusicEmptyState(
-                    icon: "square.grid.2x2", title: "暂无推荐歌单",
-                    note: "歌单广场没有返回内容，稍后再试。",
-                    onRetry: { homeVM.loadRecommendedPlaylists() }
-                )
-            } else {
-                let columnWidth = width - 20
-                let columns = Array(Array(homeVM.recommendedPlaylists.prefix(18)).chunked(into: 3))
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 16) {
-                        ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
-                            VStack(spacing: 16) {
-                                ForEach(column, id: \.id) { summary in
-                                    NavigationLink(destination: MusicPlazaDetailView(summary: summary)) {
-                                        playlistMiniRow(summary)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                                // A short column keeps the shelf
-                                // height steady — an empty slot is
-                                // better than a jumping layout.
-                                ForEach(0..<(3 - column.count), id: \.self) { _ in
-                                    Color.clear.frame(width: columnWidth, height: 56)
-                                }
-                            }
-                            .frame(width: columnWidth, alignment: .leading)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func playlistMiniRow(_ summary: PlaylistSummary) -> some View {
-        HStack(spacing: 12) {
-            MusicCoverView(urlString: summary.cover, size: 56, cornerRadius: 8)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(summary.name)
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(theme.textPrimary)
-                    .lineLimit(1)
-                Text(plazaMiniSubtitle(summary))
-                    .font(.haoFootnote)
-                    .foregroundStyle(theme.textSecondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(theme.textMuted)
-        }
-        .contentShape(Rectangle())
-    }
-
-    private func plazaMiniSubtitle(_ summary: PlaylistSummary) -> String {
-        var parts: [String] = []
-        if !summary.creator.isEmpty { parts.append(summary.creator) }
-        let plays = musicCompactCount(summary.playCount)
-        if !plays.isEmpty { parts.append("\(plays)次播放") }
-        if summary.trackCount > 0 { parts.append("\(summary.trackCount) 首") }
-        return parts.joined(separator: " · ")
-    }
-
-    // MARK: - Discovered songs (Coda §3.1 发现歌曲行)
-
-    /// Local top songs, 36 cap. Columns of 4 compact rows in a
-    /// horizontal shelf — tap plays in place.
-    private func discoveredSongsSection(width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MusicCodaSectionHeader(title: "发现歌曲")
-            if homeVM.discoveredSongs.isEmpty {
-                MusicEmptyState(
-                    icon: "music.note", title: "还没有发现歌曲",
-                    note: "播过的歌会出现在这里。"
-                )
-            } else {
-                let columnWidth = width - 20
-                let columns = Array(Array(homeVM.discoveredSongs.prefix(36)).chunked(into: 4))
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 16) {
-                        ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
-                            VStack(spacing: 1) {
-                                ForEach(Array(column.enumerated()), id: \.element.id) { index, song in
-                                    discoverSongCell(
-                                        song: song,
-                                        play: {
-                                            let songs = homeVM.discoveredSongs
-                                            if let at = songs.firstIndex(where: { $0.identityKey == song.identityKey }) {
-                                                // b46: discovered list is a reloadable place.
-                                                playerVM.play(song: song, in: songs, startAt: at, source: PlaySource(kind: .discover, id: "discovered"), sourceDisplayName: "发现歌曲")
-                                            }
-                                        }
-                                    )
-                                    .frame(width: columnWidth, alignment: .leading)
-                                }
-                            }
-                            .frame(width: columnWidth, alignment: .leading)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func discoverSongCell(song: MusicSong, play: @escaping () -> Void) -> some View {
-        Button(action: play) {
-            HStack(spacing: 12) {
-                MusicCoverView(urlString: song.cover, size: 48, cornerRadius: 6)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(song.title.isEmpty ? "未知歌曲" : song.title)
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(theme.textPrimary)
-                        .lineLimit(1)
-                    Text(song.artist.isEmpty ? "未知艺人" : song.artist)
-                        .font(.haoSubhead)
-                        .foregroundStyle(theme.textSecondary)
-                        .lineLimit(1)
-                }
-                Spacer()
-                if song.dur > 0 {
-                    Text(musicDurationText(seconds: song.dur))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(theme.textMuted)
-                        .frame(width: 36, alignment: .trailing)
-                }
-            }
-            .frame(minHeight: 64)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: - Charts (Coda §3.1 榜单)
-
-    /// Three charts on the home, each with its top 10 rows
-    /// (lazy-loaded, cached 1800s). A horizontal paged 3-charts-
-    /// per-page layout does not fit a phone: three 10-row charts
-    /// stacked are ~800pt tall per page, so the home shows the
-    /// three charts stacked vertically instead — same 3 charts,
-    /// same 10 rows each, no paging. The charts page has all of
-    /// them.
-    private var chartsSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MusicCodaSectionHeader(title: "榜单") { path.append(.charts) }
-            if homeVM.chartsLoading && homeVM.charts.isEmpty {
-                VStack(spacing: 1) {
-                    ForEach(0..<10, id: \.self) { _ in MusicSkeletonRow() }
-                }
-            } else if homeVM.charts.isEmpty {
-                MusicEmptyState(
-                    icon: "list.number", title: "排行榜加载失败",
-                    note: "网易云没有返回榜单，稍后再试。",
-                    onRetry: { homeVM.loadCharts() }
-                )
-            } else {
-                VStack(spacing: 24) {
-                    ForEach(homeVM.charts.prefix(3), id: \.id) { chart in
-                        chartBlock(chart: chart)
-                    }
-                }
-            }
-        }
-    }
-
-    private func chartBlock(chart: PlaylistSummary) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            NavigationLink(destination: MusicChartDetailView(chart: chart)) {
-                HStack(spacing: 12) {
-                    MusicCoverView(urlString: chart.cover, size: 48, cornerRadius: 8)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(chart.name)
-                            .font(.haoBodyStrong)
-                            .foregroundStyle(theme.textPrimary)
-                            .lineLimit(1)
-                        Text(chart.desc.isEmpty ? "网易云音乐" : chart.desc)
-                            .font(.haoFootnote)
-                            .foregroundStyle(theme.textSecondary)
-                            .lineLimit(1)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(theme.accentText)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            if let tracks = homeVM.chartTracks[chart.id] {
-                if tracks.isEmpty {
-                    Text("该榜单没有返回曲目。")
-                        .font(.haoFootnote)
-                        .foregroundStyle(theme.textSecondary)
-                        .padding(.vertical, 8)
-                } else {
-                    VStack(spacing: 1) {
-                        ForEach(Array(tracks.prefix(10).enumerated()), id: \.element.id) { index, song in
-                            Button(action: {
-                                // b46: chart list is a reloadable place.
-                                playerVM.play(song: song, in: tracks, startAt: index, source: PlaySource(kind: .chart, id: chart.id), sourceDisplayName: chart.name)
-                            }) {
-                                HStack(spacing: 12) {
-                                    Text("\(index + 1)")
-                                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(index < 3 ? theme.liveRed : theme.textSecondary)
-                                        .frame(width: 28, alignment: .center)
-                                    Text(song.title.isEmpty ? "未知歌曲" : song.title)
-                                        .font(.system(size: 17, weight: .medium))
-                                        .foregroundStyle(theme.textPrimary)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text(song.artist.isEmpty ? "" : song.artist)
-                                        .font(.haoSubhead)
-                                        .foregroundStyle(theme.textSecondary)
-                                        .lineLimit(1)
-                                }
-                                .frame(minHeight: 32)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-            } else {
-                VStack(spacing: 1) {
-                    ForEach(0..<4, id: \.self) { _ in MusicSkeletonRow() }
-                }
-            }
-        }
-        .onAppear { homeVM.loadChartTracks(chart: chart) }
-    }
-
-    // MARK: - Regional hot (Coda §3.1 分地区热门)
-
-    private func regionalHotSection(width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MusicCodaSectionHeader(title: "分地区热门")
-            if homeVM.regionalLoading && homeVM.regionalHotSongs.isEmpty {
-                VStack(spacing: 1) {
-                    ForEach(0..<4, id: \.self) { _ in MusicSkeletonRow() }
-                }
-            } else if homeVM.regionalHotSongs.isEmpty {
-                MusicEmptyState(
-                    icon: "globe", title: "暂无热门歌曲",
-                    note: "分地区热门没有返回内容，稍后再试。",
-                    onRetry: { homeVM.loadRegionalHot(force: true) }
-                )
-            } else {
-                let columnWidth = width - 20
-                let columns = Array(Array(homeVM.regionalHotSongs.prefix(36)).chunked(into: 4))
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 16) {
-                        ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
-                            VStack(spacing: 1) {
-                                ForEach(column) { song in
-                                    discoverSongCell(song: song) {
-                                        let songs = homeVM.regionalHotSongs
-                                        if let at = songs.firstIndex(where: { $0.identityKey == song.identityKey }) {
-                                            // b46: regional-hot list is a reloadable place.
-                                            playerVM.play(song: song, in: songs, startAt: at, source: PlaySource(kind: .discover, id: "regional-hot"), sourceDisplayName: "地区热门")
-                                        }
-                                    }
-                                    .frame(width: columnWidth, alignment: .leading)
-                                }
-                            }
-                            .frame(width: columnWidth, alignment: .leading)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Discovered playlists / radio (Coda §3.1 双行货架)
-
-    /// Two-row CoverCard shelf (178, r22 body), other platforms'
-    /// plaza merged. Preview caps at 18 cards.
-    private func discoveredPlaylistsSection(width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MusicCodaSectionHeader(title: "发现歌单") { path.append(.plaza) }
-            if homeVM.discoveredLoading && homeVM.discoveredPlaylists.isEmpty {
-                HStack(spacing: 16) {
-                    ForEach(0..<3, id: \.self) { _ in MusicSkeletonCard() }
-                }
-            } else if homeVM.discoveredPlaylists.isEmpty {
-                MusicEmptyState(
-                    icon: "square.grid.2x2", title: "暂无发现歌单",
-                    note: "其他平台没有返回歌单，稍后再试。",
-                    onRetry: { homeVM.loadDiscoveredPlaylists() }
-                )
-            } else {
-                let columns = Array(Array(homeVM.discoveredPlaylists.prefix(18)).chunked(into: 2))
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 24) {
-                        ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
-                            VStack(alignment: .leading, spacing: 24) {
-                                ForEach(Array(column.enumerated()), id: \.offset) { _, summary in
-                                    NavigationLink(destination: MusicPlazaDetailView(summary: summary)) {
-                                        MusicCoverCardBody(
-                                            coverURL: summary.cover, title: summary.name,
-                                            subtitle: plazaMiniSubtitle(summary)
-                                        )
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-        }
-    }
-
-    // MARK: - New albums (Coda §3.1 新专辑)
-
-    private func newAlbumsSection(width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MusicCodaSectionHeader(title: "新专辑")
-            if homeVM.newAlbums.isEmpty {
-                MusicEmptyState(
-                    icon: "square.stack", title: "还没有专辑",
-                    note: "收藏或播过的歌的专辑会出现在这里。"
-                )
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 16) {
-                        ForEach(homeVM.newAlbums) { album in
-                            NavigationLink(destination: MusicAlbumDetailView(album: album)) {
-                                MusicCoverCardBody(
-                                    coverURL: album.cover, title: album.name,
-                                    subtitle: album.artist
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-        }
-    }
-
-    // MARK: - Recommended artists (Coda §3.1 推荐歌手)
-
-    /// 128 circle in a 140 frame, name body medium.
-    private var recommendedArtistsSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MusicCodaSectionHeader(title: "推荐歌手")
-            if homeVM.recommendedArtists.isEmpty {
-                MusicEmptyState(
-                    icon: "person", title: "还没有推荐歌手",
-                    note: "常听的歌手会出现在这里。"
-                )
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 16) {
-                        ForEach(homeVM.recommendedArtists, id: \.name) { artist in
-                            NavigationLink(destination: MusicArtistDetailView(artist: artist)) {
-                                VStack(spacing: 8) {
-                                    MusicCoverView(urlString: artist.cover, size: 128, cornerRadius: 64)
-                                    Text(artist.name)
-                                        .font(.system(size: 17, weight: .medium))
-                                        .foregroundStyle(theme.textPrimary)
-                                        .lineLimit(1)
-                                        .frame(width: 140, alignment: .center)
-                                }
-                                .frame(width: 140, alignment: .top)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-        }
+        .accessibilityLabel("推荐")
     }
 
     // MARK: - 我的歌单 (kept: local, collapsible)
@@ -833,6 +393,559 @@ struct MusicHomeView: View {
             MusicFMView(mode: .heartbeat)
         case .explore:
             MusicExploreView()
+        case .recommend:
+            MusicRecommendView(homeVM: homeVM, path: $path, fmEmptyNote: $fmEmptyNote)
+        }
+    }
+}
+
+// MARK: - 推荐 page (b47-home)
+
+/// 推荐 page: all recommendation content moved off the Music home
+/// (chen 2026-11-25: "这些推荐什么的不可以单独放一个页面吗" /
+/// "不然点我的歌单都要翻到最下面"). The home keeps search +
+/// 我的歌单 + 最近播放 at the top; this page holds the 4 feature
+/// tiles, 推荐歌单， 发现歌曲， 榜单， 分地区热门， 发现歌单，
+/// 新专辑 and 推荐歌手, plus the 探索歌单分类 entry at the top.
+/// Every destination is the same as before — nothing was removed,
+/// only moved. Pushed from the Music home via .recommend; it uses
+/// the system nav bar (inline "推荐" + back button) like every
+/// other pushed music page, so the status-bar zone is covered by
+/// the bar itself. Shares the home's view model, so the data is
+/// already loaded; pull-to-refresh re-fetches it.
+struct MusicRecommendView: View {
+    @ObservedObject var homeVM: MusicHomeViewModel
+    @Binding var path: [MusicDestination]
+    @Binding var fmEmptyNote: Bool
+
+    @EnvironmentObject private var playerVM: MusicPlayerViewModel
+    @Environment(\.haoTheme) private var theme
+
+    var body: some View {
+        GeometryReader { geo in
+            let availableWidth = max(geo.size.width - 40, 200)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    exploreEntry
+                        .padding(.top, 12)
+                    featureCards(width: availableWidth)
+                        .padding(.top, 32)
+                    recommendedPlaylistsSection(width: availableWidth)
+                        .padding(.top, 32)
+                    discoveredSongsSection(width: availableWidth)
+                        .padding(.top, 32)
+                    chartsSection
+                        .padding(.top, 32)
+                    regionalHotSection(width: availableWidth)
+                        .padding(.top, 32)
+                    discoveredPlaylistsSection(width: availableWidth)
+                        .padding(.top, 32)
+                    newAlbumsSection(width: availableWidth)
+                        .padding(.top, 32)
+                    recommendedArtistsSection
+                        .padding(.top, 32)
+                    Spacer(minLength: 12)
+                }
+                .padding(.horizontal, 20)
+                .haoBottomChromeContentPadding()
+            }
+            .refreshable { homeVM.refresh() }
+            .background(theme.scaffoldBackground)
+            .navigationTitle("推荐")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    /// Explore entry: the 26-category explore page (Coda §3.9).
+    private var exploreEntry: some View {
+        Button(action: { path.wrappedValue.append(.explore) }) {
+            HStack(spacing: 8) {
+                Image(systemName: "square.grid.2x2")
+                    .foregroundStyle(theme.accentText)
+                Text("探索歌单分类")
+                    .font(.haoSubheadStrong)
+                    .foregroundStyle(theme.textPrimary)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(theme.textMuted)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 44)
+            .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(theme.hairline, lineWidth: 0.5)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("探索歌单分类")
+    }
+
+    // MARK: - Feature cards (Coda §3.1, local only)
+
+    /// Feature cards: 每日推荐 / 私人漫游 / 心动模式 / 我的雷达
+    /// (local listen report). Horizontal paging shelf, 2 rows,
+    /// cards 178² (computed down to fit the real width),
+    /// spacing 16. Every card is local — no login-gated block.
+    private func featureCards(width: CGFloat) -> some View {
+        let cardSize = min(178, (width - 16) / 2)
+        return ScrollView(.horizontal, showsIndicators: false) {
+            LazyHGrid(
+                rows: [
+                    GridItem(.fixed(cardSize), spacing: 16),
+                    GridItem(.fixed(cardSize), spacing: 16),
+                ],
+                spacing: 16
+            ) {
+                MusicFeatureCollageCard(
+                    icon: "calendar", title: "每日推荐", subtitle: "每天 6:00 更新",
+                    palette: [.orange, .yellow], size: cardSize, isDateCard: true
+                ) { path.wrappedValue.append(.daily) }
+                MusicFeatureCollageCard(
+                    icon: "waveform", title: "私人漫游", subtitle: "本地漫游",
+                    palette: [.blue, .teal], size: cardSize
+                ) { startFM() }
+                MusicFeatureCollageCard(
+                    icon: "heart.fill", title: "心动模式", subtitle: "从喜欢出发",
+                    palette: [.pink, .orange], size: cardSize
+                ) { startHeartbeat() }
+                MusicFeatureCollageCard(
+                    icon: "chart.bar", title: "我的雷达", subtitle: "听歌报告",
+                    palette: [.green, .teal], size: cardSize
+                ) { path.wrappedValue.append(.report) }
+            }
+            .padding(.vertical, 6)
+        }
+        .frame(height: cardSize * 2 + 16 + 12)
+    }
+
+    private func startFM() {
+        if MusicRadio.fmQueue(
+            favourites: MusicLibraryStore.favSongs(),
+            recent: MusicLibraryStore.getRecent(),
+            listenTop: MusicRadio.mostPlayedSongs(from: MusicLibraryStore.getListenLog(), limit: 20),
+            dislikedIds: MusicLibraryStore.fmDislikedIds(),
+            seed: musicDayKey(of: Date())
+        ).isEmpty {
+            fmEmptyNote.wrappedValue = true
+            return
+        }
+        path.wrappedValue.append(.fm)
+    }
+
+    private func startHeartbeat() {
+        if MusicRadio.heartbeatQueue(
+            favourites: MusicLibraryStore.favSongs(),
+            seed: musicDayKey(of: Date())
+        ).isEmpty {
+            fmEmptyNote.wrappedValue = true
+            return
+        }
+        path.wrappedValue.append(.heartbeat)
+    }
+
+    // MARK: - Recommended playlists (Coda §3.1)
+
+    /// 3 rows per column, column width from the real width
+    /// (available width − 20 peek, never a hardcoded 357).
+    /// Home preview caps at 18 cards; the plaza page shows all.
+    private func recommendedPlaylistsSection(width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            MusicCodaSectionHeader(title: "推荐歌单") { path.wrappedValue.append(.plaza) }
+            if homeVM.recommendedLoading && homeVM.recommendedPlaylists.isEmpty {
+                HStack(spacing: 16) {
+                    ForEach(0..<3, id: \.self) { _ in MusicSkeletonCard() }
+                }
+            } else if homeVM.recommendedPlaylists.isEmpty {
+                MusicEmptyState(
+                    icon: "square.grid.2x2", title: "暂无推荐歌单",
+                    note: "歌单广场没有返回内容，稍后再试。",
+                    onRetry: { homeVM.loadRecommendedPlaylists() }
+                )
+            } else {
+                let columnWidth = width - 20
+                let columns = Array(Array(homeVM.recommendedPlaylists.prefix(18)).chunked(into: 3))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 16) {
+                        ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
+                            VStack(spacing: 16) {
+                                ForEach(column, id: \.id) { summary in
+                                    NavigationLink(destination: MusicPlazaDetailView(summary: summary)) {
+                                        playlistMiniRow(summary)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                // A short column keeps the shelf
+                                // height steady — an empty slot is
+                                // better than a jumping layout.
+                                ForEach(0..<(3 - column.count), id: \.self) { _ in
+                                    Color.clear.frame(width: columnWidth, height: 56)
+                                }
+                            }
+                            .frame(width: columnWidth, alignment: .leading)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func playlistMiniRow(_ summary: PlaylistSummary) -> some View {
+        HStack(spacing: 12) {
+            MusicCoverView(urlString: summary.cover, size: 56, cornerRadius: 8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(summary.name)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(theme.textPrimary)
+                    .lineLimit(1)
+                Text(plazaMiniSubtitle(summary))
+                    .font(.haoFootnote)
+                    .foregroundStyle(theme.textSecondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(theme.textMuted)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func plazaMiniSubtitle(_ summary: PlaylistSummary) -> String {
+        var parts: [String] = []
+        if !summary.creator.isEmpty { parts.append(summary.creator) }
+        let plays = musicCompactCount(summary.playCount)
+        if !plays.isEmpty { parts.append("\(plays)次播放") }
+        if summary.trackCount > 0 { parts.append("\(summary.trackCount) 首") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Grid-card meta (b47-home): plays + track count only. The
+    /// mini rows (plazaMiniSubtitle) can afford the creator, but
+    /// in a 178pt card "creator · plays · tracks" truncates
+    /// ("51…") and a single-glyph creator renders as a tofu box —
+    /// the card meta must be fully visible, so the creator stays
+    /// out of it.
+    private func plazaCardSubtitle(_ summary: PlaylistSummary) -> String {
+        var parts: [String] = []
+        let plays = musicCompactCount(summary.playCount)
+        if !plays.isEmpty { parts.append("\(plays)次播放") }
+        if summary.trackCount > 0 { parts.append("\(summary.trackCount) 首") }
+        return parts.joined(separator: " · ")
+    }
+
+    // MARK: - Discovered songs (Coda §3.1 发现歌曲行)
+
+    /// Local top songs, 36 cap. Columns of 4 compact rows in a
+    /// horizontal shelf — tap plays in place.
+    private func discoveredSongsSection(width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            MusicCodaSectionHeader(title: "发现歌曲")
+            if homeVM.discoveredSongs.isEmpty {
+                MusicEmptyState(
+                    icon: "music.note", title: "还没有发现歌曲",
+                    note: "播过的歌会出现在这里。"
+                )
+            } else {
+                let columnWidth = width - 20
+                let columns = Array(Array(homeVM.discoveredSongs.prefix(36)).chunked(into: 4))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 16) {
+                        ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
+                            VStack(spacing: 1) {
+                                ForEach(Array(column.enumerated()), id: \.element.id) { index, song in
+                                    discoverSongCell(
+                                        song: song,
+                                        play: {
+                                            let songs = homeVM.discoveredSongs
+                                            if let at = songs.firstIndex(where: { $0.identityKey == song.identityKey }) {
+                                                // b46: discovered list is a reloadable place.
+                                                playerVM.play(song: song, in: songs, startAt: at, source: PlaySource(kind: .discover, id: "discovered"), sourceDisplayName: "发现歌曲")
+                                            }
+                                        }
+                                    )
+                                    .frame(width: columnWidth, alignment: .leading)
+                                }
+                            }
+                            .frame(width: columnWidth, alignment: .leading)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func discoverSongCell(song: MusicSong, play: @escaping () -> Void) -> some View {
+        Button(action: play) {
+            HStack(spacing: 12) {
+                MusicCoverView(urlString: song.cover, size: 48, cornerRadius: 6)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(song.title.isEmpty ? "未知歌曲" : song.title)
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(theme.textPrimary)
+                        .lineLimit(1)
+                    Text(song.artist.isEmpty ? "未知艺人" : song.artist)
+                        .font(.haoSubhead)
+                        .foregroundStyle(theme.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                if song.dur > 0 {
+                    Text(musicDurationText(seconds: song.dur))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(theme.textMuted)
+                        .frame(width: 36, alignment: .trailing)
+                }
+            }
+            .frame(minHeight: 64)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Charts (Coda §3.1 榜单)
+
+    /// Three charts on the home, each with its top 10 rows
+    /// (lazy-loaded, cached 1800s). A horizontal paged 3-charts-
+    /// per-page layout does not fit a phone: three 10-row charts
+    /// stacked are ~800pt tall per page, so the home shows the
+    /// three charts stacked vertically instead — same 3 charts,
+    /// same 10 rows each, no paging. The charts page has all of
+    /// them.
+    private var chartsSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            MusicCodaSectionHeader(title: "榜单") { path.wrappedValue.append(.charts) }
+            if homeVM.chartsLoading && homeVM.charts.isEmpty {
+                VStack(spacing: 1) {
+                    ForEach(0..<10, id: \.self) { _ in MusicSkeletonRow() }
+                }
+            } else if homeVM.charts.isEmpty {
+                MusicEmptyState(
+                    icon: "list.number", title: "排行榜加载失败",
+                    note: "网易云没有返回榜单，稍后再试。",
+                    onRetry: { homeVM.loadCharts() }
+                )
+            } else {
+                VStack(spacing: 24) {
+                    ForEach(homeVM.charts.prefix(3), id: \.id) { chart in
+                        chartBlock(chart: chart)
+                    }
+                }
+            }
+        }
+    }
+
+    private func chartBlock(chart: PlaylistSummary) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            NavigationLink(destination: MusicChartDetailView(chart: chart)) {
+                HStack(spacing: 12) {
+                    MusicCoverView(urlString: chart.cover, size: 48, cornerRadius: 8)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(chart.name)
+                            .font(.haoBodyStrong)
+                            .foregroundStyle(theme.textPrimary)
+                            .lineLimit(1)
+                        Text(chart.desc.isEmpty ? "网易云音乐" : chart.desc)
+                            .font(.haoFootnote)
+                            .foregroundStyle(theme.textSecondary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(theme.accentText)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if let tracks = homeVM.chartTracks[chart.id] {
+                if tracks.isEmpty {
+                    Text("该榜单没有返回曲目。")
+                        .font(.haoFootnote)
+                        .foregroundStyle(theme.textSecondary)
+                        .padding(.vertical, 8)
+                } else {
+                    VStack(spacing: 1) {
+                        ForEach(Array(tracks.prefix(10).enumerated()), id: \.element.id) { index, song in
+                            Button(action: {
+                                // b46: chart list is a reloadable place.
+                                playerVM.play(song: song, in: tracks, startAt: index, source: PlaySource(kind: .chart, id: chart.id), sourceDisplayName: chart.name)
+                            }) {
+                                HStack(spacing: 12) {
+                                    Text("\(index + 1)")
+                                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                        .foregroundStyle(index < 3 ? theme.liveRed : theme.textSecondary)
+                                        .frame(width: 28, alignment: .center)
+                                    Text(song.title.isEmpty ? "未知歌曲" : song.title)
+                                        .font(.system(size: 17, weight: .medium))
+                                        .foregroundStyle(theme.textPrimary)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text(song.artist.isEmpty ? "" : song.artist)
+                                        .font(.haoSubhead)
+                                        .foregroundStyle(theme.textSecondary)
+                                        .lineLimit(1)
+                                }
+                                .frame(minHeight: 32)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            } else {
+                VStack(spacing: 1) {
+                    ForEach(0..<4, id: \.self) { _ in MusicSkeletonRow() }
+                }
+            }
+        }
+        .onAppear { homeVM.loadChartTracks(chart: chart) }
+    }
+
+    // MARK: - Regional hot (Coda §3.1 分地区热门)
+
+    private func regionalHotSection(width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            MusicCodaSectionHeader(title: "分地区热门")
+            if homeVM.regionalLoading && homeVM.regionalHotSongs.isEmpty {
+                VStack(spacing: 1) {
+                    ForEach(0..<4, id: \.self) { _ in MusicSkeletonRow() }
+                }
+            } else if homeVM.regionalHotSongs.isEmpty {
+                MusicEmptyState(
+                    icon: "globe", title: "暂无热门歌曲",
+                    note: "分地区热门没有返回内容，稍后再试。",
+                    onRetry: { homeVM.loadRegionalHot(force: true) }
+                )
+            } else {
+                let columnWidth = width - 20
+                let columns = Array(Array(homeVM.regionalHotSongs.prefix(36)).chunked(into: 4))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 16) {
+                        ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
+                            VStack(spacing: 1) {
+                                ForEach(column) { song in
+                                    discoverSongCell(song: song) {
+                                        let songs = homeVM.regionalHotSongs
+                                        if let at = songs.firstIndex(where: { $0.identityKey == song.identityKey }) {
+                                            // b46: regional-hot list is a reloadable place.
+                                            playerVM.play(song: song, in: songs, startAt: at, source: PlaySource(kind: .discover, id: "regional-hot"), sourceDisplayName: "地区热门")
+                                        }
+                                    }
+                                    .frame(width: columnWidth, alignment: .leading)
+                                }
+                            }
+                            .frame(width: columnWidth, alignment: .leading)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Discovered playlists / radio (Coda §3.1 双行货架)
+
+    /// Two-row CoverCard shelf (178, r22 body), other platforms'
+    /// plaza merged. Preview caps at 18 cards.
+    private func discoveredPlaylistsSection(width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            MusicCodaSectionHeader(title: "发现歌单") { path.wrappedValue.append(.plaza) }
+            if homeVM.discoveredLoading && homeVM.discoveredPlaylists.isEmpty {
+                HStack(spacing: 16) {
+                    ForEach(0..<3, id: \.self) { _ in MusicSkeletonCard() }
+                }
+            } else if homeVM.discoveredPlaylists.isEmpty {
+                MusicEmptyState(
+                    icon: "square.grid.2x2", title: "暂无发现歌单",
+                    note: "其他平台没有返回歌单，稍后再试。",
+                    onRetry: { homeVM.loadDiscoveredPlaylists() }
+                )
+            } else {
+                let columns = Array(Array(homeVM.discoveredPlaylists.prefix(18)).chunked(into: 2))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 24) {
+                        ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
+                            VStack(alignment: .leading, spacing: 24) {
+                                ForEach(Array(column.enumerated()), id: \.offset) { _, summary in
+                                    NavigationLink(destination: MusicPlazaDetailView(summary: summary)) {
+                                        MusicCoverCardBody(
+                                            coverURL: summary.cover, title: summary.name,
+                                            subtitle: plazaCardSubtitle(summary)
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+    }
+
+    // MARK: - New albums (Coda §3.1 新专辑)
+
+    private func newAlbumsSection(width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            MusicCodaSectionHeader(title: "新专辑")
+            if homeVM.newAlbums.isEmpty {
+                MusicEmptyState(
+                    icon: "square.stack", title: "还没有专辑",
+                    note: "收藏或播过的歌的专辑会出现在这里。"
+                )
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 16) {
+                        ForEach(homeVM.newAlbums) { album in
+                            NavigationLink(destination: MusicAlbumDetailView(album: album)) {
+                                MusicCoverCardBody(
+                                    coverURL: album.cover, title: album.name,
+                                    subtitle: album.artist
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+    }
+
+    // MARK: - Recommended artists (Coda §3.1 推荐歌手)
+
+    /// 128 circle in a 140 frame, name body medium.
+    private var recommendedArtistsSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            MusicCodaSectionHeader(title: "推荐歌手")
+            if homeVM.recommendedArtists.isEmpty {
+                MusicEmptyState(
+                    icon: "person", title: "还没有推荐歌手",
+                    note: "常听的歌手会出现在这里。"
+                )
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 16) {
+                        ForEach(homeVM.recommendedArtists, id: \.name) { artist in
+                            NavigationLink(destination: MusicArtistDetailView(artist: artist)) {
+                                VStack(spacing: 8) {
+                                    MusicCoverView(urlString: artist.cover, size: 128, cornerRadius: 64)
+                                    Text(artist.name)
+                                        .font(.system(size: 17, weight: .medium))
+                                        .foregroundStyle(theme.textPrimary)
+                                        .lineLimit(1)
+                                        .frame(width: 140, alignment: .center)
+                                }
+                                .frame(width: 140, alignment: .top)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
         }
     }
 }
@@ -878,26 +991,41 @@ struct MusicFeatureCollageCard: View {
                     colors: [Color.black.opacity(0.18), Color.black.opacity(0.76)],
                     startPoint: .top, endPoint: .bottom
                 )
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        ZStack {
-                            Circle()
-                                .fill(Color.white.opacity(0.20))
-                                .frame(width: 46, height: 46)
-                            Image(systemName: icon)
-                                .font(.system(size: 22, weight: .semibold))
-                                .foregroundStyle(.white)
-                        }
-                        Spacer()
-                        if isDateCard {
-                            Text("\(Calendar.current.component(.day, from: Date()))")
-                                .font(.system(size: 20, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 40, height: 40)
-                                .background(Color.white.opacity(0.28), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        }
+            }
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            // b47-home: the icon row and the text block are pinned to
+            // the tile's bounds as overlays. The old Spacer-expanded
+            // VStack inside this ZStack rendered its content beyond
+            // the tile's top/bottom edges on device (icons
+            // half-clipped at the top, subtitle crowded at the
+            // bottom — chen's 16:11 frames). An overlay is
+            // positioned against the tile's fixed frame, so the 12pt
+            // insets hold exactly and nothing can spill; the layout
+            // values are unchanged.
+            .overlay(alignment: .topLeading) {
+                HStack {
+                    ZStack {
+                        Circle()
+                            .fill(Color.white.opacity(0.20))
+                            .frame(width: 46, height: 46)
+                        Image(systemName: icon)
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.white)
                     }
                     Spacer()
+                    if isDateCard {
+                        Text("\(Calendar.current.component(.day, from: Date()))")
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 40, height: 40)
+                            .background(Color.white.opacity(0.28), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+                .padding(12)
+            }
+            .overlay(alignment: .bottomLeading) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text(title)
                         .font(.system(size: 20, weight: .bold))
                         .foregroundStyle(.white)
@@ -909,8 +1037,6 @@ struct MusicFeatureCollageCard: View {
                 }
                 .padding(12)
             }
-            .frame(width: size, height: size)
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
         .buttonStyle(MusicPressScaleStyle())
         .accessibilityLabel(title)

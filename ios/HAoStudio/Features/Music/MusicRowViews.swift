@@ -374,13 +374,24 @@ struct MusicCoverCardBody: View {
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(theme.textPrimary)
                         .lineLimit(2)
+                        .truncationMode(.tail)
+                        .frame(width: size, alignment: .leading)
                     Text(subtitle)
                         .font(.system(size: 13))
                         .foregroundStyle(theme.textSecondary)
                         .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(width: size, alignment: .leading)
                 }
+                .frame(width: size, alignment: .leading)
             }
             .frame(width: size, alignment: .leading)
+            // b47-home: clip to the card bounds — the meta line used
+            // to spill past the card's right edge and read as cut
+            // mid-character (chen's 16:11 frames); the explicit text
+            // widths + tail truncation make every line end cleanly
+            // with an ellipsis instead.
+            .clipped()
         }
         .buttonStyle(.plain)
         .disabled(onTap == nil)
