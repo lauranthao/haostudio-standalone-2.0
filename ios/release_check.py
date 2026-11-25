@@ -26,7 +26,10 @@ out — the chain preflight does NOT guard (2026-11-25, b49fix2 P2-67):
     against an empty/missing shop value FAILS, which is the
     confirmation that the shop manifest actually carries the key
     (2026-11-26, b49-sweep11 release lane).
-  repo version.json  <->  built IPA file (--ipa: size + md5 vs README)
+  repo version.json  <->  built IPA file (--ipa: size + md5 vs README
+    + in-package version/build from Payload/*.app/Info.plist)
+  repo version.json  <->  docs/index.html (GitHub Pages official
+    site version line, :22)
 
 Usage:
   python3 ios/release_check.py
@@ -93,6 +96,49 @@ existed): bump commit 5b67e3c -> build -> release commit
 the release commit itself — the release commit's own hash
 does not exist yet when its message is written.
 
+Ship-day checklist (2026-11-26, b49-sweep19 release P2-1:
+the six steps used to live only in sweep reports, never in
+one repo file — this header is now their canonical home, so
+they cannot drift again; verify each against README:100):
+  1. bump commit (version.json + Info.plist + preflight
+     4b/4i + README, all four together) — this is the commit
+     that TRIGGERS the Bitrise build; record its full 40-hex
+     hash. version.json: version 0.0.3, build 49, ipaUrl
+     v0.0.3, changelog in zh/tw/en. Info.plist: 0.0.3 / 49.
+     preflight 4b/4i: 0.0.2 / 48 -> 0.0.3 / 49. README: :70
+     current-version line, version-table 0.0.3 row, :72
+     download link + size/md5 filled after the build.
+  2. Bitrise build from the bump commit (workflow primary,
+     branch main); take the ACTUAL dashboard build number N
+     (never copy #30/#31 or the example number); download
+     the IPA and verify the in-package version/build is
+     0.0.3/49 — this script's --ipa check unpacks
+     Payload/*.app/Info.plist and compares it against
+     version.json (b49fix17, b49-sweep19 release P2-2), so
+     the in-package check is gated, not manual-only.
+  3. release commit: README version-table 0.0.3 row
+     "| 0.0.3 | 49 | <date> | Bitrise #N (commit <bump commit
+     full 40-hex hash>) ... |"; version.json size + sha256
+     (sha256 from THIS build's IPA, sha256sum measured,
+     never the live build-48 hash); commit message names
+     the build number and the triggering commit's full
+     40-hex hash. ALSO sync docs/index.html:22 to
+     "当前版本 0.0.3（build 49）" (b49-sweep19 release
+     P2-1: the 0.0.2 precedent 42963ab changed README +
+     docs/index.html + version.json together, but the old
+     checklist never mentioned it — the repo-side check
+     below now guards it).
+  4. shop deploy: redeploy so the live manifest carries
+     the sha256 key and matches version.json.
+  5. release_check all green: python3
+     ios/release_check.py --release --shop-manifest-url
+     <live manifest> --ipa <Bitrise-downloaded IPA>
+     (incl. the "version table row carries Bitrise build #
+     + triggering commit" gate), and preflight_check.py
+     all green — only then send the link.
+  6. 0.0.3 changelog trilingual: live manifest changelog
+     verbatim equals version.json (this script compares).
+
 0.0.3 changelog TODO (2026-11-26, b49-sweep12 release
 P2-4; write at ship time into version.json's changelog in
 all three languages AND the README version-table 0.0.3 row):
@@ -116,6 +162,7 @@ import plistlib
 import re
 import sys
 import urllib.request
+import zipfile
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
@@ -159,8 +206,8 @@ def main():
                     help="live shop version.json URL to compare against")
     ap.add_argument("--ipa", default=None,
                     help="IPA built from the release commit to verify "
-                         "(size + md5 + sha256); NEVER a file downloaded "
-                         "from the live shop")
+                         "(size + md5 + sha256 + in-package version/build); "
+                         "NEVER a file downloaded from the live shop")
     ap.add_argument("--release", action="store_true",
                     help="release-time enforcement: an empty, missing or "
                          "malformed version.json sha256 FAILS instead of "
@@ -215,6 +262,17 @@ def main():
               f"row: {_row_text.strip()!r}"
               + ("" if _has_build else " — missing Bitrise #N")
               + ("" if _has_hash else " — missing 40-hex triggering commit"))
+
+    # Repo-side: version.json <-> docs/index.html (GitHub Pages
+    # official site, 2026-11-26, b49-sweep19 release P2-1). The
+    # 0.0.2 release commit 42963ab changed docs/index.html:22
+    # alongside README + version.json, but the six-item ship
+    # checklist never mentioned it, so no gate caught a stale
+    # site version. Same substring style as the README check.
+    _site = (REPO / "docs/index.html").read_text()
+    check("docs/index.html names this version/build",
+          f"当前版本 {version}（build {build}）" in _site,
+          f"looking for 当前版本 {version}（build {build}） in docs/index.html")
 
     # Repo-side: Bitrise artifact name derived from version.json.
     check("Bitrise artifact name derived from version.json",
@@ -346,6 +404,38 @@ def main():
                      f"this IPA hashes to {ipa_sha} — copy it into version.json at release time "
                      "ONLY if this file was built from the release commit (Bitrise download); "
                      "NEVER if it was downloaded from the live shop")
+
+            # In-package version/build (2026-11-26, b49-sweep19
+            # release P2-2): size/md5/sha256 only prove this file
+            # is the file whose hashes were recorded — a build
+            # from the wrong commit, hashed into README and
+            # version.json, still passes them. Unpack
+            # Payload/*.app/Info.plist and compare
+            # CFBundleShortVersionString/CFBundleVersion against
+            # version.json; this is the gate for checklist step
+            # 2's "verify the in-package version/build", which
+            # used to be manual-only.
+            try:
+                with zipfile.ZipFile(ipa) as _z:
+                    _app_plist = next(
+                        (n for n in _z.namelist()
+                         if n.startswith("Payload/")
+                         and n.endswith(".app/Info.plist")),
+                        None)
+                    if _app_plist is None:
+                        check("IPA in-package version/build matches version.json",
+                              False, "no Payload/*.app/Info.plist in IPA")
+                    else:
+                        _ipl = plistlib.loads(_z.read(_app_plist))
+                        check("IPA in-package version/build matches version.json",
+                              _ipl.get("CFBundleShortVersionString") == version
+                              and _ipl.get("CFBundleVersion") == str(build),
+                              f"in-package {_ipl.get('CFBundleShortVersionString')}/"
+                              f"{_ipl.get('CFBundleVersion')} vs version.json "
+                              f"{version}/{build}")
+            except Exception as _e:
+                check("IPA in-package version/build matches version.json",
+                      False, f"could not read in-package Info.plist: {_e}")
 
     print()
     if failures:
