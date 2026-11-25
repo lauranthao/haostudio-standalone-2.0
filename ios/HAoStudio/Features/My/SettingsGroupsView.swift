@@ -28,13 +28,27 @@ import PhotosUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// Shared collapsible-section header: tap the title to fold /
-/// unfold the section, chevron tracks the state. Used by the 7
+/// Shared collapsible-section fold row: tap the row to fold /
+/// unfold the section, chevron tracks the state. Used by the 8
 /// settings groups in `SettingsGroupsView` and by the 我的 entry
 /// section in `MyView`, so every section folds the same way.
 /// Reads the fold state from `SettingsStore` directly; default
 /// expanded (no stored key reads back as true).
-struct SettingsSectionHeader: View {
+/// b48 (chen 2026-11-25 build 47: "这里还是不能收放", second
+/// failure of the header-Button approach): the fold control used
+/// to live in the List section HEADER (SettingsSectionHeader).
+/// The first section's header is invisible on device — MyView's
+/// List pulls its content up 51pt (.contentMargins(.top, -51),
+/// the b45 title-gap fix), so the 外观 header sits underneath
+/// the 我的 title where chen can neither see nor tap it, and the
+/// only chevron he sees is the theme Picker's menu chevron (⌃),
+/// which opens the theme menu instead of folding. The fold is
+/// therefore a ROW inside the section now — the first row, always
+/// visible, always tappable (List rows always receive taps, header
+/// Buttons do not reliably). When collapsed only this row shows.
+/// Same UserDefaults keys (settingsSectionExpanded_<id>) and the
+/// same @Published collapsedSections state as before.
+struct SettingsSectionFoldRow: View {
     @EnvironmentObject private var settings: SettingsStore
     @Environment(\.haoTheme) private var theme
 
@@ -48,17 +62,14 @@ struct SettingsSectionHeader: View {
         }) {
             HStack {
                 Text(section.title)
-                    .font(.haoFootnote)
-                    .foregroundStyle(theme.textSecondary)
+                    .font(.haoSubheadStrong)
+                    .foregroundStyle(theme.textPrimary)
                 Spacer()
                 Image(systemName: settings.sectionExpanded(section.rawValue) ? "chevron.down" : "chevron.right")
                     .font(.haoFootnoteStrong)
                     .foregroundStyle(theme.textMuted)
                     .animation(HaoLayout.settleSpring, value: settings.sectionExpanded(section.rawValue))
             }
-            // b47: the whole header row is the hit target — in a
-            // List section header the tap area is only the label's
-            // drawn content unless the shape is stated.
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -241,7 +252,8 @@ struct SettingsGroupsView: View {
     // MARK: - 外观
 
     private var appearanceSection: some View {
-        Section(header: SettingsSectionHeader(section: .appearance)) {
+        Section {
+            SettingsSectionFoldRow(section: .appearance)
             if isExpanded(.appearance) {
                 themeRow
                 appearanceRow
@@ -473,7 +485,8 @@ struct SettingsGroupsView: View {
     // MARK: - 音乐播放
 
     private var musicSection: some View {
-        Section(header: SettingsSectionHeader(section: .music)) {
+        Section {
+            SettingsSectionFoldRow(section: .music)
             if isExpanded(.music) {
                 Toggle("与其他音频同时播放", isOn: $settings.mixWithOthers)
                     .onChange(of: settings.mixWithOthers) { _, newValue in
@@ -536,7 +549,8 @@ struct SettingsGroupsView: View {
     // MARK: - 直播
 
     private var liveSection: some View {
-        Section(header: SettingsSectionHeader(section: .live)) {
+        Section {
+            SettingsSectionFoldRow(section: .live)
             if isExpanded(.live) {
                 NavigationLink("弹幕设置") {
                     LiveDanmakuSettingsSheet(settings: $danmakuSettings)
@@ -561,7 +575,8 @@ struct SettingsGroupsView: View {
     // MARK: - 影视播放
 
     private var videoSection: some View {
-        Section(header: SettingsSectionHeader(section: .video)) {
+        Section {
+            SettingsSectionFoldRow(section: .video)
             if isExpanded(.video) {
                 engineRow
                 lastUsedEngineRow
@@ -745,7 +760,8 @@ struct SettingsGroupsView: View {
     // MARK: - 源管理
 
     private var sourcesSection: some View {
-        Section(header: SettingsSectionHeader(section: .sources)) {
+        Section {
+            SettingsSectionFoldRow(section: .sources)
             if isExpanded(.sources) {
                 NavigationLink("音源管理") {
                     LXSourceManagementView()
@@ -793,7 +809,8 @@ struct SettingsGroupsView: View {
     // MARK: - 数据
 
     private var dataSection: some View {
-        Section(header: SettingsSectionHeader(section: .data)) {
+        Section {
+            SettingsSectionFoldRow(section: .data)
             if isExpanded(.data) {
                 HStack {
                     Text("缓存管理")
@@ -921,11 +938,11 @@ struct SettingsGroupsView: View {
     /// footnote instead of getting a dead delete button.
     private var storageSection: some View {
         Section(
-            header: SettingsSectionHeader(section: .storage),
             footer: Text("可删除的项目会在需要时重新获取或生成；最近 10 分钟内写入的歌曲与临时文件会暂时保留。")
                 .font(.haoCaption)
                 .foregroundStyle(theme.textSecondary)
         ) {
+            SettingsSectionFoldRow(section: .storage)
             if isExpanded(.storage) {
                 storageCapacityBlock
                 storageAppUsageRow
@@ -1194,9 +1211,9 @@ struct SettingsGroupsView: View {
     /// (Coda's platform-naming / AGPL wording is never copied).
     private var aboutSection: some View {
         Section(
-            header: SettingsSectionHeader(section: .about),
             footer: aboutFooter
         ) {
+            SettingsSectionFoldRow(section: .about)
             if isExpanded(.about) {
                 aboutHero
                 aboutVersionRow

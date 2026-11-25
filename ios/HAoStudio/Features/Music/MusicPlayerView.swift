@@ -232,16 +232,17 @@ struct MusicPlayerView: View {
                             // 0.3 in/out. POSITION stays our bottom
                             // capsule slot — only the style params
                             // are Coda's, so the entry edge mirrors
-                            // to the bottom. The dark 0.7 fill stays:
-                            // white text on glass would be unreadable
-                            // in light mode (theme rule: light +
-                            // dark). Dwell stays our 2s — Coda's was
-                            // never located (§14 item 1).
+                            // to the bottom. The fill is dark liquid
+                            // glass (black 0.7 tint): white text stays
+                            // readable in light mode (plain regular
+                            // glass would wash it out — theme rule:
+                            // light + dark). Dwell stays our 2s —
+                            // Coda's was never located (§14 item 1).
                             .font(.system(size: 12.5, weight: .medium))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 9)
-                            .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .haoDarkGlassRoundedRect(cornerRadius: 10, darkness: 0.7)
                             .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
                             // b47-player: the root is full-screen now,
                             // so the toast keeps its old distance from
@@ -256,6 +257,13 @@ struct MusicPlayerView: View {
             // b45-g: the drag morph — the surface shrinks and rounds
             // as a dismiss drag progresses (see dismissDragY). At
             // rest this is scale 1 / radius 0, i.e. no visual change.
+            // b48 (chen 2026-11-25: "动画拖动也没做好", NetEase
+            // reference video 14:37): the morph scaled and rounded
+            // but never TRANSLATED — the finger went down and the
+            // surface stayed put, so the drag felt disconnected.
+            // The surface now rides down with the finger 1:1
+            // (offset = dismissDragY), like NetEase / Apple Music.
+            .offset(y: dismissDragY)
             .scaleEffect(dismissDragScale)
             .clipShape(RoundedRectangle(cornerRadius: dismissDragCornerRadius, style: .continuous))
             .frame(width: geo.size.width, height: geo.size.height)
@@ -356,8 +364,14 @@ struct MusicPlayerView: View {
         // so the Slider and the lyrics list keep their own drags.
         // The onChanged half drives the drag morph (b45-g); the
         // onEnded half decides close vs spring-back.
+        // b48: minimumDistance 0 — the surface follows the finger
+        // from the first point of movement. The old 24pt dead zone
+        // left the first 24pt of every drag doing nothing, then
+        // the morph jumped in late ("没做好" / jump, not smooth).
+        // Taps are unaffected (translation ~0 resets the morph)
+        // and the lyrics-list gate still owns scrolls.
         .simultaneousGesture(
-            DragGesture(minimumDistance: 24)
+            DragGesture(minimumDistance: 0)
                 .onChanged(handleDismissDragChanged)
                 .onEnded(handleDismissDrag)
         )
@@ -417,9 +431,20 @@ struct MusicPlayerView: View {
         let anchor = dismissDragAnchor ?? 0
         let effectiveHeight = value.translation.height - anchor
         let effectivePredicted = value.predictedEndTranslation.height - anchor
+        // b48 (chen 2026-11-25: "往右滑也可以退出界面"): direction
+        // lock — only a DOMINANTLY downward drag dismisses. The old
+        // gate only capped the actual width (< 80) while judging
+        // the PREDICTED height, so a fast right flick with a
+        // downward arc closed the player: its predicted end shot
+        // down past 190pt while the actual width was still under
+        // 80. Both the actual and the predicted translation must
+        // now be taller than they are wide; a right swipe is wider
+        // than tall on both, so it springs back instead.
+        let downwardDominant = effectiveHeight > abs(value.translation.width)
+            && effectivePredicted > abs(value.predictedEndTranslation.width)
         let shouldClose = dismissDragAllowed(startY: value.startLocation.y)
+            && downwardDominant
             && (effectiveHeight > 110 || effectivePredicted > 190)
-            && abs(value.translation.width) < 80
         dismissDragAnchor = nil
         dismissGateWasClosed = false
         if shouldClose {
@@ -444,7 +469,12 @@ struct MusicPlayerView: View {
     private func handleDismissDragChanged(_ value: DragGesture.Value) {
         noteInteraction()
         let translation = value.translation
-        guard translation.height > 0, abs(translation.width) < 80 else {
+        // b48: same direction lock as handleDismissDrag — the morph
+        // only engages while the drag is dominantly downward. The
+        // old width cap (< 80) let a down-right diagonal morph and
+        // close; a right swipe is wider than tall, so it resets
+        // the morph instead of dragging the surface.
+        guard translation.height > 0, translation.height > abs(translation.width) else {
             dismissDragY = 0
             dismissDragAnchor = nil
             dismissGateWasClosed = false
@@ -768,55 +798,34 @@ struct MusicPlayerView: View {
 
     // MARK: - Top bar
 
+    /// b48 (chen 2026-11-25 build 47: the top chevron-down button
+    /// overlapped the status-bar time and the album name was cut
+    /// behind the Dynamic Island): BOTH are removed — no chevron,
+    /// no album name at the top. Song title + artist stay below
+    /// the cover (titleRow); dismissal is the drag-down gesture
+    /// only (handleDismissDrag; close() is still its closer).
+    /// What remains of the top row is the drag grabber (Coda
+    /// 60×5, white 0.5) on the short top scrim, so the drag
+    /// affordance stays visible on any cover. The row keeps its
+    /// 40pt height — the layout budget in MusicPlayerLayout
+    /// (fixedChromeHeight 346, top bar 40) counts it, so the
+    /// player still fits one screen with no scrolling.
     private var topBar: some View {
-        HStack {
-            Button(action: { close() }) {
-                Image(systemName: "chevron.down")
-                    // Beans PlayerView: chevron.down 15 semibold in a
-                    // 38pt glass circle + white 0.22 hairline; ours
-                    // is 40pt so the hit target is closer to Apple's
-                    // 44pt minimum. The old control was a bare 32pt
-                    // white glyph with no surface — invisible on a
-                    // light cover and the player's only way out.
-                    .font(.haoSubheadStrong)
-                    .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .haoGlassCircle()
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("关闭")
-            Spacer()
-            Text(playerVM.currentSong?.album ?? "")
-                .font(.haoDenseBody)
-                .foregroundStyle(.white.opacity(0.72))
-                .lineLimit(1)
-            Spacer()
-            // No … button here (fix 2026-11-24, build 35): the
-            // title row already has one opening the same sheet.
-            // The clear 40pt block only balances the close button
-            // so the album title stays truly centred — it is
-            // layout, not a control.
-            Color.clear.frame(width: 40, height: 40)
-        }
-        // Top scrim so the buttons read on any (even light) cover —
-        // the same 0.55 -> 0 top gradient the VOD player uses.
-        .background(
-            LinearGradient(
-                colors: [Color.black.opacity(0.55), Color.black.opacity(0)],
-                startPoint: .top, endPoint: .bottom
+        Capsule()
+            .fill(.white.opacity(0.5))
+            .frame(width: 60, height: 5)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(.top, 2)
+            // Top scrim so the grabber reads on any (even light)
+            // cover — the same 0.55 -> 0 top gradient the VOD
+            // player uses.
+            .background(
+                LinearGradient(
+                    colors: [Color.black.opacity(0.55), Color.black.opacity(0)],
+                    startPoint: .top, endPoint: .bottom
+                )
             )
-        )
-        // b46-player: drag handle (Coda grabber 60×5, white 0.5),
-        // centred on the top edge — the visual affordance for the
-        // swipe-down dismiss (handleDismissDrag; fullScreenCover
-        // has no system swipe dismiss, so the drag is custom).
-        // An overlay, so it costs no layout height.
-        .overlay(alignment: .top) {
-            Capsule()
-                .fill(.white.opacity(0.5))
-                .frame(width: 60, height: 5)
-                .padding(.top, 2)
-        }
+            .frame(height: 40)
     }
 
     // MARK: - Cover / lyrics

@@ -327,16 +327,17 @@ struct MyView: View {
     /// equivalents. b44's in-content title and anchor-free
     /// structure above are untouched.
     private var entriesSection: some View {
-        Section(header: SettingsSectionHeader(section: .my)
-            // b45: the chrome scroll-offset reader and the
-            // reselect-scroll-to-top id live on the first section
-            // header now that the title is above the List — the
-            // reader must be the first child of the List's scroll
-            // content (see HaoChromeScrollAnchor in Glass.swift),
-            // and the id is what a tab reselect scrolls to.
-            .id(HaoTabScrollTop.id(for: .my))
-            .background { HaoChromeScrollOffsetReader() }
-        ) {
+        Section {
+            // b48: the fold is a row now, not a section header —
+            // same reason as SettingsSectionFoldRow (the header is
+            // hidden under the title by the -51pt content margin).
+            // The chrome scroll-offset reader and the
+            // reselect-scroll-to-top id stay on the FIRST child of
+            // the List's scroll content — the fold row is that
+            // child now.
+            SettingsSectionFoldRow(section: .my)
+                .id(HaoTabScrollTop.id(for: .my))
+                .background { HaoChromeScrollOffsetReader() }
             if settings.sectionExpanded(SettingsSection.my.rawValue) {
                 libraryGroupHeader(title: "创建的歌单", showAdd: true)
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 16))

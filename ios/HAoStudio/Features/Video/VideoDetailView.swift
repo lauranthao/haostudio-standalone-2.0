@@ -233,7 +233,7 @@ struct VideoDetailView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
-                        .background(Color.black.opacity(0.7), in: Capsule())
+                        .haoDarkGlassCapsule(darkness: 0.7)
                         .padding(.bottom, 90)
                         .onAppear {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
@@ -436,7 +436,7 @@ struct VideoDetailContentView: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
-                    .background(Color.black.opacity(0.6), in: Capsule())
+                    .haoDarkGlassCapsule(darkness: 0.6)
                 }
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

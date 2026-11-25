@@ -64,7 +64,7 @@ struct VideoPosterCard: View {
                                 .lineLimit(1)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3)
-                                .background(Color.black.opacity(0.6), in: Capsule())
+                                .haoDarkGlassCapsule(darkness: 0.6)
                                 .padding(6)
                         }
                     }

@@ -65,11 +65,49 @@ struct MusicHomeView: View {
     @State private var fmEmptyNote = false
 
     @Environment(\.haoTheme) private var theme
+    @Environment(\.haoBackdrop) private var backdrop
+
+    /// The fade colour for the top strip (b48-9): the effective
+    /// page-background colour, so the fade is invisible at rest
+    /// in every theme / mode and under every backdrop setting.
+    /// A wallpaper's photo cannot be sampled as a flat colour —
+    /// the scaffold is the closest flat match there (the
+    /// backdrop's own legibility veil already makes the photo's
+    /// top mostly scaffold).
+    private var topFadeColor: Color {
+        switch backdrop {
+        case .color(let color): return color
+        case .wallpaper: return theme.scaffoldBackground
+        case .theme: return theme.scaffoldBackground
+        }
+    }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            GeometryReader { geo in
-                let availableWidth = max(geo.size.width - 40, 200)
+        // b48-9 (chen 2026-11-25 17:42: "这最上面还有个白色的东西"):
+        // the GeometryReader used to wrap this root's ScrollView,
+        // and the b47-home ultraThinMaterial veil sat on top of it
+        // — on chen's phone the veil covered the in-content "音乐"
+        // title, blurring it into an illegible grey smudge while
+        // the material strip itself read as a white band at the
+        // very top (pixel check of his screenshot: the title zone
+        // 70–135pt is a uniform blurred wash, no sharp glyphs;
+        // the strip above it is scaffold-bright). Music is the
+        // only tab root that wrapped its ScrollView in a
+        // GeometryReader — Home/Video/Live do not, and the video
+        // tab already dropped its own in b43 for the same class
+        // of problem. The reader is gone: the ScrollView is a
+        // direct NavigationStack child like HomeView's, so the
+        // title sits below the status bar with ordinary layout
+        // and stays sharp. The veil is replaced by a
+        // page-background fade on the NavigationStack (its frame
+        // is the full screen, so the fade sits exactly over the
+        // status strip and can never cover the title): invisible
+        // at rest, and scrolling rows fade out before they reach
+        // the status text — the b47 protection, without the
+        // material. The fade never takes a tap (status-bar
+        // tap-to-top still reaches the list).
+        GeometryReader { geo in
+            NavigationStack(path: $path) {
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
@@ -111,37 +149,33 @@ struct MusicHomeView: View {
                     .haoBackdropLayer()
                     .haoTabBackground()
                     .refreshable { homeVM.refresh() }
-                    // b47-home: the nav bar is hidden on this root
-                    // (in-content title, b42), so nothing covers the
-                    // status-bar strip when the list scrolls — rows
-                    // slid up under the time/battery and overlapped
-                    // them (chen's 16:11 frames). A fixed material
-                    // veil exactly over the top safe area hides the
-                    // scrolling content before it reaches the status
-                    // text; it never scrolls, never takes a tap
-                    // (status-bar tap-to-top still reaches the list),
-                    // and reads as the page background at rest.
-                    .overlay(alignment: .top) {
-                        Rectangle()
-                            .fill(.ultraThinMaterial)
-                            .frame(height: geo.safeAreaInsets.top)
-                            .allowsHitTesting(false)
-                    }
+                }
+                // b42: no system nav bar on this root (see
+                // musicHeader above — the system large title
+                // overlaps the cards on chen's phone). Pushed
+                // pages keep their own bars and back buttons.
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(for: MusicDestination.self) { destination in
+                    destinationView(destination)
+                }
+                .onAppear { homeVM.reload() }
+                .alert("本地曲库还是空的", isPresented: $fmEmptyNote) {
+                    Button("知道了", role: .cancel) { }
+                } message: {
+                    Text("先收藏几首歌或播几首歌，私人漫游和心动模式才能从本地生成歌单。")
                 }
             }
-            // b42: no system nav bar on this root (see
-            // musicHeader above — the system large title
-            // overlaps the cards on chen's phone). Pushed
-            // pages keep their own bars and back buttons.
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: MusicDestination.self) { destination in
-                destinationView(destination)
-            }
-            .onAppear { homeVM.reload() }
-            .alert("本地曲库还是空的", isPresented: $fmEmptyNote) {
-                Button("知道了", role: .cancel) { }
-            } message: {
-                Text("先收藏几首歌或播几首歌，私人漫游和心动模式才能从本地生成歌单。")
+            .overlay(alignment: .top) {
+                LinearGradient(
+                    stops: [
+                        .init(color: topFadeColor, location: 0),
+                        .init(color: topFadeColor, location: 0.7),
+                        .init(color: topFadeColor.opacity(0), location: 1),
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
+                .frame(height: geo.safeAreaInsets.top)
+                .allowsHitTesting(false)
             }
         }
     }
@@ -342,7 +376,7 @@ struct MusicHomeView: View {
                                 MusicPlayingEQView()
                                     .padding(.horizontal, 8)
                                     .padding(.vertical, 6)
-                                    .background(Color.black.opacity(0.55), in: Capsule())
+                                    .haoDarkGlassCapsule(darkness: 0.55)
                                     .padding(8)
                             }
                         }
@@ -420,6 +454,14 @@ struct MusicRecommendView: View {
 
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
     @Environment(\.haoTheme) private var theme
+
+    /// b48 (chen 2026-11-25 build 47: "这些太丑了 你不知道收进去
+    /// 吗"): each chart folds into its header; expanded chart ids
+    /// live here. Default: all collapsed, so the 榜单 section is
+    /// three compact headers instead of 30 inline rows. The full
+    /// charts page (榜单 >) and each chart's detail page (from the
+    /// charts page) are unchanged.
+    @State private var expandedCharts: Set<String> = []
 
     var body: some View {
         GeometryReader { geo in
@@ -736,9 +778,24 @@ struct MusicRecommendView: View {
         }
     }
 
+    /// b48: a chart is a foldable block — its header (cover + name
+    /// + source + chevron) is always visible; tap it to expand /
+    /// collapse the top-10 rows with animation. Default collapsed.
+    /// The header no longer navigates to the chart detail (that
+    /// page is one tap away from the 榜单 > charts page); the
+    /// header tap is the fold, so the two never fight.
     private func chartBlock(chart: PlaylistSummary) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            NavigationLink(destination: MusicChartDetailView(chart: chart)) {
+        let isExpanded = expandedCharts.contains(chart.id)
+        return VStack(alignment: .leading, spacing: 8) {
+            Button(action: {
+                withAnimation(HaoLayout.settleSpring) {
+                    if isExpanded {
+                        expandedCharts.remove(chart.id)
+                    } else {
+                        expandedCharts.insert(chart.id)
+                    }
+                }
+            }) {
                 HStack(spacing: 12) {
                     MusicCoverView(urlString: chart.cover, size: 48, cornerRadius: 8)
                     VStack(alignment: .leading, spacing: 2) {
@@ -746,57 +803,66 @@ struct MusicRecommendView: View {
                             .font(.haoBodyStrong)
                             .foregroundStyle(theme.textPrimary)
                             .lineLimit(1)
+                            .truncationMode(.tail)
                         Text(chart.desc.isEmpty ? "网易云音乐" : chart.desc)
                             .font(.haoFootnote)
                             .foregroundStyle(theme.textSecondary)
                             .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                     Spacer()
-                    Image(systemName: "chevron.right")
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(theme.accentText)
+                        .foregroundStyle(theme.textMuted)
+                        .animation(HaoLayout.settleSpring, value: isExpanded)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            if let tracks = homeVM.chartTracks[chart.id] {
-                if tracks.isEmpty {
-                    Text("该榜单没有返回曲目。")
-                        .font(.haoFootnote)
-                        .foregroundStyle(theme.textSecondary)
-                        .padding(.vertical, 8)
-                } else {
-                    VStack(spacing: 1) {
-                        ForEach(Array(tracks.prefix(10).enumerated()), id: \.element.id) { index, song in
-                            Button(action: {
-                                // b46: chart list is a reloadable place.
-                                playerVM.play(song: song, in: tracks, startAt: index, source: PlaySource(kind: .chart, id: chart.id), sourceDisplayName: chart.name)
-                            }) {
-                                HStack(spacing: 12) {
-                                    Text("\(index + 1)")
-                                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(index < 3 ? theme.liveRed : theme.textSecondary)
-                                        .frame(width: 28, alignment: .center)
-                                    Text(song.title.isEmpty ? "未知歌曲" : song.title)
-                                        .font(.system(size: 17, weight: .medium))
-                                        .foregroundStyle(theme.textPrimary)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text(song.artist.isEmpty ? "" : song.artist)
-                                        .font(.haoSubhead)
-                                        .foregroundStyle(theme.textSecondary)
-                                        .lineLimit(1)
+            if isExpanded {
+                if let tracks = homeVM.chartTracks[chart.id] {
+                    if tracks.isEmpty {
+                        Text("该榜单没有返回曲目。")
+                            .font(.haoFootnote)
+                            .foregroundStyle(theme.textSecondary)
+                            .padding(.vertical, 8)
+                    } else {
+                        VStack(spacing: 1) {
+                            ForEach(Array(tracks.prefix(10).enumerated()), id: \.element.id) { index, song in
+                                Button(action: {
+                                    // b46: chart list is a reloadable place.
+                                    playerVM.play(song: song, in: tracks, startAt: index, source: PlaySource(kind: .chart, id: chart.id), sourceDisplayName: chart.name)
+                                }) {
+                                    HStack(spacing: 12) {
+                                        Text("\(index + 1)")
+                                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                            .foregroundStyle(index < 3 ? theme.liveRed : theme.textSecondary)
+                                            .frame(width: 28, alignment: .center)
+                                        Text(song.title.isEmpty ? "未知歌曲" : song.title)
+                                            .font(.system(size: 17, weight: .medium))
+                                            .foregroundStyle(theme.textPrimary)
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                            .layoutPriority(1)
+                                        Spacer()
+                                        Text(song.artist.isEmpty ? "" : song.artist)
+                                            .font(.haoSubhead)
+                                            .foregroundStyle(theme.textSecondary)
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                            .frame(maxWidth: 150, alignment: .trailing)
+                                    }
+                                    .frame(minHeight: 32)
+                                    .contentShape(Rectangle())
                                 }
-                                .frame(minHeight: 32)
-                                .contentShape(Rectangle())
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
-                }
-            } else {
-                VStack(spacing: 1) {
-                    ForEach(0..<4, id: \.self) { _ in MusicSkeletonRow() }
+                } else {
+                    VStack(spacing: 1) {
+                        ForEach(0..<4, id: \.self) { _ in MusicSkeletonRow() }
+                    }
                 }
             }
         }

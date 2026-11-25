@@ -850,3 +850,68 @@ extension View {
         modifier(HaoGlassCircle())
     }
 }
+
+/// Dark liquid glass for small floating pills that carry white
+/// text over any content (toasts, HUDs, badges, poster pills):
+/// white text stays readable in light and dark mode because the
+/// glass is tinted dark — plain .regular glass would wash white
+/// text out on a light page (the old black 0.7 fills existed for
+/// exactly this reason; see the music-player toast comment).
+/// iOS 26+: glassEffect(.regular.tint(black)) in the shape;
+/// below: the old flat dark fill at the same opacity, so the
+/// fallback is pixel-identical to before. No stroke/shadow here
+/// — the call site keeps its own (toasts carry their Coda
+/// shadow); the shape and the darkness are the only things this
+/// helper owns.
+struct HaoDarkGlassCapsule: ViewModifier {
+    var darkness: Double = 0.7
+
+    func body(content: Content) -> some View {
+        Group {
+            if #available(iOS 26.0, *) {
+                content.glassEffect(.regular.tint(.black.opacity(darkness)), in: Capsule())
+            } else {
+                content.background(Color.black.opacity(darkness), in: Capsule())
+            }
+        }
+    }
+}
+
+/// Same dark glass as HaoDarkGlassCapsule, for the rounded-rect
+/// toasts / HUDs (corner radius 10, Coda §8.6).
+struct HaoDarkGlassRoundedRectangle: ViewModifier {
+    var cornerRadius: CGFloat = 10
+    var darkness: Double = 0.7
+
+    func body(content: Content) -> some View {
+        Group {
+            if #available(iOS 26.0, *) {
+                content.glassEffect(
+                    .regular.tint(.black.opacity(darkness)),
+                    in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                )
+            } else {
+                content.background(
+                    Color.black.opacity(darkness),
+                    in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                )
+            }
+        }
+    }
+}
+
+extension View {
+    /// Apply the shared dark-glass capsule treatment (white text
+    /// over any content). `darkness` is the tint strength on
+    /// iOS 26+ and the flat fill opacity below — pass the site's
+    /// old black opacity so the fallback does not move.
+    func haoDarkGlassCapsule(darkness: Double = 0.7) -> some View {
+        modifier(HaoDarkGlassCapsule(darkness: darkness))
+    }
+
+    /// Apply the shared dark-glass rounded-rectangle treatment
+    /// (toasts / HUDs).
+    func haoDarkGlassRoundedRect(cornerRadius: CGFloat = 10, darkness: Double = 0.7) -> some View {
+        modifier(HaoDarkGlassRoundedRectangle(cornerRadius: cornerRadius, darkness: darkness))
+    }
+}

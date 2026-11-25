@@ -895,7 +895,27 @@ final class MusicPlayerViewModel: ObservableObject {
         if !queueCanServeSwitch || queueLostSongs {
             rebuildQueueFromContext()
         }
-        switch queue.nextStep(mode: playMode) {
+        // b48 (Control Center next, second failure — 0.0.1): the
+        // gate above only fires when the current song is MISSING
+        // from the queue. A collapsed 1-song queue — or the current
+        // song sitting last in sequential / single mode — passes
+        // it (queueCanServeSwitch is true: the queue contains the
+        // current song), and nextStep then answers .restartCurrent
+        // / .nothing while the recorded play context still holds
+        // the full source list with a real next song. The tap
+        // restarts the same song or silently does nothing. Retry
+        // from the context before falling back to restart / no-op:
+        // a rebuilt queue puts the current song back at its place
+        // in its own list, so the step can find the successor.
+        // When the context is gone or the song really is last,
+        // the fallback below is unchanged.
+        var step = queue.nextStep(mode: playMode)
+        if step == .restartCurrent || step == .nothing {
+            if rebuildQueueFromContext() {
+                step = queue.nextStep(mode: playMode)
+            }
+        }
+        switch step {
         case .play(let index):
             // b46: manual switch — re-ask every source for the
             // target song (see clearResolveFailure).

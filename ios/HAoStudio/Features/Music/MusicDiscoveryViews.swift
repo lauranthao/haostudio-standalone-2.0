@@ -137,8 +137,7 @@ struct MusicDailyView: View {
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(theme.textPrimary)
                     .frame(width: 56, height: 56)
-                    .background(.ultraThinMaterial, in: Circle())
-                    .overlay { Circle().strokeBorder(theme.hairline, lineWidth: 0.5) }
+                    .haoGlassCircle()
             }
             .accessibilityLabel("更多操作")
         }

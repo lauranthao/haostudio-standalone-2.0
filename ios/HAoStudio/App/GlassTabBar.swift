@@ -117,6 +117,19 @@ private struct SystemTabBar: UIViewRepresentable {
         // overhang past the frame edges.
         tabBar.backgroundImage = UIImage()
         tabBar.shadowImage = UIImage()
+        // b48 (chen 2026-11-25 build 47: "菜单栏有两层玻璃"): the
+        // b47 transparency did NOT kill the system glass on iOS 27 —
+        // the bar still draws its own Liquid Glass pill, bottom-
+        // anchored to the screen edge and wider than the SwiftUI
+        // frame, so a second pill peeks out below/right of the
+        // SwiftUI pill. Two belts: (1) backgroundColor .clear,
+        // explicit; (2) clipsToBounds, so nothing the system draws
+        // can escape the 64pt SwiftUI frame — the overhang is cut
+        // at the frame edge. The background subview itself is hidden
+        // in updateUIView (hideSystemBackground), so inside the
+        // frame there is exactly one glass — the SwiftUI one.
+        tabBar.backgroundColor = .clear
+        tabBar.clipsToBounds = true
         return tabBar
     }
 
@@ -156,6 +169,25 @@ private struct SystemTabBar: UIViewRepresentable {
         tabBar.selectionIndicatorImage = Self.selectionPillImage(for: colorScheme)
 
         Self.configureAppearance(for: tabBar)
+        Self.hideSystemBackground(of: tabBar)
+    }
+
+    /// Hide the system-drawn background (b48, see makeUIView): the
+    /// transparent appearance does not stop iOS 27's UITabBar from
+    /// painting its own Liquid Glass pill, so the background view
+    /// itself is hidden — the bar keeps its items, tint and selection
+    /// pill (separate subviews), and the only glass left is the
+    /// SwiftUI one in GlassTabBar.body. Matched by class name for
+    /// the private _UIBarBackground and by type for the effect view
+    /// inside it; runs on every update because the bar can rebuild
+    /// its background subviews when the appearance changes.
+    private static func hideSystemBackground(of tabBar: UITabBar) {
+        for subview in tabBar.subviews {
+            let name = String(describing: type(of: subview))
+            if name.contains("BarBackground") || subview is UIVisualEffectView {
+                subview.isHidden = true
+            }
+        }
     }
 
     /// Bar background: transparent on every iOS version.
