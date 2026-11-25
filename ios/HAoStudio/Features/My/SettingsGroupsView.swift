@@ -1727,29 +1727,32 @@ struct BackupSnapshotView: View {
             // b49fix7 P1-1/P2-7: prune after every restore that
             // changed something, always excluding the target.
             // b49fix8 P2-8: a restore that restored NOTHING
-            // (restoredKeys + restoredFiles == 0 — a manifest
-            // failure, or a success whose snapshot already
-            // matches the live state) must not cost a snapshot:
-            // it skips the prune. And when the zero-change is
-            // PROVABLE (manifest failure, or a success that
-            // restored nothing), the safety net it just took is
-            // deleted again — it captured a state identical to
+            // must not cost a snapshot — but only when the
+            // zero-change is PROVABLE (a manifest failure, or
+            // a success whose snapshot already matches the
+            // live state). Then the safety net it just took is
+            // deleted again: it captured a state identical to
             // the live one, so restoring it later would be a
             // no-op; keeping it would only grow the list by one
-            // on every failed/no-op tap. A partial failure
-            // keeps its safety net: a failed verify removes the
-            // key it could not verify, so the net may still
-            // hold the undo for that removal (and the next
-            // successful import/restore prunes the list back to
-            // 5). Either way the list is never silently
-            // shrunk by a restore that changed nothing.
+            // on every failed/no-op tap.
+            // b49fix9 P2-3: a FAILED restore that restored
+            // nothing is NOT provably zero-change — the caller
+            // cannot tell a coerce failure (nothing written)
+            // from a failed verify (which REMOVES the key it
+            // could not verify), so live state may have
+            // changed and the safety net is still the undo
+            // for that removal. The net is kept AND the prune
+            // runs: round 8 skipped the prune on every
+            // 0-restore failure, so each tap on such a
+            // snapshot left one more safety net behind —
+            // round 7's pile-up through a new slit.
+            let provablyZeroChange =
+                result.manifestError != nil || result.succeeded
             var safetyNetKept = safetyNetURL != nil
-            if result.restoredKeys + result.restoredFiles == 0 {
-                if result.manifestError != nil || result.succeeded {
-                    if let net = safetyNetURL {
-                        BackupEngineCore.deleteSnapshot(at: net)
-                        safetyNetKept = false
-                    }
+            if result.restoredKeys + result.restoredFiles == 0 && provablyZeroChange {
+                if let net = safetyNetURL {
+                    BackupEngineCore.deleteSnapshot(at: net)
+                    safetyNetKept = false
                 }
             } else {
                 BackupEngineCore.pruneSnapshots(excluding: target.url, documentsURL: docs)
