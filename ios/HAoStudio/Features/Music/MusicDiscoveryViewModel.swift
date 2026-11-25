@@ -219,8 +219,9 @@ final class MusicDiscoveryViewModel: ObservableObject {
         switch action {
         case .report:
             // Week/month boundaries move at midnight; recompute
-            // the window from the stored log and record the new
-            // day so the next notification is a no-op.
+            // the window from a fresh log (recomputeReport()
+            // re-reads the store, b49fix14 P2-1) and record the
+            // new day so the next notification is a no-op.
             recomputeReport()
             dailyDayKey = todayKey
         case .daily:
@@ -253,7 +254,10 @@ final class MusicDiscoveryViewModel: ObservableObject {
     /// afternoon of listening never counted, and the stale
     /// ranking was re-pinned as today's pool (b49fix13 P2-2).
     /// The report is computed from the same log, so it is
-    /// recomputed from the fresh log too.
+    /// recomputed from the fresh log too. (recomputeReport()
+    /// also re-reads the log itself, b49fix14 P2-1/P2-2, but
+    /// the refresh here is what feeds reloadDaily() above —
+    /// it is not redundant.)
     func reload(forceDaily: Bool = false) {
         listenLog = MusicLibraryStore.getListenLog()
         reloadDaily(force: forceDaily)
@@ -534,7 +538,21 @@ final class MusicDiscoveryViewModel: ObservableObject {
 
     // MARK: - Listen report
 
+    /// Recompute the listen report from a FRESH log (b49fix14
+    /// P2-1/P2-2): the report is computed from the stored
+    /// `listenLog`, and two of the three call sites bypass
+    /// reload() — the .report midnight branch and
+    /// reportRange.didSet — so a log captured at page entry was
+    /// reused and an evening of listening never counted
+    /// (b49-sweep16 deepread P2-1/P2-2). Refreshing here fixes
+    /// every call site at once, including any future one.
+    /// reload()'s own refresh is NOT made redundant by this:
+    /// reloadDaily() also reads listenLog, so reload() must
+    /// refresh it before reloadDaily() runs. One extra local
+    /// disk read per recompute; this only runs on user action
+    /// or a midnight trigger, never a hot path.
     func recomputeReport() {
+        listenLog = MusicLibraryStore.getListenLog()
         report = MusicDiscoveryViewModel.computeReport(events: listenLog, range: reportRange)
     }
 
