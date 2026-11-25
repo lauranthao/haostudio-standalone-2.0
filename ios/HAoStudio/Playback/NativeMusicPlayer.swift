@@ -1588,6 +1588,13 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                 self.activeEngine.volume = Float(self.targetGain(for: self.currentTrack))
             }
             self.recomputePlayingState()
+            // b47 (chen 2026-11-25 build 46: 灵动岛/锁屏/控制中心不能切歌):
+            // resume() only refreshed the info, never rebuilt the
+            // registration — after any teardown (failed switch, engine
+            // failure) a resume played the song but the card stayed
+            // dead. setupNowPlaying is idempotent (already active =
+            // refresh only), so rebuilding here is a pure safety net.
+            self.setupNowPlaying()
             self.updateNowPlayingInfo()
         }
     }
@@ -2662,9 +2669,34 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     /// handle for switches that bypass a music stop.
     func clearNowPlaying() {
         teardownNowPlaying()
+        // b47 (chen 2026-11-25 build 46: 灵动岛/锁屏/控制中心不能切歌):
+        // a failure clear must not leave a dead card while the song
+        // is still loaded — restore the registration at once so the
+        // next/previous buttons keep working (a tap on next is then
+        // just a retry). Safe by construction: stop() nils
+        // currentTrack before its teardown, and requestVodPlay /
+        // requestLivePlay stop music first, so a domain switch never
+        // re-registers here — only the engine-failure path
+        // (onTrackFailed, same-id guard, track still loaded) does.
+        if currentTrack != nil {
+            setupNowPlaying()
+        }
     }
 
     private func updateNowPlayingInfo() {
+        // b47 (chen 2026-11-25 build 46: 灵动岛/锁屏/控制中心不能切歌):
+        // self-heal — the registration is built only on a successful
+        // load (startPlaybackAfterLoad / finishCrossfade) but torn
+        // down on every stop() and every failure clear, so any
+        // pause/resume/seek/speed refresh after a teardown silently
+        // returned with the card dead. While a track is still loaded,
+        // rebuild the registration first (setupNowPlaying ends by
+        // refreshing the info itself, so nothing is lost); with no
+        // track loaded there is nothing to restore.
+        if !nowPlayingActive, currentTrack != nil {
+            ensureMain { self.setupNowPlaying() }
+            return
+        }
         guard nowPlayingActive, let track = currentTrack else { return }
         var info: [String: Any] = [:]
         info[MPMediaItemPropertyTitle] = track.title
