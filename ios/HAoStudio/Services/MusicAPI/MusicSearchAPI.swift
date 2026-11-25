@@ -38,6 +38,39 @@ final class MusicSearchAPI {
         self.engine = engine
     }
 
+    // MARK: - Shared merge (stream + paged songs)
+
+    /// Cover backfill (same title+artist) + stable wy+tx-first
+    /// order. Shared by the streaming search and the paged song
+    /// fetcher so both pages sort identically.
+    static func sortAndBackfill(_ list: [MusicTrack]) -> [MusicTrack] {
+        var out = list
+        // Cover backfill from the same title+artist.
+        var coverByKey: [String: String] = [:]
+        for track in out {
+            if let cover = track.coverURL?.absoluteString, !cover.isEmpty {
+                let key = "\(MusicText.normalizeName(track.title))|\(MusicText.normalizeName(track.artist))"
+                if coverByKey[key] == nil { coverByKey[key] = cover }
+            }
+        }
+        out = out.map { track in
+            guard track.coverURL == nil else { return track }
+            let key = "\(MusicText.normalizeName(track.title))|\(MusicText.normalizeName(track.artist))"
+            guard let cover = coverByKey[key], let url = URL(string: cover) else { return track }
+            return MusicTrack(id: track.id, title: track.title, artist: track.artist,
+                              album: track.album, coverURL: url, duration: track.duration,
+                              sourceID: track.sourceID, trialOnly: track.trialOnly)
+        }
+        // Stable wy+tx-first order (arrival order within a group).
+        let groupOrder: [String: Int] = ["wy": 0, "tx": 1, "kg": 2, "kw": 3, "mg": 4]
+        return out.enumerated().sorted { a, b in
+            let ga = groupOrder[a.element.sourceID] ?? 9
+            let gb = groupOrder[b.element.sourceID] ?? 9
+            if ga != gb { return ga < gb }
+            return a.offset < b.offset
+        }.map { $0.element }
+    }
+
     // MARK: - Aggregated search (streaming)
 
     /// Search all platforms. `completion` is called repeatedly with
@@ -57,31 +90,7 @@ final class MusicSearchAPI {
         var settledPlatforms = Set<MusicPlatform>()
 
         func sortAndBackfill(_ list: [MusicTrack]) -> [MusicTrack] {
-            var out = list
-            // Cover backfill from the same title+artist.
-            var coverByKey: [String: String] = [:]
-            for track in out {
-                if let cover = track.coverURL?.absoluteString, !cover.isEmpty {
-                    let key = "\(MusicText.normalizeName(track.title))|\(MusicText.normalizeName(track.artist))"
-                    if coverByKey[key] == nil { coverByKey[key] = cover }
-                }
-            }
-            out = out.map { track in
-                guard track.coverURL == nil else { return track }
-                let key = "\(MusicText.normalizeName(track.title))|\(MusicText.normalizeName(track.artist))"
-                guard let cover = coverByKey[key], let url = URL(string: cover) else { return track }
-                return MusicTrack(id: track.id, title: track.title, artist: track.artist,
-                                  album: track.album, coverURL: url, duration: track.duration,
-                                  sourceID: track.sourceID, trialOnly: track.trialOnly)
-            }
-            // Stable wy+tx-first order (arrival order within a group).
-            let groupOrder: [String: Int] = ["wy": 0, "tx": 1, "kg": 2, "kw": 3, "mg": 4]
-            return out.enumerated().sorted { a, b in
-                let ga = groupOrder[a.element.sourceID] ?? 9
-                let gb = groupOrder[b.element.sourceID] ?? 9
-                if ga != gb { return ga < gb }
-                return a.offset < b.offset
-            }.map { $0.element }
+            MusicSearchAPI.sortAndBackfill(list)
         }
 
         func emit() {
@@ -181,13 +190,22 @@ final class MusicSearchAPI {
     }
 
     /// NetEase: POST music.163.com/api/cloudsearch/pc, type=1.
-    func searchWy(_ query: String, limit: Int, token: LXCancelToken? = nil, completion: @escaping ([MusicTrack]) -> Void) {
+    /// `offset` pages the song list (page 0 = the streamed first
+    /// page); the single-array wrapper keeps the old call sites.
+    func searchWy(_ query: String, limit: Int, offset: Int = 0, token: LXCancelToken? = nil, completion: @escaping ([MusicTrack]) -> Void) {
+        searchWyResult(query, limit: limit, offset: offset, token: token) { tracks, _ in completion(tracks) }
+    }
+
+    /// Same as `searchWy`, but also reports whether the transport
+    /// succeeded (false = nil response / cancelled / timeout), so a
+    /// paged caller can tell "no more results" from "page failed".
+    func searchWyResult(_ query: String, limit: Int, offset: Int = 0, token: LXCancelToken? = nil, completion: @escaping ([MusicTrack], Bool) -> Void) {
         client.postFormJson(
             "https://music.163.com/api/cloudsearch/pc",
-            fields: ["s": query, "type": "1", "limit": "\(limit)", "offset": "0"],
+            fields: ["s": query, "type": "1", "limit": "\(limit)", "offset": "\(offset)"],
             headers: ["User-Agent": MusicUA.value]
         ) { json in
-            guard let json = json, token?.isCancelled != true else { completion([]); return }
+            guard let json = json, token?.isCancelled != true else { completion([], false); return }
             let result = MusicAPIJSON.asMap(json["result"])
             let songs = MusicAPIJSON.asList(result?["songs"])
             completion(songs.map { x in
@@ -207,12 +225,19 @@ final class MusicSearchAPI {
                     duration: (Double(durMs) / 1000.0).rounded(),
                     sourceID: "wy",
                     trialOnly: trialOnly)
-            })
+            }, true)
         }
     }
 
     /// QQ: GET c.y.qq.com search_for_qq_cp. songId is the songmid.
-    func searchTx(_ query: String, limit: Int, token: LXCancelToken? = nil, completion: @escaping ([MusicTrack]) -> Void) {
+    /// `page` is 1-based (page 1 = the streamed first page).
+    func searchTx(_ query: String, limit: Int, page: Int = 1, token: LXCancelToken? = nil, completion: @escaping ([MusicTrack]) -> Void) {
+        searchTxResult(query, limit: limit, page: page, token: token) { tracks, _ in completion(tracks) }
+    }
+
+    /// Same as `searchTx`, plus a transport-success flag (see
+    /// `searchWyResult`).
+    func searchTxResult(_ query: String, limit: Int, page: Int = 1, token: LXCancelToken? = nil, completion: @escaping ([MusicTrack], Bool) -> Void) {
         client.getJson(
             "https://c.y.qq.com/soso/fcgi-bin/search_for_qq_cp",
             query: [
@@ -221,12 +246,12 @@ final class MusicSearchAPI {
                 "platform": "h5", "needNewCode": "1", "w": query,
                 "zhidaqu": "1", "catZhida": "1", "t": "0", "flag": "1",
                 "ie": "utf-8", "sem": "1", "aggr": "0",
-                "perpage": "\(limit)", "n": "\(limit)", "p": "1",
+                "perpage": "\(limit)", "n": "\(limit)", "p": "\(page)",
                 "remoteplace": "txt.mqq.all",
             ],
             headers: ["Referer": "https://y.qq.com/", "User-Agent": MusicUA.value]
         ) { json in
-            guard let json = json, token?.isCancelled != true else { completion([]); return }
+            guard let json = json, token?.isCancelled != true else { completion([], false); return }
             let data = MusicAPIJSON.asMap(json["data"])
             let song = MusicAPIJSON.asMap(data?["song"])
             let list = MusicAPIJSON.asList(song?["list"])
@@ -247,21 +272,29 @@ final class MusicSearchAPI {
                     duration: TimeInterval(MusicAPIJSON.asInt(x["interval"])),
                     sourceID: "tx",
                     trialOnly: trialOnly)
-            })
+            }, true)
         }
     }
 
     /// Kugou: GET songsearch.kugou.com. Retry once after 800 ms if
     /// the API answered 200 but with an empty list (its known
     /// flakiness). A null fetch (network/timeout) is NOT retried.
-    func searchKg(_ query: String, limit: Int, token: LXCancelToken? = nil, completion: @escaping ([MusicTrack]) -> Void) {
+    /// `page` is 1-based (page 1 = the streamed first page).
+    func searchKg(_ query: String, limit: Int, page: Int = 1, token: LXCancelToken? = nil, completion: @escaping ([MusicTrack]) -> Void) {
+        searchKgResult(query, limit: limit, page: page, token: token) { tracks, _ in completion(tracks) }
+    }
+
+    /// Same as `searchKg`, plus a transport-success flag (see
+    /// `searchWyResult`). A 200-with-empty-list retry that still
+    /// comes back empty counts as success (the leg answered).
+    func searchKgResult(_ query: String, limit: Int, page: Int = 1, token: LXCancelToken? = nil, completion: @escaping ([MusicTrack], Bool) -> Void) {
         func attempt(_ attemptNumber: Int) {
             client.getJson(
                 "https://songsearch.kugou.com/song_search_v2",
-                query: ["keyword": query, "page": "1", "pagesize": "\(limit)", "format": "json"],
+                query: ["keyword": query, "page": "\(page)", "pagesize": "\(limit)", "format": "json"],
                 headers: ["User-Agent": MusicUA.value]
             ) { json in
-                guard let json = json, token?.isCancelled != true else { completion([]); return }
+                guard let json = json, token?.isCancelled != true else { completion([], false); return }
                 let data = MusicAPIJSON.asMap(json["data"])
                 let out = MusicAPIJSON.asList(data?["lists"]).compactMap { x -> MusicTrack? in
                     let track = MusicTrack(
@@ -274,7 +307,7 @@ final class MusicSearchAPI {
                     return track.id.isEmpty ? nil : track
                 }
                 if !out.isEmpty || attemptNumber >= 1 {
-                    completion(out)
+                    completion(out, true)
                     return
                 }
                 DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(800)) {
@@ -286,15 +319,22 @@ final class MusicSearchAPI {
     }
 
     /// Kuwo: single-quoted pseudo-JSON via r.s. Retry once after
-    /// 800 ms if empty (same rule as Kugou).
-    func searchKw(_ query: String, limit: Int, token: LXCancelToken? = nil, completion: @escaping ([MusicTrack]) -> Void) {
+    /// 800 ms if empty (same rule as Kugou). `page` is the 0-based
+    /// `pn` the API takes (page 0 = the streamed first page).
+    func searchKw(_ query: String, limit: Int, page: Int = 0, token: LXCancelToken? = nil, completion: @escaping ([MusicTrack]) -> Void) {
+        searchKwResult(query, limit: limit, page: page, token: token) { tracks, _ in completion(tracks) }
+    }
+
+    /// Same as `searchKw`, plus a transport-success flag (see
+    /// `searchWyResult`).
+    func searchKwResult(_ query: String, limit: Int, page: Int = 0, token: LXCancelToken? = nil, completion: @escaping ([MusicTrack], Bool) -> Void) {
         func attempt(_ attemptNumber: Int) {
-            let url = "https://search.kuwo.cn/r.s?all=\(MusicAPIClient.percentEncode(query))&ft=music&rformat=json&encoding=utf8&rn=\(limit)"
+            let url = "https://search.kuwo.cn/r.s?all=\(MusicAPIClient.percentEncode(query))&ft=music&rformat=json&encoding=utf8&rn=\(limit)&pn=\(page)"
             client.getText(url, headers: ["User-Agent": MusicUA.value]) { text in
-                guard let text = text, token?.isCancelled != true else { completion([]); return }
+                guard let text = text, token?.isCancelled != true else { completion([], false); return }
                 let out = MusicSearchAPI.parseKwSongs(text)
                 if !out.isEmpty || attemptNumber >= 1 {
-                    completion(out)
+                    completion(out, true)
                     return
                 }
                 DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(800)) {
@@ -421,6 +461,673 @@ final class MusicSearchAPI {
             seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
         }
         return seconds > 0 ? seconds : nil
+    }
+
+    // MARK: - Paged songs (b45-d: songs tab "load more")
+
+    /// One extra songs page after the streamed first page.
+    /// `page` is 1-based (1 = the second page of results). Each leg
+    /// fetches its own next slice (wy offset, tx/kg page, kw pn);
+    /// the merge is the same wy+tx-first order as the stream.
+    /// Completion: merged tracks, any-leg-succeeded, any-leg-full.
+    /// An empty page with no leg succeeding is a failure (retryable);
+    /// an empty page with legs succeeding means exhausted.
+    func searchSongsPage(keyword: String, page: Int, completion: @escaping ([MusicTrack], Bool, Bool) -> Void) {
+        let query = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty, page >= 1 else { completion([], false, false); return }
+        let mergeQueue = DispatchQueue(label: "com.haostudio.musicsearch.page")
+        var results: [MusicTrack] = []
+        var seenKeys = Set<String>()
+        var anyOk = false
+        var anyFull = false
+        var remaining = 4
+        let token = LXCancelToken()
+        let timeoutWork = DispatchWorkItem { token.cancel() }
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.legTimeout, execute: timeoutWork)
+        func legDone(_ tracks: [MusicTrack], _ ok: Bool, _ limit: Int) {
+            mergeQueue.async {
+                if ok { anyOk = true }
+                if tracks.count >= limit { anyFull = true }
+                for track in tracks {
+                    let key: String
+                    if track.id.isEmpty {
+                        key = "t|\(MusicText.normalizeName(track.title))|\(MusicText.normalizeName(track.artist))"
+                    } else {
+                        key = track.dedupeKey
+                    }
+                    guard !seenKeys.contains(key) else { continue }
+                    seenKeys.insert(key)
+                    results.append(track)
+                }
+                remaining -= 1
+                if remaining == 0 {
+                    timeoutWork.cancel()
+                    let merged = MusicSearchAPI.sortAndBackfill(results)
+                    let ok = anyOk
+                    let full = anyFull
+                    DispatchQueue.main.async { completion(merged, ok, full) }
+                }
+            }
+        }
+        searchWyResult(query, limit: 20, offset: page * 20, token: token) { tracks, ok in legDone(tracks, ok, 20) }
+        searchTxResult(query, limit: 20, page: page + 1, token: token) { tracks, ok in legDone(tracks, ok, 20) }
+        searchKgResult(query, limit: 15, page: page + 1, token: token) { tracks, ok in legDone(tracks, ok, 15) }
+        searchKwResult(query, limit: 15, page: page, token: token) { tracks, ok in legDone(tracks, ok, 15) }
+    }
+
+    // MARK: - Categories: artists / albums / playlists (b45-d)
+
+    /// Which non-song result kind a category fetch returns. The
+    /// search tab enum mirrors these cases (see MusicSearchViewModel).
+    enum MusicSearchCategoryKind: String, CaseIterable {
+        case artists
+        case albums
+        case playlists
+    }
+
+    /// Fan-out helper for one category kind: every leg reports
+    /// (items, total, ok); when all settle, batches merge in
+    /// platform-priority order (wy, tx, kg, kw) with platform+id
+    /// dedupe, and the total is the first trustworthy one in that
+    /// same order. A leg that fails contributes nothing and never
+    /// kills the others.
+    private func fetchCategory<Item>(
+        legs: [(platform: MusicPlatform, fetch: (@escaping ([Item], Int?, Bool) -> Void) -> Void)],
+        dedupeKey: @escaping (Item) -> String,
+        completion: @escaping ([Item], Int?, Bool) -> Void
+    ) {
+        guard !legs.isEmpty else { completion([], nil, false); return }
+        let sync = DispatchQueue(label: "com.haostudio.musicsearch.category")
+        var batches: [(priority: Int, items: [Item])] = []
+        var totals: [Int: Int] = [:]
+        var anyOk = false
+        var remaining = legs.count
+        for leg in legs {
+            leg.fetch { items, total, ok in
+                sync.async {
+                    if ok { anyOk = true }
+                    if let total = total { totals[leg.platform.searchPriority] = total }
+                    batches.append((leg.platform.searchPriority, items))
+                    remaining -= 1
+                    if remaining == 0 {
+                        var seen = Set<String>()
+                        var merged: [Item] = []
+                        for batch in batches.sorted(by: { $0.priority < $1.priority }) {
+                            for item in batch.items {
+                                let key = dedupeKey(item)
+                                guard !key.isEmpty, !seen.contains(key) else { continue }
+                                seen.insert(key)
+                                merged.append(item)
+                            }
+                        }
+                        let total = totals.keys.sorted().first.flatMap { totals[$0] }
+                        let ok = anyOk
+                        DispatchQueue.main.async { completion(merged, total, ok) }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Artists for one page. NetEase cloudsearch type 100 (total
+    /// trusted); QQ zhida single direct hit (no artist list exists
+    /// on search_for_qq_cp — the Lite endpoint returned empty for
+    /// every search_type, so QQ contributes at most one artist);
+    /// Kugou v3/search/singer (no portrait in the payload — cover
+    /// stays empty, no URL invented); Kuwo r.s ft=artist (TOTAL
+    /// trusted, PICPATH under BASEPICPATH).
+    func searchArtists(keyword: String, limit: Int, offset: Int, completion: @escaping ([ArtistSummary], Int?, Bool) -> Void) {
+        let query = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { completion([], nil, false); return }
+        fetchCategory(
+            legs: [
+                (.wy, { done in self.searchWyArtists(keyword: query, limit: limit, offset: offset, completion: done) }),
+                (.tx, { done in self.searchTxZhidaArtist(keyword: query, offset: offset, completion: done) }),
+                (.kg, { done in self.searchKgArtists(keyword: query, limit: limit, offset: offset, completion: done) }),
+                (.kw, { done in self.searchKwArtists(keyword: query, limit: limit, offset: offset, completion: done) }),
+            ],
+            dedupeKey: { $0.id.isEmpty ? "name|\($0.name.lowercased())" : "\($0.platform.rawValue)|\($0.id)" },
+            completion: completion)
+    }
+
+    /// Albums for one page. NetEase cloudsearch type 10 (total
+    /// trusted); QQ search_for_qq_cp t=8 (totalnum echoes the song
+    /// total — never trusted); Kugou v3/search/album (data.total is
+    /// a 500 cap, not a count); Kuwo r.s ft=album (no TOTAL).
+    func searchAlbums(keyword: String, limit: Int, offset: Int, completion: @escaping ([AlbumSummary], Int?, Bool) -> Void) {
+        let query = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { completion([], nil, false); return }
+        fetchCategory(
+            legs: [
+                (.wy, { done in self.searchWyAlbums(keyword: query, limit: limit, offset: offset, completion: done) }),
+                (.tx, { done in self.searchTxAlbums(keyword: query, limit: limit, offset: offset, completion: done) }),
+                (.kg, { done in self.searchKgAlbums(keyword: query, limit: limit, offset: offset, completion: done) }),
+                (.kw, { done in self.searchKwAlbums(keyword: query, limit: limit, offset: offset, completion: done) }),
+            ],
+            dedupeKey: { $0.id.isEmpty ? "name|\($0.name.lowercased())|\($0.artist.lowercased())" : "\($0.platform.rawValue)|\($0.id)" },
+            completion: completion)
+    }
+
+    /// Playlists for one page. NetEase cloudsearch type 1000 (total
+    /// trusted); Kugou v3/search/special (pagesize capped at 30);
+    /// Kuwo r.s ft=playlist (TOTAL trusted). QQ has no verified
+    /// no-login playlist endpoint (DoSearchForQQMusicLite returned
+    /// empty for every search_type), so QQ contributes none.
+    func searchPlaylists(keyword: String, limit: Int, offset: Int, completion: @escaping ([PlaylistSummary], Int?, Bool) -> Void) {
+        let query = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { completion([], nil, false); return }
+        fetchCategory(
+            legs: [
+                (.wy, { done in self.searchWyPlaylists(keyword: query, limit: limit, offset: offset, completion: done) }),
+                (.kg, { done in self.searchKgPlaylists(keyword: query, limit: limit, offset: offset, completion: done) }),
+                (.kw, { done in self.searchKwPlaylists(keyword: query, limit: limit, offset: offset, completion: done) }),
+            ],
+            dedupeKey: { $0.id.isEmpty ? "name|\($0.name.lowercased())|\($0.creator.lowercased())" : "\($0.platform.rawValue)|\($0.id)" },
+            completion: completion)
+    }
+
+    // MARK: - Category legs: NetEase
+
+    private func searchWyArtists(keyword: String, limit: Int, offset: Int, completion: @escaping ([ArtistSummary], Int?, Bool) -> Void) {
+        client.postFormJson(
+            "https://music.163.com/api/cloudsearch/pc",
+            fields: ["s": keyword, "type": "100", "limit": "\(limit)", "offset": "\(offset)", "total": "true"],
+            headers: ["User-Agent": MusicUA.value],
+            timeout: 5
+        ) { json in
+            guard let json = json else { completion([], nil, false); return }
+            let result = MusicAPIJSON.asMap(json["result"])
+            let artists = MusicAPIJSON.asList(result?["artists"]).compactMap { x -> ArtistSummary? in
+                let name = MusicAPIJSON.asString(x["name"])
+                guard !name.isEmpty else { return nil }
+                let aliases = x["alias"] as? [String] ?? []
+                return ArtistSummary(
+                    id: MusicAPIJSON.asString(x["id"]),
+                    name: name,
+                    cover: MusicText.coverHi(MusicAPIJSON.asString(x["picUrl"]), platform: "wy"),
+                    musicSize: MusicAPIJSON.asInt(x["musicSize"]),
+                    albumSize: MusicAPIJSON.asInt(x["albumSize"]),
+                    platform: .wy,
+                    alias: aliases.first ?? "")
+            }
+            completion(artists, Self.optionalTotal(result?["artistCount"]), true)
+        }
+    }
+
+    private func searchWyAlbums(keyword: String, limit: Int, offset: Int, completion: @escaping ([AlbumSummary], Int?, Bool) -> Void) {
+        client.postFormJson(
+            "https://music.163.com/api/cloudsearch/pc",
+            fields: ["s": keyword, "type": "10", "limit": "\(limit)", "offset": "\(offset)", "total": "true"],
+            headers: ["User-Agent": MusicUA.value],
+            timeout: 5
+        ) { json in
+            guard let json = json else { completion([], nil, false); return }
+            let result = MusicAPIJSON.asMap(json["result"])
+            let albums = MusicAPIJSON.asList(result?["albums"]).compactMap { x -> AlbumSummary? in
+                let name = MusicAPIJSON.asString(x["name"])
+                guard !name.isEmpty else { return nil }
+                let artist = MusicAPIJSON.asMap(x["artist"])
+                return AlbumSummary(
+                    id: MusicAPIJSON.asString(x["id"]),
+                    name: name,
+                    cover: MusicText.coverHi(MusicAPIJSON.asString(x["picUrl"]), platform: "wy"),
+                    artist: MusicAPIJSON.asString(artist?["name"]),
+                    publishTime: MusicAPIJSON.asInt(x["publishTime"]),
+                    songCount: MusicAPIJSON.asInt(x["size"]),
+                    platform: .wy)
+            }
+            completion(albums, Self.optionalTotal(result?["albumCount"]), true)
+        }
+    }
+
+    private func searchWyPlaylists(keyword: String, limit: Int, offset: Int, completion: @escaping ([PlaylistSummary], Int?, Bool) -> Void) {
+        client.postFormJson(
+            "https://music.163.com/api/cloudsearch/pc",
+            fields: ["s": keyword, "type": "1000", "limit": "\(limit)", "offset": "\(offset)", "total": "true"],
+            headers: ["User-Agent": MusicUA.value],
+            timeout: 5
+        ) { json in
+            guard let json = json else { completion([], nil, false); return }
+            let result = MusicAPIJSON.asMap(json["result"])
+            let lists = MusicAPIJSON.asList(result?["playlists"]).compactMap { x -> PlaylistSummary? in
+                let name = MusicAPIJSON.asString(x["name"])
+                guard !name.isEmpty else { return nil }
+                let creator = MusicAPIJSON.asMap(x["creator"])
+                return PlaylistSummary(
+                    id: MusicAPIJSON.asString(x["id"]),
+                    name: name,
+                    cover: MusicText.coverHi(MusicAPIJSON.asString(x["coverImgUrl"]), platform: "wy"),
+                    creator: MusicAPIJSON.asString(creator?["nickname"]),
+                    playCount: MusicAPIJSON.asInt(x["playCount"]),
+                    trackCount: MusicAPIJSON.asInt(x["trackCount"]),
+                    platform: .wy)
+            }
+            completion(lists, Self.optionalTotal(result?["playlistCount"]), true)
+        }
+    }
+
+    // MARK: - Category legs: QQ
+
+    private func searchTxAlbums(keyword: String, limit: Int, offset: Int, completion: @escaping ([AlbumSummary], Int?, Bool) -> Void) {
+        let page = offset / max(limit, 1) + 1
+        client.getJson(
+            "https://c.y.qq.com/soso/fcgi-bin/search_for_qq_cp",
+            query: [
+                "g_tk": "5381", "uin": "0", "format": "json",
+                "inCharset": "utf-8", "outCharset": "utf-8", "notice": "0",
+                "platform": "h5", "needNewCode": "1", "w": keyword,
+                "zhidaqu": "1", "catZhida": "1", "t": "8", "flag": "1",
+                "ie": "utf-8", "sem": "1", "aggr": "0",
+                "perpage": "\(limit)", "n": "\(limit)", "p": "\(page)",
+                "remoteplace": "txt.mqq.all",
+            ],
+            headers: ["Referer": "https://y.qq.com/", "User-Agent": MusicUA.value],
+            timeout: 5
+        ) { json in
+            guard let json = json else { completion([], nil, false); return }
+            let data = MusicAPIJSON.asMap(json["data"])
+            let album = MusicAPIJSON.asMap(data?["album"])
+            let albums = MusicAPIJSON.asList(album?["list"]).compactMap { x -> AlbumSummary? in
+                let mid = MusicAPIJSON.asString(x["albumMID"])
+                let name = MusicAPIJSON.asString(x["albumName"])
+                guard !mid.isEmpty, !name.isEmpty else { return nil }
+                return AlbumSummary(
+                    id: mid,
+                    name: name,
+                    cover: MusicText.coverHi("https://y.gtimg.cn/music/photo_new/T002R300x300M000\(mid).jpg", platform: "tx"),
+                    artist: MusicAPIJSON.asString(x["singerName"]),
+                    publishTime: Self.millis(from: MusicAPIJSON.asString(x["publicTime"]), format: "yyyy-MM-dd"),
+                    songCount: 0,
+                    platform: .tx)
+            }
+            // data.album.totalnum echoes the song total (verified
+            // 600 on a 2-item page) — never trusted for hasMore.
+            completion(albums, nil, true)
+        }
+    }
+
+    /// QQ zhida direct artist hit from the song search payload:
+    /// type 2 = singer, with singermid/singername/songnum/albumnum.
+    /// At most one artist; deep pages contribute nothing.
+    private func searchTxZhidaArtist(keyword: String, offset: Int, completion: @escaping ([ArtistSummary], Int?, Bool) -> Void) {
+        guard offset == 0 else { completion([], nil, true); return }
+        client.getJson(
+            "https://c.y.qq.com/soso/fcgi-bin/search_for_qq_cp",
+            query: [
+                "g_tk": "5381", "uin": "0", "format": "json",
+                "inCharset": "utf-8", "outCharset": "utf-8", "notice": "0",
+                "platform": "h5", "needNewCode": "1", "w": keyword,
+                "zhidaqu": "1", "catZhida": "1", "t": "0", "flag": "1",
+                "ie": "utf-8", "sem": "1", "aggr": "0",
+                "perpage": "1", "n": "1", "p": "1",
+                "remoteplace": "txt.mqq.all",
+            ],
+            headers: ["Referer": "https://y.qq.com/", "User-Agent": MusicUA.value],
+            timeout: 5
+        ) { json in
+            guard let json = json else { completion([], nil, false); return }
+            let data = MusicAPIJSON.asMap(json["data"])
+            let zhida = MusicAPIJSON.asMap(data?["zhida"])
+            guard MusicAPIJSON.asInt(zhida?["type"]) == 2 else { completion([], nil, true); return }
+            let mid = MusicAPIJSON.asString(zhida?["singermid"])
+            let name = MusicAPIJSON.asString(zhida?["singername"])
+            guard !mid.isEmpty, !name.isEmpty else { completion([], nil, true); return }
+            let artist = ArtistSummary(
+                id: mid,
+                name: name,
+                cover: MusicText.coverHi("https://y.gtimg.cn/music/photo_new/T001R300x300M000\(mid).jpg", platform: "tx"),
+                musicSize: MusicAPIJSON.asInt(zhida?["songnum"]),
+                albumSize: MusicAPIJSON.asInt(zhida?["albumnum"]),
+                platform: .tx)
+            completion([artist], nil, true)
+        }
+    }
+
+    // MARK: - Category legs: Kugou
+
+    private func searchKgArtists(keyword: String, limit: Int, offset: Int, completion: @escaping ([ArtistSummary], Int?, Bool) -> Void) {
+        let page = offset / max(limit, 1) + 1
+        client.getJson(
+            "https://mobileservice.kugou.com/api/v3/search/singer",
+            query: ["keyword": keyword, "page": "\(page)", "pagesize": "\(limit)"],
+            headers: ["User-Agent": MusicUA.value],
+            timeout: 5
+        ) { json in
+            guard let json = json else { completion([], nil, false); return }
+            // The singer list carries no portrait in this payload —
+            // the card shows a placeholder cover (no URL invented).
+            let artists = MusicAPIJSON.asList(json["data"]).compactMap { x -> ArtistSummary? in
+                let name = MusicAPIJSON.asString(x["singername"])
+                let id = MusicAPIJSON.asString(x["singerid"])
+                guard !name.isEmpty, !id.isEmpty else { return nil }
+                return ArtistSummary(id: id, name: name, cover: "", platform: .kg)
+            }
+            completion(artists, nil, true)
+        }
+    }
+
+    private func searchKgAlbums(keyword: String, limit: Int, offset: Int, completion: @escaping ([AlbumSummary], Int?, Bool) -> Void) {
+        let page = offset / max(limit, 1) + 1
+        client.getJson(
+            "https://mobileservice.kugou.com/api/v3/search/album",
+            query: ["keyword": keyword, "page": "\(page)", "pagesize": "\(limit)"],
+            headers: ["User-Agent": MusicUA.value],
+            timeout: 5
+        ) { json in
+            guard let json = json else { completion([], nil, false); return }
+            let data = MusicAPIJSON.asMap(json["data"])
+            let albums = MusicAPIJSON.asList(data?["info"]).compactMap { x -> AlbumSummary? in
+                let name = MusicAPIJSON.asString(x["albumname"])
+                let id = MusicAPIJSON.asString(x["albumid"])
+                guard !name.isEmpty, !id.isEmpty else { return nil }
+                return AlbumSummary(
+                    id: id,
+                    name: name,
+                    cover: MusicText.coverHi(Self.kgSizedImage(MusicAPIJSON.asString(x["imgurl"])), platform: "kg"),
+                    artist: MusicAPIJSON.asString(x["singername"]),
+                    publishTime: Self.millis(from: MusicAPIJSON.asString(x["publishtime"]), format: "yyyy-MM-dd HH:mm:ss"),
+                    songCount: MusicAPIJSON.asInt(x["songcount"]),
+                    platform: .kg)
+            }
+            // data.total reads 500 for most queries (a cap, not a
+            // count) — hasMore falls back to "full page".
+            completion(albums, nil, true)
+        }
+    }
+
+    private func searchKgPlaylists(keyword: String, limit: Int, offset: Int, completion: @escaping ([PlaylistSummary], Int?, Bool) -> Void) {
+        // Playlist pages cap at 30 per request.
+        let pageSize = min(max(limit, 1), 30)
+        let page = offset / pageSize + 1
+        client.getJson(
+            "https://mobileservice.kugou.com/api/v3/search/special",
+            query: ["keyword": keyword, "page": "\(page)", "pagesize": "\(pageSize)"],
+            headers: ["User-Agent": MusicUA.value],
+            timeout: 5
+        ) { json in
+            guard let json = json else { completion([], nil, false); return }
+            let data = MusicAPIJSON.asMap(json["data"])
+            let lists = MusicAPIJSON.asList(data?["info"]).compactMap { x -> PlaylistSummary? in
+                let name = MusicAPIJSON.asString(x["specialname"])
+                let id = MusicAPIJSON.asString(x["specialid"])
+                guard !name.isEmpty, !id.isEmpty else { return nil }
+                return PlaylistSummary(
+                    id: id,
+                    name: name,
+                    cover: MusicText.coverHi(Self.kgSizedImage(MusicAPIJSON.asString(x["imgurl"])), platform: "kg"),
+                    creator: MusicAPIJSON.asString(x["nickname"]),
+                    playCount: MusicAPIJSON.asInt(x["playcount"]),
+                    trackCount: MusicAPIJSON.asInt(x["songcount"]),
+                    platform: .kg)
+            }
+            completion(lists, nil, true)
+        }
+    }
+
+    // MARK: - Category legs: Kuwo
+
+    /// Kuwo r.s is single-quoted pseudo-JSON (same swap as
+    /// `parseKwSongs`); the swapped text decodes as a normal object.
+    private static func parseKwCategoryJSON(_ text: String) -> [String: Any]? {
+        let swapped = text.replacingOccurrences(of: "'", with: "\"")
+        return MusicJSON.object(from: swapped) as? [String: Any]
+    }
+
+    private func searchKwArtists(keyword: String, limit: Int, offset: Int, completion: @escaping ([ArtistSummary], Int?, Bool) -> Void) {
+        let page = offset / max(limit, 1)
+        let url = "https://search.kuwo.cn/r.s?all=\(MusicAPIClient.percentEncode(keyword))&ft=artist&rformat=json&encoding=utf8&rn=\(limit)&pn=\(page)"
+        client.getText(url, headers: ["User-Agent": MusicUA.value], timeout: 5) { text in
+            guard let text = text, let decoded = Self.parseKwCategoryJSON(text) else { completion([], nil, false); return }
+            let basePic = MusicAPIJSON.asString(decoded["BASEPICPATH"])
+            let artists = MusicAPIJSON.asList(decoded["abslist"]).compactMap { x -> ArtistSummary? in
+                let name = MusicText.decodeEntities(MusicAPIJSON.asString(x["ARTIST"]))
+                let id = MusicAPIJSON.asString(x["ARTISTID"])
+                guard !name.isEmpty, !id.isEmpty else { return nil }
+                let picPath = MusicAPIJSON.asString(x["PICPATH"])
+                let cover = picPath.isEmpty ? "" : MusicText.coverHi(basePic + picPath, platform: "kw")
+                return ArtistSummary(
+                    id: id,
+                    name: name,
+                    cover: cover,
+                    musicSize: MusicAPIJSON.asInt(x["SONGNUM"]),
+                    albumSize: MusicAPIJSON.asInt(x["ALBUMNUM"]),
+                    platform: .kw)
+            }
+            completion(artists, Self.optionalTotal(decoded["TOTAL"]), true)
+        }
+    }
+
+    private func searchKwAlbums(keyword: String, limit: Int, offset: Int, completion: @escaping ([AlbumSummary], Int?, Bool) -> Void) {
+        let page = offset / max(limit, 1)
+        let url = "https://search.kuwo.cn/r.s?all=\(MusicAPIClient.percentEncode(keyword))&ft=album&rformat=json&encoding=utf8&rn=\(limit)&pn=\(page)"
+        client.getText(url, headers: ["User-Agent": MusicUA.value], timeout: 5) { text in
+            guard let text = text, let decoded = Self.parseKwCategoryJSON(text) else { completion([], nil, false); return }
+            let albums = MusicAPIJSON.asList(decoded["albumlist"]).compactMap { x -> AlbumSummary? in
+                let name = MusicText.decodeEntities(MusicAPIJSON.asString(x["name"]))
+                let id = MusicAPIJSON.asString(x["albumid"])
+                guard !name.isEmpty, !id.isEmpty else { return nil }
+                var cover = MusicAPIJSON.asString(x["hts_img"])
+                if cover.isEmpty { cover = MusicAPIJSON.asString(x["img"]) }
+                if cover.isEmpty {
+                    let pic = MusicAPIJSON.asString(x["pic"])
+                    if !pic.isEmpty { cover = "https://img1.kuwo.cn/star/albumcover/\(pic)" }
+                }
+                return AlbumSummary(
+                    id: id,
+                    name: name,
+                    cover: MusicText.coverHi(cover, platform: "kw"),
+                    artist: MusicText.decodeEntities(MusicAPIJSON.asString(x["artist"])),
+                    publishTime: Self.millis(from: MusicAPIJSON.asString(x["pub"]), format: "yyyy-MM-dd"),
+                    songCount: MusicAPIJSON.asInt(x["musiccnt"]),
+                    platform: .kw)
+            }
+            // No TOTAL in the album payload — hasMore falls back to
+            // "full page".
+            completion(albums, nil, true)
+        }
+    }
+
+    private func searchKwPlaylists(keyword: String, limit: Int, offset: Int, completion: @escaping ([PlaylistSummary], Int?, Bool) -> Void) {
+        let page = offset / max(limit, 1)
+        let url = "https://search.kuwo.cn/r.s?all=\(MusicAPIClient.percentEncode(keyword))&ft=playlist&rformat=json&encoding=utf8&rn=\(limit)&pn=\(page)"
+        client.getText(url, headers: ["User-Agent": MusicUA.value], timeout: 5) { text in
+            guard let text = text, let decoded = Self.parseKwCategoryJSON(text) else { completion([], nil, false); return }
+            let lists = MusicAPIJSON.asList(decoded["abslist"]).compactMap { x -> PlaylistSummary? in
+                let name = MusicText.decodeEntities(MusicAPIJSON.asString(x["name"]))
+                let id = MusicAPIJSON.asString(x["playlistid"])
+                guard !name.isEmpty, !id.isEmpty else { return nil }
+                var cover = MusicAPIJSON.asString(x["hts_pic"])
+                if cover.isEmpty { cover = MusicAPIJSON.asString(x["pic"]) }
+                return PlaylistSummary(
+                    id: id,
+                    name: name,
+                    cover: MusicText.coverHi(cover, platform: "kw"),
+                    creator: MusicText.decodeEntities(MusicAPIJSON.asString(x["nickname"])),
+                    playCount: MusicAPIJSON.asInt(x["playcnt"]),
+                    trackCount: MusicAPIJSON.asInt(x["songnum"]),
+                    platform: .kw)
+            }
+            completion(lists, Self.optionalTotal(decoded["TOTAL"]), true)
+        }
+    }
+
+    // MARK: - Suggestions + hot keywords (b45-d)
+
+    /// Suggestion words for the typed query, merged wy -> tx -> kg
+    /// (Kuwo has no verified suggestion endpoint and contributes
+    /// nothing). De-duplicated, without the query itself, capped
+    /// at 8.
+    func searchSuggestions(keyword: String, completion: @escaping ([String]) -> Void) {
+        let query = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { completion([]); return }
+        let sync = DispatchQueue(label: "com.haostudio.musicsearch.suggest")
+        var byPlatform: [Int: [String]] = [:]
+        var remaining = 3
+        func legDone(_ priority: Int, _ words: [String]) {
+            sync.async {
+                byPlatform[priority] = words
+                remaining -= 1
+                if remaining == 0 {
+                    var merged: [String] = []
+                    for priority in byPlatform.keys.sorted() {
+                        merged.append(contentsOf: byPlatform[priority] ?? [])
+                    }
+                    let unique = Self.uniqueSuggestionWords(merged, excluding: query)
+                    DispatchQueue.main.async { completion(unique) }
+                }
+            }
+        }
+        // NetEase /search/suggest/web: names in songs -> artists ->
+        // albums -> playlists order.
+        client.postFormJson(
+            "https://music.163.com/api/search/suggest/web",
+            fields: ["s": query],
+            headers: ["User-Agent": MusicUA.value],
+            timeout: 5
+        ) { json in
+            guard let json = json else { legDone(0, []); return }
+            let result = MusicAPIJSON.asMap(json["result"])
+            var words: [String] = []
+            for key in ["songs", "artists", "albums", "playlists"] {
+                for item in MusicAPIJSON.asList(result?[key]) {
+                    words.append(MusicAPIJSON.asString(item["name"]))
+                }
+            }
+            legDone(0, words)
+        }
+        // QQ smartbox: song / album / singer itemlists.
+        client.getJson(
+            "https://c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg",
+            query: ["is_xml": "0", "key": query],
+            headers: ["Referer": "https://y.qq.com/", "User-Agent": MusicUA.value],
+            timeout: 5
+        ) { json in
+            guard let json = json else { legDone(1, []); return }
+            let data = MusicAPIJSON.asMap(json["data"])
+            var words: [String] = []
+            for key in ["song", "album", "singer"] {
+                let group = MusicAPIJSON.asMap(data?[key])
+                for item in MusicAPIJSON.asList(group?["itemlist"]) {
+                    words.append(MusicAPIJSON.asString(item["name"]))
+                }
+            }
+            legDone(1, words)
+        }
+        // Kugou searchtip host: data[].RecordDatas[].HintInfo.
+        // (The plan's v2/getSearchTip path on songsearch.kugou.com
+        // is a 404 — the live host is searchtip.kugou.com.)
+        client.getJson(
+            "https://searchtip.kugou.com/getSearchTip",
+            query: ["MusicTipCount": "5", "keyword": query],
+            headers: ["User-Agent": MusicUA.value],
+            timeout: 5
+        ) { json in
+            guard let json = json else { legDone(2, []); return }
+            var words: [String] = []
+            for group in MusicAPIJSON.asList(json["data"]) {
+                for record in MusicAPIJSON.asList(group["RecordDatas"]) {
+                    words.append(MusicAPIJSON.asString(record["HintInfo"]))
+                }
+            }
+            legDone(2, words)
+        }
+    }
+
+    /// Hot keywords for an empty query: NetEase default keyword
+    /// (one) + QQ hotkeys + Kugou hot words, de-duplicated, capped
+    /// at 8.
+    func hotKeywords(completion: @escaping ([String]) -> Void) {
+        let sync = DispatchQueue(label: "com.haostudio.musicsearch.hot")
+        var byPlatform: [Int: [String]] = [:]
+        var remaining = 3
+        func legDone(_ priority: Int, _ words: [String]) {
+            sync.async {
+                byPlatform[priority] = words
+                remaining -= 1
+                if remaining == 0 {
+                    var merged: [String] = []
+                    for priority in byPlatform.keys.sorted() {
+                        merged.append(contentsOf: byPlatform[priority] ?? [])
+                    }
+                    let unique = Self.uniqueSuggestionWords(merged, excluding: "")
+                    DispatchQueue.main.async { completion(unique) }
+                }
+            }
+        }
+        client.getJson(
+            "https://music.163.com/api/search/defaultkeyword/get",
+            headers: ["User-Agent": MusicUA.value],
+            timeout: 5
+        ) { json in
+            guard let json = json else { legDone(0, []); return }
+            let data = MusicAPIJSON.asMap(json["data"])
+            legDone(0, [MusicAPIJSON.asString(data?["realkeyword"])])
+        }
+        client.getJson(
+            "https://c.y.qq.com/splcloud/fcgi-bin/gethotkey.fcg",
+            query: ["g_tk": "5381"],
+            headers: ["Referer": "https://y.qq.com/", "User-Agent": MusicUA.value],
+            timeout: 5
+        ) { json in
+            guard let json = json else { legDone(1, []); return }
+            let data = MusicAPIJSON.asMap(json["data"])
+            legDone(1, MusicAPIJSON.asList(data?["hotkey"]).map { MusicAPIJSON.asString($0["k"]) })
+        }
+        client.getJson(
+            "https://mobileservice.kugou.com/api/v3/search/hot",
+            query: ["format": "json", "plat": "0"],
+            headers: ["User-Agent": MusicUA.value],
+            timeout: 5
+        ) { json in
+            guard let json = json else { legDone(2, []); return }
+            let data = MusicAPIJSON.asMap(json["data"])
+            legDone(2, MusicAPIJSON.asList(data?["info"]).map { MusicAPIJSON.asString($0["keyword"]) })
+        }
+    }
+
+    /// Drop empties, drop the query itself, string-dedupe, cap 8.
+    static func uniqueSuggestionWords(_ words: [String], excluding keyword: String) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        let lowerKeyword = keyword.lowercased()
+        for raw in words {
+            let word = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !word.isEmpty, word.lowercased() != lowerKeyword else { continue }
+            let key = word.lowercased()
+            guard seen.insert(key).inserted else { continue }
+            out.append(word)
+            if out.count >= 8 { break }
+        }
+        return out
+    }
+
+    // MARK: - Category helpers (b45-d)
+
+    /// A total that is only trusted when the payload actually
+    /// carries a number (or a numeric string): a missing total is
+    /// nil, never 0 — 0 would wrongly end pagination.
+    static func optionalTotal(_ value: Any?) -> Int? {
+        if let number = value as? NSNumber { return number.intValue }
+        if let string = value as? String, let parsed = Int(string) { return parsed }
+        return nil
+    }
+
+    /// Milliseconds since epoch for a "yyyy-MM-dd" / "yyyy-MM-dd
+    /// HH:mm:ss" date string; 0 when unparseable.
+    static func millis(from dateString: String, format: String) -> Int {
+        guard !dateString.isEmpty else { return 0 }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = format
+        guard let date = formatter.date(from: dateString) else { return 0 }
+        return Int(date.timeIntervalSince1970 * 1000)
+    }
+
+    /// Kugou image URLs carry a `{size}` placeholder; 400 is the
+    /// card size used by this UI.
+    static func kgSizedImage(_ url: String, size: Int = 400) -> String {
+        url.replacingOccurrences(of: "{size}", with: "\(size)")
     }
 
     // MARK: - NetEase charts (排行榜)
