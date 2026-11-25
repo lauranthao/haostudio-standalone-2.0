@@ -91,7 +91,10 @@ final class DownloadEngineTests: XCTestCase {
 
     func testDuplicateEnqueueReturnsExistingTask() {
         let key = "t-dup-\(UUID().uuidString)"
-        let source = makeSourceFile(size: 8 * 1024 * 1024)
+        // 2 MB, not 8: the full copy is what this test waits on, and
+        // the same 8 MB copy took 19.69 s on Bitrise #31 (20 s
+        // timeout) — the test asserts dedup, not throughput.
+        let source = makeSourceFile(size: 2 * 1024 * 1024)
         engine.testChunkDelay = 0.05
         let done = expectation(description: "download completes")
         let first = engine.enqueue(request: request(key: key, source: source, fileName: "dup.bin")) { _ in
@@ -108,7 +111,12 @@ final class DownloadEngineTests: XCTestCase {
 
     func testPauseThenResumeCompletes() {
         let key = "t-pause-\(UUID().uuidString)"
-        let source = makeSourceFile(size: 8 * 1024 * 1024)
+        // 2 MB, not 8: the resume phase alone must fit the 20 s
+        // deadline, and the same 8 MB copy took 19.69 s on Bitrise
+        // #31 — pause + resume of 8 MB cannot fit 20 s on a loaded
+        // runner. The assertions (paused, partial part, resume
+        // completes) are unchanged.
+        let source = makeSourceFile(size: 2 * 1024 * 1024)
         let fileName = "pause-\(UUID().uuidString).bin"
         engine.testChunkDelay = 0.05
         let progressSeen = expectation(description: "first progress then pause")
@@ -129,7 +137,7 @@ final class DownloadEngineTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: part.path))
         let partSize = (try? FileManager.default.attributesOfItem(atPath: part.path)[.size] as? NSNumber)?.int64Value ?? 0
         XCTAssertGreaterThan(partSize, 0)
-        XCTAssertLessThan(partSize, 8 * 1024 * 1024)
+        XCTAssertLessThan(partSize, 2 * 1024 * 1024)
         XCTAssertFalse(FileManager.default.fileExists(atPath: downloadsDir().appendingPathComponent(fileName).path))
 
         // Resume from the part file and finish.
@@ -140,7 +148,7 @@ final class DownloadEngineTests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         }
         XCTAssertEqual(engine.taskInfo(for: key)?.state, .completed)
-        XCTAssertEqual(engine.taskInfo(for: key)?.downloadedBytes, 8 * 1024 * 1024)
+        XCTAssertEqual(engine.taskInfo(for: key)?.downloadedBytes, 2 * 1024 * 1024)
     }
 
     // MARK: - Cancel
