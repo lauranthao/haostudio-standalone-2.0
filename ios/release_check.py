@@ -26,6 +26,12 @@ out — the chain preflight does NOT guard (2026-11-25, b49fix2 P2-67):
     against an empty/missing shop value FAILS, which is the
     confirmation that the shop manifest actually carries the key
     (2026-11-26, b49-sweep11 release lane).
+    NOTE: both live fetches in this script (shop manifest and
+    live IPA download) retry transient transport failures up
+    to 3 attempts with a 1s pause (2026-11-26, b49fix21
+    D23-11: the manifest fetch failed with IncompleteRead on
+    7 of 8 runs before the retry existed). Exhausting the
+    attempts still FAILs the check — a retry is not a pass.
   repo version.json  <->  built IPA file (--ipa: size + md5 vs README
     + in-package version/build from Payload/*.app/Info.plist)
   repo version.json  <->  docs/index.html (GitHub Pages official
@@ -157,11 +163,14 @@ into one line: 「细节间距与备份行为微调」.
 """
 import argparse
 import hashlib
+import http.client
 import json
 import pathlib
 import plistlib
 import re
 import sys
+import time
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -188,17 +197,58 @@ def sha256_file(path):
     return h.hexdigest()
 
 
+# (2026-11-26, b49fix21 D23-11) Network fetch retry: the live
+# shop manifest fetch failed with http.client.IncompleteRead on
+# 7 of 8 runs in sweep 23 (Railway closes the connection
+# mid-body in bursts; the manifest itself is fine — curl
+# fetched it 4/4 in the same window, and a bare urlopen 9/13).
+# A single urlopen then fails the whole gate and skips the
+# changelog comparison and the live IPA hash, so a release-day
+# all-green verdict depended on re-running until one attempt
+# got lucky. Retry transient transport failures a couple of
+# times with a short pause instead. Exhausting the attempts
+# still raises, and the caller still FAILs the check — a retry
+# is not a silent pass. The same helper covers both network
+# points in this script (shop manifest + live IPA download).
+FETCH_ATTEMPTS = 3
+FETCH_RETRY_DELAY = 1.0
+_FETCH_RETRYABLE = (http.client.IncompleteRead, urllib.error.URLError,
+                    TimeoutError, ConnectionError)
+
+
+def fetch_url_bytes(url, timeout):
+    """GET url and return the whole body, retrying transient failures."""
+    last = None
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as r:
+                return r.read()
+        except _FETCH_RETRYABLE as e:
+            last = e
+            if attempt < FETCH_ATTEMPTS:
+                time.sleep(FETCH_RETRY_DELAY)
+    raise last
+
+
 def sha256_url(url, timeout=120):
-    h = hashlib.sha256()
-    size = 0
-    with urllib.request.urlopen(url, timeout=timeout) as r:
-        while True:
-            chunk = r.read(1024 * 1024)
-            if not chunk:
-                break
-            size += len(chunk)
-            h.update(chunk)
-    return h.hexdigest(), size
+    last = None
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        try:
+            h = hashlib.sha256()
+            size = 0
+            with urllib.request.urlopen(url, timeout=timeout) as r:
+                while True:
+                    chunk = r.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    h.update(chunk)
+            return h.hexdigest(), size
+        except _FETCH_RETRYABLE as e:
+            last = e
+            if attempt < FETCH_ATTEMPTS:
+                time.sleep(FETCH_RETRY_DELAY)
+    raise last
 
 
 def main():
@@ -304,8 +354,11 @@ def main():
     # Release-time: shop manifest.
     if args.shop_manifest_url:
         try:
-            with urllib.request.urlopen(args.shop_manifest_url, timeout=30) as r:
-                shop = json.loads(r.read().decode("utf-8"))
+            # (2026-11-26, b49fix21 D23-11) fetch with retry —
+            # see fetch_url_bytes; a transient IncompleteRead no
+            # longer fails the whole gate on the first attempt.
+            shop = json.loads(fetch_url_bytes(
+                args.shop_manifest_url, timeout=30).decode("utf-8"))
             for key in ("version", "build", "ipaUrl", "size"):
                 check(f"shop manifest {key} matches version.json",
                       shop.get(key) == vj.get(key),
