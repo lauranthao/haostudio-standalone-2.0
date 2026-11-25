@@ -901,4 +901,30 @@ final class HomeAggregationTests: XCTestCase {
             hasLoadedOnce: true, todayKey: "2026-11-27",
             cachedDayKey: "2026-11-26", issuedKey: "2026-11-26"))
     }
+
+    func testMidnightActionSplitByMode() {
+        // b49fix13 P2-3: the midnight trigger splits by need —
+        // only the Daily instance runs the full reload, the
+        // Report instance only recomputes its week/month window,
+        // and Explore/Plaza instances do nothing at all. All
+        // three modes are no-ops on a same-day foreground.
+        XCTAssertEqual(MusicDiscoveryViewModel.midnightAction(
+            mode: .daily, todayKey: "2026-11-26",
+            cachedDayKey: "2026-11-25"), .daily)
+        XCTAssertEqual(MusicDiscoveryViewModel.midnightAction(
+            mode: .report, todayKey: "2026-11-26",
+            cachedDayKey: "2026-11-25"), .report)
+        XCTAssertNil(MusicDiscoveryViewModel.midnightAction(
+            mode: .none, todayKey: "2026-11-26",
+            cachedDayKey: "2026-11-25"))
+        XCTAssertNil(MusicDiscoveryViewModel.midnightAction(
+            mode: .daily, todayKey: "2026-11-26",
+            cachedDayKey: "2026-11-26"))
+        XCTAssertNil(MusicDiscoveryViewModel.midnightAction(
+            mode: .report, todayKey: "2026-11-26",
+            cachedDayKey: "2026-11-26"))
+        XCTAssertNil(MusicDiscoveryViewModel.midnightAction(
+            mode: .none, todayKey: "2026-11-26",
+            cachedDayKey: "2026-11-26"))
+    }
 }
