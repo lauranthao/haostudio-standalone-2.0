@@ -29,7 +29,7 @@ struct MusicEqualizerView: View {
                     autoEqCard
                     normalizationCard
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.vertical, 16)
             }
             .background(theme.scaffoldBackground)

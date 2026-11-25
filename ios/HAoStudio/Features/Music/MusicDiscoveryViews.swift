@@ -80,7 +80,7 @@ struct MusicDailyView: View {
                                     }
                                     .font(.haoFootnoteStrong)
                                     .foregroundStyle(theme.accentText)
-                                    .accessibilityLabel("不喜欢，换一首")
+                                    .accessibilityLabel("不喜欢《\(song.title)》，换一首")
                                 }
                             }
                             .listRowBackground(theme.scaffoldBackground)
@@ -170,24 +170,37 @@ struct MusicExploreView: View {
     @Environment(\.haoTheme) private var theme
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                categoryChips
-                    .padding(.top, 12)
-                    .padding(.bottom, 16)
-                ForEach(discoveryVM.exploreAvailableCategories, id: \.self) { category in
-                    exploreShelf(category: category)
-                        .padding(.top, 32)
+        // b49fix3 P1-4: the chips are section navigation, not a
+        // filter — tapping one scrolls to that shelf (the page
+        // renders every shelf; a highlight-only chip was a dead
+        // control). ScrollViewReader owns the proxy; the chips
+        // take it as a parameter.
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    categoryChips(proxy: proxy)
+                        .padding(.top, 12)
+                        .padding(.bottom, 16)
+                    if discoveryVM.exploreRefreshFailed {
+                        refreshFailedBanner
+                    }
+                    ForEach(discoveryVM.exploreAvailableCategories, id: \.self) { category in
+                        exploreShelf(category: category)
+                            .id(category)
+                            // b49fix3 P1-21: true discovery shelves
+                            // keep the 32pt section gap, as a token.
+                            .padding(.top, HaoLayout.discoverySectionTopSpacing)
+                    }
+                    Spacer(minLength: 12)
                 }
-                Spacer(minLength: 12)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
+                .haoBottomChromeContentPadding()
             }
-            .padding(.horizontal, 20)
-            .haoBottomChromeContentPadding()
+            // b45-g (Coda §8.2): pull-to-refresh re-fetches the plaza
+            // once and re-filters every loaded category (900s snapshots
+            // are bypassed, not waited out).
+            .refreshable { discoveryVM.refreshExplore() }
         }
-        // b45-g (Coda §8.2): pull-to-refresh re-fetches the plaza
-        // once and re-filters every loaded category (900s snapshots
-        // are bypassed, not waited out).
-        .refreshable { discoveryVM.refreshExplore() }
         .background(
             // One hidden link for every shelf header's arrow:
             // the header sets selectedCategory, then flips this.
@@ -203,13 +216,36 @@ struct MusicExploreView: View {
         .onAppear { discoveryVM.loadExploreCategory("全部") }
     }
 
-    private var categoryChips: some View {
+    /// b49fix3 P2-10: a failed pull-to-refresh used to be silent
+    /// (old snapshots kept, no feedback, no retry). The banner
+    /// says the data is stale and offers one-tap retry.
+    private var refreshFailedBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "wifi.exclamationmark")
+            Text("刷新失败，显示的是旧数据。")
+                .font(.haoFootnote)
+            Spacer()
+            Button("重试") { discoveryVM.refreshExplore() }
+                .font(.haoFootnoteStrong)
+                .foregroundStyle(theme.accentText)
+        }
+        .foregroundStyle(theme.textSecondary)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.bottom, 8)
+    }
+
+    private func categoryChips(proxy: ScrollViewProxy) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(discoveryVM.exploreAvailableCategories, id: \.self) { category in
                     Button(action: {
                         selectedCategory = category
                         discoveryVM.loadExploreCategory(category)
+                        // P1-4: the chip jumps to its shelf — the
+                        // highlight alone changed nothing before.
+                        withAnimation { proxy.scrollTo(category, anchor: .top) }
                     }) {
                         Text(category)
                             .font(.haoSubheadMedium)
@@ -313,7 +349,7 @@ struct MusicExploreCategoryView: View {
                 VStack(spacing: 16) {
                     ForEach(0..<6, id: \.self) { _ in MusicSkeletonCard() }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
             } else if playlists.isEmpty {
                 MusicEmptyState(
                     icon: "square.grid.2x2", title: "该分类暂无歌单",
@@ -345,7 +381,7 @@ struct MusicExploreCategoryView: View {
                                 .buttonStyle(.plain)
                             }
                         }
-                        .padding(.horizontal, 20)
+                        .padding(.horizontal, HaoLayout.pushedPageMargin)
                         .padding(.vertical, 12)
                         if shownCount < playlists.count {
                             Button("加载更多") { shownCount += 20 }
@@ -415,7 +451,7 @@ struct MusicPlazaView: View {
                 }
             }
             .pickerStyle(.segmented)
-            .padding(.horizontal, 20)
+            .padding(.horizontal, HaoLayout.pushedPageMargin)
             .padding(.top, 12)
             plazaContent
         }
@@ -652,7 +688,7 @@ struct MusicListenReportView: View {
                 topPlatformsSection
                 perDaySection
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, HaoLayout.pushedPageMargin)
             .padding(.vertical, 16)
         }
         .haoBottomChromePadding()

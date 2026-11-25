@@ -35,7 +35,14 @@ struct MusicSearchView: View {
     var body: some View {
         VStack(spacing: 0) {
             searchField
-                .padding(.horizontal, 20)
+                // b49fix3 P1-18: the search page keeps its 20pt
+                // margin (pushed page) — the brief's 20→24 is NOT
+                // applied to this line alone: the page's inner
+                // sections are all built on 20, and changing only
+                // the outer padding would misalign them (same call
+                // as the Live lane's search page, which kept 24).
+                // The search-page margin question goes to sweep 6.
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.top, 8)
             suggestionChips
             if !searchVM.hasSearched {
@@ -90,7 +97,7 @@ struct MusicSearchView: View {
         }
         .padding(.leading, 16)
         .padding(.trailing, query.isEmpty ? 16 : 4)
-        .frame(minHeight: 48)
+        .frame(minHeight: HaoLayout.searchFieldHeight)
         .background(theme.surfaceStrong, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
@@ -374,7 +381,10 @@ struct MusicSearchView: View {
     private func sectionHeader(title: String, showAll: Bool, onShowAll: @escaping () -> Void) -> some View {
         HStack {
             Text(title)
-                .font(.haoBodyStrong)
+                // b49fix3 P1-19: section headers are 20 semibold
+                // everywhere, not 17 — the search page's four
+                // section titles were the odd ones out.
+                .font(.haoSectionTitle)
                 .foregroundStyle(theme.textPrimary)
             Spacer()
             if showAll {
@@ -389,6 +399,10 @@ struct MusicSearchView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                // b49fix3 P2-8: four identical "查看全部" buttons
+                // read identically to VoiceOver — the label carries
+                // the section so they are distinguishable.
+                .accessibilityLabel("查看全部\(title)")
             }
         }
     }
@@ -424,13 +438,13 @@ struct MusicSearchView: View {
 
     // MARK: - Cards (Coda §5.4)
 
-    /// Artist card: 128×128 circle, name body medium 1 line, 140 frame.
+    /// Artist card: 128×128 circle, name body strong 1 line, 140 frame.
     private func artistCard(_ artist: ArtistSummary) -> some View {
         NavigationLink(destination: MusicArtistDetailView(artist: artist)) {
             VStack(spacing: 8) {
                 MusicCoverView(urlString: artist.cover, size: 128, cornerRadius: 64)
                 Text(artist.name.isEmpty ? "未知歌手" : artist.name)
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.haoBodyStrong)
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1)
             }
@@ -440,13 +454,13 @@ struct MusicSearchView: View {
     }
 
     /// Album / playlist card: 178 cover (CoverCardBody size), name
-    /// body medium up to 2 lines, subtitle secondary 1 line.
+    /// body strong up to 2 lines, subtitle secondary 1 line.
     private func albumCard(_ album: AlbumSummary) -> some View {
         NavigationLink(destination: MusicAlbumDetailView(album: album)) {
             VStack(alignment: .leading, spacing: 8) {
-                MusicCoverView(urlString: album.cover, size: 178, cornerRadius: 12)
+                MusicCoverView(urlString: album.cover, size: 178, cornerRadius: HaoLayout.cornerMedium)
                 Text(album.name.isEmpty ? "未知专辑" : album.name)
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.haoBodyStrong)
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(2)
                 Text(album.artist.isEmpty ? "未知艺人" : album.artist)
@@ -462,9 +476,9 @@ struct MusicSearchView: View {
     private func playlistCard(_ summary: PlaylistSummary) -> some View {
         NavigationLink(destination: MusicPlazaDetailView(summary: summary)) {
             VStack(alignment: .leading, spacing: 8) {
-                MusicCoverView(urlString: summary.cover, size: 178, cornerRadius: 12)
+                MusicCoverView(urlString: summary.cover, size: 178, cornerRadius: HaoLayout.cornerMedium)
                 Text(summary.name.isEmpty ? "未知歌单" : summary.name)
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.haoBodyStrong)
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(2)
                 Text(playlistSubtitle(summary))
@@ -726,7 +740,10 @@ struct MusicSearchView: View {
                                     .frame(width: 28, height: 28)
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("删除搜索记录")
+                            // b49fix3 P2-8: the delete label carries
+                            // the term — "删除搜索记录" alone does
+                            // not say which one.
+                            .accessibilityLabel("删除搜索记录：\(item)")
                         }
                         .padding(.horizontal, 20)
                         .padding(.vertical, 12)

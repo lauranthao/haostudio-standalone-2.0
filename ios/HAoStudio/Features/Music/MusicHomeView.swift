@@ -92,25 +92,24 @@ struct MusicHomeView: View {
                         // in this setup — build 38 it did not render
                         // at all on Home, build 41 it renders ~300pt
                         // too low on Music, drawn OVER the card grid
-                        // (the "音乐" title's lower half is covered
-                        // by the 搜歌/每日推荐 cards). A title row in
-                        // the scroll content is ordinary VStack
-                        // layout: it sits above the cards with
-                        // normal spacing and cannot overlap them.
-                        // The VStack's horizontal padding (20) is
-                        // the title's side padding, as on Home (24).
+                        // A title row in the scroll content is
+                        // ordinary VStack layout: it sits above the
+                        // cards with normal spacing and cannot
+                        // overlap them. b49fix3 P1-18: the tab
+                        // root's horizontal padding is 24, same
+                        // as Home.
                         musicHeader
                         searchEntry
                             .padding(.top, 12)
                         recommendEntry
                             .padding(.top, 8)
                         playlistsSection
-                            .padding(.top, 32)
+                            .padding(.top, HaoLayout.sectionTopSpacing)
                         recentSection
-                            .padding(.top, 32)
+                            .padding(.top, HaoLayout.sectionTopSpacing)
                         Spacer(minLength: 12)
                     }
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, HaoLayout.pageMargin)
                     .haoBottomChromeContentPadding()
                 }
                 .haoChromeScrollTracking()
@@ -143,7 +142,7 @@ struct MusicHomeView: View {
     /// the cards, because it is ordinary VStack layout.
     private var musicHeader: some View {
         Text("音乐")
-            .font(.system(size: 34, weight: .bold))
+            .font(.haoScreenTitle)
             .foregroundStyle(theme.textPrimary)
             .padding(.top, 12)
     }
@@ -164,7 +163,7 @@ struct MusicHomeView: View {
                 Spacer()
             }
             .padding(.horizontal, 16)
-            .frame(height: 48)
+            .frame(height: HaoLayout.searchFieldHeight)
             .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -189,7 +188,7 @@ struct MusicHomeView: View {
                     .foregroundStyle(theme.textMuted)
             }
             .padding(.horizontal, 16)
-            .frame(height: 44)
+            .frame(height: HaoLayout.detailSearchHeight)
             .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -207,8 +206,7 @@ struct MusicHomeView: View {
             MusicSectionHeader(
                 title: "我的歌单",
                 expanded: homeVM.playlistsExpanded,
-                onToggle: { homeVM.setPlaylistsExpanded(!homeVM.playlistsExpanded) },
-                titleFont: .haoPageTitle
+                onToggle: { homeVM.setPlaylistsExpanded(!homeVM.playlistsExpanded) }
             )
             .padding(.vertical, 10)
             if homeVM.playlistsExpanded {
@@ -296,7 +294,6 @@ struct MusicHomeView: View {
                         }
                     })
                 },
-                titleFont: .haoPageTitle
             )
             .padding(.vertical, 10)
             if homeVM.recentExpanded {
@@ -427,24 +424,24 @@ struct MusicRecommendView: View {
                     exploreEntry
                         .padding(.top, 12)
                     featureCards(width: availableWidth)
-                        .padding(.top, 32)
+                        .padding(.top, HaoLayout.discoverySectionTopSpacing)
                     recommendedPlaylistsSection(width: availableWidth)
-                        .padding(.top, 32)
+                        .padding(.top, HaoLayout.discoverySectionTopSpacing)
                     discoveredSongsSection(width: availableWidth)
-                        .padding(.top, 32)
+                        .padding(.top, HaoLayout.discoverySectionTopSpacing)
                     chartsSection
-                        .padding(.top, 32)
+                        .padding(.top, HaoLayout.discoverySectionTopSpacing)
                     regionalHotSection(width: availableWidth)
-                        .padding(.top, 32)
+                        .padding(.top, HaoLayout.discoverySectionTopSpacing)
                     discoveredPlaylistsSection(width: availableWidth)
-                        .padding(.top, 32)
+                        .padding(.top, HaoLayout.discoverySectionTopSpacing)
                     newAlbumsSection(width: availableWidth)
-                        .padding(.top, 32)
+                        .padding(.top, HaoLayout.discoverySectionTopSpacing)
                     recommendedArtistsSection
-                        .padding(.top, 32)
+                        .padding(.top, HaoLayout.discoverySectionTopSpacing)
                     Spacer(minLength: 12)
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .haoBottomChromeContentPadding()
             }
             .refreshable { homeVM.refresh() }
@@ -469,7 +466,7 @@ struct MusicRecommendView: View {
                     .foregroundStyle(theme.textMuted)
             }
             .padding(.horizontal, 16)
-            .frame(height: 44)
+            .frame(height: HaoLayout.detailSearchHeight)
             .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -817,6 +814,14 @@ struct MusicRecommendView: View {
                                             .truncationMode(.tail)
                                             .frame(maxWidth: 150, alignment: .trailing)
                                     }
+                                    // b49fix3 P2-48: the rank row is
+                                    // intentionally 32, not 64 — it
+                                    // is a dense text-only ranking
+                                    // row (rank + title + artist),
+                                    // not a song row with a 48 cover.
+                                    // Unifying it to 64 would make
+                                    // the chart list sparse for
+                                    // nothing.
                                     .frame(minHeight: 32)
                                     .contentShape(Rectangle())
                                 }
@@ -1045,7 +1050,10 @@ struct MusicFeatureCollageCard: View {
                 )
             }
             .frame(width: size, height: size)
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            // b49fix3 P1-24: same-width cards share one radius —
+            // the collage tile was 20 while the 178 search cards
+            // are 12; 12 (cornerMedium) is the shared value.
+            .clipShape(RoundedRectangle(cornerRadius: HaoLayout.cornerMedium, style: .continuous))
             // b47-home: the icon row and the text block are pinned to
             // the tile's bounds as overlays. The old Spacer-expanded
             // VStack inside this ZStack rendered its content beyond

@@ -123,7 +123,14 @@ final class MusicCommentsAPI {
             var pool: [CommentItem] = []
             var anyOk = false
             func key(_ c: CommentItem) -> String {
-                "\(c.nick)|\(String(c.content.prefix(60)))"
+                // b49fix3 P2-16: nick + first 60 chars swallowed
+                // distinct comments (same user, two long comments
+                // sharing a prefix; or two users sharing a nick
+                // posting the same short comment). The timestamp
+                // (ms) separates them; a true cross-platform copy
+                // of one comment (same nick, text and ms) still
+                // dedupes.
+                "\(c.nick)|\(c.time)|\(String(c.content.prefix(60)))"
             }
             let allResults = ([firstResult].compactMap { $0 }) + altResults
             for result in allResults {
