@@ -1594,8 +1594,11 @@ struct DisclaimerView: View {
     @Environment(\.haoTheme) private var theme
     @EnvironmentObject private var settings: SettingsStore
     /// Decline confirmation (gate mode only): refusing the
-    /// disclaimer exits the app, so the tap is confirmed first
-    /// instead of killing the app on a mis-tap.
+    /// disclaimer does not exit the app (b49sweep: no exit(0) on
+    /// decline) — the gate simply stays presented until the user
+    /// accepts, so the tap is confirmed first instead of
+    /// dismissing on a mis-tap and landing straight back on
+    /// the gate.
     @State private var showDeclineConfirm = false
 
     var body: some View {
@@ -1679,11 +1682,11 @@ struct DisclaimerView: View {
         }
         .background(theme.scaffoldBackground)
         .alert("需要同意免责声明", isPresented: $showDeclineConfirm) {
-            Button("退出应用", role: .destructive) {
-                // Refusing the disclaimer exits the app (Coda
-                // OnboardingView behaviour). The dismiss runs
-                // MainTabView's gate binding, which exits when
-                // the disclaimer is not accepted.
+            Button("不同意", role: .destructive) {
+                // Declining dismisses this sheet, but the gate
+                // binding in MainTabView keeps the disclaimer
+                // presented until it is accepted — decline
+                // means stay, never exit.
                 dismiss()
             }
             Button("返回阅读", role: .cancel) {

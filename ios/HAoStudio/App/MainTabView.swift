@@ -141,9 +141,9 @@ struct MainTabView: View {
     /// the gate. Any other dismiss (不同意, or a swipe) NEVER
     /// exits the app (b49sweep: exit(0) on decline killed the
     /// app with no way back) — the gate simply stays presented
-    /// until the user accepts. The decline alert's "退出应用"
-    /// label in DisclaimerView is now stale (Settings/My owner
-    /// to reword); the behaviour here is: decline = stay.
+    /// until the user accepts. The decline alert's button in
+    /// DisclaimerView now reads "不同意" (reworded b49sweep:
+    /// it never exited); the behaviour here is: decline = stay.
     private var disclaimerGateBinding: Binding<Bool> {
         return Binding(
             get: { showDisclaimerGate },
