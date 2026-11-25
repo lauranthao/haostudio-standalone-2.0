@@ -1298,7 +1298,10 @@ struct LiveRoomView: View {
             .contentShape(Rectangle())
             .accessibilityLabel("弹幕设置")
         }
-        .padding(.horizontal, 20)
+        // b49fix7 P2-20: player-chrome inset — the same token as
+        // the VOD player chrome (VideoPlayerView), so both players
+        // agree at 24. Was a literal 20.
+        .padding(.horizontal, HaoLayout.playerHorizontalMargin)
         .padding(.top, 12)
         .background(
             LinearGradient(
@@ -1434,7 +1437,8 @@ struct LiveRoomView: View {
             .contentShape(Rectangle())
             .accessibilityLabel("退出全屏")
         }
-        .padding(.horizontal, 20)
+        // b49fix7 P2-20: same player-chrome inset as the top bar.
+        .padding(.horizontal, HaoLayout.playerHorizontalMargin)
         .padding(.bottom, 12)
         .background(
             LinearGradient(

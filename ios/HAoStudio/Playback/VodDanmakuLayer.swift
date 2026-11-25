@@ -38,6 +38,14 @@ final class VodDanmakuLayerState: ObservableObject {
     @Published var isEnabled: Bool = true
     /// Text opacity 0.3-1.0 (bound to the settings sheet).
     @Published var opacity: Double = 1.0
+    /// Font size in points (b49fix7 P2-23). Follows the user's live
+    /// danmaku font-size setting (`LiveDanmakuSettings.fontSize`,
+    /// default 14, range 12-20) — the live settings page owns the
+    /// control, so this is a read, not a second writer. Read at
+    /// construction, fresh every time the player opens (the VOD
+    /// sheet has no font-size control, so there is no in-player
+    /// refresh path to miss). Was a fixed 16 medium.
+    @Published var fontSize: Double = LiveDanmakuSettings.load().fontSize
     /// A fetch is in flight for the current episode. The player
     /// page reads this (with `didLoad`) to decide whether the
     /// danmaku switch is real yet: a switch shown while the fetch
@@ -212,12 +220,13 @@ private struct VodDanmakuScrollingRow: View {
     let lane: Int
     let containerWidth: CGFloat
     let opacity: Double
+    let fontSize: CGFloat
 
     @State private var xOffset: CGFloat?
 
     var body: some View {
         Text(item.text)
-            .font(.system(size: 16, weight: .medium))
+            .font(.system(size: fontSize, weight: .medium))
             .foregroundColor(Color.danmakuColor(hex: item.colorHex))
             .shadow(color: .black.opacity(0.8), radius: 1, x: 0, y: 1)
             .opacity(opacity)
@@ -248,14 +257,15 @@ struct VodDanmakuLayer: View {
                         item: entry.item,
                         lane: entry.id % VodDanmakuLayerState.laneCount,
                         containerWidth: width,
-                        opacity: state.opacity
+                        opacity: state.opacity,
+                        fontSize: CGFloat(state.fontSize)
                     )
                 }
                 // Top (pinned) rows, stacked from the top centre.
                 VStack(spacing: 4) {
                     ForEach(visible.filter { $0.item.isTop }.prefix(3), id: \.id) { entry in
                         Text(entry.item.text)
-                            .font(.system(size: 16, weight: .medium))
+                            .font(.system(size: CGFloat(state.fontSize), weight: .medium))
                             .foregroundColor(Color.danmakuColor(hex: entry.item.colorHex))
                             .shadow(color: .black.opacity(0.8), radius: 1, x: 0, y: 1)
                             .opacity(state.opacity)
