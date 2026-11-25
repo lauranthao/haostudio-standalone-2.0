@@ -54,6 +54,12 @@ final class MusicHomeViewModel: ObservableObject {
     @Published private(set) var chartsFailed = false
     /// Per-chart top tracks (lazy, cached 1800s).
     @Published private(set) var chartTracks: [String: [MusicSong]] = [:]
+    /// Charts whose top-tracks load failed with no cached tracks
+    /// (b49fix2 P1-11): the view offers a retry for these.
+    @Published private(set) var chartTracksFailed: Set<String> = []
+    /// Regional hot failed with no content (b49fix2 P2-6): the
+    /// view offers a retry.
+    @Published private(set) var regionalFailed = false
     /// New albums, derived from the local library (album name +
     /// artist, newest year first).
     @Published private(set) var newAlbums: [AlbumSummary] = []
@@ -168,11 +174,25 @@ final class MusicHomeViewModel: ObservableObject {
         if !force, let loadedAt = homeLoadedAt, now.timeIntervalSince(loadedAt) < Self.homeCacheTTL {
             return
         }
-        homeLoadedAt = now
+        // b49fix2 P2-6: the old code stamped homeLoadedAt BEFORE
+        // the loads ran, so a total failure froze every discovery
+        // section for 30 min. The stamp now lands only when a
+        // section succeeds (see noteDiscoverySuccess) — a failed
+        // home retries on the next appear instead of serving empty
+        // shelves.
         loadRecommendedPlaylists()
         loadDiscoveredPlaylists()
         loadCharts()
         loadRegionalHot(force: force)
+    }
+
+    /// Mark one discovery section as succeeded (b49fix2 P2-6): the
+    /// home-level 30 min gate only starts once something actually
+    /// loaded.
+    private func noteDiscoverySuccess() {
+        if homeLoadedAt == nil {
+            homeLoadedAt = Date()
+        }
     }
 
     func loadRecommendedPlaylists() {
@@ -185,6 +205,7 @@ final class MusicHomeViewModel: ObservableObject {
             if !playlists.isEmpty {
                 self.recommendedPlaylists = playlists
                 self.recommendedFailed = false
+                self.noteDiscoverySuccess()
             } else if self.recommendedPlaylists.isEmpty {
                 self.recommendedFailed = true
             }
@@ -203,7 +224,10 @@ final class MusicHomeViewModel: ObservableObject {
                 settled += 1
                 if settled == platforms.count {
                     self.discoveredLoading = false
-                    if !merged.isEmpty { self.discoveredPlaylists = merged }
+                    if !merged.isEmpty {
+                        self.discoveredPlaylists = merged
+                        self.noteDiscoverySuccess()
+                    }
                 }
             }
         }
@@ -226,6 +250,7 @@ final class MusicHomeViewModel: ObservableObject {
             if !parsed.isEmpty {
                 self.charts = parsed
                 self.chartsFailed = false
+                self.noteDiscoverySuccess()
             } else if self.charts.isEmpty {
                 self.chartsFailed = true
             }
@@ -234,10 +259,12 @@ final class MusicHomeViewModel: ObservableObject {
 
     /// Lazy per-chart top tracks (10 per chart, Coda §3.1),
     /// cached 1800s. A chart that already has cached tracks is
-    /// never re-fetched for the same home visit.
-    func loadChartTracks(chart: PlaylistSummary) {
+    /// never re-fetched for the same home visit. `force` bypasses
+    /// the cache for the view's retry button.
+    func loadChartTracks(chart: PlaylistSummary, force: Bool = false) {
         let now = Date()
-        if let loadedAt = chartTracksLoadedAt[chart.id],
+        if !force,
+           let loadedAt = chartTracksLoadedAt[chart.id],
            now.timeIntervalSince(loadedAt) < Self.chartPreviewCacheTTL,
            chartTracks[chart.id] != nil {
             return
@@ -247,8 +274,20 @@ final class MusicHomeViewModel: ObservableObject {
         MusicPlaylistImportAPI.shared.importWyPlaylist(chart.id) { [weak self] imported in
             guard let self = self else { return }
             self.chartTracksLoading.remove(chart.id)
-            self.chartTracksLoadedAt[chart.id] = Date()
-            self.chartTracks[chart.id] = Array(imported.tracks.map(MusicSong.init(from:)).prefix(10))
+            let tracks = Array(imported.tracks.map(MusicSong.init(from:)).prefix(10))
+            // b49fix2 P1-11: stamp + store only on a non-empty
+            // success — the old code stamped unconditionally and
+            // stored the (possibly empty) array, so a failed chart
+            // cached empty for 30 min with no retry. A failure
+            // leaves the stamp unset (the next appear retries) and
+            // marks the chart failed so the view offers a retry.
+            if !tracks.isEmpty {
+                self.chartTracksLoadedAt[chart.id] = Date()
+                self.chartTracks[chart.id] = tracks
+                self.chartTracksFailed.remove(chart.id)
+            } else if self.chartTracks[chart.id] == nil {
+                self.chartTracksFailed.insert(chart.id)
+            }
         }
     }
 
@@ -279,7 +318,6 @@ final class MusicHomeViewModel: ObservableObject {
                     settled += 1
                     if settled == total {
                         self.regionalLoading = false
-                        self.regionalLoadedAt = Date()
                         var seen = Set<String>()
                         var merged: [MusicSong] = []
                         var round = 0
@@ -297,7 +335,20 @@ final class MusicHomeViewModel: ObservableObject {
                             if !addedInRound { break }
                             round += 1
                         }
-                        if !merged.isEmpty { self.regionalHotSongs = merged }
+                        // b49fix2 P2-6: stamp only on a non-empty
+                        // merge — the old code stamped even when
+                        // every leg failed, freezing the section
+                        // for 15 min. A total failure marks the
+                        // section failed (the view offers a retry)
+                        // and leaves the stamp unset.
+                        if !merged.isEmpty {
+                            self.regionalHotSongs = merged
+                            self.regionalLoadedAt = Date()
+                            self.regionalFailed = false
+                            self.noteDiscoverySuccess()
+                        } else if self.regionalHotSongs.isEmpty {
+                            self.regionalFailed = true
+                        }
                     }
                 }
             }

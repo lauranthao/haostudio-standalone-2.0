@@ -193,13 +193,22 @@ final class MusicCommentsAPI {
             guard let json = json else { completion(nil); return }
             func map(_ c: [String: Any]) -> CommentItem {
                 let user = MusicAPIJSON.asMap(c["user"]) ?? [:]
+                // b49fix2 P2-21: nested replies — beReplied is the
+                // comment this comment replied to (user + content).
+                let replies = MusicAPIJSON.asList(c["beReplied"]).map { r in
+                    let replyUser = MusicAPIJSON.asMap(r["user"]) ?? [:]
+                    return CommentReply(
+                        nick: MusicAPIJSON.asString(replyUser["nickname"]),
+                        content: MusicAPIJSON.asString(r["content"]))
+                }
                 return CommentItem(
                     nick: MusicAPIJSON.asString(user["nickname"]),
                     avatar: MusicText.toHttps(MusicAPIJSON.asString(user["avatarUrl"])),
                     content: MusicAPIJSON.asString(c["content"]),
                     likes: MusicAPIJSON.asInt(c["likedCount"]),
                     time: MusicAPIJSON.asInt(c["time"]),
-                    platform: .wy)
+                    platform: .wy,
+                    replies: replies)
             }
             completion((
                 hot: MusicAPIJSON.asList(json["hotComments"]).map(map),

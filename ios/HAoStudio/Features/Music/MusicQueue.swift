@@ -535,20 +535,6 @@ struct PlayContext: Codable {
     }
 }
 
-/// A most-recent-first list of play contexts, capped, with
-/// one-tap replay (the newest context replays its song list).
-enum RecentPlayContexts {
-    static let maxContexts = 20
-
-    static func replayed(_ contexts: [PlayContext], _ context: PlayContext) -> [PlayContext] {
-        var rest = contexts.filter { $0.source != context.source }
-        var updated = context
-        updated.lastPlayedAt = Date().timeIntervalSince1970
-        rest.insert(updated, at: 0)
-        return Array(rest.prefix(maxContexts))
-    }
-}
-
 // MARK: - b45-F: offline context resolution (plan §9.3)
 //
 // Offline-first: read local (playlist snapshot / downloads)
@@ -642,6 +628,14 @@ enum PlaylistSnapshotStore {
     static func load(source: PlaySource, documentsURL: URL? = nil) -> PlaylistSnapshot? {
         guard let data = try? Data(contentsOf: fileURL(source: source, documentsURL: documentsURL)) else { return nil }
         return try? JSONDecoder().decode(PlaylistSnapshot.self, from: data)
+    }
+
+    /// Delete a snapshot (b49fix2 P2-28): deleting a playlist must
+    /// delete its snapshot too, or 切歌 keeps playing the deleted
+    /// list from the snapshot and the detail page stays stuck on
+    /// "歌单不存在" with the songs still loadable.
+    static func delete(source: PlaySource, documentsURL: URL? = nil) {
+        try? FileManager.default.removeItem(at: fileURL(source: source, documentsURL: documentsURL))
     }
 
     /// All snapshots, newest first (offline browsing).

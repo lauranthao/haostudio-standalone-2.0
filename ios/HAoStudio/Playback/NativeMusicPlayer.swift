@@ -999,6 +999,14 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     /// known after load.
     private var previewCheckedTrackID: String?
     private var playRequested: Bool = false
+    /// "与其他音频同时播放" preference, stored (not applied) at
+    /// init — the session is only touched on first real playback
+    /// (b49fix2 P1-35).
+    private var mixWithOthers: Bool = false
+    /// Whether this player currently holds the audio session
+    /// active. Set on the first successful start, cleared on
+    /// stop (b49fix2 P1-35).
+    private var audioSessionActive = false
     private var stallFailed: Bool = false
 
     private var openTimeoutWork: DispatchWorkItem?
@@ -1046,6 +1054,12 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     private var seekStartedAt: Date?
     private var interruptionObserver: NSObjectProtocol?
     private var wasPlayingBeforeInterruption: Bool = false
+    /// b49fix2 P2-17: true between an interruption's .began (after
+    /// the handler's own pause) and its .ended. Any pause() in that
+    /// window is the user's, remembered in
+    /// pausedDuringInterruption so the end does not resume it.
+    private var interruptionActive = false
+    private var pausedDuringInterruption = false
 
     // MARK: - b45-F: prefetch / offline / failure recovery
     // (plan §7.4 / §9.2 / §9.3)
@@ -1101,6 +1115,11 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     /// and runs once the audible transition finishes.
     private var crossfadeInProgress = false
     private var pendingManualNext = false
+    /// b49fix2 P2-29: direction of the pending manual step — the
+    /// old code remembered only "a tap arrived" and always ran
+    /// next() on completion, so a previous() during a crossfade
+    /// skipped FORWARD. False = next, true = previous.
+    private var pendingManualIsPrevious = false
     /// True when the running crossfade is a manual 0.8 s one
     /// (its failure path falls back to a hard cut, never to
     /// auto-advance).
@@ -1217,7 +1236,13 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         engineBRef.onTimeUpdate = { [weak self] pos, dur in self?.handleTimeUpdate(pos: pos, duration: dur, engine: engineBRef) }
         equalizer.onLoudnessMeasured = { [weak self] key, lufs in self?.noteMeasuredLoudness(key, lufs) }
         loadLoudnessCache()
-        applyMixWithOthers(defaults.bool(forKey: SettingsStore.mixWithOthersKey))
+        // b49fix2 P1-35: only remember the preference here — the
+        // old call activated the session at launch, silencing
+        // other apps' audio before anything played here.
+        // Activation happens on the first successful start (see
+        // noteSuccessfulStart); the settings toggle applies via
+        // applyMixWithOthers while playing.
+        mixWithOthers = defaults.bool(forKey: SettingsStore.mixWithOthersKey)
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
         ) { [weak self] note in self?.handleInterruption(note) }
@@ -1236,15 +1261,45 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     /// Apply the "与其他音频同时播放" preference to the audio
     /// session (Flutter `AvMusicPlayer.applyMixWithOthers`):
     /// category .playback, mode .default, [.mixWithOthers] when
-    /// on, no options when off, then setActive(true). Called at
-    /// init with the stored value and from the settings toggle,
+    /// on, no options when off. Called from the settings toggle,
     /// so a change takes effect on the playing track — no restart.
     /// Music-player only, like Flutter: the video / live drivers
     /// set their own session when they open.
+    /// b49fix2 P1-35: a category change only (re)activates the
+    /// session while this player is actually sounding (or already
+    /// holds it) — toggling the switch with nothing playing must
+    /// not seize the session. The category above still applies to
+    /// the next activation (see activateAudioSession).
     func applyMixWithOthers(_ mix: Bool) {
+        mixWithOthers = mix
         let options: AVAudioSession.CategoryOptions = mix ? [.mixWithOthers] : []
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: options)
+        if audioSessionActive || playRequested {
+            try? AVAudioSession.sharedInstance().setActive(true, options: [])
+            audioSessionActive = true
+        }
+    }
+
+    /// Activate the audio session on the first real playback
+    /// (b49fix2 P1-35): launching the app used to activate it and
+    /// silence other apps' audio before anything played here.
+    /// Idempotent — a second start is a no-op.
+    private func activateAudioSession() {
+        guard !audioSessionActive else { return }
+        let options: AVAudioSession.CategoryOptions = mixWithOthers ? [.mixWithOthers] : []
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: options)
         try? AVAudioSession.sharedInstance().setActive(true, options: [])
+        audioSessionActive = true
+    }
+
+    /// Release the audio session when all drivers are stopped
+    /// (b49fix2 P1-35): the old code never deactivated, so the
+    /// session stayed seized after playback ended. No-op when the
+    /// session was never activated.
+    private func deactivateAudioSession() {
+        guard audioSessionActive else { return }
+        audioSessionActive = false
+        try? AVAudioSession.sharedInstance().setActive(false, options: [])
     }
 
     private func ensureMain(_ work: @escaping () -> Void) {
@@ -1366,7 +1421,11 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     func setQueueOnly(_ items: [PlaybackItem], startAt: Int) {
         ensureMain {
             self.queue = items
-            guard !items.isEmpty else { return }
+            // b49fix2 P2-11: an empty set must clear the queue like
+            // setQueue does — the old early return left the stale
+            // queue (and its index) in place, so the player kept
+            // auto-advancing through songs the UI had removed.
+            guard !items.isEmpty else { self.stop(); return }
             self.queueIndex = min(max(startAt, 0), items.count - 1)
         }
     }
@@ -1644,6 +1703,12 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     func pause() {
         ensureMain {
             guard self.currentTrack != nil else { return }
+            // b49fix2 P2-17: a pause that arrives while an
+            // interruption is active is the USER pausing (the
+            // handler's own pause runs before interruptionActive
+            // is set) — remember it so the interruption's end
+            // does not resume what the user paused.
+            if self.interruptionActive { self.pausedDuringInterruption = true }
             self.playRequested = false
             self.activeEngine.pause()
             self.standbyEngine.pause()
@@ -1679,6 +1744,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             // b45-F: a stop also abandons any remembered manual
             // "next" and any running transition.
             self.pendingManualNext = false
+            self.pendingManualIsPrevious = false
             self.crossfadeInProgress = false
             self.crossfadeIsManual = false
             self.prefetcher.cancel()
@@ -1701,6 +1767,9 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             self.nowPlayingArtworkRetryWork = nil
             self.recomputePlayingState()
             self.teardownNowPlaying()
+            // b49fix2 P1-35: all drivers stopped — release the
+            // session so other apps' audio is no longer held.
+            self.deactivateAudioSession()
         }
     }
 
@@ -1800,6 +1869,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             // audible transition finishes.
             if self.crossfadeInProgress {
                 self.pendingManualNext = true
+                self.pendingManualIsPrevious = false
                 return
             }
             let nextIndex = musicNextTrackIndex(mode: self.playMode, current: self.queueIndex, length: self.queue.count, auto: false)
@@ -1835,6 +1905,7 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             // audible crossfade; remember the tap instead.
             if self.crossfadeInProgress {
                 self.pendingManualNext = true
+                self.pendingManualIsPrevious = true
                 return
             }
             let prevIndex = musicPrevTrackIndex(mode: self.playMode, current: self.queueIndex, length: self.queue.count)
@@ -1952,7 +2023,17 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                 }) {
                 offlineSkippedCount = found.skipped
                 queueIndex = found.index
-                play(item: queue[found.index])
+                if found.index == index {
+                    // b49fix2 P2-5 (sweep-4): the loop-head scan can
+                    // return the just-ended track itself — play()
+                    // would short-circuit a same-track request to
+                    // resume() at the END position, so the track
+                    // replays its tail (or nothing) and loops
+                    // silently. Restart it from 0 instead.
+                    restartCurrentTrack()
+                } else {
+                    play(item: queue[found.index])
+                }
             } else {
                 offlineSkippedCount = 0
                 offlineAlertNeeded = true
@@ -2247,7 +2328,14 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         onTrackStarted?(item)
         if pendingManualNext {
             pendingManualNext = false
-            next()
+            // b49fix2 P2-29: honour the direction that was actually
+            // tapped — a previous() during the crossfade goes back.
+            if pendingManualIsPrevious {
+                pendingManualIsPrevious = false
+                previous()
+            } else {
+                next()
+            }
             return
         }
         if standbyEndedDuringCrossfade {
@@ -2270,6 +2358,9 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         if let tier = actualQuality {
             ConfirmedQualityBadge.save(identityKey: item.id, quality: tier)
         }
+        // b49fix2 P1-35: first real playback — this is the moment
+        // the session is seized, never at launch.
+        activateAudioSession()
         maybePrefetch()
     }
 
@@ -2319,6 +2410,15 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
                 if item.localFileURL != nil {
                     return (try? FileManager.default.attributesOfItem(
                         atPath: item.localFileURL!.path)[.size] as? NSNumber)?.int64Value ?? 0
+                }
+                // b49fix2 P1-1: a downloaded file is already local
+                // even when the item carries no localFileURL (e.g. a
+                // queue restored at launch) — count its bytes so
+                // prefetch never tries to resolve (and re-download)
+                // it. localAudioURL is installed by the view model.
+                if let localURL = self.localAudioURL?(item) {
+                    return (try? FileManager.default.attributesOfItem(
+                        atPath: localURL.path)[.size] as? NSNumber)?.int64Value ?? 0
                 }
                 guard let entry = HaoAudioCache.entry(
                     trackID: item.id, requestedQuality: "",
@@ -2693,9 +2793,22 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
             guard isPlaying else { return }
             wasPlayingBeforeInterruption = true
             pause()
+            // b49fix2 P2-17: set AFTER the handler's own pause —
+            // pause() above must not count as a manual pause. Any
+            // pause from here until .ended is the user's, and the
+            // end must not undo it.
+            interruptionActive = true
+            pausedDuringInterruption = false
         case .ended:
             guard wasPlayingBeforeInterruption else { return }
             wasPlayingBeforeInterruption = false
+            interruptionActive = false
+            // b49fix2 P2-17: the user paused during the call — do
+            // not resume what they paused, even with .shouldResume.
+            guard !pausedDuringInterruption else {
+                pausedDuringInterruption = false
+                return
+            }
             if let optionsRaw = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
                 let options = AVAudioSession.InterruptionOptions(rawValue: optionsRaw)
                 if options.contains(.shouldResume) { resume() }
@@ -3100,7 +3213,15 @@ final class QueuePrefetcher {
             result = (url, tier, isTrial)
             semaphore.signal()
         }
-        semaphore.wait()
+        // b49fix2 P2-4 (sweep-4): the old unbounded wait hung the
+        // worker forever on a lost completion — and cancel() is
+        // queued behind it, so one lost resolve killed prefetching
+        // for the app's lifetime. A 10 s bound (just above the
+        // resolver's own 8 s budget) treats expiry as a failed
+        // resolve for this item; the round moves on.
+        if semaphore.wait(timeout: .now() + 10) == .timedOut {
+            return (nil, nil, false)
+        }
         return result
     }
 
@@ -3116,7 +3237,14 @@ final class QueuePrefetcher {
             result = bytes
             semaphore.signal()
         }
-        semaphore.wait()
+        // b49fix2 P2-4 (sweep-4): same bound as the resolve wait —
+        // a lost download completion must end this item, not the
+        // worker. 60 s covers a whole-file fetch on a slow link;
+        // expiry reads as a failed download (the round ends, no
+        // retry — the existing network-error rule).
+        if semaphore.wait(timeout: .now() + 60) == .timedOut {
+            return nil
+        }
         return result
     }
 

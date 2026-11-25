@@ -321,37 +321,43 @@ struct MusicExploreCategoryView: View {
                     onRetry: { discoveryVM.loadExploreCategory(category) }
                 )
             } else {
-                ScrollView {
-                    LazyVGrid(
-                        columns: [
-                            GridItem(.flexible(), spacing: 16),
-                            GridItem(.flexible(), spacing: 16),
-                        ],
-                        spacing: 24
-                    ) {
-                        ForEach(Array(playlists.prefix(shownCount).enumerated()), id: \.offset) { _, summary in
-                            NavigationLink(destination: MusicPlazaDetailView(summary: summary)) {
-                                MusicCoverCardBody(
-                                    coverURL: summary.cover, title: summary.name,
-                                    subtitle: summary.creator,
-                                    size: (UIScreen.main.bounds.width - 40 - 16) / 2
-                                )
+                // b49fix2 B15: the card size comes from the page's
+                // real width (GeometryReader), not UIScreen — Split
+                // View / Stage Manager narrow the window without
+                // changing the screen.
+                GeometryReader { geo in
+                    ScrollView {
+                        LazyVGrid(
+                            columns: [
+                                GridItem(.flexible(), spacing: 16),
+                                GridItem(.flexible(), spacing: 16),
+                            ],
+                            spacing: 24
+                        ) {
+                            ForEach(Array(playlists.prefix(shownCount).enumerated()), id: \.offset) { _, summary in
+                                NavigationLink(destination: MusicPlazaDetailView(summary: summary)) {
+                                    MusicCoverCardBody(
+                                        coverURL: summary.cover, title: summary.name,
+                                        subtitle: summary.creator,
+                                        size: (geo.size.width - 40 - 16) / 2
+                                    )
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 12)
+                        if shownCount < playlists.count {
+                            Button("加载更多") { shownCount += 20 }
+                                .font(.haoFootnoteStrong)
+                                .foregroundStyle(theme.accentText)
+                                .frame(minHeight: 44)
+                                .frame(maxWidth: .infinity)
+                        }
+                        Spacer(minLength: 12)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                    if shownCount < playlists.count {
-                        Button("加载更多") { shownCount += 20 }
-                            .font(.haoFootnoteStrong)
-                            .foregroundStyle(theme.accentText)
-                            .frame(minHeight: 44)
-                            .frame(maxWidth: .infinity)
-                    }
-                    Spacer(minLength: 12)
+                    .haoBottomChromeContentPadding()
                 }
-                .haoBottomChromeContentPadding()
             }
         }
         .background(theme.scaffoldBackground)

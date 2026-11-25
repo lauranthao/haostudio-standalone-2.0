@@ -120,6 +120,11 @@ final class MusicSearchViewModel: ObservableObject {
     /// A page fetch failed with nothing new: keep the old rows and
     /// offer "加载更多失败，点击重试".
     @Published private(set) var songPageError = false
+    /// b49fix2 P2-4: the whole songs stream failed — every leg
+    /// never answered (not a genuine no-match: an answered leg
+    /// with zero matches reports ok). The view shows a retry
+    /// instead of "没有找到".
+    @Published private(set) var songsFailed = false
     /// Deep-page cap: five extra pages (~350 more songs). Kugou /
     /// Kuwo page server-side, so this is a UI cap, not a cost cap.
     static let maxSongPages = 5
@@ -246,6 +251,7 @@ final class MusicSearchViewModel: ObservableObject {
         hasMoreSongs = true
         isLoadingMoreSongs = false
         songPageError = false
+        songsFailed = false
         cardPages = [:]
         cardHasMore = [:]
         loadingCards = []
@@ -257,13 +263,16 @@ final class MusicSearchViewModel: ObservableObject {
         armSettleTimer()
         MusicLibraryStore.saveSearchQuery(trimmed)
         history = MusicLibraryStore.getSearchHistory()
-        MusicSearchAPI.shared.search(keyword: trimmed) { [weak self] batch in
+        MusicSearchAPI.shared.search(keyword: trimmed) { [weak self] batch, allFailed in
             guard let self = self else { return }
             // Stale leg from an older query: drop it, never mix.
             guard trimmed == self.currentQuery else { return }
             let songs = batch.map(MusicSong.init(from:))
             let added = self.merge.appendBatch(songs)
             self.results = self.merge.tracks
+            // b49fix2 P2-4: mirror the stream's all-legs-failed
+            // signal — a later batch with tracks clears it.
+            self.songsFailed = allFailed
             self.settledBatchCount += 1
             if self.searchSettled {
                 // Late leg after the footer settled: its results
@@ -309,6 +318,7 @@ final class MusicSearchViewModel: ObservableObject {
         hasMoreSongs = true
         isLoadingMoreSongs = false
         songPageError = false
+        songsFailed = false
         cardPages = [:]
         cardHasMore = [:]
         loadingCards = []
@@ -637,6 +647,13 @@ final class MusicSearchViewModel: ObservableObject {
             }
         }()
         loadCategory(kind, limit: limit, offset: offset, isFirstPage: isFirst)
+    }
+
+    /// Re-run the current query from scratch — the songs-stream
+    /// retry (b49fix2 P2-4).
+    func retrySongs() {
+        guard !currentQuery.isEmpty else { return }
+        search(currentQuery)
     }
 
     // MARK: - Suggestions + hot keywords (b45-d)

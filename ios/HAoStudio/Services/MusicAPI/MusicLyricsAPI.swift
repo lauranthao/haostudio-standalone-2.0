@@ -30,11 +30,16 @@ struct LyricsLine: Equatable {
     let time: TimeInterval
     let text: String
     let translation: String?
+    /// Romaji transliteration (NetEase `romalrc`), matched by
+    /// timestamp like the translation (b49fix2 P2-22). Nil when the
+    /// source carries none.
+    let romaji: String?
 
-    init(time: TimeInterval, text: String, translation: String? = nil) {
+    init(time: TimeInterval, text: String, translation: String? = nil, romaji: String? = nil) {
         self.time = time
         self.text = text
         self.translation = translation
+        self.romaji = romaji
     }
 }
 
@@ -46,12 +51,16 @@ final class MusicLyricsAPI {
     static let shared = MusicLyricsAPI()
 
     private let client: MusicAPIClient
+    /// Cross-platform song lookup for the lyric-source switch
+    /// (b49fix2 #16) — same pattern as MusicCommentsAPI.
+    private let searchAPI: MusicSearchAPI
     /// In-memory lyrics cache, keyed by `MusicTrack.identityKey`.
     private var cache: [String: Lyrics] = [:]
     private let cacheQueue = DispatchQueue(label: "com.haostudio.lyrics")
 
-    init(client: MusicAPIClient = .shared) {
+    init(client: MusicAPIClient = .shared, searchAPI: MusicSearchAPI = .shared) {
         self.client = client
+        self.searchAPI = searchAPI
     }
 
     // MARK: - Fetch (contract method)
@@ -89,6 +98,58 @@ final class MusicLyricsAPI {
         }
     }
 
+    /// Platforms with a lyrics endpoint, in menu order (b49fix2
+    /// #16 — the lyric-source switch lists exactly these).
+    static let lyricPlatforms: [MusicPlatform] = [.wy, .tx, .kw]
+
+    /// Fetch lyrics for a song from a SPECIFIC platform (b49fix2
+    /// #16): the song's own platform fetches by id (the contract
+    /// path); any other platform first searches it by title (+
+    /// first-artist match, the same rule as the comments API's
+    /// alt-platform lookup) and fetches the matched track's
+    /// lyrics. Nil when the platform has no endpoint, no match is
+    /// found, or the match has no lyrics. The result is cached
+    /// under the song's suffixed key (`identityKey|lyrics:<platform>`)
+    /// — the lyrics belong to the song, not to the matched track.
+    /// Completion fires once, on the main queue.
+    func fetchLyricsFromPlatform(_ platform: MusicPlatform, for track: MusicTrack, completion: @escaping (Lyrics?) -> Void) {
+        let key = "\(track.identityKey)|lyrics:\(platform.rawValue)"
+        let cached: Lyrics? = cacheQueue.sync { cache[key] }
+        if let cached = cached {
+            completion(cached)
+            return
+        }
+        let done: (Lyrics?) -> Void = { [weak self] lyrics in
+            guard let self = self else { completion(lyrics); return }
+            if let lyrics = lyrics, !lyrics.lines.isEmpty {
+                self.cacheQueue.async { self.cache[key] = lyrics }
+            }
+            completion(lyrics)
+        }
+        guard Self.hasLyricsEndpoint(platform) else { completion(nil); return }
+        if platform == track.platform {
+            fetchLyricsUncached(for: track, completion: done)
+            return
+        }
+        // Cross-platform: find the same song there first.
+        guard !track.title.isEmpty else { completion(nil); return }
+        searchAPI.searchOne(platform: platform, keyword: track.title) { tracks in
+            // searchOne may answer off the main queue — the match
+            // and everything downstream run on main.
+            DispatchQueue.main.async {
+                let targetTitle = MusicText.normalizeName(track.title)
+                let targetArtist = MusicText.normalizeName(MusicAPIJSON.firstArtist(track.artist))
+                let match = tracks.first { candidate in
+                    guard MusicText.normalizeName(candidate.title) == targetTitle else { return false }
+                    if targetArtist.isEmpty { return true }
+                    return MusicText.normalizeName(MusicAPIJSON.firstArtist(candidate.artist)) == targetArtist
+                }
+                guard let match = match else { completion(nil); return }
+                self.fetchLyricsUncached(for: match, completion: done)
+            }
+        }
+    }
+
     private func fetchLyricsUncached(for track: MusicTrack, completion: @escaping (Lyrics?) -> Void) {
         switch track.platform {
         case .wy:
@@ -99,10 +160,12 @@ final class MusicLyricsAPI {
                 guard let json = json else { completion(nil); return }
                 let lrc = MusicAPIJSON.asMap(json["lrc"])
                 let tlyric = MusicAPIJSON.asMap(json["tlyric"])
+                let romalrc = MusicAPIJSON.asMap(json["romalrc"])
                 let rawLrc = MusicAPIJSON.asString(lrc?["lyric"])
                 let lines = MusicLyricsAPI.parseLrcWithTranslation(
                     rawLrc,
-                    translation: MusicAPIJSON.asString(tlyric?["lyric"]))
+                    translation: MusicAPIJSON.asString(tlyric?["lyric"]),
+                    romaji: MusicAPIJSON.asString(romalrc?["lyric"]))
                 guard !lines.isEmpty else { completion(nil); return }
                 let gated = MusicLyricsAPI.gateLyrics(
                     lines,
@@ -415,24 +478,43 @@ final class MusicLyricsAPI {
     }
 
     /// Parse LRC with an optional translation track (NetEase
-    /// `tlyric`): translations are matched to main lines by
-    /// timestamp (centisecond key, nearest within 0.5 s as fallback).
-    /// Lines without a match keep `translation == nil`.
-    static func parseLrcWithTranslation(_ text: String, translation translationText: String?) -> [LyricsLine] {
-        let main = parseLrc(text)
-        guard let translationText = translationText, !translationText.isEmpty, !main.isEmpty else {
-            return main
+    /// `tlyric`) and an optional romaji track (NetEase `romalrc`,
+    /// b49fix2 P2-22): both are matched to main lines by timestamp
+    /// (centisecond key, nearest within 0.5 s as fallback).
+    /// Lines without a match keep `translation` / `romaji` nil.
+    static func parseLrcWithTranslation(_ text: String, translation translationText: String?, romaji romajiText: String? = nil) -> [LyricsLine] {
+        var lines = parseLrc(text)
+        if let translationText = translationText, !translationText.isEmpty {
+            lines = attachSecondary(parseLrc(translationText), to: lines) {
+                LyricsLine(time: $0.time, text: $0.text, translation: $1, romaji: $0.romaji)
+            }
         }
-        let trans = parseLrc(translationText)
-        guard !trans.isEmpty else { return main }
+        if let romajiText = romajiText, !romajiText.isEmpty {
+            lines = attachSecondary(parseLrc(romajiText), to: lines) {
+                LyricsLine(time: $0.time, text: $0.text, translation: $0.translation, romaji: $1)
+            }
+        }
+        return lines
+    }
+
+    /// Attach a secondary track (translation / romaji) to main
+    /// lines by timestamp (centisecond key, nearest within 0.5 s
+    /// as fallback). The `set` closure rebuilds a line with the
+    /// secondary text attached.
+    private static func attachSecondary(
+        _ secondary: [LyricsLine],
+        to main: [LyricsLine],
+        set: (LyricsLine, String) -> LyricsLine
+    ) -> [LyricsLine] {
+        guard !secondary.isEmpty, !main.isEmpty else { return main }
         var byTime: [Int: String] = [:]
-        for line in trans {
+        for line in secondary {
             byTime[Int((line.time * 100).rounded())] = line.text
         }
         func nearest(_ time: TimeInterval) -> String? {
             var best: String?
             var bestDiff = 0.5
-            for line in trans {
+            for line in secondary {
                 let diff = abs(line.time - time)
                 if diff < bestDiff {
                     bestDiff = diff
@@ -442,9 +524,9 @@ final class MusicLyricsAPI {
             return best
         }
         return main.map { line in
-            let translation = byTime[Int((line.time * 100).rounded())] ?? nearest(line.time)
-            guard let translation = translation, !translation.isEmpty else { return line }
-            return LyricsLine(time: line.time, text: line.text, translation: translation)
+            guard let text = byTime[Int((line.time * 100).rounded())] ?? nearest(line.time),
+                  !text.isEmpty else { return line }
+            return set(line, text)
         }
     }
 }

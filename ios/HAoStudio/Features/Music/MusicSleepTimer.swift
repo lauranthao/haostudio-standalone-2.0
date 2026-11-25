@@ -72,6 +72,40 @@ enum SleepTimerOption: Equatable {
         .min5, .min15, .min30, .min45, .min60, .min90,
         .queueEnd, .currentTrackEnd, .afterNTracks, .custom, .off,
     ]
+
+    /// Stable code for persistence (b49fix2 P1-7). Never reorder.
+    var code: Int {
+        switch self {
+        case .off: return 0
+        case .min5: return 1
+        case .min15: return 2
+        case .min30: return 3
+        case .min45: return 4
+        case .min60: return 5
+        case .min90: return 6
+        case .queueEnd: return 7
+        case .currentTrackEnd: return 8
+        case .afterNTracks: return 9
+        case .custom: return 10
+        }
+    }
+
+    init?(code: Int) {
+        switch code {
+        case 0: self = .off
+        case 1: self = .min5
+        case 2: self = .min15
+        case 3: self = .min30
+        case 4: self = .min45
+        case 5: self = .min60
+        case 6: self = .min90
+        case 7: self = .queueEnd
+        case 8: self = .currentTrackEnd
+        case 9: self = .afterNTracks
+        case 10: self = .custom
+        default: return nil
+        }
+    }
 }
 
 /// Beans `SleepTimerSheet` clamp: 1..720 minutes, bad input falls
@@ -177,6 +211,7 @@ final class MusicSleepTimer {
     func setTrackTarget(_ count: Int) {
         trackTarget = clampSleepTrackCount(count)
         if isAfterNTracks { tracksCompleted = 0 }
+        persist()
         onChanged?()
     }
 
@@ -190,14 +225,105 @@ final class MusicSleepTimer {
     func noteTrackCompleted() -> Bool {
         guard isAfterNTracks else { return false }
         tracksCompleted += 1
+        persist()
         onChanged?()
         return tracksCompleted >= trackTarget
     }
 
-    func start(_ option: SleepTimerOption) {
-        cancel(silent: true)
+    // MARK: - Persistence (b49fix2 P1-7)
+
+    /// The timer survives a relaunch: wall-clock modes store the
+    /// deadline, completion modes store the option + counters.
+    /// A wall-clock deadline that passed while the app was dead
+    /// counts as fired (see restore()).
+    private static let persistedOptionKey = "hao.sleepTimer.option"
+    private static let persistedDeadlineKey = "hao.sleepTimer.deadline"
+    private static let persistedCustomMinutesKey = "hao.sleepTimer.customMinutes"
+    private static let persistedTrackTargetKey = "hao.sleepTimer.trackTarget"
+    private static let persistedTracksCompletedKey = "hao.sleepTimer.tracksCompleted"
+
+    private func persist() {
+        let defaults = UserDefaults.standard
+        defaults.set(option.code, forKey: Self.persistedOptionKey)
+        if let deadline = deadline {
+            defaults.set(deadline.timeIntervalSince1970, forKey: Self.persistedDeadlineKey)
+        } else {
+            defaults.removeObject(forKey: Self.persistedDeadlineKey)
+        }
+        defaults.set(customMinutes, forKey: Self.persistedCustomMinutesKey)
+        defaults.set(trackTarget, forKey: Self.persistedTrackTargetKey)
+        defaults.set(tracksCompleted, forKey: Self.persistedTracksCompletedKey)
+    }
+
+    private func clearPersisted() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: Self.persistedOptionKey)
+        defaults.removeObject(forKey: Self.persistedDeadlineKey)
+        defaults.removeObject(forKey: Self.persistedCustomMinutesKey)
+        defaults.removeObject(forKey: Self.persistedTrackTargetKey)
+        defaults.removeObject(forKey: Self.persistedTracksCompletedKey)
+    }
+
+    /// Restore a persisted timer, called once by the view model
+    /// in init (after onFire / onChanged are wired). Returns true
+    /// when a wall-clock timer fired while the app was dead — the
+    /// caller must NOT auto-play on launch in that case (the user
+    /// asked for silence, not a surprise resume). A still-running
+    /// wall-clock timer is re-armed; completion modes resume
+    /// their counters.
+    @discardableResult
+    func restore() -> Bool {
+        let defaults = UserDefaults.standard
+        guard let option = SleepTimerOption(code: defaults.integer(forKey: Self.persistedOptionKey)),
+              option != .off else {
+            clearPersisted()
+            return false
+        }
+        customMinutes = clampSleepCustomMinutes(defaults.integer(forKey: Self.persistedCustomMinutesKey))
+        trackTarget = clampSleepTrackCount(defaults.integer(forKey: Self.persistedTrackTargetKey))
+        tracksCompleted = defaults.integer(forKey: Self.persistedTracksCompletedKey)
+        let duration: TimeInterval?
+        if option == .custom {
+            duration = TimeInterval(customMinutes * 60)
+        } else {
+            duration = option.duration
+        }
+        if duration != nil {
+            // Wall-clock mode: the deadline is the truth, not the
+            // duration — a relaunch must not restart the countdown.
+            let deadlineValue = defaults.double(forKey: Self.persistedDeadlineKey)
+            guard deadlineValue > 0 else { clearPersisted(); return false }
+            let deadline = Date(timeIntervalSince1970: deadlineValue)
+            if now() >= deadline {
+                clearPersisted()
+                return true
+            }
+            self.option = option
+            self.deadline = deadline
+            armTicker()
+            onChanged?()
+            return false
+        }
+        // Completion mode: no clock — restore the option + counters.
+        self.option = option
+        self.deadline = nil
+        onChanged?()
+        return false
+    }
+
+    /// (Re)start the 1 s ticker for the current deadline. The
+    /// generation guard is shared with start() — a stale ticker
+    /// from a replaced timer can never pause playback.
+    private func armTicker() {
         generation += 1
         let capturedGeneration = generation
+        ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            self?.checkFire(generation: capturedGeneration)
+        }
+    }
+
+    func start(_ option: SleepTimerOption) {
+        cancel(silent: true)
         self.option = option
         let duration: TimeInterval?
         if option == .custom {
@@ -207,10 +333,9 @@ final class MusicSleepTimer {
         }
         if let duration = duration {
             deadline = now().addingTimeInterval(duration)
-            ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-                self?.checkFire(generation: capturedGeneration)
-            }
+            armTicker()
         }
+        persist()
         onChanged?()
     }
 
@@ -242,6 +367,7 @@ final class MusicSleepTimer {
         option = .off
         deadline = nil
         tracksCompleted = 0
+        clearPersisted()
         if !silent { onChanged?() }
     }
 }

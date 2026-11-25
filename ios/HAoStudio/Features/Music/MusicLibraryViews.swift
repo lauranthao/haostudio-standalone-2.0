@@ -103,45 +103,50 @@ struct MusicCollectionsView: View {
 
     @Environment(\.haoTheme) private var theme
 
-    /// Two flexible columns; card size from the real screen
-    /// width (side margin 20 + 16 column spacing), never a
-    /// hardcoded card width.
-    private var cardSize: CGFloat {
-        max((UIScreen.main.bounds.width - 40 - 16) / 2, 120)
+    /// Two flexible columns; card size from the page's real width
+    /// (side margin 20 + 16 column spacing), never a hardcoded
+    /// card width and never UIScreen (b49fix2 B15).
+    private func cardSize(for width: CGFloat) -> CGFloat {
+        max((width - 40 - 16) / 2, 120)
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                Picker("类型", selection: $kind) {
-                    ForEach(Kind.allCases, id: \.rawValue) { kind in
-                        Text(kind.rawValue).tag(kind)
+        // b49fix2 B15: the width comes from the page's own
+        // GeometryReader, not UIScreen — Split View / Stage
+        // Manager narrow the window without changing the screen.
+        GeometryReader { geo in
+            ScrollView {
+                VStack(spacing: 0) {
+                    Picker("类型", selection: $kind) {
+                        ForEach(Kind.allCases, id: \.rawValue) { kind in
+                            Text(kind.rawValue).tag(kind)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 240)
+                    .padding(.top, 12)
+                    .padding(.bottom, 16)
+                    if isLoading {
+                        collectionsSkeleton(width: geo.size.width)
+                    } else if kind == .albums {
+                        if albums.isEmpty {
+                            MusicEmptyState(icon: "square.stack", title: "还没有收藏的专辑", note: "在专辑页点星标收藏专辑。")
+                                .frame(minHeight: 300)
+                        } else {
+                            albumGrid(width: geo.size.width)
+                        }
+                    } else {
+                        if artists.isEmpty {
+                            MusicEmptyState(icon: "music.microphone", title: "还没有收藏的歌手", note: "在歌手页点星标收藏歌手。")
+                                .frame(minHeight: 300)
+                        } else {
+                            artistGrid
+                        }
                     }
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 240)
-                .padding(.top, 12)
-                .padding(.bottom, 16)
-                if isLoading {
-                    collectionsSkeleton
-                } else if kind == .albums {
-                    if albums.isEmpty {
-                        MusicEmptyState(icon: "square.stack", title: "还没有收藏的专辑", note: "在专辑页点星标收藏专辑。")
-                            .frame(minHeight: 300)
-                    } else {
-                        albumGrid
-                    }
-                } else {
-                    if artists.isEmpty {
-                        MusicEmptyState(icon: "music.microphone", title: "还没有收藏的歌手", note: "在歌手页点星标收藏歌手。")
-                            .frame(minHeight: 300)
-                    } else {
-                        artistGrid
-                    }
-                }
+                .padding(.horizontal, 20)
+                .haoBottomChromeContentPadding()
             }
-            .padding(.horizontal, 20)
-            .haoBottomChromeContentPadding()
         }
         .background(theme.scaffoldBackground)
         .navigationTitle("我的收藏")
@@ -149,7 +154,7 @@ struct MusicCollectionsView: View {
         .onAppear { reload() }
     }
 
-    private var albumGrid: some View {
+    private func albumGrid(width: CGFloat) -> some View {
         LazyVGrid(
             columns: [
                 GridItem(.flexible(), spacing: 16),
@@ -161,7 +166,7 @@ struct MusicCollectionsView: View {
                 NavigationLink(destination: MusicAlbumDetailView(album: album)) {
                     MusicCoverCardBody(
                         coverURL: album.cover, title: album.name,
-                        subtitle: album.artist, size: cardSize
+                        subtitle: album.artist, size: cardSize(for: width)
                     )
                 }
                 .buttonStyle(.plain)
@@ -195,7 +200,7 @@ struct MusicCollectionsView: View {
         }
     }
 
-    private var collectionsSkeleton: some View {
+    private func collectionsSkeleton(width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             MusicSkeletonBlock(width: 200, height: 22)
             LazyVGrid(
@@ -206,7 +211,7 @@ struct MusicCollectionsView: View {
                 spacing: 24
             ) {
                 ForEach(0..<6, id: \.self) { _ in
-                    MusicSkeletonCard(size: cardSize)
+                    MusicSkeletonCard(size: cardSize(for: width))
                 }
             }
         }
@@ -711,6 +716,15 @@ struct MusicDownloadsView: View {
 /// "等待登录原账号" state does not exist here — there is no login.
 struct MusicDownloadTasksView: View {
     @State private var tasks: [DownloadTaskInfo] = []
+    // b49fix2 P2-5: keys the user cleared from this page. The
+    // engine's delete(key:) also deletes the downloaded FILE, so
+    // clearing a finished task only hides its row here — the file
+    // stays in the downloads list.
+    @State private var hiddenKeys: Set<String> = []
+    // Live refresh while the page is visible (1 s) — the old code
+    // loaded once in onAppear, so progress froze and finished
+    // tasks never appeared until the page was reopened.
+    private let refreshPublisher = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     @Environment(\.haoTheme) private var theme
 
@@ -762,26 +776,49 @@ struct MusicDownloadTasksView: View {
         .background(theme.scaffoldBackground)
         .navigationTitle("下载任务")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // b49fix2 P2-5: clear finished rows (completed /
+            // cancelled) — hides them, never deletes the file
+            // (see hiddenKeys above).
+            ToolbarItem(placement: .destructiveAction) {
+                Button("清除已完成") { clearFinished() }
+                    .disabled(!tasks.contains { $0.state == .completed || $0.state == .cancelled })
+            }
+        }
         .onAppear { reload() }
+        .onReceive(refreshPublisher) { _ in reload() }
     }
 
     @ViewBuilder
     private func taskActions(_ task: DownloadTaskInfo) -> some View {
-        switch task.state {
-        case .downloading, .queued:
-            Button("暂停") { DownloadEngine.shared.pause(key: task.request.key); reload() }
-                .font(.haoFootnoteStrong)
-                .foregroundStyle(theme.accentText)
-        case .paused:
-            Button("继续") { DownloadEngine.shared.resume(key: task.request.key); reload() }
-                .font(.haoFootnoteStrong)
-                .foregroundStyle(theme.accentText)
-        case .failed:
-            Button("重试") { DownloadEngine.shared.resume(key: task.request.key); reload() }
-                .font(.haoFootnoteStrong)
-                .foregroundStyle(theme.accentText)
-        default:
-            EmptyView()
+        // b49fix2 P2-5: every live task can be cancelled, not just
+        // paused / resumed — the old row had no cancel at all.
+        HStack(spacing: 12) {
+            switch task.state {
+            case .downloading, .queued:
+                Button("暂停") { DownloadEngine.shared.pause(key: task.request.key); reload() }
+                    .font(.haoFootnoteStrong)
+                    .foregroundStyle(theme.accentText)
+                Button("取消") { DownloadEngine.shared.cancel(key: task.request.key); reload() }
+                    .font(.haoFootnoteStrong)
+                    .foregroundStyle(theme.accentText)
+            case .paused:
+                Button("继续") { DownloadEngine.shared.resume(key: task.request.key); reload() }
+                    .font(.haoFootnoteStrong)
+                    .foregroundStyle(theme.accentText)
+                Button("取消") { DownloadEngine.shared.cancel(key: task.request.key); reload() }
+                    .font(.haoFootnoteStrong)
+                    .foregroundStyle(theme.accentText)
+            case .failed:
+                Button("重试") { DownloadEngine.shared.resume(key: task.request.key); reload() }
+                    .font(.haoFootnoteStrong)
+                    .foregroundStyle(theme.accentText)
+                Button("取消") { DownloadEngine.shared.cancel(key: task.request.key); reload() }
+                    .font(.haoFootnoteStrong)
+                    .foregroundStyle(theme.accentText)
+            default:
+                EmptyView()
+            }
         }
     }
 
@@ -804,7 +841,16 @@ struct MusicDownloadTasksView: View {
     }
 
     private func reload() {
-        tasks = DownloadEngine.shared.allTasks()
+        tasks = DownloadEngine.shared.allTasks().filter { !hiddenKeys.contains($0.request.key) }
+    }
+
+    /// Hide finished rows (completed / cancelled). Never calls
+    /// delete(key:) — that also deletes the downloaded file.
+    private func clearFinished() {
+        for task in tasks where task.state == .completed || task.state == .cancelled {
+            hiddenKeys.insert(task.request.key)
+        }
+        reload()
     }
 }
 

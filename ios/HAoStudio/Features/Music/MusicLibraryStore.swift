@@ -170,6 +170,18 @@ enum MusicLibraryStore {
         songSwitchIOQueue.async(execute: work)
     }
 
+    /// Lyrics-cache read with the entry's short-lived flag (b49fix2
+    /// P2-42); `completion` runs on main. The view model needs the
+    /// flag to skip its own truncation check for these entries.
+    static func cachedLyricsInfoAsync(for identityKey: String, completion: @escaping ((lines: [StoredLyricLine], shortLived: Bool)?) -> Void) {
+        let work = DispatchWorkItem {
+            let cached = cachedLyricsInfo(for: identityKey)
+            let back = DispatchWorkItem { completion(cached) }
+            DispatchQueue.main.async(execute: back)
+        }
+        songSwitchIOQueue.async(execute: work)
+    }
+
     /// Recent write off the main thread. The change notification is
     /// posted on main after the write lands, so observers that reload
     /// (getRecent) always read the new list.
@@ -360,6 +372,10 @@ enum MusicLibraryStore {
 
     static func deleteList(id: String) {
         saveLists(getLists().filter { $0.id != id })
+        // b49fix2 P2-28: the snapshot is the deleted list's ghost —
+        // without this, 切歌 still plays it from the snapshot and
+        // the detail page stays stuck on "歌单不存在".
+        PlaylistSnapshotStore.delete(source: PlaySource(kind: .playlist, id: id))
         // A3: 我的's 歌单 count reloads on this — the pushed list
         // refreshes itself, the count did not.
         NotificationCenter.default.post(name: .haoMusicPlaylistChanged, object: nil)
@@ -669,6 +685,15 @@ enum MusicLibraryStore {
     }
 
     static func cachedLyrics(for identityKey: String) -> [StoredLyricLine]? {
+        cachedLyricsInfo(for: identityKey)?.lines
+    }
+
+    /// Lyrics-cache read with the entry's short-lived flag (b49fix2
+    /// P2-42): truncated fetches are cached under a 1 h marker
+    /// instead of never being cached, so a song whose lyrics
+    /// legitimately end early (long instrumental outro) does not
+    /// re-fetch on every play.
+    static func cachedLyricsInfo(for identityKey: String) -> (lines: [StoredLyricLine], shortLived: Bool)? {
         guard UserDefaults.standard.integer(forKey: lyricsCacheVersionKey) == lyricsCacheVersion else {
             // First read after the bump (or a fresh install with
             // no version stamped): drop the stale collection once
@@ -693,22 +718,36 @@ enum MusicLibraryStore {
             let duration = MusicDict.double(entry, "dur")
             let lines = lineDicts.map(StoredLyricLine.init(json:))
             let lastTime = lines.map(\.t).max() ?? 0
+            // b49fix2 P2-42: a short-lived entry is a KNOWN-truncated
+            // fetch cached under a 1 h marker — the 80% check must
+            // not drop it (that is the whole point), but an expired
+            // marker is dropped so the next play re-fetches.
+            let shortLived = (entry["short"] as? Bool) == true
+            if shortLived {
+                let expiresAt = MusicDict.double(entry, "expiresAt")
+                if expiresAt > 0, Date().timeIntervalSince1970 >= expiresAt {
+                    dict.removeValue(forKey: identityKey)
+                    writeObject(named: lyricsCacheCollection, dict)
+                    saveLyricsCacheOrder(lyricsCacheOrder().filter { $0 != identityKey })
+                    return nil
+                }
+            }
             let invalid = version != lyricsCacheVersion
                 || count != lineDicts.count
-                || (duration > 0 && !lines.isEmpty && lastTime < duration * 0.8)
+                || (!shortLived && duration > 0 && !lines.isEmpty && lastTime < duration * 0.8)
             if invalid {
                 dict.removeValue(forKey: identityKey)
                 writeObject(named: lyricsCacheCollection, dict)
                 saveLyricsCacheOrder(lyricsCacheOrder().filter { $0 != identityKey })
                 return nil
             }
-            return lines
+            return (lines, shortLived)
         }
         // Legacy b49 entry: a plain line array with no metadata.
         // Valid (the global version wipe above already cleared
         // version-1 entries); it gains metadata on its next put.
         guard let rawLines = raw as? [[String: Any]] else { return nil }
-        return rawLines.map(StoredLyricLine.init(json:))
+        return (rawLines.map(StoredLyricLine.init(json:)), false)
     }
 
     /// Stores lyrics with per-entry metadata (b49sweep): cache
@@ -720,15 +759,23 @@ enum MusicLibraryStore {
     /// call-site truncation guard stays the live check.
     /// Eviction is oldest-inserted first via the order list —
     /// never `cache.keys.first`.
-    static func putLyrics(_ lines: [StoredLyricLine], for identityKey: String, duration: TimeInterval = 0) {
+    /// b49fix2 P2-42: `shortLived` caches a truncated fetch under
+    /// a 1 h marker instead of not caching it at all — a song whose
+    /// lyrics legitimately end early must not re-fetch on every play.
+    static func putLyrics(_ lines: [StoredLyricLine], for identityKey: String, duration: TimeInterval = 0, shortLived: Bool = false) {
         var cache = readObject(named: lyricsCacheCollection)
         let lastTime = lines.map(\.t).max() ?? 0
-        cache[identityKey] = [
+        var entry: [String: Any] = [
             "v": lyricsCacheVersion,
             "dur": duration > 0 ? duration : lastTime,
             "count": lines.count,
             "lines": lines.map { $0.toJSON() },
-        ] as [String: Any]
+        ]
+        if shortLived {
+            entry["short"] = true
+            entry["expiresAt"] = Date().timeIntervalSince1970 + 3600
+        }
+        cache[identityKey] = entry
         var order = lyricsCacheOrder().filter { cache[$0] != nil }
         order.removeAll(where: { $0 == identityKey })
         let unknown = cache.keys
@@ -776,10 +823,37 @@ enum MusicLibraryStore {
 
     /// The local-music index is a list of full Song JSON objects
     /// (Flutter LocalMusicStore._readIndex maps Song.fromJson) whose
-    /// `localPath` carries the file reference. Repair-then-prune via
-    /// LocalFileIndex: a file found on disk under its basename is
-    /// kept, never dropped on a stale index alone.
+    /// `localPath` carries the file reference. A plain read repairs
+    /// each path via LocalFileIndex (in memory only) but never
+    /// deletes: a song whose file fails to resolve is kept, so its
+    /// row can still show the song and offer removal — a read must
+    /// never permanently drop an entry (b49fix2 P2-9: the old read
+    /// pruned + rewrote on every call, so a transiently
+    /// unresolvable file vanished from the library for good).
+    /// Pruning happens only on an explicit path (see
+    /// pruneLocalSongs, called from delete / rescan).
     static func localMusicSongs() -> [MusicSong] {
+        let stored = readArray(named: localMusicCollection).map(MusicSong.init(json:))
+        return stored.compactMap { song in
+            guard !song.localPath.isEmpty else { return nil }
+            if let resolved = LocalFileIndex.resolve(song.localPath, subdir: "local_music") {
+                var repaired = song
+                repaired.localPath = resolved.path
+                return repaired
+            }
+            // Unresolvable — kept with its stored path, so the row
+            // can still show the song and offer removal instead of
+            // the entry vanishing on a plain read.
+            return song
+        }
+    }
+
+    /// Explicit prune (b49fix2 P2-9): drop index entries whose
+    /// files are gone in every place we know, and rewrite the
+    /// index. Called only from delete / rescan paths — never from
+    /// a plain read.
+    @discardableResult
+    static func pruneLocalSongs() -> [MusicSong] {
         let stored = readArray(named: localMusicCollection).map(MusicSong.init(json:))
         var kept: [MusicSong] = []
         var changed = false

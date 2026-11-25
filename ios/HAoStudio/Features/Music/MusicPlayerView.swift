@@ -184,6 +184,11 @@ struct MusicPlayerView: View {
     /// Full-screen height, tracked from the root GeometryReader
     /// (b47-player Coda check: the drag scale ramps over it).
     @State private var fullScreenHeight: CGFloat = 800
+    /// Full-screen width, tracked the same way (b49fix2 B15) —
+    /// dismissTopZone reads orientation from the tracked size,
+    /// not UIScreen, so Split View / Stage Manager get the real
+    /// window width.
+    @State private var fullScreenWidth: CGFloat = 390
     /// Drag-linked scale (b47-player Coda check,
     /// IOSMainWindow.dragGeometry): 1.0 at rest, ramping to the
     /// 0.86 floor over the full screen height. The corner radius
@@ -213,6 +218,17 @@ struct MusicPlayerView: View {
     /// Replaces the imperative ScrollViewReader + scrollTo, which
     /// could silently lose follow with no error.
     @State private var lyricScrollPosition: Int? = nil
+    /// b49fix2 P2-43: the follow only writes lyricScrollPosition
+    /// while the lyrics are visible; hiding them mid-song (or
+    /// changing songs) left a stale index, so the list reopened
+    /// at the old line. Reset to the active line whenever the
+    /// lyrics become visible or the song changes; nil when the
+    /// index is out of range (the follow re-anchors on the next
+    /// line change).
+    private func resetLyricScrollPosition() {
+        let index = playerVM.activeLyricIndex
+        lyricScrollPosition = (index >= 0 && index < playerVM.lyrics.count) ? index : nil
+    }
     /// The artist name tapped in the multi-artist title row (Coda
     /// §2.3: each artist is its own link; id=0 / empty names are
     /// filtered — we only have names, so empty names are dropped).
@@ -278,6 +294,27 @@ struct MusicPlayerView: View {
             .onChange(of: geo.size.height, initial: true) { _, newValue in
                 fullScreenHeight = newValue
             }
+            // b49fix2 B15: track the width too, for dismissTopZone.
+            .onChange(of: geo.size.width, initial: true) { _, newValue in
+                fullScreenWidth = newValue
+            }
+            // b49fix2 P2-43: re-anchor the lyrics list whenever it
+            // becomes visible or the song changes (see
+            // resetLyricScrollPosition) — the follow alone only
+            // writes while the list is on screen.
+            .onChange(of: playerVM.showLyrics) { _, shown in
+                if shown { resetLyricScrollPosition() }
+            }
+            .onChange(of: playerVM.currentSong?.identityKey) { _, _ in
+                resetLyricScrollPosition()
+            }
+            // b49fix2 P2-27: clearing the queue (or removing its
+            // last song) left the full player open on a dead
+            // "未在播放" screen — the queue is the player's reason
+            // to exist, so when it empties, close to the tab.
+            .onChange(of: playerVM.queue.isEmpty) { _, isEmpty in
+                if isEmpty && playerVM.currentSong == nil { close() }
+            }
         }
         // b47-player (chen build 46: "还不是全屏呀"): the root
         // ignores the safe area, so geo is the FULL screen and the
@@ -299,6 +336,13 @@ struct MusicPlayerView: View {
         // dark-coherent with the player.
         .ignoresSafeArea()
         .preferredColorScheme(.dark)
+        // b49fix2 B11: the player is fixed one-screen chrome (the
+        // fixedChromeHeight budget — top bar, transport, toolbar
+        // all have fixed heights and the column must fit without
+        // scrolling). Unbounded Dynamic Type would overflow it, so
+        // text scaling caps at .accessibility1 here: still large
+        // for accessibility, but the layout holds.
+        .dynamicTypeSize(DynamicTypeSize.xSmall ... DynamicTypeSize.accessibility1)
         // Cover tint follows the song (b38, item 1): the old
         // tint is cleared synchronously on a song change, so the
         // previous song's colour never lingers; a stale load
@@ -504,7 +548,10 @@ struct MusicPlayerView: View {
     /// at the screen top, so the inset is added back). Landscape
     /// keeps the old 60pt strip (its safe top is ~0).
     private var dismissTopZone: CGFloat {
-        let isLandscape = UIScreen.main.bounds.width > UIScreen.main.bounds.height
+        // b49fix2 B15: orientation from the root GeometryReader's
+        // tracked size, not UIScreen — Split View / Stage Manager
+        // narrow the window without changing the screen.
+        let isLandscape = fullScreenWidth > fullScreenHeight
         return isLandscape ? 60 : safeTopInset + 140
     }
 
@@ -819,12 +866,51 @@ struct MusicPlayerView: View {
     /// counts it, so the player still fits one screen with no
     /// scrolling.
     private var topBar: some View {
-        Capsule()
-            .fill(.white.opacity(0.5))
-            .frame(width: 60, height: 5)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(.top, 2)
-            .frame(height: 40)
+        VStack(spacing: 4) {
+            ZStack {
+                // b49fix2 P2-44: the bare white-0.5 capsule vanished
+                // on light covers once the top scrim was removed
+                // (b49). A small dark pill behind it — not a band —
+                // keeps the grabber readable on any cover, light
+                // or dark.
+                Capsule()
+                    .fill(.black.opacity(0.28))
+                    .frame(width: 76, height: 17)
+                Capsule()
+                    .fill(.white.opacity(0.85))
+                    .frame(width: 60, height: 5)
+            }
+            // b49fix2 A13: the sleep timer used to live only in
+            // the more sheet — once set, nothing on the player
+            // said so. While active a pill sits under the grabber
+            // (the top bar is otherwise empty space); tapping it
+            // opens the sleep sheet to adjust or cancel.
+            // Completion modes (after N tracks / queue end) have
+            // no wall-clock remaining text, so the pill shows just
+            // "睡眠定时" for those instead of a trailing blank.
+            if playerVM.sleepActive {
+                Button(action: {
+                    noteInteraction()
+                    showSleep = true
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "moon.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text(playerVM.sleepRemainingText.isEmpty ? "睡眠定时" : "睡眠定时 \(playerVM.sleepRemainingText)")
+                    }
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(.black.opacity(0.3), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(playerVM.sleepRemainingText.isEmpty ? "睡眠定时已开启，点按调整" : "睡眠定时 \(playerVM.sleepRemainingText)，点按调整")
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.top, 2)
+        .frame(height: 40)
     }
 
     // MARK: - Cover / lyrics
@@ -999,11 +1085,17 @@ struct MusicPlayerView: View {
                                         lineStart: line.time,
                                         lineDuration: (index + 1 < playerVM.lyrics.count ? playerVM.lyrics[index + 1].time : line.time + 4) - line.time,
                                         position: playerVM.position,
-                                        fontSize: 28
+                                        // b49fix2 A27: Coda §2.8 — the
+                                        // active line is ~36pt, not 28.
+                                        fontSize: 36
                                     )
                                 } else {
                                     Text(line.text.isEmpty ? " " : line.text)
-                                        .font(.system(size: 20, weight: .regular))
+                                        // b49fix2 A27: inactive lines
+                                        // rise with the active one
+                                        // (20 -> 24), keeping the
+                                        // hierarchy.
+                                        .font(.system(size: 24, weight: .regular))
                                         .foregroundStyle(.white.opacity(
                                             MusicLyrics.lineOpacity(
                                                 distance: distance,
@@ -1019,6 +1111,21 @@ struct MusicPlayerView: View {
                                         ))
                                         .foregroundStyle(.white.opacity(
                                             isActive ? 0.85 : 0.4
+                                        ))
+                                }
+                                // b49fix2 P2-22: romalrc rides under
+                                // the line like the translation,
+                                // a touch dimmer — only wy songs
+                                // carry it, so most rows show nothing
+                                // extra. (Furigana: no data source in
+                                // the app returns it — deferred.)
+                                if let romaji = line.romaji, !romaji.isEmpty {
+                                    Text(romaji)
+                                        .font(.system(
+                                            size: isActive ? 15 : 13
+                                        ))
+                                        .foregroundStyle(.white.opacity(
+                                            isActive ? 0.7 : 0.35
                                         ))
                                 }
                             }
@@ -1204,15 +1311,16 @@ struct MusicPlayerView: View {
         return MusicLyrics.splitArtists(song.artist)
     }
 
-    /// Lyric source label (b45-a, Coda §2.8 "歌词来源"): the lyrics
-    /// endpoint follows the song's platform (wy / tx / kw have one;
+    /// Lyric source label (b45-a, Coda §2.8 "歌词来源"): the
+    /// effective lyric source for this song — the per-song
+    /// override when one is set (b49fix2 #16 menu), else the
+    /// song's own platform (wy / tx / kw have an endpoint;
     /// kg / mg have none — the honest empty state, not a failure).
-    /// There is no alternate lyric source to switch to in this
-    /// build; the row shows the current source + a reload action.
     private var lyricSourceLabel: String {
         guard let song = playerVM.currentSong else { return "—" }
-        if MusicLyricsAPI.hasLyricsEndpoint(song.platform) {
-            return song.platform.displayName
+        let source = playerVM.lyricSource(for: song)
+        if MusicLyricsAPI.hasLyricsEndpoint(source) {
+            return source.displayName
         }
         return "无歌词源"
     }
@@ -1607,7 +1715,11 @@ struct MusicPlayerView: View {
             Spacer(minLength: 12)
             HStack(spacing: 8) {
                 toolbarIcon(
-                    systemName: "text.bubble",
+                    // b49fix2 A19: text.bubble read as a twin of the
+                    // lyrics quote.bubble at 20pt — the comments
+                    // icon is now the speech-bubble silhouette,
+                    // clearly different from the quote bubble.
+                    systemName: "message",
                     isSelected: false,
                     label: "评论"
                 ) {
@@ -1761,7 +1873,9 @@ struct MusicPlayerView: View {
                     }
                 }
                 Section("音质") {
-                    Button("音质选择（目标：\(MusicLibraryStore.badgeLabel(for: coordinator.targetQuality))）") {
+                    // b49fix2 A2: "目标" is jargon — the button
+                    // names the actual tier (the target quality).
+                    Button("音质选择（\(MusicLibraryStore.badgeLabel(for: coordinator.targetQuality))）") {
                         showMore = false
                         showQuality = true
                     }
@@ -1771,15 +1885,40 @@ struct MusicPlayerView: View {
                     }
                 }
                 Section("歌词") {
-                    HStack {
-                        Text("歌词来源")
-                        Spacer()
-                        Text(lyricSourceLabel)
-                            .foregroundStyle(.secondary)
-                        Button("重新加载") {
-                            playerVM.retryLyrics()
+                    // b49fix2 #16: the lyric source is now a real
+                    // switch — follow the song, or pin one of the
+                    // platforms with a lyric endpoint (wy/tx/kw).
+                    // The checkmark shows the per-song override;
+                    // "跟随歌曲" clears it.
+                    Menu {
+                        Button(action: { playerVM.setLyricSource(nil) }) {
+                            HStack {
+                                Text("跟随歌曲")
+                                if playerVM.lyricSourceOverride == nil {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
                         }
-                        .font(.haoFootnoteMedium)
+                        ForEach(MusicLyricsAPI.lyricPlatforms, id: \.rawValue) { platform in
+                            Button(action: { playerVM.setLyricSource(platform) }) {
+                                HStack {
+                                    Text(platform.displayName)
+                                    if playerVM.lyricSourceOverride == platform {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Text("歌词来源")
+                            Spacer()
+                            Text(lyricSourceLabel)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Button("重新加载歌词") {
+                        playerVM.retryLyrics()
                     }
                     HStack {
                         Text("歌词偏移")

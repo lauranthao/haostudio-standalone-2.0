@@ -20,14 +20,20 @@ final class MusicCommentsViewModel: ObservableObject {
     @Published private(set) var hasMore = false
     @Published private(set) var isLoading = false
     @Published private(set) var failed = false
+    // b49fix2 P1-19: a failed load-more used to leave the spinner
+    // spinning forever with no error and no retry (the nil-page
+    // branch only set `failed` for offset 0).
+    @Published private(set) var loadMoreFailed = false
     @Published private(set) var songTitle = ""
 
     private var song: MusicSong?
     private var offset = 0
     private var loadingMore = false
 
-    func load(song: MusicSong) {
-        if self.song?.identityKey == song.identityKey && !latest.isEmpty { return }
+    /// `force` is the pull-to-refresh path — the same-song guard
+    /// below would otherwise swallow a refresh entirely.
+    func load(song: MusicSong, force: Bool = false) {
+        if !force, self.song?.identityKey == song.identityKey && !latest.isEmpty { return }
         self.song = song
         songTitle = song.title
         offset = 0
@@ -35,6 +41,7 @@ final class MusicCommentsViewModel: ObservableObject {
         latest = []
         hasMore = false
         failed = false
+        loadMoreFailed = false
         isLoading = true
         fetch(offset: 0)
     }
@@ -47,6 +54,7 @@ final class MusicCommentsViewModel: ObservableObject {
 
     private func fetch(offset: Int) {
         guard let song = song else { return }
+        if offset > 0 { loadMoreFailed = false }
         MusicCommentsAPI.shared.comments(
             songId: song.songId, platform: song.platform,
             title: song.title, artist: song.artist, offset: offset
@@ -55,7 +63,7 @@ final class MusicCommentsViewModel: ObservableObject {
             self.isLoading = false
             self.loadingMore = false
             guard let page = page else {
-                if offset == 0 { self.failed = true }
+                if offset == 0 { self.failed = true } else { self.loadMoreFailed = true }
                 return
             }
             if offset == 0 {
@@ -76,6 +84,8 @@ final class MusicCommentsViewModel: ObservableObject {
 struct MusicCommentsView: View {
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
     @StateObject private var viewModel = MusicCommentsViewModel()
+    // b49fix2 P2-21: hot / latest segmented switch (Coda §9.5).
+    @State private var commentTab: CommentTab = .hot
 
     @Environment(\.haoTheme) private var theme
 
@@ -109,42 +119,88 @@ struct MusicCommentsView: View {
                         note: "这首歌在各平台都没有评论。"
                     )
                 } else {
-                    List {
-                        if !viewModel.hot.isEmpty {
-                            Section("热门评论") {
-                                // A10: id was the comment text — two
-                                // identical comments ("好听") collided
-                                // and dropped a row. Offset is stable
-                                // for a loaded page.
-                                ForEach(Array(viewModel.hot.enumerated()), id: \.offset) { _, comment in
-                                    MusicCommentRow(comment: comment)
+                    // b49fix2 P2-21: hot / latest segmented switch
+                    // (Coda §9.5) + pull-to-refresh. The API loads
+                    // both lists in one call; the switch only
+                    // chooses which one is shown.
+                    VStack(spacing: 0) {
+                        Picker("评论", selection: $commentTab) {
+                            Text("热门").tag(CommentTab.hot)
+                            Text("最新").tag(CommentTab.latest)
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 12)
+                        List {
+                            // b49fix2 A14: the read-only note sits
+                            // at the TOP of the list now — it used
+                            // to be the last section, where nobody
+                            // saw it before scrolling past every
+                            // comment.
+                            Section {
+                                Text("评论只读 — 发表评论需要平台登录，本应用没有登录入口。")
+                                    .font(.haoCaption)
+                                    .foregroundStyle(theme.textMuted)
+                            }
+                            if commentTab == .hot {
+                                if !viewModel.hot.isEmpty {
+                                    Section("热门评论") {
+                                        // A10: id was the comment text — two
+                                        // identical comments ("好听") collided
+                                        // and dropped a row. Offset is stable
+                                        // for a loaded page.
+                                        ForEach(Array(viewModel.hot.enumerated()), id: \.offset) { _, comment in
+                                            MusicCommentRow(comment: comment)
+                                                .listRowBackground(theme.scaffoldBackground)
+                                                .listRowSeparatorTint(theme.hairline)
+                                        }
+                                    }
+                                } else {
+                                    Section {
+                                        Text("暂无热门评论")
+                                            .font(.haoFootnote)
+                                            .foregroundStyle(theme.textSecondary)
+                                            .frame(maxWidth: .infinity, alignment: .center)
+                                            .padding(.vertical, 8)
+                                            .listRowBackground(theme.scaffoldBackground)
+                                    }
+                                }
+                            } else {
+                                Section("最新评论") {
+                                    ForEach(Array(viewModel.latest.enumerated()), id: \.offset) { _, comment in
+                                        MusicCommentRow(comment: comment)
+                                            .listRowBackground(theme.scaffoldBackground)
+                                            .listRowSeparatorTint(theme.hairline)
+                                    }
+                                    // b49fix2 P1-19: a failed
+                                    // load-more offers a retry
+                                    // instead of a permanent spinner.
+                                    if viewModel.loadMoreFailed {
+                                        Button("加载失败，点按重试") {
+                                            viewModel.loadMore()
+                                        }
+                                        .font(.haoFootnoteStrong)
+                                        .foregroundStyle(theme.accentText)
+                                        .frame(maxWidth: .infinity, alignment: .center)
                                         .listRowBackground(theme.scaffoldBackground)
-                                        .listRowSeparatorTint(theme.hairline)
+                                    } else if viewModel.hasMore {
+                                        ProgressView()
+                                            .frame(maxWidth: .infinity)
+                                            .listRowBackground(theme.scaffoldBackground)
+                                            .onAppear { viewModel.loadMore() }
+                                    }
                                 }
                             }
                         }
-                        Section("最新评论") {
-                            ForEach(Array(viewModel.latest.enumerated()), id: \.offset) { _, comment in
-                                MusicCommentRow(comment: comment)
-                                    .listRowBackground(theme.scaffoldBackground)
-                                    .listRowSeparatorTint(theme.hairline)
+                        .haoBottomChromePadding()
+                        .listStyle(.plain)
+                        .scrollContentBackground(.hidden)
+                        .refreshable {
+                            if let song = playerVM.currentSong {
+                                viewModel.load(song: song, force: true)
                             }
-                            if viewModel.hasMore {
-                                ProgressView()
-                                    .frame(maxWidth: .infinity)
-                                    .listRowBackground(theme.scaffoldBackground)
-                                    .onAppear { viewModel.loadMore() }
-                            }
-                        }
-                        Section {
-                            Text("评论只读 — 发表评论需要平台登录，本应用没有登录入口。")
-                                .font(.haoCaption)
-                                .foregroundStyle(theme.textMuted)
                         }
                     }
-                    .haoBottomChromePadding()
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
                 }
             }
             .background(theme.scaffoldBackground)
@@ -162,6 +218,13 @@ struct MusicCommentsView: View {
             }
         }
     }
+}
+
+/// Hot / latest switch for the comments page (b49fix2 P2-21,
+/// Coda §9.5).
+private enum CommentTab {
+    case hot
+    case latest
 }
 
 struct MusicCommentRow: View {
@@ -197,6 +260,21 @@ struct MusicCommentRow: View {
                 Text(comment.content)
                     .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textPrimary)
+                // b49fix2 P2-21: nested replies (wy beReplied only
+                // — tx / kg / kw carry no reply data). beReplied is
+                // the comment THIS comment replied to, so it renders
+                // as a quote under the comment.
+                if !comment.replies.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(comment.replies.enumerated()), id: \.offset) { _, reply in
+                            Text("回复 \(reply.nick)：\(reply.content)")
+                                .font(.haoFootnote)
+                                .foregroundStyle(theme.textSecondary)
+                        }
+                    }
+                    .padding(8)
+                    .background(theme.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
                 Text(musicCommentDateText(milliseconds: comment.time))
                     .font(.haoCaption2)
                     .foregroundStyle(theme.textMuted)

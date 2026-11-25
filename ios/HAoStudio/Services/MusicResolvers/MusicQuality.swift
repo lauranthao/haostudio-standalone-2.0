@@ -27,6 +27,21 @@ extension AudioQuality {
         }
     }
 
+    /// Reverse of `lxCode`: the tier a stored code means, or nil
+    /// for an unknown code (the caller then falls back to a safe
+    /// tier instead of guessing). b49fix2 P1-1: the download
+    /// record's qualityCode is an lxCode.
+    init?(lxCode code: String) {
+        switch code {
+        case "master": self = .master
+        case "hires": self = .hiRes
+        case "lossless": self = .flac
+        case "320k": self = .high320
+        case "128k": self = .standard128
+        default: return nil
+        }
+    }
+
     /// The quality parameter most direct APIs take. Master maps to
     /// each API's best known parameter — never to a parameter the API
     /// does not understand, never to a low tier. Only the LX APIs
@@ -115,13 +130,34 @@ enum MusicQualityGate {
         }
     }
 
-    /// Pure tier check for a script-reported tier string: at a master
-    /// request, only a literal `master` report keeps master; any
-    /// other report is hires. Other requests keep the declared label
-    /// (nil = no override).
+    /// Pure tier check for a script-reported tier string: map the
+    /// report to the tier actually served, for EVERY request — not
+    /// just master. b49sweep2 P1-15: the old version only handled
+    /// master requests (anything else fell through to nil, and the
+    /// caller labelled the result with the REQUESTED tier), so a
+    /// script that served 128k at a flac request showed a FLAC
+    /// badge. A script that reports no tier (nil) still yields
+    /// nil — the caller then keeps the declared label, which is
+    /// the honest "no signal" case. Unknown strings also yield
+    /// nil rather than guessing a tier.
     static func reportedTierFor(reported: String?, requested: AudioQuality) -> AudioQuality? {
-        guard requested == .master, let reported = reported else { return nil }
-        return reported == "master" ? .master : .hiRes
+        guard let reported = reported?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !reported.isEmpty
+        else { return nil }
+        switch reported {
+        case "master":
+            return .master
+        case "hires", "hi-res", "flac24bit", "flac24":
+            return .hiRes
+        case "flac", "lossless":
+            return .flac
+        case "320k", "320", "exhigh":
+            return .high320
+        case "128k", "128", "standard":
+            return .standard128
+        default:
+            return nil
+        }
     }
 
     /// LX-API served-tier check (zddyr/xinghai response): only

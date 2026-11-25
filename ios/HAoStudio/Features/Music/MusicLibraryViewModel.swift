@@ -112,11 +112,18 @@ final class MusicLibraryViewModel: ObservableObject {
     // MARK: - Local music
 
     func deleteLocalSong(_ song: MusicSong) {
-        if !song.localPath.isEmpty {
-            try? FileManager.default.removeItem(atPath: song.localPath)
+        // b49fix2 #21: resolve FIRST — the stored path may be an
+        // old absolute path (container moved) or a relative one;
+        // removing the raw string deletes nothing (or the wrong
+        // file) in those cases.
+        if !song.localPath.isEmpty,
+           let url = LocalFileIndex.resolve(song.localPath, subdir: "local_music") {
+            try? FileManager.default.removeItem(at: url)
         }
-        // Re-read: loadRepaired prunes the missing entry on next load.
-        localSongs = MusicLibraryStore.localSongs()
+        // b49fix2 P2-9: the read no longer prunes, so the delete
+        // path prunes explicitly — otherwise the deleted entry
+        // would stay listed forever.
+        localSongs = MusicLibraryStore.pruneLocalSongs()
         // B7: same as deleteDownload — never keep playing a file
         // that no longer exists.
         stopIfPlaying(key: song.identityKey)
