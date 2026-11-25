@@ -54,6 +54,17 @@ final class BackupUpdateFlow: ObservableObject {
     @Published var exportWarnings: [String] = []
     @Published var isImporting = false
     @Published var showingImporter = false
+    /// b49fix3 P1-6: import preview — the picked .zip is
+    /// validated first (validateBackupFile reads only the
+    /// envelope; nothing is written), and the user confirms
+    /// from a preview sheet (version / export time / entry
+    /// count) before anything merges. The security-scoped
+    /// access opened in importPicked is held until the
+    /// confirmed import finishes or the preview is cancelled.
+    @Published var showingImportPreview = false
+    @Published var pendingImportURL: URL?
+    @Published var pendingImportEnvelope: BackupEnvelope?
+    private var pendingImportNeedsStop = false
     @Published var alert: BackupUpdateAlert?
     @Published var isCheckingUpdate = false
     @Published var updatePrompt: UpdateCheckResult?
@@ -163,8 +174,37 @@ final class BackupUpdateFlow: ObservableObject {
             importFlutterJSON(url: url)
             return
         }
+        // b49fix3 P1-6: validate before anything merges — the
+        // envelope read touches no storage. A rejected file is
+        // refused here with its reason; a valid one goes to the
+        // preview sheet, and the security-scoped access is held
+        // until the confirmed import finishes (or the preview
+        // is cancelled).
+        pendingImportNeedsStop = url.startAccessingSecurityScopedResource()
+        switch BackupEngineCore.validateBackupFile(at: url) {
+        case .rejected(let reason):
+            stopPendingImportAccess(for: url)
+            alert = BackupUpdateAlert(title: "无法导入该备份", message: reason)
+        case .valid(let envelope):
+            pendingImportURL = url
+            pendingImportEnvelope = envelope
+            showingImportPreview = true
+        }
+    }
+
+    /// The preview sheet's confirm button: run the import that
+    /// importPicked already validated.
+    func confirmPendingImport() {
+        guard let engine = engine, let url = pendingImportURL else {
+            cancelPendingImport()
+            return
+        }
+        showingImportPreview = false
         isImporting = true
-        let needsStop = url.startAccessingSecurityScopedResource()
+        // Capture the access flag: the completion releases the
+        // held access even if the flow is gone by then (same as
+        // the old importPicked shape).
+        let needsStop = pendingImportNeedsStop
         engine.importBackup(from: url) { [weak self] result in
             DispatchQueue.main.async {
                 if needsStop {
@@ -173,6 +213,9 @@ final class BackupUpdateFlow: ObservableObject {
                 guard let self = self else {
                     return
                 }
+                self.pendingImportNeedsStop = false
+                self.pendingImportURL = nil
+                self.pendingImportEnvelope = nil
                 self.isImporting = false
                 switch result {
                 case .success(let report):
@@ -193,6 +236,22 @@ final class BackupUpdateFlow: ObservableObject {
                 }
             }
         }
+    }
+
+    /// The preview sheet's cancel button: drop the pending file
+    /// and release the held security-scoped access.
+    func cancelPendingImport() {
+        showingImportPreview = false
+        stopPendingImportAccess(for: pendingImportURL)
+        pendingImportURL = nil
+        pendingImportEnvelope = nil
+    }
+
+    private func stopPendingImportAccess(for url: URL?) {
+        if pendingImportNeedsStop, let url = url {
+            url.stopAccessingSecurityScopedResource()
+        }
+        pendingImportNeedsStop = false
     }
 
     /// Route B: a Flutter 1.x backup JSON. Runs on a background
@@ -687,6 +746,75 @@ struct AutoShareSheet: UIViewControllerRepresentable {
 /// no new version: already up to date (green) or failed
 /// (orange). Presented from the settings Form via
 /// BackupUpdateFlow.showingUpdateStatus.
+/// b49fix3 P1-6: import preview — what the picked .zip holds,
+/// before anything merges. Version / export time / entry count
+/// come from validateBackupFile (envelope only, no storage
+/// touched). Import is a merge, not a replace: keys absent from
+/// the backup keep their current values, and the engine snapshots
+/// the current data first (see 导入快照).
+struct ImportPreviewSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.haoTheme) private var theme
+    @ObservedObject private var flow = BackupUpdateFlow.shared
+
+    var body: some View {
+        VStack(spacing: 22) {
+            Text("导入备份")
+                .font(.haoDetailTitle)
+                .foregroundStyle(theme.textPrimary)
+                .multilineTextAlignment(.center)
+            if let envelope = flow.pendingImportEnvelope {
+                VStack(alignment: .leading, spacing: 8) {
+                    previewRow(label: "备份版本", value: "\(envelope.appVersion) (build \(envelope.appBuild))")
+                    previewRow(label: "导出时间", value: envelope.exportedAt)
+                    previewRow(label: "内容", value: "\(envelope.contents.count) 项")
+                    if !envelope.warnings.isEmpty {
+                        ForEach(envelope.warnings, id: \.self) { warning in
+                            Text(warning)
+                                .font(.haoSubhead)
+                                .foregroundStyle(theme.textSecondary)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Text("导入是合并，不是替换：备份里没有的项会保留现在的值；导入时会先保存一份当前数据的快照（见设置里的“导入快照”）。")
+                    .font(.haoSubhead)
+                    .foregroundStyle(theme.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+            HStack(spacing: 24) {
+                Button("取消") {
+                    flow.cancelPendingImport()
+                    dismiss()
+                }
+                .font(.haoBody)
+                .foregroundStyle(theme.textSecondary)
+                Button("确认导入") {
+                    flow.confirmPendingImport()
+                    dismiss()
+                }
+                .font(.haoBodyStrong)
+                .foregroundStyle(theme.accentText)
+            }
+        }
+        .padding(24)
+        .background(theme.scaffoldBackground)
+    }
+
+    private func previewRow(label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.haoSubhead)
+                .foregroundStyle(theme.textSecondary)
+            Spacer()
+            Text(value)
+                .font(.haoSubhead)
+                .foregroundStyle(theme.textPrimary)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+}
+
 struct UpdateStatusSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.haoTheme) private var theme
@@ -700,7 +828,7 @@ struct UpdateStatusSheet: View {
                 .foregroundStyle(theme.textPrimary)
                 .multilineTextAlignment(.center)
             Text(message)
-                .font(.subheadline)
+                .font(.haoSubhead)
                 .foregroundStyle(theme.textSecondary)
                 .multilineTextAlignment(.center)
             Button("关闭") {
@@ -875,6 +1003,15 @@ struct UpdatePromptSheet: View {
                 .font(.haoSubhead)
                 .foregroundStyle(theme.textSecondary)
                 .multilineTextAlignment(.center)
+            // b49fix3 P2-14: the version info came from the
+            // fallback manifest and disagreed with the last-seen
+            // primary — say so, don't present it as primary.
+            if result.fromFallback {
+                Text("版本信息来自备用源")
+                    .font(.haoFootnote)
+                    .foregroundStyle(theme.textMuted)
+                    .multilineTextAlignment(.center)
+            }
         }
     }
 
@@ -929,9 +1066,16 @@ struct UpdatePromptSheet: View {
             Text("安装步骤")
                 .font(.haoCallout)
                 .foregroundStyle(theme.textPrimary)
-            Text("1. 点下面的按钮，在分享表单里选择你的签名工具（如 LCSign）。")
-            Text("2. 在签名工具里导入这个 IPA，按它的提示完成签名。")
-            Text("3. 回到桌面，打开新装的 HAo Studio。")
+            // b49fix3 P1-13: the two steps a first-time
+            // sideload needs — where the signing tool comes from,
+            // and the certificate trust after install (without
+            // it the icon will not open). No download URL is
+            // claimed here: none is verified in the repo or docs.
+            Text("1. 如果还没装签名工具，先下载安装 LCSign（或 TrollStore、AltStore 等签名工具）。")
+            Text("2. 点下面的按钮，在分享表单里选择你的签名工具（如 LCSign）。")
+            Text("3. 在签名工具里导入这个 IPA，按它的提示完成签名。")
+            Text("4. 回到桌面，打开新装的 HAo Studio。")
+            Text("5. 如果点图标打不开，先到“设置 → 通用 → VPN 与设备管理”，信任开发者证书，再重新打开。")
         }
         .font(.haoSubhead)
         .foregroundStyle(theme.textSecondary)

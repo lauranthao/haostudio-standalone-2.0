@@ -273,6 +273,25 @@ struct MyView: View {
                         // download removed from the pushed list now posts.
                         counts = MyEntryCounts.reload()
                     }
+                    // b49fix3 P2-24: deep link into a settings row
+                    // (backup nudge's "去备份", welcome card's
+                    // "配置歌源/片源"). The row post arrives 0.35 s
+                    // after the tab switch, and SettingsGroupsView
+                    // expands the containing section on the same
+                    // post — scroll after one more beat so the
+                    // expanded rows have laid out.
+                    .onReceive(NotificationCenter.default.publisher(for: .haoOpenSettingsRow)) { note in
+                        guard let row = note.object as? String else { return }
+                        let target: String
+                        switch row {
+                        case "backup": target = "backupImport"
+                        case "sources": target = "musicSources"
+                        default: return
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                            proxy.scrollTo(target, anchor: .top)
+                        }
+                    }
                 }
                 .haoBackdropLayer()
                 .haoTabBackground()
@@ -328,8 +347,10 @@ struct MyView: View {
     /// artists. Each group has a SectionHeader + (for created
     /// lists) a "+" new button, a horizontal shelf with 8pt
     /// vertical padding, and a secondary empty text with 12pt
-    /// vertical padding. Group titles sit at 16pt side margin
-    /// (not 20). Everything is local — the login-gated hero /
+    /// vertical padding. Group titles sit at 20pt side margin,
+    /// same as the title row (b49fix3 P1-22 — the old comment
+    /// claimed 16pt "deliberately"; the sweep unifies the page
+    /// at 20). Everything is local — the login-gated hero /
     /// cloud / liked-albums blocks are replaced by these local
     /// equivalents. b44's in-content title (now the first row of
     /// this section) and anchor-free structure are untouched.
@@ -347,7 +368,7 @@ struct MyView: View {
             SettingsSectionFoldRow(section: .my)
             if settings.sectionExpanded(SettingsSection.my.rawValue) {
                 libraryGroupHeader(title: "创建的歌单", showAdd: true)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 16))
+                    .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 0, trailing: 20))
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                 if libraryLists.isEmpty {
@@ -355,18 +376,18 @@ struct MyView: View {
                         .font(.haoSubhead)
                         .foregroundStyle(theme.textSecondary)
                         .padding(.vertical, 12)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                 } else {
                     playlistShelf(libraryLists)
                         .padding(.vertical, 8)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                 }
                 libraryGroupHeader(title: "收藏的歌单")
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 16))
+                    .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 0, trailing: 20))
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                 let favLists = libraryLists.filter { libraryFavPlaylistIds.contains($0.id) }
@@ -375,18 +396,18 @@ struct MyView: View {
                         .font(.haoSubhead)
                         .foregroundStyle(theme.textSecondary)
                         .padding(.vertical, 12)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                 } else {
                     playlistShelf(favLists)
                         .padding(.vertical, 8)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                 }
                 libraryGroupHeader(title: "收藏的专辑")
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 16))
+                    .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 0, trailing: 20))
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                 if libraryFavAlbums.isEmpty {
@@ -394,18 +415,18 @@ struct MyView: View {
                         .font(.haoSubhead)
                         .foregroundStyle(theme.textSecondary)
                         .padding(.vertical, 12)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                 } else {
                     albumShelf(libraryFavAlbums)
                         .padding(.vertical, 8)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                 }
                 libraryGroupHeader(title: "收藏的歌手")
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 16))
+                    .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 0, trailing: 20))
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                 if libraryFavArtists.isEmpty {
@@ -413,13 +434,13 @@ struct MyView: View {
                         .font(.haoSubhead)
                         .foregroundStyle(theme.textSecondary)
                         .padding(.vertical, 12)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                 } else {
                     artistShelf(libraryFavArtists)
                         .padding(.vertical, 8)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                 }

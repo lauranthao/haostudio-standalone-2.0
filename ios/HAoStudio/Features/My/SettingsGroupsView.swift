@@ -140,6 +140,13 @@ struct SettingsGroupsView: View {
     /// on appear and after clearing.
     @State private var cacheSizeBytes: Int = 0
 
+    /// Import-snapshot count shown on the 导入快照 row.
+    /// Refreshed on appear, after an import, and after a delete
+    /// in the snapshot list (via its onChange) — a raw
+    /// listSnapshots() call in the row body would go stale when
+    /// popping back from the list.
+    @State private var snapshotCount = 0
+
     /// Cache-clear confirmation.
     @State private var showingClearCacheAlert = false
 
@@ -203,6 +210,23 @@ struct SettingsGroupsView: View {
         )
         .onAppear {
             backupFlow.refreshUpdateState()
+            snapshotCount = BackupEngineCore.listSnapshots().count
+        }
+        // b49fix3 P2-24 / P1-14: deep link into a settings row.
+        // The sender posts .haoSwitchTab (.my) first, then this
+        // notification with the row id — expand the containing
+        // section here; MyView's ScrollViewReader scrolls to
+        // the row id (the List lives there, not here).
+        .onReceive(NotificationCenter.default.publisher(for: .haoOpenSettingsRow)) { note in
+            guard let row = note.object as? String else { return }
+            switch row {
+            case "backup":
+                settings.setSectionExpanded(true, for: SettingsSection.data.rawValue)
+            case "sources":
+                settings.setSectionExpanded(true, for: SettingsSection.sources.rawValue)
+            default:
+                break
+            }
         }
         // b45-coda 包 C: sheets hang on the Form (this Group),
         // never on a Section / row — iOS dismisses a sheet
@@ -212,6 +236,9 @@ struct SettingsGroupsView: View {
         }
         .sheet(isPresented: $backupFlow.showingUpdateStatus) {
             UpdateStatusSheet()
+        }
+        .sheet(isPresented: $backupFlow.showingImportPreview) {
+            ImportPreviewSheet()
         }
     }
 
@@ -614,7 +641,13 @@ struct SettingsGroupsView: View {
                 Toggle("防剧透：模糊未看海报", isOn: $settings.blurUnwatchedPosters)
                 footnote("未看过的影片海报模糊显示，点按查看")
                 Toggle("纯音频后台播放", isOn: $settings.audioOnlyBackground)
-                footnote("只听声音，后台继续播")
+                // b49fix3 P1-17: the switch keeps audio playing in
+                // background on every engine — only the video-track
+                // drop is MPV-only (VideoDriver.setAudioOnly:
+                // AVPlayer/IJK no-op, "the audio keeps playing in
+                // background natively there"). The sweep's draft
+                // ("AVPlayer / IJK 下切后台仍会停") was wrong.
+                footnote("切后台后只保留声音；MPV 同时停掉画面解码，AVPlayer / IJK 下声音照常播")
                 NavigationLink("影视分类排序") {
                     VideoCategoryEditView()
                 }
@@ -796,6 +829,9 @@ struct SettingsGroupsView: View {
                 NavigationLink("音源管理") {
                     LXSourceManagementView()
                 }
+                // b49fix3 P1-14: deep-link target for the welcome
+                // card's "配置歌源/片源" (see haoOpenSettingsRow).
+                .id("musicSources")
                 NavigationLink("影视源管理") {
                     CmsSourceManagementView()
                 }
@@ -844,6 +880,10 @@ struct SettingsGroupsView: View {
             if isExpanded(.data) {
                 backupExportRow
                 backupImportRow
+                    // b49fix3 P2-24: deep-link target for the
+                    // backup nudge's "去备份" (see haoOpenSettingsRow).
+                    .id("backupImport")
+                backupSnapshotRow
             }
         }
     }
@@ -912,6 +952,33 @@ struct SettingsGroupsView: View {
                 }
             }
             footnote("从 .zip 或旧版 .json 备份文件导入；导入失败会自动回滚，现有数据不受影响。")
+        }
+    }
+
+    // MARK: - 数据：导入快照 (b49fix3 P1-6 / P2-17)
+
+    /// One row into the snapshot list: every import snapshots
+    /// the pre-import data under Documents/backup_snapshots/
+    /// (newest first, auto-pruned to the last 5). The row shows
+    /// the count; the list offers per-snapshot delete. Restore
+    /// is deliberately NOT offered — a snapshot is a rollback
+    /// artifact of a finished import (journal-based, partial),
+    /// not a user-restorable backup.
+    private var backupSnapshotRow: some View {
+        NavigationLink {
+            BackupSnapshotView(onChange: {
+                snapshotCount = BackupEngineCore.listSnapshots().count
+            })
+        } label: {
+            HStack {
+                Text("导入快照")
+                    .font(.haoBody)
+                    .foregroundStyle(theme.textPrimary)
+                Spacer()
+                Text("\(snapshotCount) 份")
+                    .font(.haoFootnote)
+                    .foregroundStyle(theme.textSecondary)
+            }
         }
     }
 
@@ -1005,7 +1072,7 @@ struct SettingsGroupsView: View {
                     }
                 }
                 .disabled(!settings.songCacheEnabled)
-                footnote("「清理全部缓存」会一并清理歌曲缓存、图片、分析、模型、诊断与离线索引；已下载内容不受影响；上限的执行由音频缓存引擎负责。")
+                footnote("「清理全部缓存」会清理网络缓存、图片缓存、Emby 图片缓存、歌曲缓存和未完成下载的临时文件；已下载内容不受影响。")
             }
         }
         .onAppear {
@@ -1278,7 +1345,7 @@ struct SettingsGroupsView: View {
             Image("Logo")
                 .resizable()
                 .frame(width: 72, height: 72)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: HaoLayout.cornerLarge, style: .continuous))
             Text("HAo Studio")
                 .font(.title2.bold())
                 .foregroundStyle(theme.textPrimary)
@@ -1471,6 +1538,59 @@ struct SettingsGroupsView: View {
     }
 }
 
+/// Import-snapshot list (b49fix3 P1-6 / P2-17): every import
+/// snapshots the pre-import data under
+/// Documents/backup_snapshots/. List + delete only — restore is
+/// deliberately not offered: a snapshot is a rollback artifact
+/// of a finished import (journal-based, partial), not a
+/// user-restorable backup (see BackupEngineCore.listSnapshots).
+struct BackupSnapshotView: View {
+    @Environment(\.haoTheme) private var theme
+    var onChange: () -> Void = {}
+
+    @State private var snapshots: [URL] = []
+
+    var body: some View {
+        List {
+            Section {
+                if snapshots.isEmpty {
+                    Text("还没有导入快照。每次导入备份前，这里会自动保存一份当前数据。")
+                        .font(.haoFootnote)
+                        .foregroundStyle(theme.textSecondary)
+                } else {
+                    ForEach(snapshots, id: \.path) { url in
+                        HStack {
+                            Text(url.lastPathComponent)
+                                .font(.haoBody)
+                                .foregroundStyle(theme.textPrimary)
+                            Spacer()
+                            Button("删除", role: .destructive) {
+                                BackupEngineCore.deleteSnapshot(at: url)
+                                reload()
+                            }
+                            .font(.haoBody)
+                        }
+                    }
+                }
+            } footer: {
+                Text("快照只保留最近 5 份，超出自动清理；删除快照只去掉该次导入的安全网，不动现有数据。")
+                    .font(.haoCaption)
+                    .foregroundStyle(theme.textSecondary)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(theme.scaffoldBackground)
+        .navigationTitle("导入快照")
+        .onAppear { reload() }
+    }
+
+    private func reload() {
+        snapshots = BackupEngineCore.listSnapshots()
+        onChange()
+    }
+}
+
 // MARK: - 数据与来源 (b49fix2 B6/B7)
 //
 // What leaves the device, in plain words, plus the management
@@ -1478,10 +1598,12 @@ struct SettingsGroupsView: View {
 // "不上传任何数据" — false in plain reading: a search sends the
 // query + IP to the source (NetEase / QQ / Kuwo / Kugou /
 // aggregators / Douban / CMS sources / the five live platforms /
-// the update server), and each install also sends a random
-// device id to the update endpoint. Nothing goes through us —
-// there is no HAo server in the middle — but the requests do
-// leave the device, and this page says so.
+// the update server). Nothing goes through us — there is no HAo
+// server in the middle — but the requests do leave the device,
+// and this page says so. The update check is a bare GET of the
+// version file: no device id, no account, nothing identifying
+// the install (b49fix3 M1 — the old comment here claimed a
+// random device id was sent; it never was).
 struct DataSourcesView: View {
     @Environment(\.haoTheme) private var theme
 
@@ -1489,6 +1611,11 @@ struct DataSourcesView: View {
         List {
             Section("会发到哪里") {
                 Text("本应用不设账号，不经过我们的服务器。但搜索、播放、歌词、直播与弹幕都要向所选来源的服务器发请求，你的 IP 与查询内容会到达对方：音乐（网易云、QQ、酷我、酷狗等歌源与聚合接口，包括 yy.zddyr.top）、影视（豆瓣与你添加的 CMS 源）、直播（哔哩哔哩、斗鱼、虎牙、抖音、快手）。检查更新时只向更新服务器请求一份版本文件，不带任何设备标识。")
+                    .font(.haoFootnote)
+                    .foregroundStyle(theme.textSecondary)
+                // b49fix3 P2-21: the update-server address + lyric
+                // sources, named instead of folded into "所选来源".
+                Text("更新服务器：主站 chen-hao-shop-production.up.railway.app/version.json，备用 raw.githubusercontent.com/lauranthao/haostudio-standalone-2.0/main/version.json。歌词随歌曲来源取自各平台的歌词接口（网易云、QQ、酷我等）——歌词不经过我们。")
                     .font(.haoFootnote)
                     .foregroundStyle(theme.textSecondary)
                 Text("你自己配置的 Emby 服务器除外：开启上报后，播放进度会同步到你的 Emby。")
@@ -1744,12 +1871,13 @@ struct DisclaimerView: View {
         }
         .background(theme.scaffoldBackground)
         .alert("需要同意免责声明", isPresented: $showDeclineConfirm) {
-            Button("不同意", role: .destructive) {
-                // Declining dismisses this sheet, but the gate
-                // binding in MainTabView keeps the disclaimer
-                // presented until it is accepted — decline
-                // means stay, never exit.
-                dismiss()
+            // b49fix3 P1-16: declining now has an explicit exit —
+            // "退出应用" is a deliberate user tap (exit(0) on
+            // that tap ONLY), not the old automatic exit-on-decline.
+            // "返回阅读" goes back to the text; the gate itself
+            // stays until consent.
+            Button("退出应用", role: .destructive) {
+                exit(0)
             }
             Button("返回阅读", role: .cancel) {
             }

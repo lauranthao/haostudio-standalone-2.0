@@ -89,6 +89,13 @@ struct UpdateCheckResult: Identifiable {
     var requiresNewerOS: Bool
     /// True when this version+build was skipped by the user.
     var isSkipped: Bool
+    /// b49fix3 P2-14: true when the manifest behind this result
+    /// came from the fallback (GitHub raw) AND disagreed with
+    /// the last-seen primary manifest. The prompt sheet says so
+    /// instead of presenting fallback version info as if it came
+    /// from the primary server. Set by the checker (its single
+    /// manifest-result funnel), so manual + auto checks agree.
+    var fromFallback: Bool = false
     /// Non-nil when the check itself failed; the message is shown as-is.
     var failureMessage: String?
 

@@ -130,6 +130,57 @@ enum HaoLayout {
     /// Settle spring for chrome transitions (full-player fade,
     /// sidebar, rows).
     static let settleSpring = Animation.spring(response: 0.35, dampingFraction: 0.82)
+
+    // MARK: - Visual-alignment tokens (sweep 5, b49fix3)
+    //
+    // One place for the page geometry every tab root and pushed
+    // page shares (sweep-5 Lens 3 found 24 / 20 / 16 margins,
+    // 48 / 40 / 36 search heights, 12 / 16 / 32 section tops).
+    // HaoDesignTokens (HaoTheme.swift) keeps the older Coda
+    // spacing/corner set (page 24, phonePage 20, cornerStandard 8,
+    // cornerLarge 12, cornerPanel 20, cornerCover 22); the values
+    // below deliberately repeat the shared ones so every lane
+    // reads the same names — do not add a second value for the
+    // same role. Font roles live in HaoTheme.swift (.haoScreenTitle
+    // etc.) and are NOT repeated here.
+    /// Tab-root horizontal margin (all five roots).
+    static let pageMargin: CGFloat = 24
+    /// Pushed-page horizontal margin (detail / list pages).
+    static let pushedPageMargin: CGFloat = 20
+    /// Page-top search-field height.
+    static let searchFieldHeight: CGFloat = 48
+    /// In-detail capsule search height (playlist detail, recent plays).
+    static let detailSearchHeight: CGFloat = 44
+    /// Default top spacing of a section under the previous one.
+    static let sectionTopSpacing: CGFloat = 16
+    /// Top spacing of a true discovery section only.
+    static let discoverySectionTopSpacing: CGFloat = 32
+    /// Tab-bar icon size (Coda §6.2: 23pt semibold).
+    static let tabIconSize: CGFloat = 23
+    /// Standard icon-button glyph size (mini player, live room, player).
+    static let iconSize: CGFloat = 20
+    /// Corner-radius scale (sweep 5 P2-42): 8 / 12 / 16 / 20 / 22,
+    /// for cards and sheets. Rectangular selection cells are NOT
+    /// on this scale — they use selectionCellCornerRadius (10,
+    /// sweep 5 P2-41); pill chips stay Capsule.
+    static let cornerSmall: CGFloat = 8
+    static let cornerMedium: CGFloat = 12
+    static let cornerLarge: CGFloat = 16
+    static let cornerXLarge: CGFloat = 20
+    static let cornerXXLarge: CGFloat = 22
+    /// Rectangular selection-cell corner radius (quality / line /
+    /// episode grids, sweep 5 P2-41).
+    static let selectionCellCornerRadius: CGFloat = 10
+    /// Player content horizontal margin (music player already 24;
+    /// video player 20 -> 24, sweep 5 P2-44).
+    static let playerHorizontalMargin: CGFloat = 24
+    /// Toast bottom offset above the safe area (sweep 5 P2-37:
+    /// music 90, live room 96 -> 90).
+    static let toastBottomOffset: CGFloat = 90
+    /// Sheet horizontal padding.
+    static let sheetHorizontalPadding: CGFloat = 24
+    /// Sheet top padding.
+    static let sheetTopPadding: CGFloat = 16
 }
 
 /// Player motion values (b45-a, copy plan §8.1/§8.3). Animation /
@@ -360,6 +411,12 @@ extension Notification.Name {
     /// `object` is the HaoTab to switch to. MainTabView listens
     /// and selects the tab; nothing else listens.
     static let haoSwitchTab = Notification.Name("haoSwitchTab")
+    /// Posted together with haoSwitchTab when the destination is
+    /// a specific row inside Settings (b49fix3 P2-24 / P1-14).
+    /// `object` is the row id ("backup" = 导入备份,
+    /// "sources" = 来源管理). SettingsGroupsView expands the
+    /// containing section; MyView scrolls the List to the row.
+    static let haoOpenSettingsRow = Notification.Name("haoOpenSettingsRow")
     /// Posted by LocalStore when a corrupt collection file is
     /// quarantined (b49fix2 P0-1). `object` is the collection
     /// name. MainTabView listens and shows a one-time notice.
@@ -760,6 +817,12 @@ private struct HaoBackdropLayer: ViewModifier {
     @Environment(\.haoBackdrop) private var backdrop
     @Environment(\.haoTheme) private var theme
 
+    /// b49fix3 B12: veil strength by scheme (see the note at the
+    /// gradient). Dark needs the strong veil for AA on a white
+    /// wallpaper; light already passes at the b49fix2 values.
+    private var veilTop: CGFloat { theme.colorScheme == .dark ? 0.92 : 0.72 }
+    private var veilBottom: CGFloat { theme.colorScheme == .dark ? 0.90 : 0.58 }
+
     func body(content: Content) -> some View {
         // b43: background, not a ZStack wrapper — a background
         // never sizes its parent (see the doc above), and its
@@ -778,20 +841,36 @@ private struct HaoBackdropLayer: ViewModifier {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
                     .ignoresSafeArea()
-                // Legibility veil (b42, strengthened b49fix2 #34):
-                // scaffold colour (near-white light mode, black
-                // dark mode) as a top-to-bottom gradient — the
-                // titles at the top get the strongest veil, the
-                // cards below get a lighter one. The b42 values
+                // Legibility veil (b42, strengthened b49fix2 #34,
+                // b49fix3 B12): scaffold colour (near-white light
+                // mode, black dark mode) as a top-to-bottom gradient
+                // — the titles at the top get the strongest veil,
+                // the cards below get a lighter one. The b42 values
                 // (0.55 / 0.42) still washed song rows out on busy
                 // photos (chen build 42: grey subtitle text unreadable);
                 // the stronger veil keeps rows legible while the
                 // photo still shows through everywhere. The text
                 // and the semi-transparent cards just stop fighting it.
+                //
+                // b49fix3 B12: the dark veil is scheme-dependent.
+                // Light mode keeps 0.72 / 0.58 — all four light
+                // themes already pass AA 4.5:1 on a pure-white
+                // wallpaper. Dark mode needs 0.92 / 0.90: the exact
+                // WCAG computation (harness b12-contrast.py) shows
+                // the dimmest dark muted (gold #9A8B6B) needs >=
+                // 0.895 at the bottom to clear 4.5:1 on white —
+                // 0.88 leaves it at 4.00. The wallpaper still shows
+                // through (8-10%). The only text still below AA
+                // after this is muted text sitting on translucent
+                // white cards in the gold dark theme (the three
+                // search-entry placeholders, 3.6-4.1:1) — no veil
+                // can fix those, the white card lift dominates;
+                // that needs the placeholder role fixed, not a
+                // stronger veil. No text value was changed here.
                 LinearGradient(
                     colors: [
-                        theme.scaffoldBackground.opacity(0.72),
-                        theme.scaffoldBackground.opacity(0.58),
+                        theme.scaffoldBackground.opacity(veilTop),
+                        theme.scaffoldBackground.opacity(veilBottom),
                     ],
                     startPoint: .top, endPoint: .bottom
                 )

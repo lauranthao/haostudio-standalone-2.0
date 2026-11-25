@@ -1105,6 +1105,11 @@ extension BackupEngineCore {
             warnings.append(lxKeysWarning)
         }
         NotificationCenter.default.post(name: .haoBackupImported, object: nil)
+        // b49fix3 P2-17: keep only the newest 5 snapshots — every
+        // import leaves one behind, and the folder would otherwise
+        // grow without bound. The settings row offers per-snapshot
+        // delete on top of this.
+        pruneSnapshots(documentsURL: documentsURL)
         let detail = "已恢复 \(appliedKeys) 个设置、\(appliedCollections) 个集合、\(appliedFiles) 个文件"
             + (planned.skipped.isEmpty ? "" : "，跳过 \(planned.skipped.count) 个坏键")
             + (planned.unknown.isEmpty ? "" : "，隔离 \(planned.unknown.count) 个未知键")
@@ -1193,6 +1198,42 @@ extension BackupEngineCore {
             return dir
         } catch {
             return nil
+        }
+    }
+
+    // MARK: - Snapshot management (b49fix3 P1-6 / P2-17)
+
+    /// Lists the import snapshots under
+    /// `Documents/backup_snapshots/`, newest first (the folder
+    /// name starts with a yyyyMMdd-HHmmss stamp). Empty when no
+    /// import ever ran. A snapshot is a rollback artifact of a
+    /// finished import — it is NOT a user-restorable backup
+    /// (restore runs through the import's own journal), so the
+    /// settings row offers list + delete only, never restore.
+    static func listSnapshots(documentsURL: URL? = nil) -> [URL] {
+        let docs = documentsURL ?? LocalStore.documentsDirectory()
+        let dir = docs.appendingPathComponent(snapshotDirectoryName)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return names
+            .map { dir.appendingPathComponent($0) }
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+    }
+
+    /// Deletes one snapshot folder. Only removes the safety net
+    /// for that import — never live data.
+    static func deleteSnapshot(at url: URL) {
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    /// Keeps only the newest `keeping` snapshots. Called on
+    /// every successful import; the settings row also offers
+    /// per-snapshot delete.
+    static func pruneSnapshots(keeping: Int = 5, documentsURL: URL? = nil) {
+        let snapshots = listSnapshots(documentsURL: documentsURL)
+        guard snapshots.count > keeping else { return }
+        for url in snapshots.dropFirst(keeping) {
+            deleteSnapshot(at: url)
         }
     }
 

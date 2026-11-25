@@ -542,8 +542,11 @@ func haoAccentText(for accent: Color, darkScheme: Bool, backgrounds: [Color]) ->
 // up to 3x at AX sizes and break fixed-height rows (56pt song rows,
 // 50pt mini player, tab bar). That is a separate layout-hardening job
 // — see the item-4 report — not something to smuggle into a size
-// unification. Colours are untouched: every role still takes its
-// colour from the theme palette (4 themes x light/dark).
+// unification. b49fix3 P2-27 (sweep 5) confirms this decision stands:
+// making the roles scale with Dynamic Type is still that separate
+// job, not a change to make during size unification; the existing
+// .accessibility1 caps are untouched. Colours are untouched: every role
+// still takes its colour from the theme palette (4 themes x light/dark).
 //
 // Rule for new code: never write `.font(.system(size:))` at a call
 // site again — pick the role whose meaning matches the text.

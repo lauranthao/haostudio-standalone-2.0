@@ -176,6 +176,27 @@ final class HomeViewModel: ObservableObject {
     /// section array went with it — nothing reads it any more.
     @Published private(set) var allRecentPlays: [MusicSong] = []
 
+    /// b49fix3 P1-3: true until the first reload has published —
+    /// the first frame shows the title only, not the welcome
+    /// card + four empty states (which are wrong for a user
+    /// with content, and flash for everyone). Only the first
+    /// load hides content; later reloads (notifications,
+    /// pull-to-refresh) publish over the old content.
+    @Published private(set) var isLoading = true
+    private var hasLoadedOnce = false
+    /// b49fix3 P1-9: true when the last live-status round
+    /// answered `.unknown` for EVERY room it checked (with at
+    /// least one room checked) — the section cannot tell
+    /// "all offline" from "the check failed", so the retry
+    /// button shows only in this case. Any successful answer
+    /// clears it. The four sections read local data only, so
+    /// they cannot fail — a retry on their empty states would
+    /// be a dead control.
+    @Published private(set) var liveStatusFailed = false
+    /// Whether any room in the current status round answered
+    /// with a real state (`.live` / `.offline` / `.liveDetail`).
+    private var liveStatusRoundAnswered = false
+
     /// Per-section cap for every home section.
     static let sectionLimit = 10
     /// Per-room ceiling for a live-status check.
@@ -308,15 +329,20 @@ final class HomeViewModel: ObservableObject {
         if forceLiveRecheck { self.forceLiveRecheck = true }
         backgroundReloadGeneration += 1
         let generation = backgroundReloadGeneration
+        // b49fix3 P2-15: one Date() for the whole reload — the
+        // day key is taken once and passed through the daily
+        // computation, so a midnight crossing between two
+        // Date() calls can no longer split picks and spares
+        // across two days.
+        let today = Date()
+        let dayKey = musicDayKey(of: today)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let videoHistory = VideoLibraryStore.history()
             let recent = MusicLibraryStore.getRecent()
             let listenLog = MusicLibraryStore.getListenLog()
             let resumeMap = MusicLibraryStore.resumeMap()
-            let dailyPicks = Self.loadDailyPicks(listenLog: listenLog)
-            let spares = Self.computeDailySpares(
-                listenLog: listenLog, recent: recent,
-                dayKey: musicDayKey(of: Date()), current: dailyPicks)
+            let (dailyPicks, spares) = Self.loadDailyPicksAndSpares(
+                listenLog: listenLog, recent: recent, dayKey: dayKey)
             let follows = LiveLibraryStore.follows()
             let liveHistory = LiveLibraryStore.history()
             DispatchQueue.main.async { [weak self] in
@@ -377,6 +403,10 @@ final class HomeViewModel: ObservableObject {
         liveStatusRecheckNeeded = false
         forceLiveRecheck = false
         refreshLiveStatus(forceRecheck: forceRecheck)
+        // b49fix3 P1-3: the first publish ends the first-frame
+        // loading state (see isLoading above).
+        hasLoadedOnce = true
+        isLoading = false
     }
 
     /// Carry the last confirmed live state from the previous hot
@@ -538,9 +568,12 @@ final class HomeViewModel: ObservableObject {
     /// listen log + favourites + recent + playlist tracks
     /// (MusicRadio.dailyPicks), no shuffle, no seeded random.
     /// The same data always yields the same list; the per-day
-    /// cache in loadDailyPicks keeps one day stable even as
-    /// the user keeps listening. Nonisolated (pure, store reads
-    /// only): the background reload calls it off the main thread.
+    /// cache in loadDailyPicksAndSpares keeps one day stable
+    /// even as the user keeps listening. Nonisolated (pure,
+    /// store reads only). Kept as the direct entry point for
+    /// the tests (HomeAggregationTests calls it) — the reload
+    /// path itself uses loadDailyPicksAndSpares (one total-40
+    /// run for picks + spares).
     nonisolated static func computeDailyPicks(
         listenLog: [ListenEvent],
         favourites: [MusicSong],
@@ -558,35 +591,55 @@ final class HomeViewModel: ObservableObject {
             dayKey: dayKey)
     }
 
-    /// Daily picks with the per-day cache (hao_daily), exactly
-    /// like MusicDiscoveryViewModel.reloadDaily: a cached day is
-    /// returned as-is when it validates; a missing or invalid day
-    /// is computed and saved when non-empty. Validation (see
-    /// validatedDailyTracks): the cached day must be today, the
-    /// list must be non-empty, and every track must have a real
-    /// song id — a stale day, an empty cache, or identity-less
-    /// rows are recomputed instead of shown. Nonisolated: the
-    /// background reload calls it off the main thread.
-    nonisolated static func loadDailyPicks(
+    /// Daily picks + spares from ONE ranked run (b49fix3
+    /// P2-15): the day key is taken once by the caller and
+    /// passed in (see reload), and the ranking
+    /// (MusicRadio.dailyPicks, total 40) runs once — picks are
+    /// its first 20, spares the rest. The old code ran the
+    /// ranking twice per reload (a total-20 run for picks, a
+    /// total-40 run for spares) with three separate Date()
+    /// calls.
+    ///
+    /// Selection note: the old picks were a total-20 run
+    /// (top-10 ranked + affinity-10 same-artist/album fills);
+    /// the combined run's first 20 are the top-20 ranked, so
+    /// the affinity fills now land in the spares (positions
+    /// 21–40) and surface through "换一首" instead of the
+    /// list's second half. The list stays a pure ranked list;
+    /// the cache rule is unchanged (only today's key, non-empty,
+    /// every row with a real song id — see validatedDailyTracks).
+    /// Nonisolated: the background reload calls it off the
+    /// main thread.
+    nonisolated static func loadDailyPicksAndSpares(
         listenLog: [ListenEvent],
-        dayKey: String = musicDayKey(of: Date())
-    ) -> [MusicSong] {
+        recent: [MusicSong],
+        dayKey: String
+    ) -> (picks: [MusicSong], spares: [MusicSong]) {
+        let favourites = MusicLibraryStore.favSongs()
+        let playlistTracks = MusicLibraryStore.getLists().flatMap { $0.tracks }
+        let dislikedIds = MusicLibraryStore.fmDislikedIds()
         if let valid = validatedDailyTracks(
-            MusicLibraryStore.dailyTracks(for: dayKey), dayKey: dayKey
+            MusicLibraryStore.dailyTracks(for: dayKey), dayKey: dayKey, todayKey: dayKey
         ) {
-            return valid
+            // Cache hit: the picks are the cached 20; the spares
+            // still need one ranked run (the cache stores only 20).
+            let ranked = MusicRadio.dailyPicks(
+                listenLog: listenLog, favourites: favourites, recent: recent,
+                playlistTracks: playlistTracks, dislikedIds: dislikedIds,
+                dayKey: dayKey, total: 40)
+            let currentKeys = Set(valid.map { $0.identityKey })
+            let spares = ranked.filter { !currentKeys.contains($0.identityKey) }
+            return (valid, spares)
         }
-        let picks = computeDailyPicks(
-            listenLog: listenLog,
-            favourites: MusicLibraryStore.favSongs(),
-            recent: MusicLibraryStore.getRecent(),
-            dayKey: dayKey,
-            playlistTracks: MusicLibraryStore.getLists().flatMap { $0.tracks },
-            dislikedIds: MusicLibraryStore.fmDislikedIds())
+        let ranked = MusicRadio.dailyPicks(
+            listenLog: listenLog, favourites: favourites, recent: recent,
+            playlistTracks: playlistTracks, dislikedIds: dislikedIds,
+            dayKey: dayKey, total: 40)
+        let picks = Array(ranked.prefix(20))
         if !picks.isEmpty {
             MusicLibraryStore.saveDailyTracks(picks, for: dayKey)
         }
-        return picks
+        return (picks, Array(ranked.dropFirst(picks.count)))
     }
 
     /// Load-side validation for a hao_daily entry. Returns the
@@ -608,31 +661,6 @@ final class HomeViewModel: ObservableObject {
         let valid = cached.filter { !$0.songId.isEmpty }
         guard !valid.isEmpty else { return nil }
         return valid
-    }
-
-    /// Spare picks behind today's daily list: the same ranked
-    /// pool past the first 20 (total 40), minus the songs
-    /// already in the list — so a replacement is always a real
-    /// next-ranked song, never a random one. Mirrors
-    /// MusicDiscoveryViewModel.rebuildDailySpares. Nonisolated:
-    /// the background reload calls it off the main thread.
-    nonisolated static func computeDailySpares(
-        listenLog: [ListenEvent],
-        recent: [MusicSong],
-        dayKey: String,
-        current: [MusicSong]
-    ) -> [MusicSong] {
-        let picks = MusicRadio.dailyPicks(
-            listenLog: listenLog,
-            favourites: MusicLibraryStore.favSongs(),
-            recent: recent,
-            playlistTracks: MusicLibraryStore.getLists().flatMap { $0.tracks },
-            dislikedIds: MusicLibraryStore.fmDislikedIds(),
-            dayKey: dayKey,
-            total: 40
-        )
-        let currentKeys = Set(current.map { $0.identityKey })
-        return picks.filter { !currentKeys.contains($0.identityKey) }
     }
 
     /// "不喜欢换一首" on home (same as the discovery daily
@@ -682,6 +710,10 @@ final class HomeViewModel: ObservableObject {
         liveStatusLastCheckedRoomIDs = roomIDs
         liveStatusGeneration += 1
         let generation = liveStatusGeneration
+        // b49fix3 P1-9: a new round starts unanswered — the
+        // failure flag below is set only when the round ends
+        // with every answer `.unknown`.
+        liveStatusRoundAnswered = false
         for item in pending {
             liveStatusInFlightIDs.insert(item.id)
             checker(item) { [weak self] status in
@@ -690,6 +722,19 @@ final class HomeViewModel: ObservableObject {
                     self.liveStatusInFlightIDs.remove(item.id)
                     guard self.liveStatusGeneration == generation else { return }
                     guard let index = self.hotLive.firstIndex(where: { $0.id == item.id }) else { return }
+                    // b49fix3 P1-9: a real answer clears the
+                    // failure flag; an `.unknown` answer sets it
+                    // only when it was the round's last answer
+                    // and nothing in the round answered for real.
+                    if case .unknown = status {
+                        if self.liveStatusInFlightIDs.isEmpty,
+                           !self.liveStatusRoundAnswered {
+                            self.liveStatusFailed = true
+                        }
+                    } else {
+                        self.liveStatusRoundAnswered = true
+                        self.liveStatusFailed = false
+                    }
                     switch status {
                     case .unknown:
                         return
