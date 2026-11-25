@@ -191,6 +191,10 @@ struct MusicArtistDetailView: View {
         .haoBottomChromePadding()
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        // b45-g (Coda §8.2): pull-to-refresh refetches the artist.
+        // No TTL — artist detail has no cache today and none is
+        // added; refresh is always a real fetch.
+        .refreshable { viewModel.load() }
     }
 
     /// Hot songs as a horizontal shelf: 7 compact rows per

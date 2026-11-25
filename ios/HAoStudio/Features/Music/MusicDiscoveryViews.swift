@@ -90,6 +90,9 @@ struct MusicDailyView: View {
                 .haoBottomChromePadding()
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
+                // b45-g (Coda §8.2): pull-to-refresh regenerates
+                // today's picks, bypassing the day-key cache.
+                .refreshable { discoveryVM.reloadDaily(force: true) }
             }
         }
         .background(theme.scaffoldBackground)
@@ -128,7 +131,7 @@ struct MusicDailyView: View {
             .buttonStyle(MusicPressScaleStyle())
             .accessibilityLabel("播放全部")
             Menu {
-                Button("刷新今日推荐") { discoveryVM.reloadDaily() }
+                Button("刷新今日推荐") { discoveryVM.reloadDaily(force: true) }
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 22, weight: .semibold))
@@ -176,6 +179,10 @@ struct MusicExploreView: View {
             .padding(.horizontal, 20)
             .haoBottomChromeContentPadding()
         }
+        // b45-g (Coda §8.2): pull-to-refresh re-fetches the plaza
+        // once and re-filters every loaded category (900s snapshots
+        // are bypassed, not waited out).
+        .refreshable { discoveryVM.refreshExplore() }
         .background(
             // One hidden link for every shelf header's arrow:
             // the header sets selectedCategory, then flips this.
@@ -475,11 +482,23 @@ final class MusicPlazaDetailViewModel: ObservableObject {
 
     private let summary: PlaylistSummary
 
+    /// Server playlist, cached 300s (b45-g, Coda §3.1 歌单 300s).
+    private var loadedAt: Date? = nil
+    static let playlistCacheTTL: TimeInterval = 300
+
     init(summary: PlaylistSummary) {
         self.summary = summary
     }
 
-    func load() {
+    /// A fresh cache answers instantly on re-appear;
+    /// pull-to-refresh forces a refetch. A failed load never
+    /// stamps the cache, so retry still works.
+    func load(force: Bool = false) {
+        if !force, let loadedAt = loadedAt,
+           Date().timeIntervalSince(loadedAt) < Self.playlistCacheTTL,
+           !tracks.isEmpty {
+            return
+        }
         isLoading = true
         // One platform at a time, same import paths as the pasted-link
         // import — never a silent fallback to another platform. The
@@ -511,6 +530,9 @@ final class MusicPlazaDetailViewModel: ObservableObject {
     private func finish(_ imported: ImportedPlaylist) {
         isLoading = false
         tracks = imported.tracks.map(MusicSong.init(from:))
+        if !tracks.isEmpty {
+            loadedAt = Date()
+        }
         if imported.missing > 0 {
             note = "其中 \(imported.missing) 首未能导入"
         } else if !imported.note.isEmpty {
@@ -572,6 +594,9 @@ struct MusicPlazaDetailView: View {
                 .haoBottomChromePadding()
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
+                // b45-g (Coda §8.2): pull-to-refresh bypasses the
+                // 300s playlist cache.
+                .refreshable { viewModel.load(force: true) }
             }
         }
         .background(theme.scaffoldBackground)

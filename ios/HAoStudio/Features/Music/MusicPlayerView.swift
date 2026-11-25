@@ -132,6 +132,22 @@ struct MusicPlayerView: View {
     // the control bar at 200pt; any upward scroll restores it.
     @State private var lyricsScrollDownAccum: CGFloat = 0
     @State private var lastLyricsDragY: CGFloat?
+    // b45-g (Coda §8.1 CoverZoomMotion): downward dismiss-drag
+    // progress, in points. While a close-candidate drag is in
+    // flight the whole surface shrinks toward the mini (min scale
+    // 0.86, reached at the 190pt close threshold) and rounds up
+    // (36pt × min(1, translation/40)); a cancelled drag springs
+    // back on playerSpringBack (0.38/0.86). The 190pt scale ramp
+    // is our choice — Coda gives the min scale, not the ramp.
+    @State private var dismissDragY: CGFloat = 0
+    /// Drag-linked scale: 1.0 at rest, 0.86 at the close threshold.
+    private var dismissDragScale: CGFloat {
+        max(0.86, 1 - 0.14 * min(1, dismissDragY / 190))
+    }
+    /// Drag-linked corner radius: 0 at rest, 36pt past 40pt of drag.
+    private var dismissDragCornerRadius: CGFloat {
+        36 * min(1, dismissDragY / 40)
+    }
     // b45-a (Coda §2.8): the lyric row tapped for a seek keeps its
     // confirm state 380 ms (150 ms with Reduce Motion), then the
     // view polls every 50 ms (max 40) until the active line lands
@@ -160,17 +176,34 @@ struct MusicPlayerView: View {
                     VStack {
                         Spacer()
                         Text(toast)
-                            .font(.haoFootnoteMedium)
+                            // b45-g (Coda §8.6 Toast style, plan §11
+                            // C20): 12.5pt medium, radius 10, shadow
+                            // black 0.15 / radius 8 / y 4, spring
+                            // 0.3 in/out. POSITION stays our bottom
+                            // capsule slot — only the style params
+                            // are Coda's, so the entry edge mirrors
+                            // to the bottom. The dark 0.7 fill stays:
+                            // white text on glass would be unreadable
+                            // in light mode (theme rule: light +
+                            // dark). Dwell stays our 2s — Coda's was
+                            // never located (§14 item 1).
+                            .font(.system(size: 12.5, weight: .medium))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                            .background(Color.black.opacity(0.7), in: Capsule())
+                            .padding(.vertical, 9)
+                            .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
                             .padding(.bottom, 90)
-                            .transition(.opacity)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                    .animation(.easeInOut(duration: 0.25), value: playerVM.toast)
+                    .animation(.spring(duration: 0.3), value: playerVM.toast)
                 }
             }
+            // b45-g: the drag morph — the surface shrinks and rounds
+            // as a dismiss drag progresses (see dismissDragY). At
+            // rest this is scale 1 / radius 0, i.e. no visual change.
+            .scaleEffect(dismissDragScale)
+            .clipShape(RoundedRectangle(cornerRadius: dismissDragCornerRadius, style: .continuous))
             .frame(width: geo.size.width, height: geo.size.height)
         }
         // Cover tint follows the song (b38, item 1): the old
@@ -241,8 +274,12 @@ struct MusicPlayerView: View {
         }
         // Swipe down to close (see handleDismissDrag): simultaneous
         // so the Slider and the lyrics list keep their own drags.
+        // The onChanged half drives the drag morph (b45-g); the
+        // onEnded half decides close vs spring-back.
         .simultaneousGesture(
-            DragGesture(minimumDistance: 24).onEnded(handleDismissDrag)
+            DragGesture(minimumDistance: 24)
+                .onChanged(handleDismissDragChanged)
+                .onEnded(handleDismissDrag)
         )
     }
 
@@ -292,14 +329,46 @@ struct MusicPlayerView: View {
     /// the lyrics list owns vertical drags elsewhere. The top-bar
     /// zone is 140pt in portrait and the 60pt top strip in
     /// landscape (the screen is short there).
+    /// b45-g: a drag that does NOT close springs the surface back
+    /// on Coda's rebound spring (response 0.38 / damping 0.86).
     private func handleDismissDrag(_ value: DragGesture.Value) {
         let translation = value.translation
         let predicted = value.predictedEndTranslation.height
         guard translation.height > 110 || predicted > 190,
-              abs(translation.width) < 80 else { return }
+              abs(translation.width) < 80 else {
+            withAnimation(HaoPlayerMotion.playerSpringBack) {
+                dismissDragY = 0
+            }
+            return
+        }
         let isLandscape = UIScreen.main.bounds.width > UIScreen.main.bounds.height
-        if playerVM.showLyrics && value.startLocation.y > (isLandscape ? 60 : 140) { return }
+        if playerVM.showLyrics && value.startLocation.y > (isLandscape ? 60 : 140) {
+            withAnimation(HaoPlayerMotion.playerSpringBack) {
+                dismissDragY = 0
+            }
+            return
+        }
         close()
+    }
+
+    /// Drag morph driver (b45-g, Coda §8.1): while a drag that
+    /// could close is in flight, track its downward distance so
+    /// the surface shrinks/rounds with it. The predicate mirrors
+    /// handleDismissDrag exactly — a drag that cannot close never
+    /// morphs (the Slider and the lyrics list keep their drags
+    /// visually untouched). Upward or horizontal movement resets.
+    private func handleDismissDragChanged(_ value: DragGesture.Value) {
+        let translation = value.translation
+        guard translation.height > 0, abs(translation.width) < 80 else {
+            dismissDragY = 0
+            return
+        }
+        let isLandscape = UIScreen.main.bounds.width > UIScreen.main.bounds.height
+        if playerVM.showLyrics && value.startLocation.y > (isLandscape ? 60 : 140) {
+            dismissDragY = 0
+            return
+        }
+        dismissDragY = translation.height
     }
 
     /// Content width: the GeometryReader width minus the safe-area

@@ -130,10 +130,14 @@ final class MusicDiscoveryViewModel: ObservableObject {
 
     // MARK: - Daily
 
-    func reloadDaily() {
+    /// Daily picks, cached per day key (Coda §3.1: 86400s, day-keyed).
+    /// A plain call serves the cache; `force` regenerates today
+    /// (pull-to-refresh and the "刷新今日推荐" menu — the menu was
+    /// a no-op while the cache lived, b45-g).
+    func reloadDaily(force: Bool = false) {
         let dayKey = musicDayKey(of: Date())
         dailyDayKey = dayKey
-        if let cached = MusicLibraryStore.dailyTracks(for: dayKey) {
+        if !force, let cached = MusicLibraryStore.dailyTracks(for: dayKey) {
             dailyTracks = cached
             rebuildDailySpares()
             return
@@ -208,6 +212,31 @@ final class MusicDiscoveryViewModel: ObservableObject {
             }
             self.exploreLoadedAt[category] = Date()
             self.exploreSnapshots[category] = Self.filterExplorePlaylists(all, category: category)
+        }
+    }
+
+    /// Pull-to-refresh (b45-g, Coda §8.2 PanelRefresh): drop every
+    /// explore snapshot + the shared plaza cache, then re-filter
+    /// every already-loaded category from ONE fresh plaza fetch —
+    /// not one fetch per shelf. A failed fetch keeps the old
+    /// snapshots (with cleared timestamps, so the next shelf
+    /// appear refetches) instead of blanking the page.
+    func refreshExplore() {
+        let loadedCategories = Set(exploreSnapshots.keys)
+        exploreLoadedAt.removeAll()
+        exploreAllLoadedAt = nil
+        exploreAllPlaylists = []
+        if loadedCategories.isEmpty {
+            loadExploreCategory("全部")
+            return
+        }
+        loadExploreAll { [weak self] all in
+            guard let self = self else { return }
+            guard let all = all else { return }
+            for category in loadedCategories {
+                self.exploreLoadedAt[category] = Date()
+                self.exploreSnapshots[category] = Self.filterExplorePlaylists(all, category: category)
+            }
         }
     }
 

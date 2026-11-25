@@ -358,6 +358,11 @@ struct MusicPlaylistDetailView: View {
                 .haoBottomChromePadding()
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
+                // b45-g (Coda §8.2): pull-to-refresh re-reads the
+                // local store. No TTL here — this is a local
+                // playlist, not a server one (Coda's 300s applies
+                // to server playlists; see plaza detail).
+                .refreshable { libraryVM.reload() }
                 .navigationTitle(list.name)
                 .navigationBarTitleDisplayMode(.inline)
             } else {

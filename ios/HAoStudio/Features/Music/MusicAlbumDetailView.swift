@@ -231,6 +231,10 @@ struct MusicAlbumDetailView: View {
                 .haoBottomChromePadding()
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
+                // b45-g (Coda §8.2): pull-to-refresh refetches the
+                // album. No TTL — album detail has no cache today
+                // and none is added; refresh is always a real fetch.
+                .refreshable { viewModel.load() }
             }
         }
         .background(theme.scaffoldBackground)

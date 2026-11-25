@@ -109,7 +109,15 @@ struct MainTabView: View {
     /// narrowed capsule form).
     private var bottomChromeContent: some View {
         VStack(spacing: HaoLayout.floatingStackSpacing) {
-            MiniPlayerBar(onTapFullPlayer: { showingFullPlayer = true }, morphNamespace: playerMorph)
+            MiniPlayerBar(onTapFullPlayer: {
+                // b45-g (Coda §8.1 CoverZoomMotion.open): the expand
+                // runs on the open spring (response 0.5 / damping
+                // 0.94). The token existed since b45-a but nothing
+                // used it — the cover presented with the system
+                // default. The chrome fade keeps its own
+                // settleSpring (b39 chain, untouched).
+                withAnimation(HaoPlayerMotion.playerOpen) { showingFullPlayer = true }
+            }, morphNamespace: playerMorph)
             GlassTabBar(
                 items: tabBarItems,
                 selection: $selectedTab,
