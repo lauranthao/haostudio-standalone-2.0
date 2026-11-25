@@ -79,6 +79,20 @@ final class LiveStallWatchdog {
         }
         let stalledFor = now().timeIntervalSince(since)
         if stalledFor >= LiveStallWatchdog.failAfter {
+            // Fail leg arms only after the first position movement
+            // (b49 sweep #15): before the first frame the position
+            // is legitimately static (slow start, backend prepared
+            // but no frame yet), so a healthy-but-slow stream must
+            // never fail here — warn-only until `progressSeen`
+            // proves the stream can move at all. `progressSeen`
+            // was set but never read before this fix.
+            guard progressSeen else {
+                if !warned {
+                    warned = true
+                    return .warn
+                }
+                return .none
+            }
             lastProgressAt = nil
             return .failed
         }
@@ -87,6 +101,52 @@ final class LiveStallWatchdog {
             return .warn
         }
         return .none
+    }
+}
+
+// MARK: - Preferred live quality (b49 sweep #14)
+//
+// The quality the user last picked, persisted per platform so the
+// next room entry re-opens at that tier instead of the server best
+// tier (the cellular downgrade then caps it, never re-applies as
+// the choice itself). Stored in UserDefaults as one
+// `[platformRawValue: qualityId]` dict under
+// `hao_live_preferred_quality`. Foundation-only, so the harness
+// can drive it without the driver. Only a user-initiated switch
+// writes it (LiveDriver.switchQuality); entry / cellular caps
+// never do.
+enum LivePreferredQuality {
+    static let defaultsKey = "hao_live_preferred_quality"
+
+    /// The persisted quality id for this platform, or nil when the
+    /// user never picked one (entry then opens at the best tier).
+    static func preferredQualityId(for platform: LivePlatform, defaults: UserDefaults = .standard) -> String? {
+        guard let stored = defaults.dictionary(forKey: defaultsKey) else {
+            return nil
+        }
+        return stored[platform.rawValue] as? String
+    }
+
+    /// Persist (or clear, with nil) the user's picked tier for
+    /// this platform.
+    static func savePreferredQualityId(_ id: String?, for platform: LivePlatform, defaults: UserDefaults = .standard) {
+        var stored = (defaults.dictionary(forKey: defaultsKey) as? [String: String]) ?? [:]
+        if let id = id {
+            stored[platform.rawValue] = id
+        } else {
+            stored.removeValue(forKey: platform.rawValue)
+        }
+        defaults.set(stored, forKey: defaultsKey)
+    }
+
+    /// Index of the preferred tier in the resolved quality list,
+    /// or nil when there is no preference or it is not offered
+    /// for this room (entry then falls back to the best tier).
+    static func entryQualityIndex(qualities: [LiveQuality], preferredId: String?) -> Int? {
+        guard let preferredId = preferredId else {
+            return nil
+        }
+        return qualities.firstIndex(where: { $0.id == preferredId })
     }
 }
 
@@ -382,18 +442,28 @@ final class LiveRecovery {
     /// false the resolution is returned WITHOUT installing it, so a
     /// quality switch can inspect it first and roll back on a
     /// mismatch without ever touching the playing lines.
-    func fetchFresh(adopting: Bool = true, completion: @escaping (LivePlayUrlResolution?) -> Void) {
+    ///
+    /// Throttle (b49 sweep #11): the 60 s stamp is taken ONLY on a
+    /// successful fetch — a failed fetch, a stall recovery or a
+    /// prior switch must not block the next fetch for 60 s. With
+    /// `bypassThrottle` (user-initiated quality switches only) the
+    /// call neither checks nor stamps the recovery throttle: a
+    /// switch the user asked for is never blocked by a recovery
+    /// fetch, and a successful switch never blocks a later
+    /// recovery fetch.
+    func fetchFresh(adopting: Bool = true, bypassThrottle: Bool = false, completion: @escaping (LivePlayUrlResolution?) -> Void) {
         let current = now()
-        let throttled = locked {
-            if let last = lastFreshFetchAt, current.timeIntervalSince(last) < LiveRecovery.freshFetchThrottle {
-                return true
+        if !bypassThrottle {
+            let throttled = locked {
+                guard let last = lastFreshFetchAt else {
+                    return false
+                }
+                return current.timeIntervalSince(last) < LiveRecovery.freshFetchThrottle
             }
-            lastFreshFetchAt = current
-            return false
-        }
-        if throttled {
-            completion(nil)
-            return
+            if throttled {
+                completion(nil)
+                return
+            }
         }
         fetchFromResolver { [weak self] resolution in
             guard let self = self else {
@@ -403,6 +473,9 @@ final class LiveRecovery {
             guard let resolution = resolution, !resolution.appliedUrls.isEmpty else {
                 completion(nil)
                 return
+            }
+            if !bypassThrottle {
+                self.locked { self.lastFreshFetchAt = current }
             }
             if adopting {
                 self.adopt(resolution: resolution, previousUrl: nil)
@@ -995,7 +1068,11 @@ final class LiveRoomSession {
             pendingQuality = quality
         }
         recovery.quality = quality
-        recovery.fetchFresh(adopting: false) { [weak self] resolution in
+        // User-initiated switch: exempt from the recovery throttle
+        // (b49 sweep #11) — a stall recovery must never block the
+        // user's own switch for 60 s, and this switch must not
+        // stamp the throttle a later recovery would hit.
+        recovery.fetchFresh(adopting: false, bypassThrottle: true) { [weak self] resolution in
             guard let self = self else {
                 completion(false)
                 return

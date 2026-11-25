@@ -43,6 +43,11 @@ final class LiveTabViewModel: ObservableObject {
 
     @Published var platform: LivePlatform = .bilibili
     @Published var selectedArea: String?
+    /// Platforms the settings switches leave enabled (b49 sweep
+    /// #2): the tabs only ever show these. Refreshed on every
+    /// appear / reload, because the user may have toggled a
+    /// platform in settings since the tab last loaded.
+    @Published private(set) var enabledPlatforms: [LivePlatform] = LivePlatform.enabledCases
 
     /// The gateway, readable so the search page can share it.
     let gateway: LiveDataGateway?
@@ -65,6 +70,7 @@ final class LiveTabViewModel: ObservableObject {
     var hasGateway: Bool { gateway != nil }
 
     func reload() {
+        refreshEnabledPlatforms()
         follows = LiveLibraryStore.follows()
         history = LiveLibraryStore.history()
         page = 0
@@ -95,6 +101,7 @@ final class LiveTabViewModel: ObservableObject {
     /// re-run `reload()` and wipe the grid + scroll position.
     func loadIfNeeded() {
         refreshLibrary()
+        refreshEnabledPlatforms()
         if rooms.isEmpty && !isLoading {
             loadFresh()
         }
@@ -103,8 +110,21 @@ final class LiveTabViewModel: ObservableObject {
         }
     }
 
+    /// Re-read the enabled platforms from the settings switches
+    /// (b49 sweep #2) and move off a platform that was just
+    /// switched off: the selected platform must always be one of
+    /// the enabled tabs, or the tab would fetch a platform the
+    /// user turned off.
+    private func refreshEnabledPlatforms() {
+        enabledPlatforms = LivePlatform.enabledCases
+        if !enabledPlatforms.contains(platform) {
+            platform = enabledPlatforms[0]
+            selectedArea = nil
+        }
+    }
+
     func selectPlatform(_ next: LivePlatform) {
-        guard next != platform else { return }
+        guard next != platform, enabledPlatforms.contains(next) else { return }
         platform = next
         selectedArea = nil
         reload()
@@ -143,7 +163,13 @@ final class LiveTabViewModel: ObservableObject {
                   platformId == self.platform.rawValue,
                   area == self.selectedArea else { return }
             self.isLoading = false
-            if result.rooms.isEmpty && self.rooms.isEmpty {
+            if result.rooms.isEmpty {
+                // (b49 sweep #34) An empty answer is a failed
+                // load whether the grid was empty or not: with a
+                // non-empty grid the rooms stay (they may still be
+                // good) but loadFailed surfaces the stale refresh
+                // — the grid below shows a retry row while it is
+                // set, instead of keeping stale rooms silently.
                 self.loadFailed = true
             } else {
                 // Dedupe by platform + room id before the grid
@@ -318,7 +344,8 @@ struct LiveTabView: View {
     private func openRoom(_ room: LiveRoom, playlist: [LiveRoom]) {
         LiveLibraryStore.recordHistory(
             platform: room.platform.rawValue, roomId: room.roomId,
-            title: room.title, nick: room.streamer, cover: room.cover)
+            title: room.title, nick: room.streamer, cover: room.cover,
+            playUrlsJSON: LiveLibraryStore.playUrlsJSON(from: room.data))
         viewModel.refreshLibrary()
         path.append(.room(room, playlist))
     }
@@ -368,7 +395,9 @@ struct LiveTabView: View {
     /// levels of navigation no longer look equal — platform is
     /// the tab level, category is the chip level.
     private var platformRow: some View {
-        LivePlatformTextTabs(selected: viewModel.platform) { platform in
+        LivePlatformTextTabs(
+            platforms: viewModel.enabledPlatforms,
+            selected: viewModel.platform) { platform in
             viewModel.selectPlatform(platform)
         }
     }
@@ -545,7 +574,19 @@ struct LiveTabView: View {
                     }
                 }
                 .padding(.horizontal, LiveGridLayout.gridEdgePadding)
-                if viewModel.loadingMore {
+                if viewModel.loadFailed {
+                    // (b49 sweep #34) The last refresh returned
+                    // empty over these rooms: say so and offer a
+                    // retry instead of leaving stale rooms with no
+                    // indication. loadFresh clears the flag when it
+                    // starts, so a good refresh hides this row.
+                    Button("刷新没有返回新房间，点击重试") { viewModel.loadFresh() }
+                        .font(.haoFootnoteMedium)
+                        .foregroundStyle(theme.accentText)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .buttonStyle(.plain)
+                } else if viewModel.loadingMore {
                     ProgressView()
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
@@ -705,7 +746,8 @@ extension LiveFollowedRoom {
         LiveRoom(
             roomId: roomId, platform: LivePlatform(rawValue: platform) ?? .bilibili,
             title: title, streamer: nick, avatar: "", cover: cover,
-            onlineCount: 0, isLive: false, link: "")
+            onlineCount: 0, isLive: false, link: "",
+            data: LiveLibraryStore.playUrlsData(from: playUrlsJSON))
     }
 }
 
@@ -714,7 +756,20 @@ extension LiveHistoryEntry {
         LiveRoom(
             roomId: roomId, platform: LivePlatform(rawValue: platform) ?? .bilibili,
             title: title, streamer: nick, avatar: "", cover: cover,
-            onlineCount: 0, isLive: false, link: "")
+            onlineCount: 0, isLive: false, link: "",
+            data: LiveLibraryStore.playUrlsData(from: playUrlsJSON))
+    }
+}
+
+/// Platforms the live source switches leave enabled (b49 sweep
+/// #2): `LiveSourcePrefs.load()` reads the `hao_live_sources`
+/// collection the settings page writes; the tabs, the search
+/// page and the gateway all filter through this one list, so a
+/// platform switched off can appear in none of them. An empty or
+/// unreadable list means all five (the prefs' own default).
+extension LivePlatform {
+    static var enabledCases: [LivePlatform] {
+        LivePlatform.enabledCases(from: LiveSourcePrefs.load())
     }
 }
 
@@ -727,6 +782,11 @@ extension LiveHistoryEntry {
 /// the strip never jumps. Used by LiveTabView and LiveSearchView
 /// so the two pages cannot drift apart again.
 struct LivePlatformTextTabs: View {
+    /// Platforms to show (b49 sweep #2): the live tab passes the
+    /// settings-enabled list; the search page does the same. The
+    /// default is all five, so a caller that does not filter
+    /// behaves exactly as before.
+    var platforms: [LivePlatform] = LivePlatform.allCases
     var selected: LivePlatform
     var onSelect: (LivePlatform) -> Void
 
@@ -735,7 +795,7 @@ struct LivePlatformTextTabs: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 24) {
-                ForEach(LivePlatform.allCases) { platform in
+                ForEach(platforms) { platform in
                     Button(action: { onSelect(platform) }) {
                         VStack(spacing: 6) {
                             Text(platform.displayName)

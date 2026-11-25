@@ -36,9 +36,20 @@ struct VideoEmbyLibrary: Equatable, Identifiable {
 /// One page of items from a list endpoint. `hasMore` is false
 /// when the last page returned fewer rows than the page size, or
 /// when the service says there is nothing after this page.
+/// `note` is a non-blocking line (b49 sweep #21): when one side
+/// of a parallel fetch failed, the good side's items still show
+/// and this carries the failure line for the banner instead of
+/// failing the whole page.
 struct VideoItemPage: Equatable {
     let items: [VideoItem]
     let hasMore: Bool
+    let note: String?
+
+    init(items: [VideoItem], hasMore: Bool, note: String? = nil) {
+        self.items = items
+        self.hasMore = hasMore
+        self.note = note
+    }
 
     static let empty = VideoItemPage(items: [], hasMore: false)
 }
@@ -78,7 +89,12 @@ protocol VideoDataGateway {
     /// "这个分类下没有内容".
     func fetchByType(_ type: String, page: Int, area: String, year: String, by: String, completion: @escaping (Result<VideoItemPage, VideoFetchError>) -> Void)
     /// CMS search across enabled sources, fastest first.
-    func search(keyword: String, completion: @escaping ([VideoItem]) -> Void)
+    /// Page 1 searches all sources (15 s budget); later pages
+    /// are one more source-page each (b49 sweep #22 — load-more).
+    /// Failures surface as VideoFetchError (not swallowed to []):
+    /// a dead source must show an honest error + retry, never
+    /// "没有找到相关影片" (b49 sweep #3).
+    func search(keyword: String, page: Int, completion: @escaping (Result<[VideoItem], VideoFetchError>) -> Void)
     /// Full detail: CMS lines + Douban metadata merged. Nil when
     /// the title cannot be resolved on any source.
     func fetchDetail(item: VideoItem, completion: @escaping (VideoDetail?) -> Void)
@@ -109,8 +125,9 @@ protocol VideoDataGateway {
     /// Emby library search. Failures surface as EmbyError (not
     /// swallowed to []): the dedicated Emby search page shows an
     /// honest offline error, while the CMS search page keeps the
-    /// Emby section hidden on failure.
-    func searchEmby(keyword: String, completion: @escaping (Result<[VideoItem], EmbyError>) -> Void)
+    /// Emby section hidden on failure. `startIndex` pages the
+    /// server search (b49 sweep #22 — load-more, 50 per page).
+    func searchEmby(keyword: String, startIndex: Int, completion: @escaping (Result<[VideoItem], EmbyError>) -> Void)
     /// Server-side continue watching (`/Users/{id}/Items/Resume`):
     /// in-progress movies + episodes with their positions. A
     /// failure surfaces as EmbyError; the tab treats it as "no
@@ -129,6 +146,19 @@ protocol VideoDataGateway {
         line: PlayLine,
         completion: @escaping (Bool) -> Void
     )
+    /// Whether the selected episode can be downloaded at all
+    /// (b49 sweep #8): false when the resolved URL is HLS (the
+    /// engine would save only the playlist file, not the
+    /// segments) or when there is no URL. The detail page
+    /// resolves this up front and hides/disables the button
+    /// instead of letting the tap fail with "下载暂不可用".
+    /// HLS segment download is deferred, not implemented.
+    func checkDownloadable(
+        detail: VideoDetail,
+        episode: PlayEpisode,
+        line: PlayLine,
+        completion: @escaping (Bool) -> Void
+    )
 }
 
 /// Default for the newest gateway method: gateways that predate
@@ -138,6 +168,30 @@ protocol VideoDataGateway {
 extension VideoDataGateway {
     func fetchEmbyResume(completion: @escaping (Result<[EmbyResumeItem], EmbyError>) -> Void) {
         completion(.failure(.unreachable()))
+    }
+
+    /// Defaults for the paged search methods (b49 sweep #3/#22):
+    /// stubs that predate them keep compiling and answer
+    /// "unreachable" — the search pages surface that as an error
+    /// state with a retry. The real gateway overrides both below.
+    func search(keyword: String, page: Int, completion: @escaping (Result<[VideoItem], VideoFetchError>) -> Void) {
+        completion(.failure(.unreachable))
+    }
+
+    func searchEmby(keyword: String, startIndex: Int, completion: @escaping (Result<[VideoItem], EmbyError>) -> Void) {
+        completion(.failure(.unreachable()))
+    }
+
+    /// Default for checkDownloadable (b49 sweep #8): stubs that
+    /// predate it answer "not downloadable". The real gateway
+    /// overrides it below.
+    func checkDownloadable(
+        detail: VideoDetail,
+        episode: PlayEpisode,
+        line: PlayLine,
+        completion: @escaping (Bool) -> Void
+    ) {
+        completion(false)
     }
 }
 
@@ -241,20 +295,34 @@ final class RealVideoDataGateway: VideoDataGateway {
         }
     }
 
-    func search(keyword: String, completion: @escaping ([VideoItem]) -> Void) {
-        cms.search(query: keyword) { items, _ in
-            DispatchQueue.main.async { completion(items) }
+    func search(keyword: String, page: Int, completion: @escaping (Result<[VideoItem], VideoFetchError>) -> Void) {
+        cms.search(query: keyword, page: page) { items, anyOk in
+            DispatchQueue.main.async {
+                // A dead source is an error, never an empty result
+                // (b49 sweep #3): `anyOk == false` means no source
+                // answered at all, so the search page shows the
+                // error card + retry instead of "没有找到相关影片".
+                guard anyOk else {
+                    completion(.failure(.unreachable))
+                    return
+                }
+                completion(.success(items))
+            }
         }
     }
 
-    /// CMS detail + Douban metadata, one completion. The two fetches
-    /// run in parallel; Douban is slow by design (serial chain + 1 s
-    /// gap, suggest + abstract + mobile + cast photos), so it gets
-    /// 2.5 s after the CMS detail lands — a cache/builtin hit merges
-    /// in, a slow miss falls back to the CMS meta (rating / cast /
-    /// synopsis from vod_score / vod_actor / vod_content) instead of
-    /// holding the episode grid hostage. The detail view tolerates
-    /// exactly one completion, so there is no second call.
+    /// CMS detail + Douban metadata, up to two completions. The
+    /// two fetches run in parallel; the CMS detail publishes the
+    /// moment it lands — the play button and episode grid never
+    /// wait for Douban (b49 sweep #17: the old finish() required
+    /// doubanDone, so the grid sat hostage up to 2.5 s behind
+    /// the Douban cap). Douban gets 2.5 s after the CMS detail
+    /// lands; a cache/builtin hit merges in as a SECOND publish
+    /// with the same lines + merged meta (the detail view just
+    /// replaces `detail` and recomputes the same selection, so
+    /// the second publish is safe), a slow miss publishes
+    /// nothing more and the CMS meta stands. Nil only when the
+    /// CMS detail itself fails.
     func fetchDetail(item: VideoItem, completion: @escaping (VideoDetail?) -> Void) {
         guard let sourceId = item.sourceId else {
             DispatchQueue.main.async { completion(nil) }
@@ -264,14 +332,10 @@ final class RealVideoDataGateway: VideoDataGateway {
         var doubanMeta: VideoMeta?
         var cmsDone = false
         var doubanDone = false
-        var finished = false
-        func finish() {
-            guard !finished else { return }
-            finished = true
-            guard var detail = cmsDetail else {
-                completion(nil)
-                return
-            }
+        var publishedCMS = false
+        var publishedMerged = false
+        func mergedDetail() -> VideoDetail? {
+            guard var detail = cmsDetail else { return nil }
             if let dMeta = doubanMeta {
                 detail = VideoDetail(
                     item: detail.item,
@@ -285,13 +349,34 @@ final class RealVideoDataGateway: VideoDataGateway {
                     )
                 )
             }
-            completion(detail)
+            return detail
+        }
+        /// First publish: CMS lines as soon as they land.
+        func publishCMS() {
+            guard cmsDone, !publishedCMS else { return }
+            publishedCMS = true
+            completion(cmsDetail)
+        }
+        /// Second publish: same lines + Douban meta, only when
+        /// Douban actually answered with meta.
+        func publishMerged() {
+            guard cmsDone, doubanDone, !publishedMerged, cmsDetail != nil, doubanMeta != nil else { return }
+            publishedMerged = true
+            completion(mergedDetail())
         }
         func maybeFinish() {
             // Complete when CMS is in and Douban has answered or
             // timed out. All state lives on the main queue.
             guard cmsDone else { return }
-            if doubanDone { finish() }
+            if doubanDone {
+                if doubanMeta != nil {
+                    publishMerged()
+                } else if !publishedCMS {
+                    publishCMS()
+                }
+            } else {
+                publishCMS()
+            }
         }
         cms.detail(sourceId: sourceId, vodId: item.id) { detail in
             DispatchQueue.main.async {
@@ -377,21 +462,26 @@ final class RealVideoDataGateway: VideoDataGateway {
         // both kinds across all libraries).
         var moviesPage: EmbyItemsPage?
         var seriesPage: EmbyItemsPage?
-        /// A failed side fails the page: one side's items with the
-        /// other's silence is a half-truth the UI would show as a
-        /// complete library.
-        var firstError: EmbyError?
+        /// A failed side no longer fails the page (b49 sweep
+        /// #21): the good side's items show and the failure rides
+        /// as a non-blocking note (VideoItemPage.note), which the
+        /// tab shows as a banner over the grid.
+        var moviesError: EmbyError?
+        var seriesError: EmbyError?
         func finish() {
             guard let movies = moviesPage, let series = seriesPage else { return }
-            if let error = firstError {
-                completion(.failure(error))
-                return
-            }
             let items = movies.items + series.items
-            let total = movies.totalCount + series.totalCount
+            // Per-side hasMore: the shared startIndex + combined
+            // count used to stay true past the end (up-to-100-item
+            // pages stepping by 50), yielding 1–2 empty trailing
+            // fetches with the bottom spinner showing.
+            let moviesHasMore = moviesError == nil && startIndex + movies.items.count < movies.totalCount
+            let seriesHasMore = seriesError == nil && startIndex + series.items.count < series.totalCount
+            let note = (moviesError ?? seriesError)?.message
             completion(.success(VideoItemPage(
                 items: items,
-                hasMore: startIndex + items.count < total
+                hasMore: moviesHasMore || seriesHasMore,
+                note: note
             )))
         }
         client.movies(libraryId: libraryId, startIndex: startIndex) { result in
@@ -399,7 +489,7 @@ final class RealVideoDataGateway: VideoDataGateway {
                 switch result {
                 case .failure(let error):
                     moviesPage = EmbyItemsPage(items: [], totalCount: 0)
-                    if firstError == nil { firstError = error }
+                    if moviesError == nil { moviesError = error }
                 case .success(let pageResult): moviesPage = pageResult
                 }
                 finish()
@@ -410,7 +500,7 @@ final class RealVideoDataGateway: VideoDataGateway {
                 switch result {
                 case .failure(let error):
                     seriesPage = EmbyItemsPage(items: [], totalCount: 0)
-                    if firstError == nil { firstError = error }
+                    if seriesError == nil { seriesError = error }
                 case .success(let pageResult): seriesPage = pageResult
                 }
                 finish()
@@ -445,17 +535,45 @@ final class RealVideoDataGateway: VideoDataGateway {
         }
     }
 
-    func searchEmby(keyword: String, completion: @escaping (Result<[VideoItem], EmbyError>) -> Void) {
+    func searchEmby(keyword: String, startIndex: Int, completion: @escaping (Result<[VideoItem], EmbyError>) -> Void) {
         guard let client = embyClient() else {
             DispatchQueue.main.async { completion(.failure(.unreachable())) }
             return
         }
-        client.search(query: keyword) { result in
+        client.search(query: keyword, startIndex: startIndex) { result in
             DispatchQueue.main.async { completion(result.map { $0.items }) }
         }
     }
 
     // MARK: - Download
+
+    /// Whether the selected episode can be downloaded (b49 sweep
+    /// #8): resolve first — the button state must reflect the
+    /// real URL, not the episode's existence. HLS (m3u8) is not
+    /// downloadable (the engine saves only the playlist); HLS
+    /// segment download is deferred. Emby never downloads
+    /// through this gateway (expiring credentialed URL — see
+    /// enqueueDownload).
+    func checkDownloadable(
+        detail: VideoDetail,
+        episode: PlayEpisode,
+        line: PlayLine,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard detail.item.detailSource != .emby else {
+            DispatchQueue.main.async { completion(false) }
+            return
+        }
+        cms.resolvePlayURL(detail: detail, episode: episode, line: line, excluding: []) { url in
+            DispatchQueue.main.async {
+                guard let url = url else {
+                    completion(false)
+                    return
+                }
+                completion(url.pathExtension.lowercased() != "m3u8")
+            }
+        }
+    }
 
     /// Queue one episode for download. The URL resolves the same
     /// way the player does (line fallback, no exclusions — a fresh

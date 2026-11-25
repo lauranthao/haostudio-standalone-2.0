@@ -67,6 +67,17 @@ enum LivePlatform: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Platforms the live source switches leave enabled (b49
+    /// sweep #2): `enabledIDs` are Flutter site ids
+    /// (`LiveSourcePrefs.load()`); the tabs, the search page and
+    /// the gateway all filter through this one list. An empty or
+    /// fully-invalid list means all five (the prefs' own default).
+    static func enabledCases(from enabledIDs: [String]) -> [LivePlatform] {
+        let enabled = Set(enabledIDs)
+        let filtered = allCases.filter { enabled.contains($0.flutterSiteId) }
+        return filtered.isEmpty ? allCases : filtered
+    }
+
     /// Room page URL for a room id (used for `LiveRoom.link` fallbacks).
     func roomLink(roomId: String) -> String {
         switch self {

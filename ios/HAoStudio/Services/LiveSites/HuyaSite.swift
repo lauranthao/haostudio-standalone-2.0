@@ -602,6 +602,37 @@ final class HuyaLiveSite: LiveSiteResolver {
         return body()
     }
 
+    /// Full resolutions banked by a background line walk (b49
+    /// sweep #10 — same shape as DouyuLiveSite): `resolve`
+    /// completes on the first playable line and the rest keep
+    /// resolving; the finished resolution lands here, keyed by
+    /// room + requested quality id, so the next resolve answers
+    /// at once with every line. 90 s TTL — inside the web
+    /// anti-code's ~120 s lease, so a cached resolution is never
+    /// served past its usable life.
+    private var backgroundResolutions: [String: (resolution: LivePlayUrlResolution, storedAt: Date)] = [:]
+    private static let backgroundCacheTTL: TimeInterval = 90
+
+    private func backgroundCacheKey(roomId: String, qualityId: String) -> String {
+        "\(roomId)|\(qualityId)"
+    }
+
+    private func cachedBackgroundResolution(roomId: String, qualityId: String) -> LivePlayUrlResolution? {
+        locked {
+            guard let entry = backgroundResolutions[backgroundCacheKey(roomId: roomId, qualityId: qualityId)],
+                  Date().timeIntervalSince(entry.storedAt) < HuyaLiveSite.backgroundCacheTTL else {
+                return nil
+            }
+            return entry.resolution
+        }
+    }
+
+    private func storeBackgroundResolution(_ resolution: LivePlayUrlResolution, roomId: String, qualityId: String) {
+        locked {
+            backgroundResolutions[backgroundCacheKey(roomId: roomId, qualityId: qualityId)] = (resolution, Date())
+        }
+    }
+
     init(fetcher: LiveDataFetcher? = nil, wupClient: HuyaWupClient? = nil) {
         let resolvedFetcher = fetcher ?? LiveHTTP.defaultFetcher
         self.fetcher = resolvedFetcher
@@ -723,9 +754,31 @@ final class HuyaLiveSite: LiveSiteResolver {
                 }
                 let requested = qualities.first { $0.id == quality?.id } ?? qualities[0]
                 let bitRate = Int(requested.id) ?? 0
-                self.resolveHuyaLines(data.lines, bitRate: bitRate) { resolved in
+                // A background walk already banked every line for
+                // this room + bitrate (b49 sweep #10): answer at
+                // once, no serial chain.
+                if let cached = self.cachedBackgroundResolution(roomId: trimmed, qualityId: requested.id) {
+                    completion(.success(cached))
+                    return
+                }
+                var deliveredEarly = false
+                self.resolveHuyaLines(data.lines, bitRate: bitRate, onFirst: { [weak self] first in
+                    guard let self = self, !deliveredEarly else { return }
+                    deliveredEarly = true
+                    let liveLines = [LiveLine(name: first.line.cdnType, urls: [first.url], format: first.line.lineType == .hls ? "hls" : "flv")]
+                    var filled = qualities
+                    var applied = requested
+                    if let index = filled.firstIndex(where: { $0.id == requested.id }) {
+                        filled[index].lines = liveLines
+                        applied = filled[index]
+                    }
+                    completion(.success(LivePlayUrlResolution.applying(applied, in: filled)))
+                }) { [weak self] resolved in
+                    guard let self = self else { return }
                     if resolved.isEmpty {
-                        completion(.failure(LiveError.transportFailed("虎牙全部线路均不可用")))
+                        if !deliveredEarly {
+                            completion(.failure(LiveError.transportFailed("虎牙全部线路均不可用")))
+                        }
                         return
                     }
                     var filled = qualities
@@ -747,7 +800,15 @@ final class HuyaLiveSite: LiveSiteResolver {
                             invalidAt = value
                         }
                     }
-                    completion(.success(LivePlayUrlResolution.applying(applied, in: filled, refreshAt: refreshAt, invalidAt: invalidAt)))
+                    let full = LivePlayUrlResolution.applying(applied, in: filled, refreshAt: refreshAt, invalidAt: invalidAt)
+                    if deliveredEarly {
+                        // The driver already opened the first line;
+                        // bank the full resolution for the next
+                        // re-parse instead of completing twice.
+                        self.storeBackgroundResolution(full, roomId: trimmed, qualityId: requested.id)
+                    } else {
+                        completion(.success(full))
+                    }
                 }
             case .failure(let error):
                 completion(.failure(error))
@@ -757,8 +818,11 @@ final class HuyaLiveSite: LiveSiteResolver {
 
     /// Resolves every line for one bitrate, serially (server order
     /// kept, duplicates dropped, one bad token never discards the
-    /// healthy alternatives).
-    private func resolveHuyaLines(_ lines: [HuyaLine], bitRate: Int, completion: @escaping ([(line: HuyaLine, url: String)]) -> Void) {
+    /// healthy alternatives). (b49 sweep #10) `onFirst` fires on
+    /// the first playable line, while the rest keep resolving —
+    /// the caller completes early on it and banks the finished
+    /// list via the final completion instead of waiting.
+    private func resolveHuyaLines(_ lines: [HuyaLine], bitRate: Int, onFirst: @escaping ((line: HuyaLine, url: String)) -> Void, completion: @escaping ([(line: HuyaLine, url: String)]) -> Void) {
         var out: [(line: HuyaLine, url: String)] = []
         var seen = Set<String>()
         var remaining = lines
@@ -772,7 +836,11 @@ final class HuyaLiveSite: LiveSiteResolver {
                 switch result {
                 case .success(let url):
                     if !url.isEmpty && seen.insert(url).inserted {
-                        out.append((line: line, url: url))
+                        let pair = (line: line, url: url)
+                        out.append(pair)
+                        if out.count == 1 {
+                            onFirst(pair)
+                        }
                     }
                     next()
                 case .failure:

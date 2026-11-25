@@ -153,6 +153,17 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     /// stale failure apart, because a line/quality switch opens
     /// the SAME room id again.
     private var openAttemptToken = 0
+    /// Wall-clock budget for one attemptOpen chain (b49 sweep
+    /// #12): every open() in the chain already gets its own whole-
+    /// open cap (25 s), so a multi-line dead room used to spin
+    /// ~50–200 s before the failure card. One chain — entry
+    /// resolve, line walk, fresh re-parses — gets a single shared
+    /// 25 s budget from its first attempt; when it is spent the
+    /// chain fails fast with .timeout. Armed lazily by attemptOpen
+    /// and reset by beginAttemptChain() at each new chain entry
+    /// (new room, line/quality switch, stall recovery).
+    private var attemptChainDeadline: Date?
+    private var attemptChainArmed = false
     private var pendingItem: PlaybackItem?
     private var playRequested: Bool = false
     // #6: the backend paused itself (interruption / stall /
@@ -345,6 +356,7 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         currentLineIndex = index
         let url = recovery.urls[index]
         ensureMain {
+            self.beginAttemptChain()
             self.attemptOpen(item: item, url: url, tried: [url], freshRounds: 2)
         }
         return true
@@ -354,7 +366,9 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     /// commits when the returned resolution is for the requested
     /// quality; on failure the room keeps playing at the old
     /// quality and the completion reports false. On success the
-    /// driver opens the new quality's matched line.
+    /// driver opens the new quality's matched line, and the pick
+    /// is persisted as the preferred quality for the platform
+    /// (b49 sweep #14) so the next room entry re-opens at it.
     func switchQuality(to quality: LiveQuality, completion: @escaping (Bool) -> Void) {
         ensureMain {
             guard let item = self.currentRoom else {
@@ -372,7 +386,11 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                         return
                     }
                     self.currentQuality = quality
+                    if let platform = self.session.room?.platform {
+                        LivePreferredQuality.savePreferredQualityId(quality.id, for: platform, defaults: self.defaults)
+                    }
                     if let url = self.session.recovery?.currentUrl {
+                        self.beginAttemptChain()
                         self.attemptOpen(item: item, url: url, tried: [url], freshRounds: 2)
                     }
                     completion(true)
@@ -393,18 +411,35 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     /// Entry-quality target for an initial resolution: the index
     /// into `resolution.qualities` to open instead of the resolved
     /// (best) tier, or nil when the resolved tier already applies.
-    /// "Preferred" is the resolved tier: Swift never persisted a
-    /// preferred quality (`preferResolution` has no reader), so the
-    /// best tier is the preference the ceiling caps. Wi-Fi /
-    /// unknown and a switched-off downgrade both return nil.
-    private func cellularDowngradeTarget(resolution: LivePlayUrlResolution) -> Int? {
-        guard cellularDowngradeEnabled else { return nil }
-        guard LiveDriver.detectNetworkType() == .cellular else { return nil }
-        let names = resolution.qualities.map { $0.name }
+    /// (b49 sweep #14) The user's persisted preferred quality wins
+    /// over the best tier — the preference is read from
+    /// LivePreferredQuality (per platform) and requested through
+    /// the session like the cellular cap. The cellular ceiling then
+    /// caps that entry tier (Wi-Fi / unknown and a switched-off
+    /// downgrade leave the preferred tier untouched).
+    private func entryQualityTarget(resolution: LivePlayUrlResolution) -> Int? {
         guard let applied = resolution.quality,
               let appliedIndex = resolution.qualities.firstIndex(where: { $0.id == applied.id }) else { return nil }
-        let target = LiveCellularDowngrade.entryQualityIndex(
-            qualityNames: names, preferredIndex: appliedIndex, network: .cellular)
+        var target = appliedIndex
+        if let platform = session.room?.platform,
+           let preferred = LivePreferredQuality.entryQualityIndex(
+               qualities: resolution.qualities,
+               preferredId: LivePreferredQuality.preferredQualityId(for: platform, defaults: defaults)) {
+            target = preferred
+        }
+        if cellularDowngradeEnabled, LiveDriver.detectNetworkType() == .cellular {
+            // The ceiling is the best tier allowed on cellular
+            // (index 0 = best, so the ceiling is a lower bound on
+            // the index): a preferred tier better than the ceiling
+            // drops to it, a preferred tier already at or below
+            // the ceiling stays — the cap never switches UP.
+            let names = resolution.qualities.map { $0.name }
+            let ceiling = LiveCellularDowngrade.entryQualityIndex(
+                qualityNames: names, preferredIndex: appliedIndex, network: .cellular)
+            if target < ceiling {
+                target = ceiling
+            }
+        }
         return target == appliedIndex ? nil : target
     }
 
@@ -471,11 +506,31 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         }
     }
 
+    /// Public refresh entry (b49 sweep #29 — the landscape bar's
+    /// 刷新 button): re-resolve + re-open the room currently
+    /// playing (or the last failed one), from scratch, keeping
+    /// the current quality. Unlike `retryCurrentRoom` this needs
+    /// no failure: a healthy room can be refreshed too. Goes
+    /// through `startNewRoomPlayback` directly, not `play(item:)`,
+    /// so a playing room is actually restarted instead of
+    /// no-op'd by play's same-room check.
+    func refreshCurrentRoom() {
+        ensureMain {
+            guard let item = self.currentRoom ?? self.lastFailedItem else {
+                return
+            }
+            self.lastFailedItem = nil
+            self.openFailure = nil
+            self.startNewRoomPlayback(item: item)
+        }
+    }
+
     /// Start playback of a new room (no same-room check — callers
     /// that already decided this is a new request use this
     /// directly, e.g. `switchLine`, where the id is unchanged but
     /// the line is new).
     private func startNewRoomPlayback(item: PlaybackItem) {
+        self.beginAttemptChain()
         self.stopBackendForNewRequest()
         self.pendingItem = item
         self.stallFailed = false
@@ -513,13 +568,14 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                     self.onRoomFailed?(item, failure)
                     return
                 }
-                // Cellular downgrade (wiring leg B; Flutter
-                // live_room_page _loadRoom): on mobile data with the
-                // switch on, cap the entry quality at the cellular
-                // ceiling （超清及以下） before opening. The capped
-                // tier is requested through the session (a failed
-                // cap rolls back and the original URL still opens).
-                if let target = self.cellularDowngradeTarget(resolution: resolution) {
+                // Preferred quality (b49 sweep #14) + cellular
+                // downgrade (wiring leg B; Flutter live_room_page
+                // _loadRoom): the persisted preferred tier is
+                // requested first, capped at the cellular ceiling
+                // on mobile data with the switch on. The tier is
+                // requested through the session (a failed request
+                // rolls back and the original URL still opens).
+                if let target = self.entryQualityTarget(resolution: resolution) {
                     self.session.requestQualityChange(to: resolution.qualities[target]) { [weak self] ok in
                         guard let self = self else { return }
                         self.ensureMain {
@@ -549,8 +605,16 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
     /// fan-out and never an unbounded retry loop — and never the
     /// same URL twice (`excluding` is passed through). `freshRounds`
     /// bounds the fresh-URL recursion inside `open` (at most 2
-    /// fresh re-parses per open).
+    /// fresh re-parses per open). The whole chain shares one
+    /// 25 s wall-clock budget (b49 sweep #12): when it is spent
+    /// the chain fails fast instead of walking every line at
+    /// 25 s each.
     private func attemptOpen(item: PlaybackItem, url: URL, tried: [URL], freshRounds: Int) {
+        if !attemptChainArmed {
+            attemptChainArmed = true
+            attemptChainDeadline = Date().addingTimeInterval(
+                openTimeoutInterval * LiveDriver.openTotalTimeoutFactor)
+        }
         openAttemptToken += 1
         let token = openAttemptToken
         open(item: item, url: url, freshRounds: freshRounds) { [weak self] result in
@@ -567,8 +631,24 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             }
             switch result {
             case .success:
+                self.clearAttemptChain()
                 return
             case .failure(let error):
+                // Unsupported format (b49 sweep #28): no line walk
+                // and no fresh re-parse — re-parsing a format
+                // problem cannot fix it, and every line shares the
+                // same format. Fail straight to the card.
+                if error == .unsupportedFormat {
+                    self.failAttemptChain(item: item, error: error)
+                    return
+                }
+                // Shared chain budget spent (b49 sweep #12): fail
+                // fast to the card instead of opening the next line
+                // for another whole-open cap.
+                if let deadline = self.attemptChainDeadline, Date() >= deadline {
+                    self.failAttemptChain(item: item, error: .timeout)
+                    return
+                }
                 // Build 37 (D2): walk EVERY resolved line before
                 // giving up — the session holds all of them
                 // (recovery.urls) and the first one is often a
@@ -582,11 +662,7 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                 // returns nil at once, no request).
                 let maxTries = max(2, self.session.recovery?.urls.count ?? 0)
                 guard tried.count < maxTries else {
-                    self.isLoading = false
-                    self.pendingItem = nil
-                    self.openFailure = error
-                    self.lastFailedItem = item
-                    self.onRoomFailed?(item, error)
+                    self.failAttemptChain(item: item, error: error)
                     return
                 }
                 self.resolveURL?(item, tried) { [weak self] nextURL in
@@ -598,11 +674,7 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                             return
                         }
                         guard let nextURL = nextURL else {
-                            self.isLoading = false
-                            self.pendingItem = nil
-                            self.openFailure = error
-                            self.lastFailedItem = item
-                            self.onRoomFailed?(item, error)
+                            self.failAttemptChain(item: item, error: error)
                             return
                         }
                         // Build 35 sweep S2: the fallback opens a
@@ -619,14 +691,38 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                     }
                 }
                 if self.resolveURL == nil {
-                    self.isLoading = false
-                    self.pendingItem = nil
-                    self.openFailure = error
-                    self.lastFailedItem = item
-                    self.onRoomFailed?(item, error)
+                    self.failAttemptChain(item: item, error: error)
                 }
             }
         }
+    }
+
+    /// Start a fresh attemptOpen chain (new room, line/quality
+    /// switch, stall recovery): the next attemptOpen arms a new
+    /// shared 25 s budget instead of inheriting the old chain's
+    /// (possibly spent) deadline.
+    private func beginAttemptChain() {
+        attemptChainArmed = false
+        attemptChainDeadline = nil
+    }
+
+    /// A chain ended in success: drop its budget.
+    private func clearAttemptChain() {
+        attemptChainArmed = false
+        attemptChainDeadline = nil
+    }
+
+    /// A chain ended in failure: drop its budget and report the
+    /// failure the way the old inline sites did (loading off,
+    /// failure card on, retry item kept).
+    private func failAttemptChain(item: PlaybackItem, error: MusicPlayerError) {
+        attemptChainArmed = false
+        attemptChainDeadline = nil
+        isLoading = false
+        pendingItem = nil
+        openFailure = error
+        lastFailedItem = item
+        onRoomFailed?(item, error)
     }
 
     /// Open a URL on the first capable engine, falling down the
@@ -701,6 +797,17 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             self.openTimeoutWork = timeoutWork
             DispatchQueue.main.asyncAfter(deadline: .now() + self.openTimeoutInterval * LiveDriver.openTotalTimeoutFactor, execute: timeoutWork)
             let engines = PlayerKernel.candidatesFor(url: url, declaredFormat: self.declaredFormat(for: url))
+            // (b49 sweep #28) No capable engine for this format:
+            // the same failure VOD reports as unsupportedFormat —
+            // fail at once with that reason instead of running the
+            // ladder (which would exhaust and spend fresh rounds
+            // re-parsing a format problem re-parsing cannot fix).
+            // attemptOpen then fails straight to the card without
+            // walking the other lines, which share the format.
+            guard !engines.isEmpty else {
+                finish(.failure(.unsupportedFormat))
+                return
+            }
             // Accumulate across the opens of one room (original
             // open + fresh rounds), so the diagnostics name every
             // engine that was tried. (Same discipline as
@@ -1365,10 +1472,17 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
                     // A clean EOF on a live stream means the room
                     // ended: fail visibly, no recovery loop — there
                     // is no next episode and re-parsing a finished
-                    // room only burns the budget.
+                    // room only burns the budget. (b49 sweep #31:
+                    // this used to call stop() + onRoomFailed with
+                    // no openFailure, so the page kept its generic
+                    // placeholder with no retry.) Set after stop(),
+                    // which clears the failure state, and keep the
+                    // item so the card's retry re-opens the room.
                     if let item = self.currentRoom {
                         self.stop()
-                        self.onRoomFailed?(item, .loadFailed)
+                        self.openFailure = .offline
+                        self.lastFailedItem = item
+                        self.onRoomFailed?(item, .offline)
                     }
                 case .error:
                     self.recoverFromStall()
@@ -1385,6 +1499,10 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
         guard let item = currentRoom else {
             return
         }
+        // A stall recovery is a fresh open chain (b49 sweep #12):
+        // it gets its own 25 s budget, never the entry chain's
+        // (possibly spent) deadline.
+        beginAttemptChain()
         // B36 item 5: same token rule as the entry resolve — a
         // back-out bumps the token, so a late re-parse from the
         // exited room cannot reopen against a fresh re-entry

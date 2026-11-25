@@ -15,6 +15,9 @@ final class LiveSearchViewModel: ObservableObject {
     @Published private(set) var isSearching = false
     @Published private(set) var hasSearched = false
     @Published var platform: LivePlatform = .bilibili
+    /// Platforms the settings switches leave enabled (b49 sweep
+    /// #2): the search tabs only ever show these.
+    @Published private(set) var enabledPlatforms: [LivePlatform] = LivePlatform.enabledCases
 
     /// Search history, read from disk once (build 36, item
     /// 10): this used to be a computed property, so every
@@ -38,6 +41,10 @@ final class LiveSearchViewModel: ObservableObject {
     init(gateway: LiveDataGateway? = nil) {
         self.gateway = gateway
         self.searchHistory = LiveLibraryStore.searchHistory()
+        // (b49 sweep #2) Never start on a switched-off platform.
+        if !enabledPlatforms.contains(platform) {
+            platform = enabledPlatforms[0]
+        }
     }
 
     var hasGateway: Bool { gateway != nil }
@@ -91,7 +98,7 @@ final class LiveSearchViewModel: ObservableObject {
     /// the new platform; when the field is empty there is nothing
     /// to re-run, so drop back to the history view.
     func selectPlatform(_ next: LivePlatform, query: String) {
-        guard next != platform else { return }
+        guard next != platform, enabledPlatforms.contains(next) else { return }
         platform = next
         guard hasSearched else { return }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -184,7 +191,9 @@ struct LiveSearchView: View {
     }
 
     private var platformRow: some View {
-        LivePlatformTextTabs(selected: viewModel.platform) { platform in
+        LivePlatformTextTabs(
+            platforms: viewModel.enabledPlatforms,
+            selected: viewModel.platform) { platform in
             viewModel.selectPlatform(platform, query: query)
         }
     }

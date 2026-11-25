@@ -272,7 +272,12 @@ final class HuyaDanmaku: LiveDanmakuTransportBase {
         } else if uri == 8001 {
             do {
                 let presenterUid = try TarsInputStream(payload).readInt(tag: 0)
-                if presenterUid == 0 || presenterUid == args.uid {
+                // (b49 sweep #32) readInt defaults to 0 when the
+                // tag is missing, so a malformed 8001 frame used
+                // to close danmaku for the whole visit. Only a
+                // KNOWN presenter uid matching ours ends the
+                // stream; unknown (0) never closes.
+                if presenterUid != 0 && presenterUid == args.uid {
                     let close = onClose
                     stop()
                     close?()

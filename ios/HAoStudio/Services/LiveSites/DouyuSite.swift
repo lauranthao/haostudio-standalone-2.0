@@ -150,6 +150,36 @@ final class DouyuLiveSite: LiveSiteResolver {
         return body()
     }
 
+    /// Full resolutions banked by a background line walk (b49
+    /// sweep #10): `resolveLines` completes on the first playable
+    /// line and keeps resolving the rest; the finished resolution
+    /// lands here, keyed by room + requested quality id, so the
+    /// next resolve for the same room/quality answers at once with
+    /// every line. 120 s TTL — well inside the URLs' own expiry —
+    /// after which a fresh serial chain runs again.
+    private var backgroundResolutions: [String: (resolution: LivePlayUrlResolution, storedAt: Date)] = [:]
+    private static let backgroundCacheTTL: TimeInterval = 120
+
+    private func backgroundCacheKey(roomId: String, qualityId: String) -> String {
+        "\(roomId)|\(qualityId)"
+    }
+
+    private func cachedBackgroundResolution(roomId: String, qualityId: String) -> LivePlayUrlResolution? {
+        locked {
+            guard let entry = backgroundResolutions[backgroundCacheKey(roomId: roomId, qualityId: qualityId)],
+                  Date().timeIntervalSince(entry.storedAt) < DouyuLiveSite.backgroundCacheTTL else {
+                return nil
+            }
+            return entry.resolution
+        }
+    }
+
+    private func storeBackgroundResolution(_ resolution: LivePlayUrlResolution, roomId: String, qualityId: String) {
+        locked {
+            backgroundResolutions[backgroundCacheKey(roomId: roomId, qualityId: qualityId)] = (resolution, Date())
+        }
+    }
+
     init(fetcher: LiveDataFetcher? = nil, deviceId: String? = nil) {
         self.fetcher = fetcher ?? LiveHTTP.defaultFetcher
         self.deviceId = deviceId ?? DouyuUtils.generateDeviceId()
@@ -230,6 +260,13 @@ final class DouyuLiveSite: LiveSiteResolver {
                     }
                     let requested = qualities.first { $0.id == quality?.id } ?? qualities[0]
                     let requestedRate = Int(requested.id) ?? -1
+                    // A background walk already banked every line
+                    // for this room + tier (b49 sweep #10): answer
+                    // at once, no serial chain.
+                    if let cached = self.cachedBackgroundResolution(roomId: trimmed, qualityId: requested.id) {
+                        completion(.success(cached))
+                        return
+                    }
                     self.resolveLines(roomId: trimmed, qualities: qualities, requested: requested, requestedRate: requestedRate, cdns: cdns, completion: completion)
                 case .failure(let error):
                     completion(.failure(error))
@@ -241,28 +278,47 @@ final class DouyuLiveSite: LiveSiteResolver {
     /// plays immediately). CDNs are tried one by one for the
     /// requested rate; every success is kept as a line, in server
     /// order. All failing means the room cannot be resolved.
+    ///
+    /// (b49 sweep #10) The FIRST playable line completes at once —
+    /// the driver opens it while the remaining CDNs keep resolving
+    /// in the background; when they finish, the full resolution is
+    /// cached (see `storeBackgroundResolution` /
+    /// `cachedBackgroundResolution`) so the next re-parse
+    /// (recovery / quality switch / line fallback) returns every
+    /// line without another serial chain.
     private func resolveLines(roomId: String, qualities: [LiveQuality], requested: LiveQuality, requestedRate: Int, cdns: [String], completion: @escaping (Result<LivePlayUrlResolution, Error>) -> Void) {
         var lines: [LiveLine] = []
         var remainingCdns = cdns
         var appliedRate: Int?
+        var deliveredEarly = false
+        func buildResolution() -> LivePlayUrlResolution {
+            var filled = qualities
+            // The lines belong to the tier the server confirmed
+            // for them, which may differ from the requested
+            // tier; the returned `quality` echoes the
+            // confirmed one so the caller can roll back on a
+            // mismatch instead of playing a tier it did not ask
+            // for under the requested id.
+            let effectiveId = appliedRate.map(String.init) ?? requested.id
+            let targetId = filled.contains(where: { $0.id == effectiveId }) ? effectiveId : requested.id
+            let index = filled.firstIndex(where: { $0.id == targetId }) ?? 0
+            filled[index].lines = lines
+            return LivePlayUrlResolution.applying(filled[index], in: filled)
+        }
         func next() {
             if remainingCdns.isEmpty {
                 if lines.isEmpty {
                     completion(.failure(LiveError.transportFailed("斗鱼全部线路均不可用")))
                     return
                 }
-                var filled = qualities
-                // The lines belong to the tier the server confirmed
-                // for them, which may differ from the requested
-                // tier; the returned `quality` echoes the
-                // confirmed one so the caller can roll back on a
-                // mismatch instead of playing a tier it did not ask
-                // for under the requested id.
-                let effectiveId = appliedRate.map(String.init) ?? requested.id
-                let targetId = filled.contains(where: { $0.id == effectiveId }) ? effectiveId : requested.id
-                let index = filled.firstIndex(where: { $0.id == targetId }) ?? 0
-                filled[index].lines = lines
-                completion(.success(LivePlayUrlResolution.applying(filled[index], in: filled)))
+                if deliveredEarly {
+                    // The driver already opened the first line;
+                    // bank the full resolution for the next
+                    // re-parse instead of completing twice.
+                    self.storeBackgroundResolution(buildResolution(), roomId: roomId, qualityId: requested.id)
+                    return
+                }
+                completion(.success(buildResolution()))
                 return
             }
             let cdn = remainingCdns.removeFirst()
@@ -279,6 +335,10 @@ final class DouyuLiveSite: LiveSiteResolver {
                             }
                             let name = cdn.isEmpty ? "默认线路" : cdn
                             lines.append(LiveLine(name: name, urls: [url], format: DouyuLiveSite.streamFormat(url)))
+                            if !deliveredEarly {
+                                deliveredEarly = true
+                                completion(.success(buildResolution()))
+                            }
                             next()
                         } catch {
                             next()

@@ -106,6 +106,21 @@ enum DoubanParsers {
     /// only bounds how long a wrong mapping can hurt.
     static let idMapTTL: TimeInterval = 7 * 24 * 3600
 
+    /// Detail-entry TTL (b49 sweep #7): same 7 days as the id map.
+    /// A detail's rating / cast / synopsis do change (and a
+    /// truncated write used to live forever behind the 200-entry
+    /// cap), so entries expire instead of serving stale data.
+    static let detailTTL: TimeInterval = idMapTTL
+
+    /// True when a cached detail carries no usable content at all
+    /// (b49 sweep #7 — the length check): an empty overview with
+    /// no cast, no score and no poster is a truncated write, not
+    /// a sparse film, and must refetch instead of being served.
+    static func detailIsEmpty(_ detail: DoubanDetail) -> Bool {
+        detail.overview.isEmpty && detail.castNames.isEmpty &&
+        detail.score == nil && detail.poster.isEmpty
+    }
+
     /// First (19|20)xx year in `s`, or 0 when there is none.
     static func parseYear(_ s: String?) -> Int {
         guard let s = s, !s.isEmpty else { return 0 }
@@ -391,20 +406,39 @@ protocol DoubanCache {
 /// In-memory cache (tests / previews).
 final class MemoryDoubanCache: DoubanCache {
     private var details: [String: DoubanDetail] = [:]
+    private var detailTimes: [String: Date] = [:]
     private var ids: [String: String] = [:]
     private var idTimes: [String: Date] = [:]
     private var disabled = false
 
-    func detail(id: String) -> DoubanDetail? { details[id] }
+    func detail(id: String) -> DoubanDetail? {
+        // b49 sweep #7: same TTL + completeness rule as the file
+        // cache — an expired or truncated entry is a miss.
+        guard let at = detailTimes[id],
+              Date().timeIntervalSince(at) < DoubanParsers.detailTTL,
+              let cached = details[id],
+              !DoubanParsers.detailIsEmpty(cached) else {
+            if detailTimes[id] != nil {
+                details.removeValue(forKey: id)
+                detailTimes.removeValue(forKey: id)
+            }
+            return nil
+        }
+        return cached
+    }
 
     func setDetail(id: String, detail: DoubanDetail) {
         details[id] = detail
+        detailTimes[id] = Date()
         if details.count > 200 {
             details.removeValue(forKey: details.keys.first ?? "")
         }
     }
 
-    func removeDetail(id: String) { details.removeValue(forKey: id) }
+    func removeDetail(id: String) {
+        details.removeValue(forKey: id)
+        detailTimes.removeValue(forKey: id)
+    }
 
     func idForTitle(key: String) -> String? {
         guard let at = idTimes[key] else { return nil }
@@ -495,7 +529,19 @@ final class FileDoubanCache: DoubanCache {
     }
 
     func detail(id: String) -> DoubanDetail? {
-        readDetails()[id]?.detail
+        // b49 sweep #7: detail entries expire (7 days, same as the
+        // id map) and a truncated entry is a miss — the old code
+        // returned the entry regardless of its stored `at`, so a
+        // stale or truncated detail lived until the 200-entry cap
+        // evicted it.
+        guard let entry = readDetails()[id] else { return nil }
+        let ageMs = Int(Date().timeIntervalSince1970 * 1000) - entry.at
+        guard ageMs >= 0, Double(ageMs) < DoubanParsers.detailTTL * 1000,
+              !DoubanParsers.detailIsEmpty(entry.detail) else {
+            removeDetail(id: id)
+            return nil
+        }
+        return entry.detail
     }
 
     func setDetail(id: String, detail: DoubanDetail) {

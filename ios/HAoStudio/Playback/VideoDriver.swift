@@ -126,6 +126,13 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     @Published private(set) var currentEngine: VideoEngine?
     @Published private(set) var diagnostics: VideoPlaybackDiagnostics = .empty
     @Published private(set) var stallWarning: Bool = false
+    /// Resume-seek failure (b49 sweep #19): the target the failed
+    /// resume seek was aiming at, or nil when the last resume seek
+    /// landed (or no resume seek ran). The VM shows
+    /// "续播定位失败，从头播放" from this, and the breakpoint
+    /// guards refuse to overwrite the stored resume until
+    /// playback passes this target.
+    @Published private(set) var failedResumeTarget: Double?
     @Published private(set) var isLoading: Bool = false
     /// True when the most recent open request failed outright (no
     /// playable URL, open timeout, watchdog stall, backend error).
@@ -196,6 +203,12 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     /// ends. Default on (Flutter behaviour); C leg binds it to the
     /// setting when the settings UI lands.
     var autoAdvanceToNextEpisode = true
+
+    /// Once-per-episode guard for the driver's near-end advance
+    /// (b49 sweep #20): the driver owns auto-advance outright
+    /// (.finished event + the near-end tick below), so the VM's
+    /// own duration - 1.0 advance is deleted, not duplicated.
+    private var didAutoAdvanceNearEnd = false
 
     /// DV-P8 downgrade switch (SettingsStore.dvP8Downgrade,
     /// default true). The view model pushes the live setting
@@ -1106,6 +1119,10 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         position = 0
         duration = backend.duration.isFinite ? backend.duration : 0
         watchdog.resetForNewEpisode()
+        // b49 sweep #19/#20: a new episode clears the previous
+        // episode's failed-resume floor and near-end advance guard.
+        failedResumeTarget = nil
+        didAutoAdvanceNearEnd = false
         healthyPlaybackAccumulated = 0
         lastHealthyPosition = 0
         startPositionTimerIfNeeded()
@@ -1113,13 +1130,25 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         updateDiagnostics()
         // Resume position: seek after the engine is playing (the
         // old player did the same on prepared). A failed resume
-        // seek starts from 0 rather than failing the episode.
+        // seek starts from 0 rather than failing the episode —
+        // but the failure is no longer silent (b49 sweep #19):
+        // the target is published so the UI can say
+        // "续播定位失败，从头播放", and the breakpoint guards
+        // refuse to overwrite the stored resume until playback
+        // passes that target.
         if startPosition > 0 {
             let target = startPosition
             startPosition = 0
-            backend.seek(to: target) { [weak self] _ in
+            backend.seek(to: target) { [weak self] ok in
                 guard let self = self else { return }
-                self.ensureMain { self.position = self.backend?.currentTime ?? 0 }
+                self.ensureMain {
+                    if ok {
+                        self.failedResumeTarget = nil
+                    } else {
+                        self.failedResumeTarget = target
+                    }
+                    self.position = self.backend?.currentTime ?? 0
+                }
             }
         }
         recomputePlayingState()
@@ -1544,6 +1573,8 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             self.playRequested = false
             self.stallFailed = false
             self.stallWarning = false
+            self.failedResumeTarget = nil
+            self.didAutoAdvanceNearEnd = false
             self.isAudioOnly = false
             self.pendingItem = nil
             self.backend?.pause()
@@ -1676,6 +1707,10 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
               let episode = line.episode(at: currentEpisodeIndex),
               currentEpisode != nil,
               position > 0 else { return }
+        // b49 sweep #19: a failed resume seek must not let the
+        // from-0 playback overwrite the stored resume — skip the
+        // save until playback passes the old target.
+        if let floor = failedResumeTarget, position < floor { return }
         let info = ResumeInfo(
             key: VideoResumeKey.key(title: detail.item.title, year: detail.item.year),
             episodeName: episode.name,
@@ -1785,6 +1820,12 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         position = pos
         if dur.isFinite, dur > 0 { duration = dur }
         recomputePlayingState()
+        // b49 sweep #19: playback passed the failed resume target
+        // — the old resume is no longer at risk; clear the floor
+        // so later saves proceed.
+        if let floor = failedResumeTarget, pos >= floor {
+            failedResumeTarget = nil
+        }
         // (G-E) Healthy-playback clock for the mid-play retry
         // reset: 30 s of continuous position progress re-arms the
         // one retry per failure episode. Any stall resets it.
@@ -1806,7 +1847,11 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         embyReporter.noteProgress(positionSeconds: pos, durationSeconds: duration, isPaused: !isPlaying)
         switch watchdog.tick(position: pos, duration: duration, isPlaying: isPlaying) {
         case .none:
-            break
+            // b49 sweep #9: the stall recovered (position moved
+            // again) — clear the warning, or the "加载缓慢…"
+            // pill would stick until the next stop. The old code
+            // set it true on .warn and never cleared it here.
+            stallWarning = false
         case .warn:
             stallWarning = true
         case .failed:
@@ -1826,6 +1871,23 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                 onEpisodeFailed?(item, .timeout)
             }
         case .atEnd:
+            handleEpisodeEnded()
+        }
+        // b49 sweep #20: the driver owns auto-advance outright —
+        // this near-end tick is the same trigger the VM used to
+        // run on its own (duration - 1.0), moved here so a backend
+        // that never sends .finished still advances promptly
+        // instead of waiting 12 s for the watchdog .atEnd. The
+        // condition mirrors the old VM one exactly: only when an
+        // advance would actually happen (auto-next on + a next
+        // episode exists); with auto-next off, playback runs to
+        // the real end and .finished / .atEnd owns the stop.
+        if isPlaying, autoAdvanceToNextEpisode,
+           defaults.object(forKey: SettingsStore.autoNextEpisodeKey) as? Bool ?? true,
+           duration > 0, position >= duration - 1.0, !didAutoAdvanceNearEnd,
+           let line = currentLine,
+           line.episode(at: currentEpisodeIndex + 1) != nil {
+            didAutoAdvanceNearEnd = true
             handleEpisodeEnded()
         }
     }

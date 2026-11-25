@@ -219,6 +219,21 @@ enum PlayerKernel {
         }
     }
 
+    /// The STORED preference, or nil when the user never picked
+    /// one (b49 sweep P0-1): `preferred` above defaults to MPV
+    /// when nothing is stored, and that default must NOT
+    /// masquerade as an explicit pick — passing it would defeat
+    /// the capability split for every user who never touched
+    /// the picker (HLS / MP4 / HEVC would go to MPV instead of
+    /// AVPlayer's hardware decode, the exact problem the split
+    /// fixed). nil lets the split decide; a stored value —
+    /// including an explicit MPV pick — wins among capable
+    /// engines.
+    static var storedPreferred: VideoEngine? {
+        guard let raw = UserDefaults.standard.string(forKey: userDefaultsKey) else { return nil }
+        return VideoEngine.from(raw: raw)
+    }
+
     static func makeBackend(engine: VideoEngine) -> VideoPlayerBackend {
         switch engine {
         case .mpv: return MpvPlayerBackend()
@@ -248,9 +263,18 @@ enum PlayerKernel {
         dvDowngradeToHdr: Bool = true,
         excluding: [VideoEngine] = []
     ) -> [VideoEngine] {
+        // b49 sweep P0-1: the settings picker writes
+        // `hao_video_player_key` (PlayerKernel.preferred) but this
+        // used to hardcode preferred: nil, so the picker changed
+        // nothing — every caller got the capability-split order.
+        // The STORED preference now wins among capable engines
+        // (the gate in videoCandidatesFor still excludes engines
+        // that cannot play the stream); when nothing is stored,
+        // nil lets the split decide instead of letting the .mpv
+        // default masquerade as a pick (see storedPreferred).
         return videoCandidatesFor(
             url: url, declaredFormat: declaredFormat,
-            preferred: nil,
+            preferred: PlayerKernel.storedPreferred,
             hasAssSubtitles: hasAssSubtitles,
             hasMultipleAudioTracks: hasMultipleAudioTracks,
             hasExternalSubtitles: hasExternalSubtitles,
