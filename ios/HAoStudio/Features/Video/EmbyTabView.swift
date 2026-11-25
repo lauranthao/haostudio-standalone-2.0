@@ -29,6 +29,12 @@ final class EmbyTabViewModel: ObservableObject {
     /// Set only on failure — an empty library stays an empty state,
     /// never an error state.
     @Published private(set) var errorMessage: String?
+    /// (b49fix2 P1-12) The last loadMore failed: the grid keeps
+    /// its loaded rows and the banner retries just that page
+    /// (retryFailedPage), instead of reload() wiping the grid
+    /// and losing the scroll position. `hasMore` stays false so
+    /// the auto-load trigger does not retry it on its own.
+    @Published private(set) var loadMoreFailed = false
     /// True when the last failure was a 401: the credential is
     /// wrong, so the error state offers a re-login path (not just
     /// a retry that fails the same way).
@@ -64,6 +70,7 @@ final class EmbyTabViewModel: ObservableObject {
         items = []
         resumeItems = []
         errorMessage = nil
+        loadMoreFailed = false
         isUnauthorized = false
         hasLoaded = true
         gateway.fetchEmbyLibraries { [weak self] libs in
@@ -98,7 +105,22 @@ final class EmbyTabViewModel: ObservableObject {
         hasMore = true
         items = []
         errorMessage = nil
+        loadMoreFailed = false
         isUnauthorized = false
+        loadMore()
+    }
+
+    /// (b49fix2 P1-12) Retry only the page that failed: the
+    /// loaded rows stay, the scroll position stays, and only
+    /// the failed page is re-requested. `loadMore()` is guarded
+    /// by `hasMore`, so re-arm it first — the failure set it
+    /// false to stop the auto-load trigger.
+    func retryFailedPage() {
+        guard isConfigured, !loadingMore, loadMoreFailed else { return }
+        loadMoreFailed = false
+        errorMessage = nil
+        isUnauthorized = false
+        hasMore = true
         loadMore()
     }
 
@@ -126,6 +148,7 @@ final class EmbyTabViewModel: ObservableObject {
                 // side's line as a note — it shows as a banner
                 // over the grid, never as a page error.
                 self.errorMessage = page.note
+                self.loadMoreFailed = false
                 if page.items.isEmpty {
                     self.hasMore = false
                 } else {
@@ -142,7 +165,10 @@ final class EmbyTabViewModel: ObservableObject {
             case .failure(let error):
                 // A dead server used to show "媒体库是空的" (the
                 // gateway swallowed the failure to .empty). Say so.
+                // (b49fix2 P1-12) The rows stay: only the flag +
+                // the banner change, so the retry is page-only.
                 self.errorMessage = error.message
+                self.loadMoreFailed = true
                 self.isUnauthorized = error.kind == .unauthorized
                 self.hasMore = false
             }
@@ -258,7 +284,18 @@ struct EmbyTabView: View {
                                         Text(error)
                                             .font(.haoFootnote)
                                         Spacer()
-                                        Button("重试") { viewModel.reload() }
+                                        // (b49fix2 P1-12) A failed
+                                        // page retries just that
+                                        // page (rows + scroll stay);
+                                        // a partial-page note
+                                        // reloads, as before.
+                                        Button("重试") {
+                                            if viewModel.loadMoreFailed {
+                                                viewModel.retryFailedPage()
+                                            } else {
+                                                viewModel.reload()
+                                            }
+                                        }
                                             .font(.haoFootnote)
                                             .foregroundStyle(theme.accentText)
                                     }

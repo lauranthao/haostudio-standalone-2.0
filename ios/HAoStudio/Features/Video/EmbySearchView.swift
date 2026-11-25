@@ -22,6 +22,11 @@ final class EmbySearchViewModel: ObservableObject {
     @Published private(set) var searched = false
     /// Human error text (EmbyError.message — never contains the URL or key).
     @Published private(set) var errorMessage: String?
+    /// (b49fix2 P2-7) The last loadMore failed: the banner
+    /// retries just that page (retryFailedPage) instead of
+    /// retrySearch() wiping the loaded results and starting
+    /// over from page 0.
+    @Published private(set) var loadMoreFailed = false
     /// Load-more paging (b49 sweep #22): the server page is 50;
     /// a full page means there may be more.
     @Published private(set) var hasMore = false
@@ -42,6 +47,7 @@ final class EmbySearchViewModel: ObservableObject {
         isSearching = true
         searched = true
         errorMessage = nil
+        loadMoreFailed = false
         results = []
         hasMore = false
         lastQuery = query
@@ -67,6 +73,19 @@ final class EmbySearchViewModel: ObservableObject {
         search(lastQuery)
     }
 
+    /// (b49fix2 P2-7) Retry only the load-more page that
+    /// failed: the loaded results stay, and only that page is
+    /// re-requested. `loadMore()` is guarded by `hasMore`, so
+    /// re-arm it first — the failure set it false to stop
+    /// paging.
+    func retryFailedPage() {
+        guard !loadingMore, loadMoreFailed, !lastQuery.isEmpty else { return }
+        loadMoreFailed = false
+        errorMessage = nil
+        hasMore = true
+        loadMore()
+    }
+
     /// Next server page, appended (b49 sweep #22). A failure
     /// keeps the loaded results and surfaces as a banner over
     /// them; paging ends either way for this query.
@@ -81,6 +100,11 @@ final class EmbySearchViewModel: ObservableObject {
             switch result {
             case .success(let items):
                 self.startIndex = nextStart
+                // A good page clears the failure banner — the
+                // old code never cleared errorMessage here, so
+                // a stale banner stayed over fresh results.
+                self.errorMessage = nil
+                self.loadMoreFailed = false
                 var seen = Set(self.results.map { "\($0.sourceId ?? -1)|\($0.id)" })
                 for item in items where seen.insert("\(item.sourceId ?? -1)|\(item.id)").inserted {
                     self.results.append(item)
@@ -88,6 +112,7 @@ final class EmbySearchViewModel: ObservableObject {
                 self.hasMore = items.count >= 50
             case .failure(let error):
                 self.hasMore = false
+                self.loadMoreFailed = true
                 self.errorMessage = error.message
             }
         }
@@ -146,7 +171,17 @@ struct EmbySearchView: View {
                                     Text(error)
                                         .font(.haoFootnote)
                                     Spacer()
-                                    Button("重试") { viewModel.retrySearch() }
+                                    // (b49fix2 P2-7) A failed page
+                                    // retries just that page
+                                    // (results stay); anything else
+                                    // re-runs the whole search.
+                                    Button("重试") {
+                                        if viewModel.loadMoreFailed {
+                                            viewModel.retryFailedPage()
+                                        } else {
+                                            viewModel.retrySearch()
+                                        }
+                                    }
                                         .font(.haoFootnote)
                                         .foregroundStyle(theme.accentText)
                                 }
