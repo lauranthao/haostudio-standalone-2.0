@@ -207,6 +207,12 @@ enum MusicPlayerError: Error, Equatable {
     /// The room is not live (the platform said so). Shown as
     /// "房间未开播", not "没有可播放的地址" (b39).
     case offline
+    /// No engine can play this stream's format (b49 sweep #28):
+    /// the live driver's counterpart of VOD's
+    /// VideoPlaybackFailure.unsupportedFormat — a format problem
+    /// re-parsing cannot fix, so the driver fails at once with
+    /// this instead of a generic network error.
+    case unsupportedFormat
 }
 
 extension MusicPlayerError: LocalizedError {
@@ -227,6 +233,8 @@ extension MusicPlayerError: LocalizedError {
             return "跳转失败"
         case .offline:
             return "房间未开播"
+        case .unsupportedFormat:
+            return "此格式暂不支持播放"
         }
     }
 }
