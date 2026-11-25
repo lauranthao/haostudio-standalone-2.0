@@ -574,6 +574,10 @@ final class DouyinDanmaku: LiveDanmakuTransportBase {
     static let heartbeatSeconds = 10
 
     private var args = DouyinDanmakuArgs()
+    /// Index into `webSocketHosts` (b49 sweep #27): each reconnect
+    /// advances to the next host instead of retrying the same dead
+    /// one while the other sits unused. Reset on start().
+    private var serverHostIndex = 0
 
     init(socket: LiveDanmakuSocket? = nil) {
         super.init()
@@ -583,6 +587,7 @@ final class DouyinDanmaku: LiveDanmakuTransportBase {
     override func start(danmakuData: [String: Any]) {
         let generation = beginStart()
         args = DouyinDanmakuArgs.fromMap(danmakuData)
+        serverHostIndex = 0
         if args.roomId.isEmpty {
             onClose?()
             return
@@ -676,7 +681,12 @@ final class DouyinDanmaku: LiveDanmakuTransportBase {
             return
         }
         let serverUrls = DouyinDanmaku.buildServerUrls(baseUrl, signature: sign)
-        guard let url = serverUrls.first.flatMap({ URL(string: $0) }) else {
+        // (b49 sweep #27) Rotate through the per-host URLs:
+        // buildServerUrls builds one per host, but the old code
+        // always took `.first`. The reconnect closure advances the
+        // index, so a dead host is never retried twice in a row.
+        let hostIndex = serverHostIndex % max(1, serverUrls.count)
+        guard let url = serverUrls.indices.contains(hostIndex) ? URL(string: serverUrls[hostIndex]) : nil else {
             onClose?()
             return
         }
@@ -684,6 +694,7 @@ final class DouyinDanmaku: LiveDanmakuTransportBase {
             guard let self = self else {
                 return
             }
+            self.serverHostIndex += 1
             self.connect(generation: generation)
         }
         connectSocket(url: url, headers: DouyinDanmaku.buildHandshakeHeaders(args), generation: generation, onSocketMessage: { [weak self] data in

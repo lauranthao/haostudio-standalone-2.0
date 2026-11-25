@@ -64,7 +64,8 @@ struct LiveRoomCard: View {
             Button(LiveLibraryStore.isFollowed(platform: room.platform.rawValue, roomId: room.roomId) ? "取消关注" : "关注") {
                 _ = LiveLibraryStore.toggleFollow(
                     platform: room.platform.rawValue, roomId: room.roomId,
-                    title: room.title, nick: room.streamer, cover: room.cover)
+                    title: room.title, nick: room.streamer, cover: room.cover,
+                    playUrlsJSON: LiveLibraryStore.playUrlsJSON(from: room.data))
             }
         }
     }
@@ -197,7 +198,8 @@ struct LiveRoomRow: View {
             Button(LiveLibraryStore.isFollowed(platform: room.platform.rawValue, roomId: room.roomId) ? "取消关注" : "关注") {
                 _ = LiveLibraryStore.toggleFollow(
                     platform: room.platform.rawValue, roomId: room.roomId,
-                    title: room.title, nick: room.streamer, cover: room.cover)
+                    title: room.title, nick: room.streamer, cover: room.cover,
+                    playUrlsJSON: LiveLibraryStore.playUrlsJSON(from: room.data))
             }
         }
     }

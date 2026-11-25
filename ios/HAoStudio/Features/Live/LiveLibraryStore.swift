@@ -17,7 +17,9 @@
 //   duplicate.
 // - History is recorded on ENTERING a room. Live is real-time:
 //   there is no playback position to resume, so "resume" means
-//   re-entering the most recent room (resumeEntry).
+//   re-entering the most recent room (the history row lists it
+//   first; there is no separate resume entry — b49 sweep #33
+//   deleted the dead `resumeEntry` API).
 // - History cap is 50 by default, 0 = unlimited (Pure Live's
 //   history-limit rule); follows are uncapped.
 // - Search history holds keywords only (max 20, most recent
@@ -46,6 +48,13 @@ struct LiveFollowedRoom: Codable, Equatable, Identifiable {
     var nick: String
     var cover: String
     var followedAt: Date
+    /// The list feed's signed `playUrls` payload, JSON-encoded
+    /// (b49 sweep #16): Kuaishou rooms opened from 关注/历史
+    /// keep their list-feed fallback — without this the room
+    /// re-parse is the only source and a rate-limited room page
+    /// fails the room. Nil for rooms saved before this field
+    /// existed, or for rooms whose feed carried no playUrls.
+    var playUrlsJSON: String? = nil
 
     var id: String { LiveResumeKey.key(platform: platform, roomId: roomId) }
 }
@@ -58,6 +67,8 @@ struct LiveHistoryEntry: Codable, Equatable, Identifiable {
     var nick: String
     var cover: String
     var watchedAt: Date
+    /// Same as LiveFollowedRoom.playUrlsJSON (b49 sweep #16).
+    var playUrlsJSON: String? = nil
 
     var id: String { LiveResumeKey.key(platform: platform, roomId: roomId) }
 }
@@ -178,6 +189,9 @@ enum LiveLibraryStore {
 
     /// How many stored entries a new limit would delete (0 when
     /// the new limit is unlimited or >= the stored count).
+    /// Pure cap math, covered by LiveLibraryStoreTests; the
+    /// setter that used it is gone (b49 sweep #33), but the math
+    /// itself stays for the cap rule.
     static func wouldDeleteCount(_ stored: [LiveHistoryEntry], newLimit: Int) -> Int {
         if newLimit <= 0 { return 0 }
         let count = stored.count
@@ -209,16 +223,46 @@ enum LiveLibraryStore {
         return seen
     }
 
+    /// Encode a room's list-feed `playUrls` payload for storage
+    /// (b49 sweep #16): the value in `room.data["playUrls"]` is
+    /// JSON-shaped (array of descriptors), so it round-trips as a
+    /// JSON string. Nil when the room carries no encodable
+    /// playUrls — the caller then stores nothing and the room
+    /// resolves from the network as before.
+    static func playUrlsJSON(from roomData: [String: Any]?) -> String? {
+        guard let playUrls = roomData?["playUrls"],
+              JSONSerialization.isValidJSONObject(playUrls),
+              let data = try? JSONSerialization.data(withJSONObject: playUrls, options: []),
+              let json = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return json
+    }
+
+    /// Decode a stored `playUrls` payload back into the `data`
+    /// map a `LiveRoom` carries (`toRoom()` uses this): the
+    /// resolver's `resolutionFromRoom` fallback reads exactly
+    /// `data["playUrls"]`.
+    static func playUrlsData(from json: String?) -> [String: Any]? {
+        guard let json = json, let data = json.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data, options: []) else {
+            return nil
+        }
+        return ["playUrls": parsed]
+    }
+
     static func addFollow(
         platform: String,
         roomId: String,
         title: String,
         nick: String,
-        cover: String
+        cover: String,
+        playUrlsJSON: String? = nil
     ) {
         let follow = LiveFollowedRoom(
             platform: platform, roomId: roomId, title: title,
-            nick: nick, cover: cover, followedAt: Date())
+            nick: nick, cover: cover, followedAt: Date(),
+            playUrlsJSON: playUrlsJSON)
         saveFollows(mergedFollows(follows(), with: follow))
         NotificationCenter.default.post(name: .haoLiveFollowChanged, object: nil)
     }
@@ -236,13 +280,14 @@ enum LiveLibraryStore {
         roomId: String,
         title: String,
         nick: String,
-        cover: String
+        cover: String,
+        playUrlsJSON: String? = nil
     ) -> Bool {
         if isFollowed(platform: platform, roomId: roomId) {
             removeFollow(platform: platform, roomId: roomId)
             return false
         }
-        addFollow(platform: platform, roomId: roomId, title: title, nick: nick, cover: cover)
+        addFollow(platform: platform, roomId: roomId, title: title, nick: nick, cover: cover, playUrlsJSON: playUrlsJSON)
         return true
     }
 
@@ -272,11 +317,13 @@ enum LiveLibraryStore {
         roomId: String,
         title: String,
         nick: String,
-        cover: String
+        cover: String,
+        playUrlsJSON: String? = nil
     ) {
         let entry = LiveHistoryEntry(
             platform: platform, roomId: roomId, title: title,
-            nick: nick, cover: cover, watchedAt: Date())
+            nick: nick, cover: cover, watchedAt: Date(),
+            playUrlsJSON: playUrlsJSON)
         saveHistory(mergedHistory(history(), with: entry, limit: historyLimit()))
     }
 
@@ -295,34 +342,21 @@ enum LiveLibraryStore {
         saveHistory([])
     }
 
-    /// The resume bookmark: the most recently watched room, or nil
-    /// when nothing was watched. Live has no position — resuming
-    /// means re-entering this room.
-    static func resumeEntry() -> LiveHistoryEntry? {
-        history().first
-    }
-
     // MARK: - History limit
 
     /// Current history cap: 0 = unlimited, default 50.
+    /// (b49 sweep #33) The cap reader stays — recordHistory
+    /// enforces it on every write. The setter is deleted: no UI
+    /// ever set it and no caller used it, so it was a dead API
+    /// with no "history-cap setting" to wire it to. Likewise
+    /// `resumeEntry` is deleted: there is no "继续观看" entry for
+    /// live, and the history row already opens with the most
+    /// recent room first.
     static func historyLimit(defaults: UserDefaults = .standard) -> Int {
         guard defaults.object(forKey: historyLimitKey) != nil else {
             return defaultHistoryLimit
         }
         return defaults.integer(forKey: historyLimitKey)
-    }
-
-    /// Set the cap, trimming stored entries to it when shrinking.
-    /// Returns the number of entries deleted by the trim.
-    @discardableResult
-    static func setHistoryLimit(_ newLimit: Int, defaults: UserDefaults = .standard) -> Int {
-        let stored = history()
-        let deleted = wouldDeleteCount(stored, newLimit: newLimit)
-        defaults.set(newLimit, forKey: historyLimitKey)
-        if deleted > 0 {
-            saveHistory(Array(stored.prefix(newLimit)))
-        }
-        return deleted
     }
 
     // MARK: - Search history

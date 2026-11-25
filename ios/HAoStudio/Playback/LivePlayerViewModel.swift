@@ -318,19 +318,9 @@ final class LivePlayerViewModel: ObservableObject {
     }
 
     // Own UI state.
-    /// Controls overlay visible. Auto-hides 3 s after the last
-    /// interaction while playing.
-    @Published private(set) var controlsVisible = true
     /// One-shot toast (line switched, quality switch failed, ...).
     /// The view clears it after showing.
     @Published private(set) var toast: String?
-    /// Fullscreen (landscape) state. Only the [ ] button changes
-    /// it — turning the phone never does.
-    @Published private(set) var isFullscreen = false
-    /// Quality picker presented (live only).
-    @Published var showQualityPicker = false
-    /// Line picker presented.
-    @Published var showLinePicker = false
 
     /// Brightness level (0...1) the UI shows while dragging.
     /// The value is only ever WRITTEN to the screen from
@@ -347,13 +337,16 @@ final class LivePlayerViewModel: ObservableObject {
     /// touch the system.
     var volumeApplier: ((Double) -> Void)?
 
-    /// Gesture state (VodGestures owns the object; this view model
-    /// holds the reference so the page wires one object).
-    /// `isVod = false`: the long-press 2x gate stays shut for live.
-    let gestures = VodGestureState()
+    /// (b49 sweep #33) The view model's old controls/fullscreen/
+    /// picker state is deleted: LiveRoomView keeps its own @State
+    /// for all of it (isFullscreen, controlsVisible,
+    /// showQualitySheet) and never read the view model's copies,
+    /// and the gesture object (`gestures`) was never wired to the
+    /// page's gesture layer either — the page owns its own tap
+    /// disambiguator + drag state. Dead copies of live state are
+    /// how the two halves drifted apart; one owner each now.
 
     private var cancellables = Set<AnyCancellable>()
-    private var autoHideWork: DispatchWorkItem?
     /// True only between `notePlayerEntry` and `disarmBrightness`:
     /// brightness writes outside that window are dropped, never
     /// applied. Nothing is ever written back on exit: the system
@@ -364,9 +357,6 @@ final class LivePlayerViewModel: ObservableObject {
         self.driver = driver
         driver.$isPlaying.sink { [weak self] value in
             self?.isPlaying = value
-            if value {
-                self?.scheduleControlsAutoHide()
-            }
         }.store(in: &cancellables)
         driver.$position.sink { [weak self] value in
             self?.position = value
@@ -399,17 +389,9 @@ final class LivePlayerViewModel: ObservableObject {
         driver.$openFailure.sink { [weak self] value in
             self?.openFailure = value
         }.store(in: &cancellables)
-        gestures.isVod = false
-        gestures.onSingleTap = { [weak self] in
-            self?.toggleControls()
-        }
-        // Deliberately NOT wired: onLongPressSpeedChanged (live is
-        // real-time — the VodGestures gate already kills it for
-        // isVod == false) and onDoubleTapSeek (live has no seek).
     }
 
     deinit {
-        autoHideWork?.cancel()
         danmakuFlushWork?.cancel()
     }
 
@@ -427,7 +409,6 @@ final class LivePlayerViewModel: ObservableObject {
         } else {
             driver.resume()
         }
-        scheduleControlsAutoHide()
     }
 
     /// Re-open the room whose open failed (the failure card's
@@ -436,53 +417,11 @@ final class LivePlayerViewModel: ObservableObject {
         driver.retryCurrentRoom()
     }
 
-    // MARK: - Controls visibility
-
-    func toggleControls() {
-        controlsVisible.toggle()
-        if controlsVisible {
-            scheduleControlsAutoHide()
-        }
-    }
-
-    func showControls() {
-        controlsVisible = true
-        scheduleControlsAutoHide()
-    }
-
-    private func scheduleControlsAutoHide() {
-        autoHideWork?.cancel()
-        guard isPlaying else {
-            return
-        }
-        let work = DispatchWorkItem { [weak self] in
-            guard let self = self, self.isPlaying else {
-                return
-            }
-            self.controlsVisible = false
-        }
-        autoHideWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
-    }
-
-    // MARK: - Fullscreen (only the [ ] button)
-
-    /// Enter landscape fullscreen: rotates the WHOLE app via S3
-    /// VOD's VideoOrientation mechanism (works with the
-    /// orientation lock on). Live enters portrait and only this
-    /// call takes it landscape.
-    func requestFullscreen() {
-        VideoOrientation.lockLandscape()
-        isFullscreen = true
-        showControls()
-    }
-
-    /// Back to portrait (room dismiss also goes through here via
-    /// the page's dismiss path).
-    func exitFullscreen() {
-        VideoOrientation.unlockPortrait()
-        isFullscreen = false
-        showControls()
+    /// Re-resolve + re-open the room currently playing (the
+    /// landscape bar's 刷新 button, b49 sweep #29). A plain
+    /// pass-through to the driver's public refresh entry.
+    func refreshCurrentRoom() {
+        driver.refreshCurrentRoom()
     }
 
     // MARK: - Lines / quality (live only)
@@ -497,7 +436,6 @@ final class LivePlayerViewModel: ObservableObject {
             return
         }
         if driver.switchLine(to: index) {
-            showLinePicker = false
             toast = "已切换到线路 \(index + 1)"
         }
     }
@@ -510,9 +448,7 @@ final class LivePlayerViewModel: ObservableObject {
             guard let self = self else {
                 return
             }
-            if ok {
-                self.showQualityPicker = false
-            } else {
+            if !ok {
                 self.toast = "切换失败，已回到原画质"
             }
         }

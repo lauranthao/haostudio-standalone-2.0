@@ -119,6 +119,10 @@ final class BilibiliDanmaku: LiveDanmakuTransportBase {
     private var credentialRefreshCount = 0
     private var refreshingCredentials = false
     private var authWorkItem: DispatchWorkItem?
+    /// Index into the server endpoints (b49 sweep #27): each
+    /// reconnect advances to the next endpoint instead of
+    /// retrying the same dead host forever. Reset on start().
+    private var endpointIndex = 0
 
     init(fetcher: LiveDataFetcher? = nil, socket: LiveDanmakuSocket? = nil) {
         self.fetcher = fetcher ?? LiveHTTP.defaultFetcher
@@ -131,6 +135,7 @@ final class BilibiliDanmaku: LiveDanmakuTransportBase {
         args = BilibiliDanmakuArgs.fromMap(danmakuData)
         credentialRefreshCount = 0
         refreshingCredentials = false
+        endpointIndex = 0
         if args.roomId == 0 {
             onClose?()
             return
@@ -157,7 +162,12 @@ final class BilibiliDanmaku: LiveDanmakuTransportBase {
     private func connect(args: BilibiliDanmakuArgs, generation: Int) {
         self.args = args
         let endpoints = args.serverUrls.isEmpty ? [BilibiliDanmaku.defaultServerUrl] : args.serverUrls
-        guard let url = URL(string: endpoints[0]) else {
+        // (b49 sweep #27) Rotate through the endpoints: the
+        // reconnect closure and the auth-timeout path advance the
+        // index first, so a dead host is never retried twice in a
+        // row while a healthy one sits in the list.
+        let url = URL(string: endpoints[endpointIndex % endpoints.count])
+        guard let url = url else {
             onClose?()
             return
         }
@@ -169,6 +179,7 @@ final class BilibiliDanmaku: LiveDanmakuTransportBase {
             guard let self = self else {
                 return
             }
+            self.endpointIndex += 1
             self.connect(args: self.args, generation: generation)
         }
         connectSocket(url: url, headers: headers, generation: generation, onSocketMessage: { [weak self] data in
@@ -232,6 +243,7 @@ final class BilibiliDanmaku: LiveDanmakuTransportBase {
     private func reconnectNow(generation: Int) {
         _socket?.close()
         _socket = nil
+        endpointIndex += 1
         connect(args: args, generation: generation)
     }
 
@@ -278,6 +290,16 @@ final class BilibiliDanmaku: LiveDanmakuTransportBase {
 
     private func refreshCredentialsAndReconnect(generation: Int) {
         if _stopped || refreshingCredentials || credentialRefreshCount >= 3 || args.roomId == 0 {
+            // (b49 sweep #26) The refresh budget is spent (or the
+            // room is gone): do not sit half-open with a dead
+            // socket and `_connected == false` for the rest of the
+            // visit — close and report, so the room page can stop
+            // expecting danmaku instead of waiting silently.
+            if !_stopped && args.roomId != 0 && credentialRefreshCount >= 3 {
+                _socket?.close()
+                _socket = nil
+                onClose?()
+            }
             return
         }
         refreshingCredentials = true
@@ -308,6 +330,16 @@ final class BilibiliDanmaku: LiveDanmakuTransportBase {
                 }
             }
             guard let refreshed = refreshed, !refreshed.token.isEmpty else {
+                // (b49 sweep #26) The refresh yielded no token:
+                // do not return silently with the old socket open
+                // but unauthenticated — close it and re-discover
+                // credentials with backoff (discoverCredentials
+                // retries 3x, then reports onClose). A fresh
+                // discovery can still save the visit; a silent
+                // return could not.
+                self._socket?.close()
+                self._socket = nil
+                self.discoverCredentials(generation: generation, attempt: 0)
                 return
             }
             self._socket?.close()

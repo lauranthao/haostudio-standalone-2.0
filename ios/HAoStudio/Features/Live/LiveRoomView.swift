@@ -222,7 +222,13 @@ struct LiveRoomView: View {
                 // another line), so the sheet highlighted a tier
                 // that was not playing and tapping that row was a
                 // dead no-op.
-                selectedQualityIndex: livePlayer.qualities.firstIndex(where: { $0.id == livePlayer.currentQuality?.id }) ?? 0,
+                // (b49 sweep #30) Nil until a tier is acked: the
+                // old `?? 0` highlighted tier 0 before anything
+                // was resolved, and tapping it ran a switch
+                // against no current room → a "切换失败" toast for
+                // a tier that was never playing. The sheet
+                // disables its quality rows while this is nil.
+                selectedQualityIndex: livePlayer.qualities.firstIndex(where: { $0.id == livePlayer.currentQuality?.id }),
                 selectedLineIndex: livePlayer.currentLineIndex,
                 currentQualityLabel: livePlayer.currentQuality?.name,
                 onSelectQuality: { index in switchQuality(to: index) },
@@ -308,7 +314,8 @@ struct LiveRoomView: View {
         let room = currentRoom
         LiveLibraryStore.recordHistory(
             platform: room.platform.rawValue, roomId: room.roomId,
-            title: room.title, nick: room.streamer, cover: room.cover)
+            title: room.title, nick: room.streamer, cover: room.cover,
+            playUrlsJSON: LiveLibraryStore.playUrlsJSON(from: room.data))
         isFollowing = LiveLibraryStore.isFollowed(platform: room.platform.rawValue, roomId: room.roomId)
         let resolver = LiveSites.resolver(for: room.platform)
         livePlayer.driver.configure(room: room, resolver: resolver)
@@ -327,8 +334,12 @@ struct LiveRoomView: View {
     /// S5): the ack can differ from the last request (cellular
     /// downgrade, server cap), and the old local comparison made
     /// the highlighted row untappable even when it was not the
-    /// tier playing.
+    /// tier playing. (b49 sweep #30) Nothing is acked yet
+    /// (currentQuality == nil) means no switch is possible at
+    /// all — the sheet disables its rows then, so this guard is
+    /// the second line of defence, not the first.
     private func switchQuality(to index: Int) {
+        guard livePlayer.currentQuality != nil else { return }
         guard livePlayer.qualities.indices.contains(index) else { return }
         guard livePlayer.qualities[index].id != livePlayer.currentQuality?.id else { return }
         livePlayer.switchQuality(to: livePlayer.qualities[index])
@@ -347,7 +358,8 @@ struct LiveRoomView: View {
         let room = currentRoom
         isFollowing = LiveLibraryStore.toggleFollow(
             platform: room.platform.rawValue, roomId: room.roomId,
-            title: room.title, nick: room.streamer, cover: room.cover)
+            title: room.title, nick: room.streamer, cover: room.cover,
+            playUrlsJSON: LiveLibraryStore.playUrlsJSON(from: room.data))
     }
 
     private func toggleDanmaku() {
@@ -746,7 +758,34 @@ struct LiveRoomView: View {
             // Drag pill (build 37, L3): centred over the video,
             // hit-test transparent — it never eats a tap or drag.
             liveDragIndicator
+            // Stall warning (b49 sweep #9): the driver publishes
+            // it and the view model mirrors it, but no view ever
+            // read it — a stalling room looked identical to a
+            // healthy one. Same wording as the VOD player
+            // ("加载缓慢…") so both players match.
+            if livePlayer.stallWarning {
+                VStack {
+                    stallPill
+                        .padding(.top, 56)
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+            }
         }
+    }
+
+    /// "加载缓慢…" pill (b49 sweep #9): same toast styling as the
+    /// room page's toast (12.5pt medium, dark glass, radius 10) —
+    /// a status note, never a button, so it stays hit-test
+    /// transparent wherever it is placed.
+    private var stallPill: some View {
+        Text("加载缓慢…")
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 9)
+            .haoDarkGlassRoundedRect(cornerRadius: 10, darkness: 0.7)
+            .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
     }
 
     /// The video background alone: black + native surface (or
@@ -1182,11 +1221,28 @@ struct LiveRoomView: View {
                     landscapeBottomBar
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
+                // (b49 sweep #13) The container ignores the safe
+                // area so the video is full-bleed like VOD, but
+                // the chrome stays inside it: the notch zones
+                // (landscape leading/trailing) and the home
+                // indicator (bottom) must never cover a button.
+                .safeAreaPadding()
             }
             // Drag pill (build 37, L3): centred over the video,
             // hit-test transparent — it never eats a tap or drag.
             liveDragIndicator
+            // Stall warning (b49 sweep #9): same pill as portrait,
+            // below the top bar so it never covers the title row.
+            if livePlayer.stallWarning {
+                VStack {
+                    stallPill
+                        .padding(.top, 64)
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+            }
         }
+        .ignoresSafeArea()
     }
 
     // MARK: - Landscape chrome (on-video white on a dark scrim —
@@ -1310,12 +1366,15 @@ struct LiveRoomView: View {
     }
 
     /// Landscape bottom bar — Pure Live BottomActionBar order:
-    /// play, danmaku, follow, quality as plain white text (no
-    /// capsule — the bars are white-on-scrim throughout), Spacer,
-    /// flame + watching, exit fullscreen. No refresh button:
-    /// Pure Live has one, but there is no public refresh entry
-    /// on the driver (refreshURLs is private) — see the style
-    /// list. 56pt bar: 44pt controls + 12pt bottom padding.
+    /// play, danmaku, follow, quality, refresh, room switch as
+    /// plain white text (no capsule — the bars are white-on-scrim
+    /// throughout), Spacer, flame + watching, exit fullscreen.
+    /// (b49 sweep #29) Refresh and prev/next now live here too:
+    /// refresh re-resolves + re-opens the room through the
+    /// driver's public refresh entry, and the room-switch buttons
+    /// reuse the portrait switchToRoom (hidden for a one-room
+    /// list, disabled at the ends — same as portrait).
+    /// 56pt bar: 44pt controls + 12pt bottom padding.
     private var landscapeBottomBar: some View {
         HStack(spacing: 16) {
             Button(action: { livePlayer.togglePlayPause() }) {
@@ -1342,6 +1401,34 @@ struct LiveRoomView: View {
                     .lineLimit(1)
             }
             .buttonStyle(.plain)
+            Button(action: { livePlayer.refreshCurrentRoom() }) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(theme.accentOnVideo)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("刷新")
+            if playlist.count > 1 {
+                Button(action: { switchToRoom(at: currentIndex - 1) }) {
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(hasPreviousRoom ? theme.accentOnVideo : .white.opacity(0.4))
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .disabled(!hasPreviousRoom)
+                .accessibilityLabel("上一个房间")
+                Button(action: { switchToRoom(at: currentIndex + 1) }) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(hasNextRoom ? theme.accentOnVideo : .white.opacity(0.4))
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .disabled(!hasNextRoom)
+                .accessibilityLabel("下一个房间")
+            }
             Spacer()
             if !watchingText.isEmpty {
                 HStack(spacing: 4) {
@@ -1448,7 +1535,10 @@ struct LiveQualityLineSheet: View {
     /// by the caller (build 35 sweep S5) — plain values, not
     /// bindings: the sheet only reads them, and a binding would
     /// invite a second, stale source of truth.
-    var selectedQualityIndex: Int
+    /// `selectedQualityIndex` is nil until a tier is acked (b49
+    /// sweep #30): no tier is highlighted and the rows are
+    /// disabled until then.
+    var selectedQualityIndex: Int?
     var selectedLineIndex: Int
     var currentQualityLabel: String?
     var onSelectQuality: (Int) -> Void
@@ -1488,11 +1578,18 @@ struct LiveQualityLineSheet: View {
                                             in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                                 }
                                 .buttonStyle(.plain)
+                                // (b49 sweep #30) No acked tier yet:
+                                // the rows are disabled, so a tap
+                                // cannot run a switch against no
+                                // current room.
+                                .disabled(selectedQualityIndex == nil)
+                                .opacity(selectedQualityIndex == nil ? 0.5 : 1)
                             }
                         }
                         if let acked = currentQualityLabel,
-                           qualities.indices.contains(selectedQualityIndex),
-                           acked != qualities[selectedQualityIndex].name {
+                           let selected = selectedQualityIndex,
+                           qualities.indices.contains(selected),
+                           acked != qualities[selected].name {
                             Text("清晰度已限制为 \(acked)")
                                 .font(.haoFootnote)
                                 .foregroundStyle(theme.textSecondary)

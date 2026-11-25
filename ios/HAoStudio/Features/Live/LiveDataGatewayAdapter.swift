@@ -131,6 +131,16 @@ final class LiveDataGatewayAdapter: LiveDataGateway {
             DispatchQueue.main.async { completion(.empty) }
             return
         }
+        // (b49 sweep #2) A platform switched off in settings is
+        // never fetched: its rooms must not reach the home grid
+        // through any path, including a stale view-model platform.
+        // fetchRoomDetail is deliberately NOT guarded — opening a
+        // specific saved (followed / history) room is not the room
+        // "appearing on the live home page".
+        guard LivePlatform.enabledCases.contains(platformValue) else {
+            DispatchQueue.main.async { completion(.empty) }
+            return
+        }
         let site = site(for: platformValue)
         let sitePage = max(0, page) + 1
         if let area = area {
@@ -155,6 +165,11 @@ final class LiveDataGatewayAdapter: LiveDataGateway {
             DispatchQueue.main.async { completion([]) }
             return
         }
+        // (b49 sweep #2) Same guard as fetchRecommended.
+        guard LivePlatform.enabledCases.contains(platformValue) else {
+            DispatchQueue.main.async { completion([]) }
+            return
+        }
         site(for: platformValue).listCategories { [weak self] areas in
             DispatchQueue.main.async {
                 self?.rememberCategories(platform: platformValue, areas: areas)
@@ -166,6 +181,11 @@ final class LiveDataGatewayAdapter: LiveDataGateway {
     func searchRooms(query: String, platform: String, completion: @escaping ([LiveRoom]) -> Void) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let platformValue = LivePlatform(rawValue: platform) else {
+            DispatchQueue.main.async { completion([]) }
+            return
+        }
+        // (b49 sweep #2) Same guard as fetchRecommended.
+        guard LivePlatform.enabledCases.contains(platformValue) else {
             DispatchQueue.main.async { completion([]) }
             return
         }
@@ -191,7 +211,12 @@ final class LiveDataGatewayAdapter: LiveDataGateway {
 
     private func rememberCategories(platform: LivePlatform, areas: [(id: String, name: String)]) {
         var map = areaIds[platform.rawValue] ?? [:]
-        for area in areas where map[area.name] == nil {
+        // (b49 sweep #35) A fresh list is authoritative: overwrite
+        // the id for a name, never keep a stale one — the old
+        // "only fill when missing" rule kept a renamed category's
+        // old id forever, so its rooms came back empty until
+        // restart.
+        for area in areas {
             map[area.name] = area.id
         }
         areaIds[platform.rawValue] = map
@@ -199,7 +224,7 @@ final class LiveDataGatewayAdapter: LiveDataGateway {
 
     private func fetchCategoryRooms(site: LiveListSite, platform: LivePlatform, areaName: String, page: Int, completion: @escaping (LiveRoomPage) -> Void) {
         if let areaId = areaIds[platform.rawValue]?[areaName] {
-            requestCategoryRooms(site: site, platform: platform, areaId: areaId, page: page, completion: completion)
+            requestCategoryRooms(site: site, platform: platform, areaId: areaId, page: page, allowStaleIdRetry: true, areaName: areaName, completion: completion)
             return
         }
         site.listCategories { [weak self] areas in
@@ -213,13 +238,35 @@ final class LiveDataGatewayAdapter: LiveDataGateway {
                     completion(.empty)
                     return
                 }
-                self.requestCategoryRooms(site: site, platform: platform, areaId: areaId, page: page, completion: completion)
+                self.requestCategoryRooms(site: site, platform: platform, areaId: areaId, page: page, allowStaleIdRetry: false, areaName: areaName, completion: completion)
             }
         }
     }
 
-    private func requestCategoryRooms(site: LiveListSite, platform: LivePlatform, areaId: String, page: Int, completion: @escaping (LiveRoomPage) -> Void) {
-        site.categoryRooms(areaId: areaId, page: page, pageSize: 30) { rooms in
+    private func requestCategoryRooms(site: LiveListSite, platform: LivePlatform, areaId: String, page: Int, allowStaleIdRetry: Bool, areaName: String, completion: @escaping (LiveRoomPage) -> Void) {
+        site.categoryRooms(areaId: areaId, page: page, pageSize: 30) { [weak self] rooms in
+            // (b49 sweep #35) An empty answer for a cached id may
+            // mean the id went stale (renamed category): drop it,
+            // re-list once, and retry with the fresh id. One retry
+            // only — a genuinely empty category must not loop.
+            if rooms.isEmpty, allowStaleIdRetry, let self = self {
+                self.areaIds[platform.rawValue]?.removeValue(forKey: areaName)
+                site.listCategories { [weak self] areas in
+                    DispatchQueue.main.async {
+                        guard let self = self else {
+                            completion(.empty)
+                            return
+                        }
+                        self.rememberCategories(platform: platform, areas: areas)
+                        guard let freshId = self.areaIds[platform.rawValue]?[areaName] else {
+                            completion(.empty)
+                            return
+                        }
+                        self.requestCategoryRooms(site: site, platform: platform, areaId: freshId, page: page, allowStaleIdRetry: false, areaName: areaName, completion: completion)
+                    }
+                }
+                return
+            }
             let hasMore = LiveDataGatewayAdapter.pageHasMore(platform: platform, count: rooms.count)
             DispatchQueue.main.async {
                 completion(LiveRoomPage(rooms: LiveDataGatewayAdapter.deduplicated(rooms), hasMore: hasMore))
