@@ -193,10 +193,11 @@ check("4i-d. version.json changelog is trilingual and names this version",
           isinstance(_cl.get(k), str) and _cl[k].startswith(f"v{_v}")
           for k in ("zh", "tw", "en")),
       f"keys: {sorted(_cl.keys()) if isinstance(_cl, dict) else type(_cl).__name__}")
-# (2026-11-25, b49fix3 P1-12): sha256 is written at release time
-# (download the shipped IPA, sha256sum it, write it into
-# version.json alongside size, in the same release commit) and
-# is what the app verifies the downloaded IPA against
+# (2026-11-25, b49fix3 P1-12; wording fixed b49fix13, b49-sweep15
+# release P2-1): sha256 is written at release time (download the
+# IPA built from the release commit (Bitrise deploy dir — NOT the
+# live shop file), sha256sum it, write it into version.json
+# alongside size, in the same release commit) and is what the app
 # (UpdateManifest.asSHA256). Before release the field is empty
 # and that must NOT fail preflight; a non-empty value must be
 # exactly 64 lowercase hex, and the field must exist at all.
