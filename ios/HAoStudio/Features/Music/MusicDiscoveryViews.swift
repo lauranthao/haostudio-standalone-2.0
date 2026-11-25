@@ -258,7 +258,7 @@ struct MusicExploreView: View {
                         .frame(minHeight: 120, alignment: .center)
                         .frame(maxWidth: .infinity)
                 } else {
-                    let columns = Array(playlists.prefix(12).chunked(into: 2))
+                    let columns = Array(Array(playlists.prefix(12)).chunked(into: 2))
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(alignment: .top, spacing: 24) {
                             ForEach(Array(columns.enumerated()), id: \.offset) { _, column in

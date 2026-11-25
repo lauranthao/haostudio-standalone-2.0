@@ -782,14 +782,11 @@ struct MusicDownloadTasksView: View {
     }
 
     private func downloadStateText(_ state: DownloadState) -> String {
-        switch state {
-        case .queued: return "排队中"
-        case .downloading: return "下载中"
-        case .paused: return "已暂停"
-        case .completed: return "已下载"
-        case .failed: return "下载失败"
-        case .cancelled: return "已取消"
-        }
+        // b45-fix #27: the labels live on the enum (chineseLabel) —
+        // a switch here goes non-exhaustive every time a state is
+        // added (fetchingURL / waitingNetwork / validating /
+        // notDownloadable were missing after the 12-state machine).
+        state.chineseLabel
     }
 
     private func formattedSize(_ bytes: Int) -> String {

@@ -20,6 +20,7 @@
 // and play the returned queue. Nothing here invents a song.
 
 import Foundation
+import SwiftUI
 
 enum MusicRadio {
     /// Private FM queue: local pool minus disliked, seeded shuffle.

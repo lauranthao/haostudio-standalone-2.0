@@ -280,7 +280,7 @@ struct MusicHomeView: View {
                 )
             } else {
                 let columnWidth = width - 20
-                let columns = Array(homeVM.recommendedPlaylists.prefix(18).chunked(into: 3))
+                let columns = Array(Array(homeVM.recommendedPlaylists.prefix(18)).chunked(into: 3))
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 16) {
                         ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
@@ -350,7 +350,7 @@ struct MusicHomeView: View {
                 )
             } else {
                 let columnWidth = width - 20
-                let columns = Array(homeVM.discoveredSongs.prefix(36).chunked(into: 4))
+                let columns = Array(Array(homeVM.discoveredSongs.prefix(36)).chunked(into: 4))
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 16) {
                         ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
@@ -519,7 +519,7 @@ struct MusicHomeView: View {
                 )
             } else {
                 let columnWidth = width - 20
-                let columns = Array(homeVM.regionalHotSongs.prefix(36).chunked(into: 4))
+                let columns = Array(Array(homeVM.regionalHotSongs.prefix(36)).chunked(into: 4))
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 16) {
                         ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
@@ -560,7 +560,7 @@ struct MusicHomeView: View {
                     onRetry: { homeVM.loadDiscoveredPlaylists() }
                 )
             } else {
-                let columns = Array(homeVM.discoveredPlaylists.prefix(18).chunked(into: 2))
+                let columns = Array(Array(homeVM.discoveredPlaylists.prefix(18)).chunked(into: 2))
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 24) {
                         ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
