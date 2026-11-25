@@ -1648,7 +1648,7 @@ struct BackupSnapshotView: View {
                     }
                 }
             } footer: {
-                Text("快照只保留最近 5 份，超出自动清理；恢复时目标快照不会被清理；恢复只还原本次导入改动过的内容，导入后新建的歌单、下载不受影响；删除快照只去掉该次导入的安全网，不动现有数据。")
+                Text("快照只保留最近 5 份，超出自动清理；恢复时本次不清理目标快照，但下次导入或用另一份快照恢复时，最旧的快照仍可能被清理；恢复只还原本次导入改动过的内容，导入后新建的歌单、下载不受影响；删除快照只去掉该次导入的安全网，不动现有数据。")
                     .font(.haoFootnote)
                     .foregroundStyle(theme.textSecondary)
             }
@@ -1718,27 +1718,45 @@ struct BackupSnapshotView: View {
             // touch, so a wrong-row tap can be undone by
             // restoring the new snapshot. A failed safety net
             // does not block the restore; the result says so.
-            let safetyNetTaken = BackupEngineCore.createSafetyNetSnapshot(
+            let safetyNetURL = BackupEngineCore.createSafetyNetSnapshot(
                 for: target.url, documentsURL: docs
-            ) != nil
+            )
             let result = BackupEngineCore.restoreSnapshot(
                 at: target.url, documentsURL: docs
             )
-            // b49fix7 P1-1/P2-7: prune after EVERY restore, and
-            // always excluding the target. b49fix6 pruned only
-            // after success, which left two holes: a successful
-            // restore still deleted a snapshot (the target when
-            // it was the oldest, otherwise the oldest unrelated
-            // one — the safety net counts toward keep-5), and
-            // every failed restore left its safety net behind,
-            // so the list grew to 6, 7, 8 folders until the next
-            // success. The target is never pruned here, so it
-            // stays restorable; the safety net is the newest
-            // folder and always survives.
-            BackupEngineCore.pruneSnapshots(excluding: target.url, documentsURL: docs)
+            // b49fix7 P1-1/P2-7: prune after every restore that
+            // changed something, always excluding the target.
+            // b49fix8 P2-8: a restore that restored NOTHING
+            // (restoredKeys + restoredFiles == 0 — a manifest
+            // failure, or a success whose snapshot already
+            // matches the live state) must not cost a snapshot:
+            // it skips the prune. And when the zero-change is
+            // PROVABLE (manifest failure, or a success that
+            // restored nothing), the safety net it just took is
+            // deleted again — it captured a state identical to
+            // the live one, so restoring it later would be a
+            // no-op; keeping it would only grow the list by one
+            // on every failed/no-op tap. A partial failure
+            // keeps its safety net: a failed verify removes the
+            // key it could not verify, so the net may still
+            // hold the undo for that removal (and the next
+            // successful import/restore prunes the list back to
+            // 5). Either way the list is never silently
+            // shrunk by a restore that changed nothing.
+            var safetyNetKept = safetyNetURL != nil
+            if result.restoredKeys + result.restoredFiles == 0 {
+                if result.manifestError != nil || result.succeeded {
+                    if let net = safetyNetURL {
+                        BackupEngineCore.deleteSnapshot(at: net)
+                        safetyNetKept = false
+                    }
+                }
+            } else {
+                BackupEngineCore.pruneSnapshots(excluding: target.url, documentsURL: docs)
+            }
             await MainActor.run {
                 isRestoring = false
-                restoreResultText = Self.restoreMessage(for: result, safetyNetTaken: safetyNetTaken)
+                restoreResultText = Self.restoreMessage(for: result, safetyNetTaken: safetyNetKept)
                 showingRestoreResult = true
                 reload()
             }
