@@ -510,12 +510,20 @@ check("11. LX scripts: no http:// API URL (ATS — literals + decoded _u)",
 # fails, so a future `"http://" + host` construction is caught too.
 # Tests are excluded on purpose: fixtures use example.invalid,
 # emby.local and 192.168.x by design, and they do not ship.
-# Multiline """ / #""" blocks are skipped whole (MIT licence text and
-# the LX JS prelude — verified to contain no http://).
+# Raw #"..."# and multiline """...""" blocks are yielded and judged
+# line by line (a line starting with http:// fails); a literal
+# "http" concatenated with "://..." is caught too (b49fix5 P2-20:
+# the old scanner skipped both block forms whole, so a cleartext
+# URL written in either form sailed through). The MIT licence text
+# and the LX JS prelude contain no http://, so yielding them
+# changes nothing for the current tree.
 def _swift_string_literals(text):
-    """Yield (contents, line) for every single-line double-quoted
-    string literal in Swift source, skipping // comments and
-    triple-quoted blocks (raw hash form included)."""
+    """Yield (contents, line) for every double-quoted string literal
+    in Swift source, skipping // comments. Raw hash strings and
+    triple-quoted blocks are yielded too (their contents are judged
+    line by line by the caller) — skipping them whole used to let a
+    cleartext URL written in either form sail through (b49fix5
+    P2-20)."""
     lits = []
     i, n = 0, len(text)
     while i < n:
@@ -527,16 +535,22 @@ def _swift_string_literals(text):
         if c == "#" and i + 1 < n and text[i + 1] == '"':
             if text.startswith('"""', i + 1):
                 j = text.find('"""#', i + 4)
+                if j >= 0:
+                    lits.append((text[i + 4:j], text.count("\n", 0, i) + 1))
                 i = n if j < 0 else j + 4
             else:
                 j = i + 2
                 while j < n and not (text[j] == '"' and j + 1 < n and text[j + 1] == "#"):
                     j += 1
+                if j < n:
+                    lits.append((text[i + 2:j], text.count("\n", 0, i) + 1))
                 i = n if j >= n else j + 2
             continue
         if c == '"':
             if text.startswith('"""', i):
                 j = text.find('"""', i + 3)
+                if j >= 0:
+                    lits.append((text[i + 3:j], text.count("\n", 0, i) + 1))
                 i = n if j < 0 else j + 3
                 continue
             j = i + 1
@@ -564,12 +578,23 @@ for _p in _swift_files:
     _text = _p.read_text()
     _lines = _text.splitlines()
     for _lit, _ln in _swift_string_literals(_text):
-        if re.match(r"^http://\S", _lit):
+        # Multiline contents are judged line by line: a line that
+        # starts with http:// is a request URL whatever form the
+        # literal was written in. (Single-line literals are the
+        # one-line case of the same rule.)
+        if re.search(r"(?m)^\s*http://\S", _lit):
             _swift_ats.append(f"{_p.relative_to(APP_DIR)}:{_ln}: cleartext http:// URL literal")
         elif _lit == "http://":
             _line = _lines[_ln - 1] if _ln - 1 < len(_lines) else ""
             if "hasPrefix" not in _line and "dropFirst" not in _line:
                 _swift_ats.append(f"{_p.relative_to(APP_DIR)}:{_ln}: bare http:// literal outside validator/upgrader")
+        elif _lit == "http":
+            # "http" + "://host" builds the same cleartext URL by
+            # concatenation; the scheme comparison `scheme == "http"`
+            # has no `+ "://` on its line and is not flagged.
+            _line = _lines[_ln - 1] if _ln - 1 < len(_lines) else ""
+            if re.search(r'"http"\s*\+\s*"://', _line):
+                _swift_ats.append(f"{_p.relative_to(APP_DIR)}:{_ln}: http:// URL built by concatenation")
 check("11b. Swift side: no cleartext http:// request URL (ATS — literals only)",
       not _swift_ats, str(_swift_ats[:5]) if _swift_ats else f"{len(_swift_files)} Swift files clean")
 
