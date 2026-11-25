@@ -95,6 +95,8 @@ python3 ios/preflight_check.py   # 工程引用、资产、版本对齐等；不
 
 正式打包走 Bitrise（`bitrise.yml`，Xcode 26.2，手动触发 `primary` 工作流；GitHub Actions 工作流 **iOS Unsigned IPA**（`.github/workflows/ios-unsigned.yml`，macOS 26 + Xcode 26.2）备用，Actions 页面手动触发 `workflow_dispatch`（push 不自动触发），产物是 `HAoStudio-ipa`）。libmpv 在构建时下载，不在仓库里。未签名 IPA 以 `.zip` 形式上传（Bitrise 的 Deploy 步骤会解析 `.ipa` 的描述文件，未签名包没有这个文件）。
 
+**填 `version.json` 的 `sha256` 前，必须从发版 commit 重建、以下载验证过的包重算**：包内没有 commit 字段，线上文件的实测哈希无法证明它出自哪个 commit，所以绝不能直接抄线上哈希填入（线上 build 48 的实测哈希 `0207b137…` 就是例子——不要抄）。正确流程：发版 commit → Bitrise 构建 → 下载 IPA 验证包内版本/build → `sha256sum` 取哈希与大小 → 填进 `version.json`（`sha256` + `size`）→ 重部署商店 manifest → `python3 ios/release_check.py --release --shop-manifest-url … --ipa <文件>` 全绿再发链接。详见 `ios/release_check.py` 头注释（b49-sweep8 P2-24）。
+
 ## 工程结构
 
 ```
