@@ -1210,8 +1210,10 @@ final class HomeViewModel: ObservableObject {
     /// atomic file write makes a concurrent read see either the
     /// old or the new pool, both valid; the pool writes
     /// themselves are serialised on
-    /// MusicLibraryStore.dailyPoolQueue (b49fix8 P2-4), so two
-    /// writers cannot lose each other's day key.
+    /// MigrationStore.dailyWriteQueue (b49fix17: the pool save
+    /// moved off its own dailyPoolQueue onto dailyWriteQueue,
+    /// so the import's pool merge and the pool save share one
+    /// queue), so two writers cannot lose each other's day key.
     /// Nonisolated: the background reload calls it off the main
     /// thread.
     /// Minimum pool depth that pins for the day (b49fix8 P2-3):

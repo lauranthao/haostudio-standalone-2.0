@@ -280,4 +280,164 @@ final class MigrationStoreTests: XCTestCase {
         XCTAssertEqual(MigrationStore.prefixRule(for: "haoVodProg:cms:x")?.fileName, "haoVodProg")
         XCTAssertTrue(MigrationStore.isIgnored("hao_play_url_cache:a|wy|hires"))
     }
+
+    // MARK: - b49fix17: Route B merge for hao_recent / musicResume (P1-4)
+
+    /// A recent song dict (the shape MusicSong.toJSON writes:
+    /// platform + songId — the identityKey is platform|songId).
+    private func recentSong(_ id: String) -> [String: Any] {
+        ["platform": "wy", "songId": id, "title": "t\(id)", "artist": "a", "album": ""]
+    }
+
+    private func writeJSONFile(_ name: String, _ value: Any) {
+        let json = try! JSONSerialization.data(withJSONObject: value, options: [])
+        try! json.write(to: docs.appendingPathComponent("\(name).json"), options: [.atomic])
+    }
+
+    private func jsonString(_ value: Any) -> String {
+        String(data: try! JSONSerialization.data(withJSONObject: value, options: []), encoding: .utf8)!
+    }
+
+    func testRouteBRecentMergesWithLiveInsteadOfOverwriting() {
+        // Live file: the just-played song. Snapshot: one backup
+        // song. The merge must keep BOTH, live first — the old
+        // whole-file write silently dropped the live song.
+        writeJSONFile("hao_recent", [recentSong("live-1")])
+        writeSnapshot(["hao_recent": jsonString([recentSong("backup-1")])])
+
+        let report = runMigration()
+
+        XCTAssertEqual(report.outcome, .migrated)
+        let file = readJSONFile("hao_recent") as? [[String: Any]]
+        XCTAssertEqual(file?.count, 2)
+        XCTAssertEqual(file?.first?["songId"] as? String, "live-1")
+        XCTAssertEqual(file?.last?["songId"] as? String, "backup-1")
+    }
+
+    func testRouteBResumeDictMergesAndListShapeSkips() {
+        // Dict shape (the real Flutter shape,
+        // docs/storage-mapping.md:112): live + backup keys merge.
+        writeJSONFile("musicResume", ["live|wy": 30.0])
+        writeSnapshot(["musicResume": jsonString(["backup|wy": 60.0])])
+
+        let report = runMigration()
+
+        XCTAssertEqual(report.outcome, .migrated)
+        let merged = readJSONFile("musicResume") as? [String: Any]
+        XCTAssertEqual(merged?["live|wy"] as? Double, 30.0)
+        XCTAssertEqual(merged?["backup|wy"] as? Double, 60.0)
+    }
+
+    func testRouteBResumeListShapeIsSkippedNotMerged() {
+        // The old fixture sampled musicResume as a list — a list
+        // is not the dict resumeMap() reads, so it must be
+        // skipped (and the live dict left untouched), not merged
+        // into a file the player cannot read.
+        writeJSONFile("musicResume", ["live|wy": 30.0])
+        writeSnapshot(["musicResume": jsonString([["id": "x"]])])
+
+        let report = runMigration()
+
+        XCTAssertEqual(report.outcome, .migrated)
+        XCTAssertTrue(report.skippedKeyNames.contains("musicResume"))
+        let kept = readJSONFile("musicResume") as? [String: Any]
+        XCTAssertEqual(kept?["live|wy"] as? Double, 30.0)
+        XCTAssertEqual(kept?.count, 1)
+    }
+
+    // MARK: - b49fix17: merge / cap / prune pure helpers (P2-1, P2-4, P1-2)
+
+    func testCappedVodProgKeepsAllIncomingKeys() {
+        // Incoming key sorts FIRST lexicographically — the old
+        // "take last 200" dropped exactly this key on every
+        // repeat import, silently.
+        let incoming = ["haoVodProg:aaa:early": 1.0]
+        var dict = incoming
+        for i in 0..<200 { dict["haoVodProg:zzz:\(i)"] = Double(i) }
+
+        let capped = MigrationStore.cappedVodProgEntries(dict, keeping: Set(incoming.keys))
+
+        XCTAssertEqual(capped.count, 200)
+        XCTAssertNotNil(capped["haoVodProg:aaa:early"])
+    }
+
+    func testPrunedDailyEntriesKeepsUnparseableAndKeepingKey() {
+        // Fixed "now" so the test does not drift with the date.
+        let now = Calendar.current.date(from: DateComponents(year: 2026, month: 11, day: 26))!
+        let dict: [String: Any] = [
+            "2026-11-15": [[String: Any]](), // 11 days old, pruned
+            "2026-11-22": [[String: Any]](), // 4 days old, kept
+            "not-a-date": [[String: Any]](), // unparseable, kept
+            "2026-11-01": [[String: Any]](), // old but `keeping`, kept
+        ]
+
+        let pruned = MigrationStore.prunedDailyEntries(dict, keeping: "2026-11-01", now: now)
+
+        XCTAssertEqual(Set(pruned.keys), ["2026-11-22", "not-a-date", "2026-11-01"])
+    }
+
+    func testMergedRecentEntriesLiveFirstDedupesAndCapsAt100() {
+        let live = [recentSong("live-1"), recentSong("live-2")]
+        var incoming = [recentSong("live-1")] // duplicate of live
+        for i in 0..<99 { incoming.append(recentSong("b\(i)")) }
+
+        let merged = MigrationStore.mergedRecentEntries(live: live, incoming: incoming)
+
+        XCTAssertEqual(merged.count, 100)
+        XCTAssertEqual(merged[0]["songId"] as? String, "live-1")
+        XCTAssertEqual(merged[1]["songId"] as? String, "live-2")
+        XCTAssertEqual(merged.filter { ($0["songId"] as? String) == "live-1" }.count, 1)
+    }
+
+    func testMergedListEntriesDedupesByKeyLiveWins() {
+        let live = [["id": "a", "name": "old"]]
+        let incoming = [["id": "a", "name": "new"], ["id": "b", "name": "x"]]
+
+        let merged = MigrationStore.mergedListEntries(live: live, incoming: incoming) { $0["id"] as? String }
+
+        XCTAssertEqual(merged.count, 2)
+        XCTAssertEqual(merged[0]["name"] as? String, "old")
+        XCTAssertEqual(merged[1]["id"] as? String, "b")
+    }
+
+    func testMergedStringListDedupesAndCaps() {
+        let merged = MigrationStore.mergedStringList(live: ["a", "b"], incoming: ["b", "c", "d"], cap: 3)
+
+        XCTAssertEqual(merged, ["a", "b", "c"])
+    }
+
+    func testRecentContainsAllToleratesFrontInsertDisplacement() {
+        // 100 merged entries; a new song inserted at the front
+        // pushes the oldest merged entry out of the 100 cap.
+        // The tolerant check must pass — plain multiset subset
+        // would fail and roll back the whole import.
+        let merged = (0..<100).map { recentSong("k\($0)") }
+        var actual = [recentSong("new-song")] + Array(merged.prefix(99))
+
+        XCTAssertTrue(MigrationStore.recentContainsAll(actual: actual, expected: merged))
+
+        // A missing MIDDLE entry with no displacement is a real
+        // loss, not a front insert — must fail.
+        actual = merged
+        actual.remove(at: 50)
+        XCTAssertFalse(MigrationStore.recentContainsAll(actual: actual, expected: merged))
+
+        // A missing TAIL entry with NO concurrent insert is a
+        // write that never landed — must fail.
+        actual = Array(merged.prefix(99))
+        XCTAssertFalse(MigrationStore.recentContainsAll(actual: actual, expected: merged))
+    }
+
+    func testResumeEntriesPresentToleratesOnlyRecordedDeletions() {
+        writeJSONFile("musicResume", ["a": 1.0, "b": 2.0])
+
+        // "c" never landed but was recorded as deleted by
+        // clearResume — excused. Without the record it fails.
+        XCTAssertTrue(MigrationStore.resumeEntriesPresent(
+            ["a": 1.0, "b": 2.0, "c": 3.0], documentsURL: docs, toleratingDeleted: ["c"]))
+        XCTAssertFalse(MigrationStore.resumeEntriesPresent(
+            ["a": 1.0, "b": 2.0, "c": 3.0], documentsURL: docs, toleratingDeleted: []))
+        XCTAssertTrue(MigrationStore.resumeEntriesPresent(
+            ["a": 1.0, "b": 2.0], documentsURL: docs, toleratingDeleted: []))
+    }
 }

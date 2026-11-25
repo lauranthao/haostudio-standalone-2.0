@@ -54,33 +54,32 @@ final class MusicLibraryViewModel: ObservableObject {
     func renamePlaylist(id: String, name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        var lists = MusicLibraryStore.getLists()
-        if let index = lists.firstIndex(where: { $0.id == id }) {
-            lists[index].name = trimmed
-            MusicLibraryStore.saveLists(lists)
-            playlists = lists
+        // b49fix17 P2-6: the rename runs atomically in the store
+        // (read-modify-write under collectionWriteQueue) — the
+        // old getLists/mutate/saveLists here could read before
+        // an import merge and save after it, overwriting the
+        // imported lists with stale bytes.
+        if MusicLibraryStore.renameList(id: id, name: trimmed) {
+            playlists = MusicLibraryStore.getLists()
         }
     }
 
     /// Add songs to a playlist (dedupe + 1000 cap, Flutter addTracks).
     /// Returns (added, dropped, dupes) so the UI can report honestly.
     func addToPlaylist(_ songs: [MusicSong], listId: String) -> (added: Int, dropped: Int, dupes: Int) {
-        var lists = MusicLibraryStore.getLists()
-        guard let index = lists.firstIndex(where: { $0.id == listId }) else {
-            return (0, 0, 0)
-        }
-        let result = lists[index].addTracks(songs)
-        MusicLibraryStore.saveLists(lists)
-        playlists = lists
+        // b49fix17 P2-6: atomic in the store, same reason as
+        // renamePlaylist above.
+        let result = MusicLibraryStore.addTracksToList(songs, listId: listId)
+        playlists = MusicLibraryStore.getLists()
         return result
     }
 
     func removeFromPlaylist(song: MusicSong, listId: String) {
-        var lists = MusicLibraryStore.getLists()
-        guard let index = lists.firstIndex(where: { $0.id == listId }) else { return }
-        lists[index].tracks.removeAll(where: { $0.identityKey == song.identityKey })
-        MusicLibraryStore.saveLists(lists)
-        playlists = lists
+        // b49fix17 P2-6: atomic in the store, same reason as
+        // renamePlaylist above.
+        if MusicLibraryStore.removeTrackFromList(song: song, listId: listId) {
+            playlists = MusicLibraryStore.getLists()
+        }
     }
 
     func playlist(id: String) -> UserPlaylist? {

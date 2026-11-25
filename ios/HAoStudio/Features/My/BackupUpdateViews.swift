@@ -300,7 +300,11 @@ final class BackupUpdateFlow: ObservableObject {
                 self.alert = BackupUpdateAlert(
                     title: succeeded ? "导入完成" : "导入失败",
                     message: succeeded
-                        ? "已从旧版备份导入 \(report.migratedKeys) 项设置（跳过 \(report.skippedKeys) 项，未识别 \(report.unknownKeys) 项）。"
+                        // b49fix17 §6: 导入是合并，不是精确还原 —
+                        // 备份里没有的项会保留现在的值，旧备份无法
+                        // 把数据还原到备份当下的状态；如需撤销，
+                        // 恢复导入前保存的快照。
+                        ? "已从旧版备份导入 \(report.migratedKeys) 项设置（合并导入：备份里没有的项会保留现在的值；跳过 \(report.skippedKeys) 项，未识别 \(report.unknownKeys) 项）。"
                         : "无法导入该备份文件：\(report.detail)")
                 if succeeded {
                     NotificationCenter.default.post(name: .haoBackupImported, object: nil)
@@ -803,7 +807,7 @@ struct ImportPreviewSheet: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Text("导入是合并，不是替换：备份里没有的项会保留现在的值；导入时会先保存一份当前数据的快照（见设置里的“导入快照”），导入成功后如需撤销，可在那里恢复快照。")
+                Text("导入是合并，不是替换：备份里没有的项会保留现在的值；导入时会先保存一份当前数据的快照（见设置里的“导入快照”），导入成功后如需撤销，可在那里恢复快照。旧备份无法把数据精确还原到备份当下的状态——要回到导入前的状态，请恢复快照。")
                     .font(.haoSubhead)
                     .foregroundStyle(theme.textSecondary)
                     .multilineTextAlignment(.center)
