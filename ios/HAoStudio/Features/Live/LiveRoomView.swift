@@ -279,7 +279,7 @@ struct LiveRoomView: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 9)
-                    .haoDarkGlassRoundedRect(cornerRadius: 10, darkness: 0.7)
+                    .haoDarkGlassRoundedRect(cornerRadius: HaoLayout.chipCornerRadius, darkness: 0.7)
                     .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
                     .padding(.bottom, HaoLayout.toastBottomOffset)
                     .allowsHitTesting(false)
@@ -543,7 +543,7 @@ struct LiveRoomView: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .haoDarkGlassRoundedRect(cornerRadius: 10, darkness: 0.87)
+                .haoDarkGlassRoundedRect(cornerRadius: HaoLayout.chipCornerRadius, darkness: 0.87)
                 .allowsHitTesting(false)
             }
         }
@@ -724,7 +724,9 @@ struct LiveRoomView: View {
                     .accessibilityLabel("返回")
                     Spacer()
                 }
-                .padding(.horizontal, 20)
+                // b49fix5 P2-33: portrait insets are uniformly 16
+                // (landscape chrome stays 20).
+                .padding(.horizontal, 16)
                 .padding(.top, 8)
                 .background(
                     LinearGradient(
@@ -763,7 +765,7 @@ struct LiveRoomView: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 16)
             .padding(.vertical, 9)
-            .haoDarkGlassRoundedRect(cornerRadius: 10, darkness: 0.7)
+            .haoDarkGlassRoundedRect(cornerRadius: HaoLayout.chipCornerRadius, darkness: 0.7)
             .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
     }
 

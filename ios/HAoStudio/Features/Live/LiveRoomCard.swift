@@ -89,7 +89,7 @@ struct LiveRoomCard: View {
                 .aspectRatio(CGFloat(LiveGridLayout.coverAspectRatio), contentMode: .fit)
                 .frame(maxWidth: .infinity)
                 .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: HaoLayout.chipCornerRadius, style: .continuous))
             if room.isLive {
                 // O-D3: async confirmation flips isLive false ->
                 // true; the badge fades in (0.2s ease-out) instead

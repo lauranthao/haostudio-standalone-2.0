@@ -199,7 +199,7 @@ struct LiveSearchView: View {
                         .padding(.top, 12)
                     if !viewModel.hasSearched {
                         searchHistorySection
-                            .padding(.top, 16)
+                            .padding(.top, 12)
                     }
                     resultsSection
                         .padding(.top, 16)
@@ -288,7 +288,7 @@ struct LiveSearchView: View {
                     Button("清空") {
                         showClearHistoryConfirm = true
                     }
-                    .font(.haoDenseBody)
+                    .font(.haoRowSubtitle)
                     .foregroundStyle(theme.accentText)
                     .buttonStyle(.plain)
                 }

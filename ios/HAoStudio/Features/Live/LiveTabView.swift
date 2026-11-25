@@ -486,7 +486,7 @@ struct LiveTabView: View {
     private var liveHeader: some View {
         HStack(alignment: .center) {
             Text("直播")
-                .font(.system(size: 34, weight: .bold))
+                .font(.haoScreenTitle)
                 .foregroundStyle(theme.textPrimary)
             Spacer()
             Button(action: { path.append(.history) }) {
@@ -772,7 +772,7 @@ struct LiveFollowCard: View {
                         .aspectRatio(16.0 / 9.0, contentMode: .fill)
                         .frame(width: 140)
                         .clipped()
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: HaoLayout.chipCornerRadius, style: .continuous))
                 }
                 Text(follow.nick.isEmpty ? follow.title : follow.nick)
                     .font(.haoFootnoteStrong)
@@ -834,7 +834,7 @@ struct LiveHistoryCard: View {
                     .aspectRatio(16.0 / 9.0, contentMode: .fill)
                     .frame(width: 140)
                     .clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: HaoLayout.chipCornerRadius, style: .continuous))
                 Text(entry.title.isEmpty ? "直播间" : entry.title)
                     .font(.haoFootnoteStrong)
                     .foregroundStyle(theme.textPrimary)
