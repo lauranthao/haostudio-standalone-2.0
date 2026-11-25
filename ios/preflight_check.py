@@ -28,6 +28,10 @@ no removed metadata service, no lyrics extension, no Podfile yet). Checks, in or
  11. LX scripts: no cleartext http:// API URL (ATS — literals + decoded
      _u obfuscated strings), with startsWith validators, comments,
      @see links and Referer values allowlisted by shape.
+ 11b. Swift side: no cleartext http:// request URL literal (ATS),
+     with hasPrefix validators, http→https upgraders and // comments
+     allowlisted by shape; Tests excluded (fixtures use example.invalid,
+     emby.local and 192.168.x by design).
  4i also validates version.json ipaUrl/size/trilingual changelog;
  4m checks the Bitrise artifact name is derived from version.json;
  5 is a floor (162) instead of an exact count; 5e detects (not bans)
@@ -487,6 +491,87 @@ def _ats_hits(path):
 _ats = [h for p in _SCRIPTS for h in _ats_hits(p)]
 check("11. LX scripts: no http:// API URL (ATS — literals + decoded _u)",
       not _ats, str(_ats[:5]) if _ats else f"{len(_SCRIPTS)} scripts clean")
+
+# --- 11b. Swift side: no cleartext http:// request URL literal (ATS) ---
+# (2026-11-25, b49fix6 P1-8/P2-52): the Kugou hot-playlist leg shipped a
+# literal "http://mobilecdn.kugou.com/..." request URL that ATS blocks on
+# device (NSAllowsArbitraryLoads=false) — check 11 only scans the LX
+# scripts, so it sailed through preflight. This scans every Swift
+# string literal in the shipped app code (ios/HAoStudio) and fails on
+# anything that is not an allowlisted shape:
+#   * `hasPrefix("http://")` validators — they TEST a URL, they do not
+#     fetch one (DouyinSite, EmbyClient, MusicHTTP);
+#   * http→https upgraders (`"https://" + url.dropFirst("http://"...`)
+#     — they REMOVE cleartext, they do not fetch it (MusicHTTP,
+#     CmsClient);
+#   * `//` comments and the "要以 http:// 或 https:// 开头" validation
+#     message — the scheme is mentioned, not fetched (VodDanmakuClient).
+# A bare "http://" literal outside a validator/upgrader line also
+# fails, so a future `"http://" + host` construction is caught too.
+# Tests are excluded on purpose: fixtures use example.invalid,
+# emby.local and 192.168.x by design, and they do not ship.
+# Multiline """ / #""" blocks are skipped whole (MIT licence text and
+# the LX JS prelude — verified to contain no http://).
+def _swift_string_literals(text):
+    """Yield (contents, line) for every single-line double-quoted
+    string literal in Swift source, skipping // comments and
+    triple-quoted blocks (raw hash form included)."""
+    lits = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            j = text.find("\n", i)
+            i = n if j < 0 else j + 1
+            continue
+        if c == "#" and i + 1 < n and text[i + 1] == '"':
+            if text.startswith('"""', i + 1):
+                j = text.find('"""#', i + 4)
+                i = n if j < 0 else j + 4
+            else:
+                j = i + 2
+                while j < n and not (text[j] == '"' and j + 1 < n and text[j + 1] == "#"):
+                    j += 1
+                i = n if j >= n else j + 2
+            continue
+        if c == '"':
+            if text.startswith('"""', i):
+                j = text.find('"""', i + 3)
+                i = n if j < 0 else j + 3
+                continue
+            j = i + 1
+            buf = []
+            while j < n:
+                if text[j] == "\\" and j + 1 < n:
+                    buf.append(text[j + 1])
+                    j += 2
+                    continue
+                if text[j] == '"' or text[j] == "\n":
+                    break
+                buf.append(text[j])
+                j += 1
+            if j < n and text[j] == '"':
+                lits.append(("".join(buf), text.count("\n", 0, i) + 1))
+            i = j + 1 if j < n else n
+            continue
+        i += 1
+    return lits
+
+
+_swift_files = sorted(APP_DIR.rglob("*.swift"))
+_swift_ats = []
+for _p in _swift_files:
+    _text = _p.read_text()
+    _lines = _text.splitlines()
+    for _lit, _ln in _swift_string_literals(_text):
+        if re.match(r"^http://\S", _lit):
+            _swift_ats.append(f"{_p.relative_to(APP_DIR)}:{_ln}: cleartext http:// URL literal")
+        elif _lit == "http://":
+            _line = _lines[_ln - 1] if _ln - 1 < len(_lines) else ""
+            if "hasPrefix" not in _line and "dropFirst" not in _line:
+                _swift_ats.append(f"{_p.relative_to(APP_DIR)}:{_ln}: bare http:// literal outside validator/upgrader")
+check("11b. Swift side: no cleartext http:// request URL (ATS — literals only)",
+      not _swift_ats, str(_swift_ats[:5]) if _swift_ats else f"{len(_swift_files)} Swift files clean")
 
 print()
 if failures:

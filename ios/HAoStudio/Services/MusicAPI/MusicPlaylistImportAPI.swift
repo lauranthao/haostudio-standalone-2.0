@@ -114,7 +114,7 @@ final class MusicPlaylistImportAPI {
     /// Kugou: special search for 热门, 30.
     func plazaKg(completion: @escaping ([PlaylistSummary]) -> Void) {
         client.getJson(
-            "http://mobilecdn.kugou.com/api/v3/search/special?format=json&keyword=%E7%83%AD%E9%97%A8&page=1&pagesize=30&showtype=1",
+            "https://mobilecdn.kugou.com/api/v3/search/special?format=json&keyword=%E7%83%AD%E9%97%A8&page=1&pagesize=30&showtype=1",
             headers: ["User-Agent": MusicUA.value]
         ) { json in
             guard let json = json else { completion([]); return }

@@ -24,7 +24,14 @@ endorsement by those projects, nor any affiliation with them.
   licences).
 - **mpv / libmpv** (https://mpv.io) — playback engine (GPL-2.0-or-later
   for libmpv; the app links the prebuilt library, it does not
-  redistribute modified mpv source).
+  redistribute modified mpv source). Source: mpv upstream
+  https://github.com/mpv-player/mpv; the prebuilt iOS xcframework is
+  Predidit/libmpv-darwin-build 0.6.8
+  (https://github.com/Predidit/libmpv-darwin-build/releases/tag/0.6.8,
+  SHA-256 pinned in bitrise.yml, codemagic.yaml and
+  .github/workflows/ios-unsigned.yml). FFmpeg, bundled inside that
+  libmpv build, is available at https://ffmpeg.org and
+  https://github.com/FFmpeg/FFmpeg.
 
 ## Design references (not code)
 
