@@ -278,6 +278,18 @@ final class VideoPlayerViewModel: ObservableObject {
         engine.setVideoFit(settings.videoFit)
         danmaku.isEnabled = settings.danmakuEnabled
         danmaku.opacity = settings.danmakuOpacity
+        // b49fix8 P2-13: the font size rides the same refresh
+        // path as isEnabled/opacity. The layer state lives as
+        // long as this app-level view model, so the construction
+        // read in VodDanmakuLayerState is stale after the first
+        // open — without this line a settings change only took
+        // effect after a process restart. (The Live lane adds
+        // the settings-page footnote that this size also applies
+        // to VOD danmaku; the 0.0.3 changelog must note the
+        // 16→14 default change for users who never touched the
+        // setting — recorded here, changelog is written at ship
+        // time.)
+        danmaku.fontSize = LiveDanmakuSettings.load().fontSize
     }
 
     /// Push the 影视播放器 settings into the driver (S7 wiring).
