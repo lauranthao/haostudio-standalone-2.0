@@ -56,7 +56,7 @@ ignored = re.findall(r'static let ignoredPrefixes: \[String\] = \[(.*?)\]', src,
 ignored_prefixes = re.findall(r'"([^"]+)"', ignored)
 
 mapping = {key: (kind, dest, arg) for key, kind, dest, arg in table}
-check("mapping table has 112 named keys", len(mapping) == 112, f"{len(mapping)}")
+check("mapping table has 117 named keys", len(mapping) == 117, f"{len(mapping)}")
 check("mapping keys unique", len(set(mapping)) == len(mapping))
 check("3 prefix families", len(prefixes) == 3, str([p[0] for p in prefixes]))
 check("1 ignored family", ignored_prefixes == ["hao_play_url_cache:"])
@@ -76,7 +76,7 @@ JSON_LIST_KEYS = {
     "hao_music_search_hist", "hao_cover_cache", "hao_lyrics",
     "musicQueue", "musicDownloads", "fmDislikedIds",
     # b49fix17 P1-4: musicResume is NOT a list key — it is a dict
-    # {identityKey: seconds} (docs/storage-mapping.md:112;
+    # {identityKey: seconds} (docs/storage-mapping.md:105;
     # 2.0's resumeMap() only reads a dict). It used to sit here
     # only because the generator sampled [{"id":"x"}] for every
     # .json key, not a real Flutter shape.
@@ -93,6 +93,11 @@ JSON_LIST_KEYS = {
     "hao_lx_disabled", "hao_lx_explicit_enabled", "hao_lx_custom",
     "hao_lx_deleted_bundled", "hao_lx_order", "hao_eq_custom_presets",
     "hao_wallpaper_paths",
+    # b49fix19 P2-1: the five new mappings are list-shaped
+    # (downloadTasks and the two fav collections); a dict
+    # sample would fail the plan shape check in the Swift
+    # fixture, so they belong here.
+    "hao_fav_albums", "hao_fav_artists", "downloadTasks",
 }
 
 data = {}
@@ -112,6 +117,26 @@ for key, (kind, dest, arg) in mapping.items():
         data[key] = json.dumps(["wallpapers/w.png"])
     elif key == "hao_lists":
         data[key] = json.dumps([{"id": "pl1", "name": "收藏"}])
+    elif key == "hao_video_hist":
+        # b49fix19 P1-1: real Flutter shape — ISO date, like
+        # the Swift fixture (CrossGenerationMigrationTests).
+        data[key] = json.dumps([{
+            "item": {"id": "v1", "title": "測試影片", "year": "2024"},
+            "episodeName": "第1集", "episodeIndex": 0, "lineName": "線路1",
+            "positionSeconds": 120, "durationSeconds": 3600,
+            "updatedAt": "2026-11-20T10:00:00.000Z",
+        }])
+    elif key == "hao_live_hist":
+        # b49fix19 P1-1: real Flutter shape — ms date.
+        data[key] = json.dumps([{
+            "platform": "bilibili", "roomId": "123", "title": "測試直播",
+            "nick": "主播", "cover": "https://example.com/c.jpg",
+            "watchedAt": 1795000000000,
+        }])
+    elif key == "hao_fav_playlists":
+        # b49fix19 P2-1: a string list, not a dict — the
+        # generic .json dict sample fails its shape check.
+        data[key] = json.dumps(["pl1", "pl2"])
     elif kind == "json":
         data[key] = json.dumps([{"id": "x"}]) if key in JSON_LIST_KEYS else json.dumps({"a": 1})
     else:
@@ -137,7 +162,7 @@ for unknown in ["hao_future_feature_flag", "hao_unknown_2027_key", "custom_plugi
     data[unknown] = "keep me"
 
 total = len(data)
-print(f"snapshot keys: {total} (112 named + 9 family + 2 ignored + 3 unknown)")
+print(f"snapshot keys: {total} (117 named + 9 family + 2 ignored + 3 unknown)")
 
 # --- Build the fake 1.1.6 Documents directory ---------------------------
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="hao-upgrade-sim-"))

@@ -7,9 +7,9 @@
 `lib/core/theme/appearance_store.dart`，HEAD 2ef902b，1.1.6+31；另有未进
 `HiveKeys` 的字面量键，见各域表内出处）。
 
-**覆盖率（S1，2026-11-23；2026-11-25 b49fix2 P1-3 后更新）：116 行——112 个具名键 + 4 个键族
+**覆盖率（S1，2026-11-23；2026-11-25 b49fix2 P1-3 后更新；2026-11-26 b49fix19 P2-1 后更新）：121 行——117 个具名键 + 4 个键族
 （`haoVodProg:`、`hao_daily_YYYY-MM-DD`、`hao_listen_YYYY-MM`、
-`hao_play_url_cache:`），全部有明确去向，覆盖率 100%。其中迁移 115 行；
+`hao_play_url_cache:`），全部有明确去向，覆盖率 100%。其中迁移 120 行；
 1 个键族（`hao_play_url_cache:`）按设计不迁移：1 小时 TTL 的签名 URL 缓存，
 2.0 首次启动时已过期。未知键（不在表里）不丢弃，隔离进
 `Documents/migration_unknown_keys.json`。可执行版见
@@ -30,8 +30,9 @@
 本表下方涉及这 25 个键的行已随 b49fix18 D-2 删除，本段所列即历史记录；快照里带这些键时数据
 不丢，隔离进 `migration_unknown_keys.json`，以后有真实读取方时可重新加回映射。
 （`hao_sa_xh_device` 不是 UserDefaults 键——解析器直接读
-`hao_sa_xh_device.json` 文件，删行不影响功能。）当前映射表为 112 个具名键
-（136 − 25 删 + 1 增 `hao_sa_video_applied`），连同 4 个键族共 116 行。**
+`hao_sa_xh_device.json` 文件，删行不影响功能。）当前映射表为 117 个具名键
+（136 − 25 删 + 1 增 `hao_sa_video_applied` + 5 增 b49fix19 P2-1：`downloadTasks`、
+`hao_fav_playlists`、`hao_fav_albums`、`hao_fav_artists`、`hao_daily_pool`），连同 4 个键族共 121 行。**
 
 ## 规则（铁律 7）
 
@@ -100,10 +101,15 @@
 | `hao_lyrics` | JSON 字符串，上限 100 | `Documents/hao_lyrics.json` | 歌词缓存 |
 | `musicQueue` | JSON 字符串 | `Documents/musicQueue.json` | 播放队列 `{songs, index}` |
 | `musicDownloads` | JSON 字符串 | `Documents/musicDownloads.json` | 已下载歌曲；文件在 `music_downloads/` |
+| `downloadTasks` | JSON 字符串 | `Documents/downloadTasks.json` | 下载任务（DownloadEngine 持久化状态）；整档写入。b49fix19 P2-1 新增映射，Route B 此前收不到此键。 |
 | `musicResume` | JSON 字符串 | `Documents/musicResume.json` | 断点续播 `{identityKey: 秒}`，只在杀后台时写。b49fix17 P1-4：此为 dict 形狀——舊的遷移 fixture 曾誤以 list `[{"id":"x"}]` 抽樣它（見 `simulate_upgrade.py`／`CrossGenerationMigrationTests.swift` 的修正），2.0 的 `resumeMap()` 也只認 dict；Route B 匯入時按 dict overlay 合併。 |
 | `fmDislikedIds` | JSON 字符串 | `Documents/fmDislikedIds.json` | 私人 FM 不喜欢的歌曲 id |
+| `hao_fav_playlists` | JSON 字符串 | `Documents/hao_fav_playlists.json` | 收藏的歌单 id 列表；string list 合并。b49fix19 P2-1 新增映射，Route B 此前收不到此键。 |
+| `hao_fav_albums` | JSON 字符串 | `Documents/hao_fav_albums.json` | 收藏的专辑列表；按 id+name 去重合并。b49fix19 P2-1 新增映射，Route B 此前收不到此键。 |
+| `hao_fav_artists` | JSON 字符串 | `Documents/hao_fav_artists.json` | 收藏的艺人列表；按 id+name 去重合并。b49fix19 P2-1 新增映射，Route B 此前收不到此键。 |
 | `hao_music_loudness_cache` | JSON 字符串，上限 200 | `Documents/hao_music_loudness_cache.json` | 响度缓存 `{identityKey: LUFS}`，丢了只影响第二遍起归一化冷启动 |
 | `hao_local_music` | JSON 字符串 | `Documents/hao_local_music.json` | 本地音乐索引；文件在 `local_music/` |
+| `hao_daily_pool` | JSON 字符串 | `Documents/hao_daily_pool.json` | 每日推荐候选池（100 条，7 天剪枝）；dict 合并。b49fix19 P2-1 新增映射，Route B 此前收不到此键。 |
 | `hao_resolver_speed` | JSON 字符串 | `Documents/hao_resolver_speed.json` | 解析器测速 `{源: {avg, fails, cooled}}`；字面量键 |
 
 ### 影视 / 视频
@@ -204,7 +210,7 @@
 
 | Flutter Hive 键族 | 类型 / 默认 | Swift 位置 | 备注 |
 |---|---|---|---|
-| `hao_daily_YYYY-MM-DD` | JSON 字符串 | `Documents/hao_daily.json`（合并文件） | 每日推荐缓存，按天一个键；合并时快照键名保留为条目键 |
+| `hao_daily_YYYY-MM-DD` | JSON 字符串 | `Documents/hao_daily.json`（合并文件） | 每日推荐缓存，按天一个键；b49fix19 P2-7：合并时日内逐歌合并去重（live 在前），不再整日覆写——「导入是合并」在日粒度上亦成立；快照键名保留为条目键 |
 | `hao_listen_YYYY-MM` | JSON 字符串 | `Documents/hao_listen.json`（合并文件） | 收听记录按月分片，每片上限 3000；与冻结的旧 `hao_listen` 单表合并后上限 3000 |
 | `hao_play_url_cache:<song\|platform\|quality>` | 键族 | 不迁移 | 播放 URL 缓存，1 小时 TTL，签名 URL；2.0 首次启动时已过期，丢了无影响 |
 
@@ -262,7 +268,7 @@ Flutter 侧这些集合原来存在 Hive box 里、值是相对名（`local_path
   "appVersion": "1.1.6",
   "appBuild": 31,
   "exportedAt": "2026-11-23T00:00:00.000Z",
-  "entries": 126,
+  "entries": 131,
   "data": { "<Flutter Hive 键>": <值> },
   "types": { "<Flutter Hive 键>": "string|int|double|bool|json|intList|doubleList" }
 }

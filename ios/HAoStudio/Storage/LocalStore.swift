@@ -67,6 +67,14 @@ enum LocalStore {
     /// the test seam (nil = the real container); MigrationStore
     /// passes its own documents URL so tests quarantine into the
     /// temp container, never the real one.
+    ///
+    /// b49fix19 P2-9a: the record read → append → write is
+    /// guarded by a lock — two simultaneous quarantines used to
+    /// race (both read the same record, both appended, the
+    /// second write dropped the first record; the file itself
+    /// was already moved aside, only the record was lost).
+    private static let quarantineLock = NSLock()
+
     static func quarantineFile(
         at url: URL,
         name: String,
@@ -93,6 +101,8 @@ enum LocalStore {
         guard (try? FileManager.default.moveItem(at: url, to: quarantinedURL)) != nil else {
             return
         }
+        quarantineLock.lock()
+        defer { quarantineLock.unlock() }
         let recordURL = docs
             .appendingPathComponent("\(quarantineRecordFile).json")
         var record = (try? Data(contentsOf: recordURL))

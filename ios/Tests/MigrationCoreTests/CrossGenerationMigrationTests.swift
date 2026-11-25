@@ -49,7 +49,7 @@ final class CrossGenerationMigrationTests: XCTestCase {
     /// simulate_upgrade.py; a list key given a dict value would
     /// still migrate, but the fixture mirrors real Flutter shapes.
     /// b49fix17 P1-4: musicResume is NOT here — it is a dict
-    /// {identityKey: seconds} (docs/storage-mapping.md:112;
+    /// {identityKey: seconds} (docs/storage-mapping.md:105;
     /// 2.0's resumeMap() only reads a dict). The old set listed
     /// it only because the generator sampled [{"id":"x"}] for
     /// every .json key, not a real Flutter shape.
@@ -69,6 +69,11 @@ final class CrossGenerationMigrationTests: XCTestCase {
         "hao_lx_disabled", "hao_lx_explicit_enabled", "hao_lx_custom",
         "hao_lx_deleted_bundled", "hao_lx_order", "hao_eq_custom_presets",
         "hao_wallpaper_paths",
+        // b49fix19 P2-1: the five new mappings are list-shaped
+        // (downloadTasks and the two fav collections); their
+        // samples must be lists or the plan shape check skips
+        // them and the migrated count lands one short each.
+        "hao_fav_albums", "hao_fav_artists", "downloadTasks",
     ]
 
     /// Prefix-family members: 3 per family, same values as
@@ -145,6 +150,33 @@ final class CrossGenerationMigrationTests: XCTestCase {
         if mapping.key == "hao_eq_band_gains" {
             return [0.5, -1.0, 0, 0, 0, 0, 0, 0, 0, 0]
         }
+        // b49fix19 P1-1: real Flutter shapes for the two
+        // history files — an ISO date for video, an ms date
+        // for live — so the plan-time normalisation is
+        // exercised (the generic [{"id":"x"}] sample would be
+        // dropped by the normaliser and the expected file
+        // would never match).
+        if mapping.key == "hao_video_hist" {
+            return jsonString([[
+                "item": ["id": "v1", "title": "測試影片", "year": "2024"],
+                "episodeName": "第1集", "episodeIndex": 0, "lineName": "線路1",
+                "positionSeconds": 120, "durationSeconds": 3600,
+                "updatedAt": "2026-11-20T10:00:00.000Z",
+            ]])
+        }
+        if mapping.key == "hao_live_hist" {
+            return jsonString([[
+                "platform": "bilibili", "roomId": "123", "title": "測試直播",
+                "nick": "主播", "cover": "https://example.com/c.jpg",
+                "watchedAt": 1795000000000,
+            ]])
+        }
+        // b49fix19 P2-1: hao_fav_playlists is a string list —
+        // the generic .json dict sample {"a": 1} fails its
+        // shape check and the file would never install.
+        if mapping.key == "hao_fav_playlists" {
+            return jsonString(["pl1", "pl2"])
+        }
         switch mapping.kind {
         case .string:
             return "sample"
@@ -166,8 +198,8 @@ final class CrossGenerationMigrationTests: XCTestCase {
         }
     }
 
-    /// Builds the full 1.1.6 build 32 snapshot: 112 named keys + 9
-    /// family members + 2 ignored cache keys + 3 unknown keys = 126.
+    /// Builds the full 1.1.6 build 32 snapshot: 117 named keys + 9
+    /// family members + 2 ignored cache keys + 3 unknown keys = 131.
     /// expectedFiles holds what each collection file must contain
     /// after migration, including the merged prefix families.
     private func buildFixture() -> Fixture {
@@ -190,6 +222,27 @@ final class CrossGenerationMigrationTests: XCTestCase {
         var vodProg: [String: Any] = [:]
         var daily: [String: Any] = [:]
         var listen: [[String: Any]] = []
+        // b49fix19: the mapping loop above samples the RAW
+        // snapshot values, but three files are transformed by
+        // the merge — the expected values are the TRANSFORMED
+        // ones. History dates normalise (P1-1: ISO string and
+        // ms integer both become seconds), and hao_fav merges
+        // with the pre-existing live file (buildFakeFlutterDocuments
+        // writes [["key": "old-song"]]; since fix18 D-1 Route B
+        // merges instead of whole-file overwriting, the actual
+        // file is live-first + incoming).
+        expectedFiles["hao_video_hist"] = [[
+            "item": ["id": "v1", "title": "測試影片", "year": "2024"],
+            "episodeName": "第1集", "episodeIndex": 0, "lineName": "線路1",
+            "positionSeconds": 120, "durationSeconds": 3600,
+            "updatedAt": 1795168800,
+        ]]
+        expectedFiles["hao_live_hist"] = [[
+            "platform": "bilibili", "roomId": "123", "title": "測試直播",
+            "nick": "主播", "cover": "https://example.com/c.jpg",
+            "watchedAt": 1795000000,
+        ]]
+        expectedFiles["hao_fav"] = [["key": "old-song"], ["id": "x"]]
         for member in Self.familyMembers.sorted(by: { $0.0 < $1.0 }) {
             data[member.0] = member.1
             if member.0.hasPrefix("haoVodProg:") {
@@ -341,9 +394,9 @@ final class CrossGenerationMigrationTests: XCTestCase {
     // MARK: - Full snapshot
 
     func testFullSnapshotMigratesEveryKey() {
-        XCTAssertEqual(MigrationStore.mappings.count, 112, "the mapping table is the contract; a new row belongs in the table first")
+        XCTAssertEqual(MigrationStore.mappings.count, 117, "the mapping table is the contract; a new row belongs in the table first")
         let fixture = buildFixture()
-        XCTAssertEqual(fixture.data.count, 126, "112 named + 9 family + 2 ignored + 3 unknown")
+        XCTAssertEqual(fixture.data.count, 131, "117 named + 9 family + 2 ignored + 3 unknown")
         buildFakeFlutterDocuments()
         writeSnapshot(fixture.data)
         let snapshotURL = docs.appendingPathComponent("migration_snapshot.json")
@@ -354,20 +407,23 @@ final class CrossGenerationMigrationTests: XCTestCase {
         let report = MigrationStore.runIfNeeded(documentsURL: docs, defaults: defaults)
 
         XCTAssertEqual(report.outcome, .migrated)
-        XCTAssertEqual(report.totalKeys, 126)
-        // 115, not 121: family keys merge into one file per family
+        XCTAssertEqual(report.totalKeys, 131)
+        // 120, not 126: family keys merge into one file per family
         // (9 keys -> haoVodProg, hao_daily, hao_listen), and the 3
         // unknown keys land in one unknown-keys file: 75 defaults +
-        // 35 collection files + 1 emby config + 3 family files +
-        // 1 unknown-keys file = 115. The 35 is 33 whole-file writes
+        // 40 collection files + 1 emby config + 3 family files +
+        // 1 unknown-keys file = 120. The 40 is 38 whole-file writes
         // + 2 merged family files (hao_daily, haoVodProg); the 3
         // family files are the merged singles hao_listen, hao_recent
         // and musicResume — the bare hao_listen key merges via the
         // listen family instead of a whole-file write (b49fix16 P2-1),
         // so it is counted once, not once per write path — the
-        // accounting is now exact (115 + 2 skipped + 3 unknown
-        // = 120 = 126 total - 6 family-key reduction).
-        XCTAssertEqual(report.migratedKeys, 115)
+        // accounting is now exact (120 + 2 skipped + 3 unknown
+        // = 125 = 131 total - 6 family-key reduction). b49fix19
+        // P2-1 added 5 rows (downloadTasks, hao_fav_playlists,
+        // hao_fav_albums, hao_fav_artists, hao_daily_pool):
+        // 115 -> 120, 38 whole-file writes was 33.
+        XCTAssertEqual(report.migratedKeys, 120)
         XCTAssertEqual(report.skippedKeys, 2)
         XCTAssertEqual(report.unknownKeys, 3)
         XCTAssertEqual(report.failedKeys, 0)

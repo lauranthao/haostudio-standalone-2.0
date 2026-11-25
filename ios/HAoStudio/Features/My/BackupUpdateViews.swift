@@ -297,6 +297,11 @@ final class BackupUpdateFlow: ObservableObject {
                 }
                 self.isImporting = false
                 let succeeded = report.outcome == .migrated || report.outcome == .alreadyDone
+                // b49fix19 P1-5: the success message carries
+                // report.warnings (Route A prints them; Route B
+                // used to drop them, so the D-5c/D-6 warnings
+                // were unobservable on a successful import).
+                let successMessage = "已从旧版备份导入 \(report.migratedKeys) 项设置（合并导入：备份里没有的项会保留现在的值；跳过 \(report.skippedKeys) 项，未识别 \(report.unknownKeys) 项）。" + (report.warnings.isEmpty ? "" : "\n" + report.warnings.joined(separator: "\n"))
                 self.alert = BackupUpdateAlert(
                     title: succeeded ? "导入完成" : "导入失败",
                     message: succeeded
@@ -304,7 +309,7 @@ final class BackupUpdateFlow: ObservableObject {
                         // 备份里没有的项会保留现在的值，旧备份无法
                         // 把数据还原到备份当下的状态；如需撤销，
                         // 恢复导入前保存的快照。
-                        ? "已从旧版备份导入 \(report.migratedKeys) 项设置（合并导入：备份里没有的项会保留现在的值；跳过 \(report.skippedKeys) 项，未识别 \(report.unknownKeys) 项）。"
+                        ? successMessage
                         : "无法导入该备份文件：\(report.detail)")
                 if succeeded {
                     NotificationCenter.default.post(name: .haoBackupImported, object: nil)
