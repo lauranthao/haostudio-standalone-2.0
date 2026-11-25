@@ -126,15 +126,15 @@ struct VideoPosterCard: View {
         // whole visual, and 16 reads softer and more premium next
         // to the 18pt library cards and the 14pt continue cards,
         // instead of the sharper 12 that matched nothing else.
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: HaoLayout.cornerLarge, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: HaoLayout.cornerLarge, style: .continuous)
                 .strokeBorder(theme.hairline, lineWidth: 0.5)
         }
     }
 
     private var placeholder: some View {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
+        RoundedRectangle(cornerRadius: HaoLayout.cornerLarge, style: .continuous)
             .fill(theme.surfaceStrong)
             .overlay {
                 Image(systemName: "film")

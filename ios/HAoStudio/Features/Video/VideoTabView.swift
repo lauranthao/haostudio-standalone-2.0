@@ -130,6 +130,13 @@ final class VideoTabViewModel: ObservableObject {
 }
 
 struct VideoTabView: View {
+    /// Whether this tab is the selected one (sweep-5 P2-19):
+    /// mounted tabs stay in the hierarchy at opacity 0, so
+    /// onAppear / onDisappear never fire on a tab switch and
+    /// cannot gate the hero timer — the parent passes the
+    /// selection down instead. Defaults true (the only
+    /// constructor is MainTabView.tabRoot).
+    var isSelected = true
     @StateObject private var viewModel = VideoTabViewModel()
     @State private var path: [VideoDestination] = []
     @State private var mode: String = VideoLibraryStore.tabMode()
@@ -142,8 +149,12 @@ struct VideoTabView: View {
     /// Whether the hero carousel is on screen (b49 sweep #23):
     /// the timer publisher fires forever, so the advance is gated
     /// on this + scene phase + an empty nav path — the hero must
-    /// not advance under the fullscreen player, in Emby mode, on
-    /// another tab, or while backgrounded.
+    /// not advance under the fullscreen player, in Emby mode, or
+    /// while backgrounded. (sweep-5 P2-19: "on another tab" used
+    /// to be claimed here too, but it was never gated — mounted
+    /// tabs stay in the hierarchy at opacity 0, so onAppear /
+    /// onDisappear never fire on a tab switch; the tab gate is
+    /// `isSelected`, passed down by MainTabView.)
     @State private var heroTimerActive = false
     /// Whether the user is mid-drag on the hero (sweep-4 P2-19):
     /// the timer used to fire mid-swipe and fight the drag,
@@ -202,7 +213,7 @@ struct VideoTabView: View {
                 Text("Emby").tag("emby")
             }
             .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
+            .padding(.horizontal, HaoLayout.pageMargin)
             .padding(.top, 8)
             .onChange(of: mode) { newMode in
                 VideoLibraryStore.setTabMode(newMode)
@@ -239,7 +250,10 @@ struct VideoTabView: View {
             .navigationDestination(for: VideoDestination.self) { destination in
                 switch destination {
                 case .search:
-                    VideoSearchView(onSelect: { path.append(.detail($0)) })
+                    VideoSearchView(
+                        onSelect: { path.append(.detail($0)) },
+                        onOpenEmbySearch: { path.append(.embySearch) }
+                    )
                 case .embySearch:
                     EmbySearchView(onSelect: { path.append(.embyDetail($0)) })
                 case .category(let type):
@@ -295,9 +309,9 @@ struct VideoTabView: View {
     /// clipped "影视" text under the status bar.
     private var videoHeader: some View {
         Text("影视")
-            .font(.system(size: 34, weight: .bold))
+            .font(.haoScreenTitle)
             .foregroundStyle(theme.textPrimary)
-            .padding(.horizontal, 16)
+            .padding(.horizontal, HaoLayout.pageMargin)
             .padding(.top, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -316,12 +330,12 @@ struct VideoTabView: View {
                         heroCarousel
                     }
                     searchEntry
-                        .padding(.horizontal, 16)
+                        .padding(.horizontal, HaoLayout.pageMargin)
                         .padding(.top, 12)
                     categoryStrip
                         .padding(.top, 12)
                     libraryRow
-                        .padding(.horizontal, 16)
+                        .padding(.horizontal, HaoLayout.pageMargin)
                         .padding(.top, 12)
                     if !viewModel.continueWatching.isEmpty {
                         continueSection
@@ -371,7 +385,7 @@ struct VideoTabView: View {
                                     .foregroundStyle(theme.accentText)
                             }
                             .foregroundStyle(theme.textSecondary)
-                            .padding(.horizontal, 16)
+                            .padding(.horizontal, HaoLayout.pageMargin)
                             .padding(.top, 12)
                         }
                         ForEach(viewModel.rows) { row in
@@ -430,17 +444,20 @@ struct VideoTabView: View {
                             .padding(.horizontal, 16)
                             .padding(.vertical, 10)
                             .haoDarkGlassCapsule(darkness: 0.6)
-                            .padding(.horizontal, 16)
+                            .padding(.horizontal, HaoLayout.pageMargin)
                             .padding(.bottom, 28)
                         } else {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(item.title)
-                                    // b42 polish: 22 -> 24 — the hero
-                                    // title is the page's one big moment
-                                    // (VidHub's banner), and 24 bold
-                                    // carries it instead of reading like
-                                    // a section header.
-                                    .font(.system(size: 24, weight: .bold))
+                                    // sweep-5 P2-33: back to the 22pt
+                                    // detail-title token — the b42 24pt
+                                    // broke the app-wide title scale
+                                    // (chen 2026-11-25: all pages
+                                    // visually aligned); the hero is
+                                    // the page's one big moment, but
+                                    // it is a detail title, not a
+                                    // page title.
+                                    .font(.haoDetailTitle)
                                     .foregroundStyle(.white)
                                     .lineLimit(1)
                                 HStack(spacing: 6) {
@@ -454,11 +471,11 @@ struct VideoTabView: View {
                                         Text(remarks)
                                     }
                                 }
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.haoFootnoteMedium)
                                 .foregroundStyle(.white.opacity(0.85))
                                 .lineLimit(1)
                             }
-                            .padding(.horizontal, 16)
+                            .padding(.horizontal, HaoLayout.pageMargin)
                             .padding(.bottom, 28)
                         }
                     }
@@ -499,8 +516,11 @@ struct VideoTabView: View {
             // only while the hero is actually visible, the app is
             // foreground, and no page is pushed on top. sweep-4
             // P2-19 adds the drag gate: never mid-swipe, and never
-            // within 5 s after a manual swipe.
-            guard heroTimerActive, scenePhase == .active, path.isEmpty,
+            // within 5 s after a manual swipe. sweep-5 P2-19 adds
+            // the tab gate (isSelected): onAppear / onDisappear
+            // never fire on a tab switch, so the timer would
+            // otherwise advance the hero of a hidden tab.
+            guard heroTimerActive, isSelected, scenePhase == .active, path.isEmpty,
                   !isHeroDragging,
                   Date().timeIntervalSince(lastHeroInteraction) > 5,
                   heroItems.count > 1 else { return }
@@ -555,8 +575,8 @@ struct VideoTabView: View {
                     .foregroundStyle(theme.textMuted)
                 Spacer()
             }
-            .padding(.horizontal, 14)
-            .frame(height: 40)
+            .padding(.horizontal, 16)
+            .frame(height: HaoLayout.searchFieldHeight)
             .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -596,7 +616,7 @@ struct VideoTabView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, HaoLayout.pageMargin)
         }
     }
 
@@ -635,7 +655,7 @@ struct VideoTabView: View {
                     .font(.haoDenseBody)
                     .foregroundStyle(theme.accentText)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, HaoLayout.pageMargin)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(viewModel.continueWatching) { entry in
@@ -644,7 +664,7 @@ struct VideoTabView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pageMargin)
             }
         }
     }
@@ -670,7 +690,7 @@ struct VideoTabView: View {
                     .font(.haoDenseBody)
                     .foregroundStyle(theme.accentText)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, HaoLayout.pageMargin)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(row.items) { item in
@@ -682,7 +702,7 @@ struct VideoTabView: View {
                         .frame(width: 120)
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pageMargin)
             }
         }
     }
@@ -821,11 +841,11 @@ struct VideoDailyListView: View {
                     title: "今日暂无推荐",
                     note: "每日推荐为空，稍后再来看看。"
                 )
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.top, 32)
             } else {
                 VideoPosterGrid(items: items) { onSelect($0) }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, HaoLayout.pushedPageMargin)
                     .padding(.top, 16)
                 Spacer(minLength: 16)
             }

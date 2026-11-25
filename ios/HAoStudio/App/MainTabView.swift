@@ -531,7 +531,7 @@ struct MainTabView: View {
         switch tab {
         case .home: HomeView()
         case .music: MusicHomeView()
-        case .movies: VideoTabView()
+        case .movies: VideoTabView(isSelected: tab == selectedTab)
         case .live: LiveTabView(gateway: LiveDataGatewayAdapter.shared)
         case .my: MyView()
         }

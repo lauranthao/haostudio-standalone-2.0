@@ -261,6 +261,16 @@ final class VideoPlayerViewModel: ObservableObject {
     /// backend (MPV `aid` / `sid`, AVPlayer media selection —
     /// build 36, item 14, G-F).
     func applySettings() {
+        // sweep-5 P1-8: dialogueBoost + videoFit live in
+        // SettingsStore now (the sheet binds the store) — pull
+        // them into the snapshot BEFORE persist(). The sheet ->
+        // store -> onChange bridge below syncs the same values
+        // while the player is open; this pull covers the
+        // closed-player case.
+        if let appSettings {
+            settings.dialogueBoostEnabled = appSettings.dialogueBoost
+            settings.videoFit = appSettings.videoFit
+        }
         settings.persist()
         pushVodSettingsToDriver()
         guard let engine = engine else { return }
@@ -323,7 +333,10 @@ final class VideoPlayerViewModel: ObservableObject {
 
     private func pushEnhancementToDriver() {
         let branch = resolveVodEnhancement(
-            superResolution: appSettings?.superResolution ?? false,
+            // sweep-5 P2-18: no read of the orphaned
+            // super-resolution setting any more — the key is
+            // cleared and the branch is a documented no-op.
+            superResolution: false,
             interpolation: appSettings?.interpolation ?? false,
             sdrToHdr: appSettings?.sdrToHDR ?? false
         )
@@ -1235,6 +1248,7 @@ struct VideoPlayerView: View {
                     .foregroundStyle(.white)
                     .frame(width: 96, height: 96)
                     .haoGlassCircle()
+                    .accessibilityLabel(pauseFlashShowsPause ? "已暂停" : "正在播放")
             }
             // Drag-seek preview (build 36, item 9, leg 3): the
             // same accent-capsule pill as the 2x badge, no new
@@ -1507,9 +1521,6 @@ struct VideoPlayerView: View {
         .onChange(of: settingsStore.subtitlePosition) { _, _ in
             videoPlayer.applySettings()
         }
-        .onChange(of: settingsStore.superResolution) { _, _ in
-            videoPlayer.applySettings()
-        }
         .onChange(of: settingsStore.interpolation) { _, _ in
             videoPlayer.applySettings()
         }
@@ -1597,7 +1608,7 @@ struct VideoPlayerView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("更多设置")
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, HaoLayout.playerHorizontalMargin)
         .padding(.top, 12)
         .background(
             LinearGradient(
@@ -1789,7 +1800,7 @@ struct VideoPlayerView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(isLandscape ? "退出全屏" : "全屏")
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, HaoLayout.playerHorizontalMargin)
         }
         .padding(.bottom, 16)
         .background(
@@ -1909,7 +1920,7 @@ struct VideoSeekBar: View {
             }
         }
         .frame(height: 44)
-        .padding(.horizontal, 20)
+        .padding(.horizontal, HaoLayout.playerHorizontalMargin)
     }
 }
 

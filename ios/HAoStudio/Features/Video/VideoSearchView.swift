@@ -30,6 +30,14 @@ final class VideoSearchViewModel: ObservableObject {
     @Published private(set) var cmsHasMore = false
     /// Same for the Emby section (50 per server page).
     @Published private(set) var embyHasMore = false
+    /// Emby search failure (sweep-5 P2-1 / P2-13): like
+    /// cmsErrorMessage, set only on failure. The initial search
+    /// and the load-more share it — the view tells them apart by
+    /// whether embyResults is empty (hint row) or not (banner).
+    @Published private(set) var embyErrorMessage: String?
+    /// Whether Emby is configured (the hint row only makes sense
+    /// when the user has an Emby server to search).
+    var embyConfigured: Bool { gateway.embyConfigured }
 
     private let gateway: VideoDataGateway
     /// Generation bumped on every submitted query: a completion
@@ -68,6 +76,7 @@ final class VideoSearchViewModel: ObservableObject {
         results = []
         embyResults = []
         cmsErrorMessage = nil
+        embyErrorMessage = nil
         cmsHasMore = false
         embyHasMore = false
         lastQuery = query
@@ -98,13 +107,16 @@ final class VideoSearchViewModel: ObservableObject {
                 case .success(let items):
                     self.embyResults = items
                     self.embyHasMore = items.count >= 50
-                case .failure:
+                    self.embyErrorMessage = nil
+                case .failure(let error):
                     self.embyResults = []
                     self.embyHasMore = false
+                    self.embyErrorMessage = error.message
                 }
                 // Failure keeps the Emby section hidden (CMS results
-                // still show); the dedicated Emby search page is
-                // where the error is surfaced.
+                // still show); the hint row below points at the
+                // dedicated Emby search page, where the error is
+                // surfaced in full.
                 self.embyDone = true
                 if self.cmsDone { self.isSearching = false }
             }
@@ -117,6 +129,30 @@ final class VideoSearchViewModel: ObservableObject {
         search(lastQuery)
     }
 
+    /// Clear the query + results and return to history (sweep-5
+    /// P1-5): the ✕ used to clear only the text, leaving
+    /// `searched` true and the old results on screen with no way
+    /// back (an empty submit is guarded). Bumps the generation
+    /// so a late completion from the abandoned query cannot
+    /// overwrite the cleared state. Mirrors
+    /// MusicSearchViewModel.clear().
+    func clear() {
+        searchGeneration += 1
+        isSearching = false
+        searched = false
+        results = []
+        embyResults = []
+        cmsErrorMessage = nil
+        embyErrorMessage = nil
+        cmsHasMore = false
+        embyHasMore = false
+        lastQuery = ""
+        cmsPage = 1
+        embyStartIndex = 0
+        cmsDone = true
+        embyDone = true
+    }
+
     /// Retry only the failed load-more page (sweep-4 P2-48): the
     /// banner's retry used to re-run the whole search from page 1
     /// and blank the loaded grid. The failed page is retried in
@@ -127,6 +163,15 @@ final class VideoSearchViewModel: ObservableObject {
         guard !cmsLoadingMore, !lastQuery.isEmpty else { return }
         cmsHasMore = true
         loadMoreCMS()
+    }
+
+    /// Retry only the failed Emby load-more page (sweep-5 P2-1):
+    /// same shape as retryLoadMoreCMS — the failed page is
+    /// re-issued in place, the loaded grid stays.
+    func retryLoadMoreEmby() {
+        guard !embyLoadingMore, !lastQuery.isEmpty else { return }
+        embyHasMore = true
+        loadMoreEmby()
     }
 
     /// Next CMS source-page, appended (b49 sweep #22). A failure
@@ -168,13 +213,15 @@ final class VideoSearchViewModel: ObservableObject {
             switch result {
             case .success(let items):
                 self.embyStartIndex = nextStart
+                self.embyErrorMessage = nil
                 var seen = Set(self.embyResults.map { "\($0.sourceId ?? -1)|\($0.id)" })
                 for item in items where seen.insert("\(item.sourceId ?? -1)|\(item.id)").inserted {
                     self.embyResults.append(item)
                 }
                 self.embyHasMore = items.count >= 50
-            case .failure:
+            case .failure(let error):
                 self.embyHasMore = false
+                self.embyErrorMessage = error.message
             }
         }
     }
@@ -192,16 +239,21 @@ final class VideoSearchViewModel: ObservableObject {
 
 struct VideoSearchView: View {
     var onSelect: (VideoItem) -> Void
+    /// Open the dedicated Emby search page (sweep-5 P2-13):
+    /// wired by the video tab to its .embySearch destination.
+    /// Nil when the view is presented outside the tab.
+    var onOpenEmbySearch: (() -> Void)? = nil
 
     @StateObject private var viewModel = VideoSearchViewModel()
     @State private var query = ""
+    @State private var showClearHistoryConfirm = false
 
     @Environment(\.haoTheme) private var theme
 
     var body: some View {
         VStack(spacing: 0) {
             searchField
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.top, 8)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -230,7 +282,7 @@ struct VideoSearchView: View {
                                     .padding(.vertical, 12)
                                     .background(theme.accent, in: Capsule())
                             }
-                            .padding(.horizontal, 16)
+                            .padding(.horizontal, HaoLayout.pushedPageMargin)
                         }
                         if viewModel.results.isEmpty && viewModel.embyResults.isEmpty
                             && viewModel.cmsErrorMessage == nil {
@@ -239,7 +291,7 @@ struct VideoSearchView: View {
                                 title: "没有找到相关影片",
                                 note: "换个关键词试试，或检查影视源是否可用。"
                             )
-                            .padding(.horizontal, 16)
+                            .padding(.horizontal, HaoLayout.pushedPageMargin)
                         } else {
                             if let error = viewModel.cmsErrorMessage, !viewModel.results.isEmpty {
                                 HStack(spacing: 8) {
@@ -258,18 +310,56 @@ struct VideoSearchView: View {
                                         .foregroundStyle(theme.accentText)
                                 }
                                 .foregroundStyle(theme.textSecondary)
-                                .padding(.horizontal, 16)
+                                .padding(.horizontal, HaoLayout.pushedPageMargin)
                             }
                             if !viewModel.results.isEmpty {
                                 resultSection(
                                     title: "影视源", items: viewModel.results,
                                     hasMore: viewModel.cmsHasMore,
+                                    loadFailed: viewModel.cmsErrorMessage != nil,
                                     onLoadMore: { viewModel.loadMoreCMS() })
+                            }
+                            // sweep-5 P2-1: an Emby load-more
+                            // failure is a banner with a retry over
+                            // the loaded grid (same as the CMS side),
+                            // not a silent stop.
+                            if let error = viewModel.embyErrorMessage, !viewModel.embyResults.isEmpty {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "wifi.exclamationmark")
+                                    Text(error)
+                                        .font(.haoFootnote)
+                                    Spacer()
+                                    Button("重试") { viewModel.retryLoadMoreEmby() }
+                                        .font(.haoFootnote)
+                                        .foregroundStyle(theme.accentText)
+                                }
+                                .foregroundStyle(theme.textSecondary)
+                                .padding(.horizontal, HaoLayout.pushedPageMargin)
+                            }
+                            // sweep-5 P2-13: Emby is configured but
+                            // the search failed — one hint row with a
+                            // link to the dedicated Emby search page,
+                            // instead of silence.
+                            if viewModel.embyConfigured, viewModel.embyErrorMessage != nil, viewModel.embyResults.isEmpty {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "wifi.exclamationmark")
+                                    Text("Emby 没有响应")
+                                        .font(.haoFootnote)
+                                    Spacer()
+                                    if let openEmbySearch = onOpenEmbySearch {
+                                        Button("去 Emby 搜索") { openEmbySearch() }
+                                            .font(.haoFootnote)
+                                            .foregroundStyle(theme.accentText)
+                                    }
+                                }
+                                .foregroundStyle(theme.textSecondary)
+                                .padding(.horizontal, HaoLayout.pushedPageMargin)
                             }
                             if !viewModel.embyResults.isEmpty {
                                 resultSection(
                                     title: "Emby", items: viewModel.embyResults, isEmby: true,
                                     hasMore: viewModel.embyHasMore,
+                                    loadFailed: viewModel.embyErrorMessage != nil,
                                     onLoadMore: { viewModel.loadMoreEmby() })
                                     .padding(.top, 16)
                             }
@@ -286,6 +376,10 @@ struct VideoSearchView: View {
         .background(theme.scaffoldBackground)
         .navigationTitle("搜索")
         .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog("清除搜索历史？", isPresented: $showClearHistoryConfirm, titleVisibility: .visible) {
+            Button("清除", role: .destructive) { viewModel.clearHistory() }
+            Button("取消", role: .cancel) { }
+        }
     }
 
     private var searchField: some View {
@@ -300,7 +394,7 @@ struct VideoSearchView: View {
                 .disableAutocorrection(true)
                 .onSubmit { viewModel.search(query) }
             if !query.isEmpty {
-                Button(action: { query = "" }) {
+                Button(action: { query = ""; viewModel.clear() }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.haoSubhead)
                         .foregroundStyle(theme.textMuted)
@@ -312,8 +406,8 @@ struct VideoSearchView: View {
                 .foregroundStyle(theme.accentText)
                 .buttonStyle(.plain)
         }
-        .padding(.horizontal, 14)
-        .frame(height: 40)
+        .padding(.horizontal, 16)
+        .frame(height: HaoLayout.searchFieldHeight)
         .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -329,17 +423,17 @@ struct VideoSearchView: View {
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 if !viewModel.history.isEmpty {
-                    Button("清除") { viewModel.clearHistory() }
+                    Button("清除") { showClearHistoryConfirm = true }
                         .font(.haoRowSubtitle)
                         .foregroundStyle(theme.accentText)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, HaoLayout.pushedPageMargin)
             if viewModel.history.isEmpty {
                 Text("还没有搜索记录。")
                     .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textMuted)
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, HaoLayout.pushedPageMargin)
             } else {
                 FlowChips(
                     items: viewModel.history,
@@ -349,12 +443,19 @@ struct VideoSearchView: View {
                     },
                     onDelete: { term in viewModel.removeHistoryItem(term) }
                 )
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
+                // sweep-5 P2-8: deletion used to live only in a
+                // long-press menu, with nothing on screen saying
+                // so — one visible line states it.
+                Text("长按一条记录可以删除")
+                    .font(.haoFootnote)
+                    .foregroundStyle(theme.textMuted)
+                    .padding(.horizontal, HaoLayout.pushedPageMargin)
             }
         }
     }
 
-    private func resultSection(title: String, items: [VideoItem], isEmby: Bool = false, hasMore: Bool = false, onLoadMore: (() -> Void)? = nil) -> some View {
+    private func resultSection(title: String, items: [VideoItem], isEmby: Bool = false, hasMore: Bool = false, loadFailed: Bool = false, onLoadMore: (() -> Void)? = nil) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title)
@@ -365,11 +466,15 @@ struct VideoSearchView: View {
                 // loaded results, never invented — "共 N 部" only
                 // once everything is loaded; while more pages
                 // remain it is "已加载 N 部".
-                Text(hasMore ? "已加载 \(items.count) 部" : "共 \(items.count) 部")
+                // A failed load-more leaves hasMore false, so the
+                // bare "共 N 部" would claim everything loaded
+                // (sweep-5 P2-1): a failed section always reads
+                // "已加载 N 部".
+                Text(hasMore || loadFailed ? "已加载 \(items.count) 部" : "共 \(items.count) 部")
                     .font(.haoFootnote)
                     .foregroundStyle(theme.textMuted)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, HaoLayout.pushedPageMargin)
             // Emby posters carry no api_key (auth rides the
             // request header), so plain AsyncImage 401s on them:
             // the Emby section must route through EmbyPosterImage
@@ -377,7 +482,7 @@ struct VideoSearchView: View {
             VideoPosterGrid(items: items, isEmby: isEmby) { item in
                 onSelect(item)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, HaoLayout.pushedPageMargin)
             // b49 sweep #22: explicit load-more — CMS pages are
             // 40 items, Emby pages 50; the 41st / 51st result used
             // to be unreachable.
@@ -409,11 +514,12 @@ struct FlowChips: View {
 
     @Environment(\.haoTheme) private var theme
 
-    /// Content width the chips wrap inside (screen − 24pt margins
-    /// each side).
-    private var availableWidth: CGFloat {
-        UIScreen.main.bounds.width - 48
-    }
+    /// Content width the chips wrap inside, measured from layout
+    /// (sweep-5 P2-12): UIScreen.main.bounds.width froze at launch
+    /// orientation and never updated on rotation / Split View.
+    /// 342pt is the pre-measurement fallback (390pt phone − 48).
+    @State private var measuredWidth: CGFloat = 342
+    private var availableWidth: CGFloat { measuredWidth }
 
     var body: some View {
         // A simple left-aligned flow built from rows: measure-free,
@@ -446,6 +552,15 @@ struct FlowChips: View {
                         .frame(maxWidth: availableWidth)
                     }
                 }
+            }
+        }
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { measuredWidth = proxy.size.width }
+                    .onChange(of: proxy.size.width) { _, newWidth in
+                        measuredWidth = newWidth
+                    }
             }
         }
     }
@@ -622,14 +737,14 @@ struct VideoCategoryView: View {
                         .padding(.vertical, 12)
                         .background(theme.accent, in: Capsule())
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
             } else if viewModel.items.isEmpty {
                 MusicEmptyState(
                     icon: "film",
                     title: "这个分类下没有内容",
                     note: "影视源没有返回该分类的数据。"
                 )
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
             } else {
                 // A failed refresh kept the old grid: show the error
                 // as a compact banner instead of hiding the results
@@ -645,13 +760,13 @@ struct VideoCategoryView: View {
                             .foregroundStyle(theme.accentText)
                     }
                     .foregroundStyle(theme.textSecondary)
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, HaoLayout.pushedPageMargin)
                     .padding(.top, 12)
                 }
                 VideoPosterGrid(items: viewModel.items) { item in
                     onSelect(item)
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .padding(.top, 12)
                 if viewModel.hasMore {
                     ProgressView()
