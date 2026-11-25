@@ -262,6 +262,19 @@ final class LXSourceResolver: SourceResolver {
         cooldown.clear(keys: keys)
     }
 
+    /// A completed download for this song, resolved to its file,
+    /// or nil. The record's qualityCode is the tier actually
+    /// downloaded (b49fix2 P1-1).
+    private func localDownloadURL(identityKey: String) -> (url: URL, quality: AudioQuality)? {
+        guard let info = DownloadEngine.shared.taskInfo(for: identityKey),
+              info.state == .completed,
+              let relative = info.localRelativePath,
+              let url = LocalFileIndex.resolve(relative, subdir: DownloadEngine.downloadSubdir)
+        else { return nil }
+        let quality = AudioQuality(lxCode: info.request.qualityCode) ?? .standard128
+        return (url, quality)
+    }
+
     // MARK: - Main entry
 
     /// Per-resolve mutable state, owned by the work queue.
@@ -321,6 +334,20 @@ final class LXSourceResolver: SourceResolver {
                 self.finishResolve(result: nil, truncated: false, completion: completion)
                 return
             }
+            // b49fix2 P1-1: a downloaded song never needs the
+            // network — serve its file straight away, at the
+            // quality it was downloaded at. (The coordinator's
+            // resolve closure already returns item.localFileURL
+            // first; this is the safety net for items built
+            // without a local path, e.g. a queue restored at
+            // launch.) DownloadEngine + LocalFileIndex are
+            // AppCore, so this lookup is safe on the work queue.
+            if let local = self.localDownloadURL(identityKey: "\(platform.rawValue)|\(songId)") {
+                self.finishResolve(
+                    result: PlayUrlResult(url: local.url.absoluteString, quality: local.quality, via: "download"),
+                    truncated: false, completion: completion)
+                return
+            }
             let excludedURLs = Set(excluding.map { $0.absoluteString })
             // b45-F (plan §7.4): play URLs are NEVER cached —
             // signatures are short-lived, so every playback
@@ -329,7 +356,20 @@ final class LXSourceResolver: SourceResolver {
             // LX script jobs appear once the engine has loaded; kick
             // off the load on first use (the first resolve after
             // launch may predate them — later resolves include them).
-            self.engine.ensureInitialized { _ in }
+            // b49fix2 P1-5: the old fire-and-forget above meant the
+            // first resolve after launch ran its tier passes before
+            // any script was loaded — musicUrlSources only returns
+            // loaded scripts, so a script-only song failed on the
+            // first tap and worked on the second. Wait for the
+            // engine here, bounded to ~2 s: an already-initialized
+            // engine answers immediately (its completion is a
+            // main-queue hop, and this runs on the resolver work
+            // queue, so the wait cannot deadlock); a slow first
+            // load still proceeds after the bound instead of
+            // hanging the resolve.
+            let initSemaphore = DispatchSemaphore(value: 0)
+            self.engine.ensureInitialized { _ in initSemaphore.signal() }
+            _ = initSemaphore.wait(timeout: .now() + 2)
             // Warm the xinghai token in parallel: its first fetch can
             // take seconds, and the sequential pass must not stall on it.
             if self.applicableResolvers(platform).contains(where: { $0.key == "xinghai" }) {
@@ -846,6 +886,29 @@ extension LXSourceResolver {
                     done(.url(url, MusicQualityGate.lxApiServedTier(response: json, requested: tier)))
                 }
             },
+            BuiltInResolver(key: "zddyr_mg", name: "zddyr 咪咕", order: 25, platforms: [.mg]) { resolver, songId, _, tier, _, _, token, done in
+                // b49fix2 P1-10: 咪咕 had no built-in resolver at
+                // all (allResolvers covered wy/tx/kg/kw only). The
+                // oiapi search leg hands us its contentId as the
+                // song id, and zddyr's migu API answers it.
+                // Verified live 2026-11-25: the API returns code
+                // 200 + a real Migu mp3 URL for EVERY quality
+                // parameter (flac / master / hires / 128k all serve
+                // the same MP3_128_16_Stero file), so the honest
+                // served tier is always .standard128 — never the
+                // requested tier (P1-15).
+                let urlString = "https://yy.zddyr.top/lx/api/?source=mg&songmid=\(resolver.urlEncode(songId))&quality=\(tier.lxCode)"
+                resolver.fetchJson(urlString, headers: ["User-Agent": Self.musicUserAgent], cancelToken: token) { json in
+                    guard let json = json, (json["code"] as? Int) == 200,
+                          !PreviewAudioClassifier.isPreviewResponse(json) else {
+                        done(.empty)
+                        return
+                    }
+                    let url = (json["url"] as? String) ?? ""
+                    guard !url.isEmpty else { done(.empty); return }
+                    done(.url(url, .standard128))
+                }
+            },
             BuiltInResolver(key: "gd", name: "GD Studio", order: 30, platforms: [.wy]) { resolver, songId, _, tier, _, _, token, done in
                 let br: Int
                 switch tier {
@@ -865,7 +928,7 @@ extension LXSourceResolver {
                     done(url.isEmpty ? .empty : .url(url, nil))
                 }
             },
-            BuiltInResolver(key: "xinghai", name: "星海", order: 40, platforms: [.wy, .kg, .kw]) { resolver, songId, platform, tier, _, _, token, done in
+            BuiltInResolver(key: "xinghai", name: "星海", order: 40, platforms: [.wy, .kg, .kw, .mg]) { resolver, songId, platform, tier, _, _, token, done in
                 resolver.getXhToken(cancelToken: token) { tk in
                     guard !tk.isEmpty else { done(.empty); return }
                     let sourceCode: String
@@ -892,7 +955,15 @@ extension LXSourceResolver {
                         }
                         let url = (json["url"] as? String) ?? ""
                         guard !url.isEmpty else { done(.empty); return }
-                        done(.url(url, MusicQualityGate.lxApiServedTier(response: json, requested: tier)))
+                        // b49fix2 P1-10: 咪咕 via this API serves the
+                        // same 128k mp3 at every quality (same
+                        // zddyr migu backend as zddyr_mg) — label
+                        // what it actually serves, never the
+                        // requested tier (P1-15).
+                        let served: AudioQuality? = platform == .mg
+                            ? .standard128
+                            : MusicQualityGate.lxApiServedTier(response: json, requested: tier)
+                        done(.url(url, served))
                     }
                 }
             },

@@ -531,12 +531,19 @@ struct MusicDetailHero: View {
 
     @Environment(\.haoTheme) private var theme
 
-    /// Cover from the real screen width (never a hardcoded
-    /// number): min((screen − 40) × 0.68, 300). Detail pages are
-    /// full-width on iPhone, so the screen width is the available
-    /// width minus the page's side margins.
+    // b49fix2 B15: the hero's width, measured from the hero itself
+    // (see the background reader below) — never UIScreen, so Split
+    // View / Stage Manager get the real page width.
+    @State private var containerWidth: CGFloat = 0
+
+    /// Cover from the real page width (never a hardcoded number):
+    /// min((page − 40) × 0.68, 300). Detail pages are full-width on
+    /// iPhone, so the page width is the available width minus the
+    /// page's side margins. The 390 fallback only covers the
+    /// pre-measurement frame (onAppear fires during first layout).
     private var coverSize: CGFloat {
-        min((UIScreen.main.bounds.width - 40) * 0.68, 300)
+        let width = containerWidth > 0 ? containerWidth : 390
+        return min((width - 40) * 0.68, 300)
     }
 
     var body: some View {
@@ -574,6 +581,18 @@ struct MusicDetailHero: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 20)
+        // b49fix2 B15: measure the hero's own width — it spans the
+        // page, so this is the page width. A GeometryReader as the
+        // root would need an explicit height (the VStack's height
+        // is content-driven); the background reader measures
+        // without sizing.
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { containerWidth = geo.size.width }
+                    .onChange(of: geo.size.width) { _, newValue in containerWidth = newValue }
+            }
+        )
     }
 }
 

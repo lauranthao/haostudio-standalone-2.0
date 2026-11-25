@@ -98,6 +98,10 @@ struct MusicArtistDetailView: View {
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
     @StateObject private var viewModel: MusicArtistDetailViewModel
     @State private var isFavArtist = false
+    // b49fix2 B15: the hot-songs shelf width, measured from the
+    // shelf itself (see hotSongsShelf) — never UIScreen, so Split
+    // View / Stage Manager get the real row width.
+    @State private var shelfWidth: CGFloat = 0
 
     @Environment(\.haoTheme) private var theme
 
@@ -221,10 +225,11 @@ struct MusicArtistDetailView: View {
     }
 
     /// Hot songs as a horizontal shelf: 7 compact rows per
-    /// column (Coda §3.6). Column width from the real screen
-    /// width (page side margins), never hardcoded.
+    /// column (Coda §3.6). Column width from the shelf's measured
+    /// width (row width − 20 peek), never UIScreen and never
+    /// hardcoded.
     private var hotSongsShelf: some View {
-        let columnWidth = UIScreen.main.bounds.width - 40 - 20
+        let columnWidth = max(shelfWidth - 20, 160)
         let indexed = Array(viewModel.songs.enumerated())
         let columns = indexed.chunked(into: 7)
         return ScrollView(.horizontal, showsIndicators: false) {
@@ -248,6 +253,17 @@ struct MusicArtistDetailView: View {
                 }
             }
         }
+        // b49fix2 B15: measure the shelf's own width (the List row
+        // width) — onAppear fires during the first layout pass, so
+        // the first painted frame already has the real width; the
+        // 160 floor only covers the pre-measurement frame.
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { shelfWidth = geo.size.width }
+                    .onChange(of: geo.size.width) { _, newValue in shelfWidth = newValue }
+            }
+        )
     }
 
     private func albumShelf(_ albums: [AlbumSummary]) -> some View {

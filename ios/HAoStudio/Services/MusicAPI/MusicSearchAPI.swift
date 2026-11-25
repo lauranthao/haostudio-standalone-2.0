@@ -77,10 +77,10 @@ final class MusicSearchAPI {
     /// the cumulative, deduped, wy+tx-first list as each leg settles.
     /// The caller renders each call; the last call is the complete
     /// list. Empty keyword completes once with [].
-    func search(keyword: String, completion: @escaping ([MusicTrack]) -> Void) {
+    func search(keyword: String, completion: @escaping ([MusicTrack], Bool) -> Void) {
         let query = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
-            completion([])
+            completion([], false)
             return
         }
         engine.ensureInitialized { _ in }
@@ -88,6 +88,13 @@ final class MusicSearchAPI {
         var results: [MusicTrack] = []
         var seenKeys = Set<String>()
         var settledPlatforms = Set<MusicPlatform>()
+        // b49fix2 P2-4: legs that never answered (nil response /
+        // cancelled / timeout). allFailed is true only once every
+        // leg has settled, nothing was found, and every leg failed
+        // — a genuine no-match still reports false, so the view can
+        // tell "搜索失败" from "没有找到".
+        var failedPlatforms = Set<MusicPlatform>()
+        let platforms: [MusicPlatform] = [.wy, .tx, .kg, .kw, .mg]
 
         func sortAndBackfill(_ list: [MusicTrack]) -> [MusicTrack] {
             MusicSearchAPI.sortAndBackfill(list)
@@ -95,7 +102,9 @@ final class MusicSearchAPI {
 
         func emit() {
             let snapshot = sortAndBackfill(results)
-            DispatchQueue.main.async { completion(snapshot) }
+            let allFailed = settledPlatforms.count == platforms.count
+                && results.isEmpty && failedPlatforms.count == platforms.count
+            DispatchQueue.main.async { completion(snapshot, allFailed) }
         }
 
         func addTracks(_ tracks: [MusicTrack], dedupeByTitleArtist: Bool) {
@@ -130,10 +139,11 @@ final class MusicSearchAPI {
             }
         }
 
-        for platform in [MusicPlatform.wy, .tx, .kg, .kw] {
-            searchOne(platform: platform, keyword: query) { tracks in
+        for platform in platforms {
+            searchOneResult(platform: platform, keyword: query) { tracks, ok in
                 mergeQueue.async {
                     addTracks(tracks, dedupeByTitleArtist: false)
+                    if !ok { failedPlatforms.insert(platform) }
                     platformSettled(platform)
                 }
             }
@@ -142,26 +152,78 @@ final class MusicSearchAPI {
 
     // MARK: - Single-platform search
 
-    /// One platform leg (direct API). Empty on any failure.
-    func searchOne(platform: MusicPlatform, keyword: String, completion: @escaping ([MusicTrack]) -> Void) {
+    /// One platform leg (direct API) with transport reporting
+    /// (b49fix2 P2-4): `ok` is false only when the leg never
+    /// answered (nil response / cancelled / timeout) — an answered
+    /// leg with zero matches still reports ok. The plain
+    /// `searchOne` below drops the flag; the streaming `search`
+    /// above uses it for its all-legs-failed signal.
+    func searchOneResult(platform: MusicPlatform, keyword: String, completion: @escaping ([MusicTrack], Bool) -> Void) {
         let token = LXCancelToken()
         let timeoutWork = DispatchWorkItem { token.cancel() }
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.legTimeout, execute: timeoutWork)
-        let done: ([MusicTrack]) -> Void = { tracks in
+        let done: ([MusicTrack], Bool) -> Void = { tracks, ok in
             timeoutWork.cancel()
-            completion(tracks)
+            completion(tracks, ok)
         }
         switch platform {
         case .wy:
-            searchWy(keyword, limit: 20, token: token, completion: done)
+            searchWyResult(keyword, limit: 20, token: token, completion: done)
         case .tx:
-            searchTx(keyword, limit: 20, token: token, completion: done)
+            searchTxResult(keyword, limit: 20, token: token, completion: done)
         case .kg:
-            searchKg(keyword, limit: 15, token: token, completion: done)
+            searchKgResult(keyword, limit: 15, token: token, completion: done)
         case .kw:
-            searchKw(keyword, limit: 15, token: token, completion: done)
+            searchKwResult(keyword, limit: 15, token: token, completion: done)
         case .mg:
-            done([])
+            searchMgResult(keyword, limit: 15, token: token, completion: done)
+        }
+    }
+
+    /// One platform leg (direct API). Empty on any failure.
+    func searchOne(platform: MusicPlatform, keyword: String, completion: @escaping ([MusicTrack]) -> Void) {
+        searchOneResult(platform: platform, keyword: keyword) { tracks, _ in completion(tracks) }
+    }
+
+    /// 咪咕: oiapi MiGu_Music (`?msg=` — `?keyword=` answers code
+    /// -1 "请输入msg或id"). Verified live 2026-11-25: code 1 +
+    /// data.items[{song, singer, contentId, picture, types[]}].
+    /// The track id end-to-end is oiapi's contentId — the
+    /// zddyr_mg resolver passes it as songmid (never a random
+    /// mg_ id). No duration or album in the response (duration
+    /// nil = unknown).
+    func searchMg(_ query: String, limit: Int, token: LXCancelToken? = nil, completion: @escaping ([MusicTrack]) -> Void) {
+        searchMgResult(query, limit: limit, token: token) { tracks, _ in completion(tracks) }
+    }
+
+    /// Same as `searchMg`, plus a transport-success flag (see
+    /// `searchWyResult`): false only when the leg never answered
+    /// (nil response / cancelled / timeout) — an answered leg with
+    /// zero matches still reports ok.
+    func searchMgResult(_ query: String, limit: Int, token: LXCancelToken? = nil, completion: @escaping ([MusicTrack], Bool) -> Void) {
+        let url = "https://oiapi.net/api/MiGu_Music?msg=\(MusicAPIClient.percentEncode(query))"
+        client.getJson(url, headers: ["User-Agent": MusicUA.value], timeout: Self.legTimeout) { json in
+            guard let json = json, token?.isCancelled != true else { completion([], false); return }
+            completion(Self.parseMgSongs(json, limit: limit), true)
+        }
+    }
+
+    /// Parse an oiapi MiGu_Music response. Pure, unit-tested.
+    static func parseMgSongs(_ json: [String: Any], limit: Int = 20) -> [MusicTrack] {
+        guard (json["code"] as? Int) == 1 else { return [] }
+        let data = MusicAPIJSON.asMap(json["data"])
+        let items = MusicAPIJSON.asList(data["items"])
+        return items.prefix(limit).compactMap { x in
+            let track = MusicTrack(
+                id: MusicAPIJSON.asString(x["contentId"]),
+                title: MusicAPIJSON.asString(x["song"]),
+                artist: MusicAPIJSON.asString(x["singer"]),
+                album: "",
+                coverURL: URL(string: MusicText.toHttps(MusicAPIJSON.asString(x["picture"]))),
+                duration: nil,
+                sourceID: "mg")
+            guard !track.id.isEmpty, !track.title.isEmpty else { return nil }
+            return track
         }
     }
 

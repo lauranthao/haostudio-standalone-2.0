@@ -115,6 +115,14 @@ struct PlaylistSummary: Equatable {
 
 /// One comment (read-only — posting / liking needs a platform login,
 /// which this app does not have).
+/// A comment this comment replied to (NetEase `beReplied`).
+/// Only wy carries it — tx / kg / kw return no reply data, so
+/// their comments keep the empty default.
+struct CommentReply: Equatable {
+    let nick: String
+    let content: String
+}
+
 struct CommentItem: Equatable {
     let nick: String
     let avatar: String
@@ -123,6 +131,10 @@ struct CommentItem: Equatable {
     /// Milliseconds since epoch.
     let time: Int
     let platform: MusicPlatform
+    /// The comment(s) this comment replied to. `var` (not `let`)
+    /// so the memberwise init keeps it as a defaulted parameter
+    /// — the tx / kg / kw mappers construct without it.
+    var replies: [CommentReply] = []
 }
 
 /// A playlist imported from a pasted public link. `missing` counts

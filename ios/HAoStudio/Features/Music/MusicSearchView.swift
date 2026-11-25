@@ -181,9 +181,19 @@ struct MusicSearchView: View {
     private var allTabView: some View {
         ScrollView {
             if allIsEmpty {
-                MusicEmptyState(icon: "magnifyingglass", title: "没有找到相关结果", note: "换个关键词试试。")
-                    .frame(minHeight: 300)
-                    .padding(.top, 12)
+                // b49fix2 P2-4: when the songs stream failed (and
+                // nothing else answered either), say so with a
+                // retry — "没有找到" would blame the keyword for a
+                // network failure.
+                if searchVM.songsFailed {
+                    MusicEmptyState(icon: "wifi.exclamationmark", title: "搜索失败", note: "网络似乎出了问题，检查后重试。", onRetry: { searchVM.retrySongs() })
+                        .frame(minHeight: 300)
+                        .padding(.top, 12)
+                } else {
+                    MusicEmptyState(icon: "magnifyingglass", title: "没有找到相关结果", note: "换个关键词试试。")
+                        .frame(minHeight: 300)
+                        .padding(.top, 12)
+                }
             } else {
                 LazyVStack(alignment: .leading, spacing: 24) {
                     songsSection
@@ -206,10 +216,21 @@ struct MusicSearchView: View {
         if searchVM.results.isEmpty && searchVM.isSearching {
             songSkeletonRows
         } else if searchVM.results.isEmpty {
-            Text("没有找到相关歌曲")
-                .font(.haoFootnote)
-                .foregroundStyle(theme.textSecondary)
+            // b49fix2 P2-4: a failed stream offers a retry, not a
+            // "没有找到" that blames the keyword.
+            if searchVM.songsFailed {
+                Button("搜索失败，点按重试") {
+                    searchVM.retrySongs()
+                }
+                .font(.haoFootnoteStrong)
+                .foregroundStyle(theme.accentText)
                 .padding(.vertical, 4)
+            } else {
+                Text("没有找到相关歌曲")
+                    .font(.haoFootnote)
+                    .foregroundStyle(theme.textSecondary)
+                    .padding(.vertical, 4)
+            }
         } else {
             ForEach(Array(searchVM.results.enumerated()), id: \.element.id) { index, song in
                 MusicSongRow(
@@ -517,9 +538,17 @@ struct MusicSearchView: View {
                 .listRowBackground(theme.scaffoldBackground)
                 .listRowSeparator(.hidden)
             } else if searchVM.results.isEmpty {
-                MusicEmptyState(icon: "magnifyingglass", title: "没有找到相关歌曲", note: "换个关键词试试。")
-                    .listRowBackground(theme.scaffoldBackground)
-                    .listRowSeparator(.hidden)
+                // b49fix2 P2-4: same failed-stream retry as the
+                // 综合 shelf (see songsSection).
+                if searchVM.songsFailed {
+                    MusicEmptyState(icon: "wifi.exclamationmark", title: "搜索失败", note: "网络似乎出了问题，检查后重试。", onRetry: { searchVM.retrySongs() })
+                        .listRowBackground(theme.scaffoldBackground)
+                        .listRowSeparator(.hidden)
+                } else {
+                    MusicEmptyState(icon: "magnifyingglass", title: "没有找到相关歌曲", note: "换个关键词试试。")
+                        .listRowBackground(theme.scaffoldBackground)
+                        .listRowSeparator(.hidden)
+                }
             }
         }
         .haoBottomChromePadding()
@@ -571,7 +600,11 @@ struct MusicSearchView: View {
                 MusicEmptyState(icon: "magnifyingglass", title: "没有找到相关结果", note: "换个关键词试试。")
                     .frame(minHeight: 300)
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 16)], spacing: 24) {
+                // b49fix2 B14: the adaptive minimum must be the card
+                // width (178) — at 160 a 390pt phone squeezed two
+                // 167pt columns and the 178pt card overflowed its
+                // cell into the next column.
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 178), spacing: 16)], spacing: 24) {
                     ForEach(Array(searchVM.albums.enumerated()), id: \.element.id) { index, album in
                         albumCard(album)
                             .onAppear {
@@ -601,7 +634,9 @@ struct MusicSearchView: View {
                 MusicEmptyState(icon: "magnifyingglass", title: "没有找到相关结果", note: "换个关键词试试。")
                     .frame(minHeight: 300)
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 16)], spacing: 24) {
+                // b49fix2 B14: same as albumsGrid — the minimum must
+                // be the card width (178), not 160.
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 178), spacing: 16)], spacing: 24) {
                     ForEach(Array(searchVM.playlists.enumerated()), id: \.element.id) { index, summary in
                         playlistCard(summary)
                             .onAppear {

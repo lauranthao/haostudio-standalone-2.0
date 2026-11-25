@@ -81,7 +81,7 @@ enum MusicLyrics {
     /// though the cache keeps it — the player could never show a
     /// translation from a cached song. Pass it through.
     static func toContractLines(_ stored: [StoredLyricLine]) -> [LyricsLine] {
-        return stored.map { LyricsLine(time: $0.t, text: $0.text, translation: $0.translation) }
+        return stored.map { LyricsLine(time: $0.t, text: $0.text, translation: $0.translation, romaji: $0.romaji) }
     }
 
     // MARK: - Body-only filter (b45-a, copy plan §2.8)

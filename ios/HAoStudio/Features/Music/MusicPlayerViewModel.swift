@@ -114,6 +114,16 @@ final class MusicPlayerViewModel: ObservableObject {
     /// the view's wording stays neutral ("未能加载歌词").
     @Published private(set) var lyricsLoadFailed = false
     @Published private(set) var activeLyricIndex = -1
+    /// Lyric-source override for the current song (b49fix2 #16):
+    /// the platform the lyrics were fetched from. Nil = the song's
+    /// own platform ("跟随歌曲"). The menu in the player's more
+    /// sheet sets it; the choice is remembered per song (see
+    /// lyricSourceOverrides below) so it survives relaunch.
+    @Published private(set) var lyricSourceOverride: MusicPlatform?
+    /// Per-song lyric-source overrides, persisted (UserDefaults
+    /// dict identityKey -> platform code). Loaded in init.
+    private var lyricSourceOverrides: [String: String] = [:]
+    private static let lyricSourceOverridesKey = "hao.lyricSourceOverrideBySong"
     @Published var lyricOffsetMs: Int {
         didSet {
             // b45-a: the offset is remembered PER SONG (0.1 s steps,
@@ -177,6 +187,17 @@ final class MusicPlayerViewModel: ObservableObject {
     private let player = NativeMusicPlayer.shared
     private let coordinator: PlaybackCoordinator
     private var cancellables = Set<AnyCancellable>()
+    /// b49fix2 P1-30: NotificationCenter tokens — the token's
+    /// lifetime controls the observation, not the VM's. The old
+    /// `_ = addObserver(...)` discards dropped the foreground +
+    /// favourite observers on arrival (the favourite star never
+    /// refreshed; the foreground sleep-timer check never ran).
+    /// Removed in deinit.
+    private var foregroundObserver: NSObjectProtocol?
+    private var favChangedObserver: NSObjectProtocol?
+    /// b49fix2 P1-2: backup-import observer (reload queue +
+    /// favourites after an import replaces the store).
+    private var backupImportedObserver: NSObjectProtocol?
     private var toastTimer: Timer?
     private var expectedItemId: String?
     /// Consecutive failure-driven skips (b38, item 1): bounds the
@@ -232,6 +253,8 @@ final class MusicPlayerViewModel: ObservableObject {
         self.coordinator = coordinator
         self.lyricOffsetMs = MusicLibraryStore.lyricOffsetMs()
         self.showLyricTranslation = MusicLibraryStore.lyricShowTranslation()
+        // b49fix2 #16: remembered per-song lyric sources.
+        self.lyricSourceOverrides = UserDefaults.standard.dictionary(forKey: Self.lyricSourceOverridesKey) as? [String: String] ?? [:]
         self.playMode = MusicQueueMode.fromCode(MusicLibraryStore.playModeCode())
         self.playbackSpeed = MusicLibraryStore.speed()
         // Handlers are attached AFTER the timer exists: capturing
@@ -240,6 +263,13 @@ final class MusicPlayerViewModel: ObservableObject {
         self.sleepTimer = MusicSleepTimer(onFire: {})
         sleepTimer.onFire = { [weak self] in
             guard let self = self else { return }
+            // b49fix2 P2-23: the timer stops whatever is playing —
+            // a live room or a VOD keeps sounding if only the music
+            // player is paused. coordinator.stop() stops all three
+            // drivers and clears the current item; player.pause()
+            // stays for the case where the coordinator has nothing
+            // to stop.
+            self.coordinator.stop()
             self.player.pause()
             self.sleepActive = false
             self.sleepRemainingText = ""
@@ -257,6 +287,11 @@ final class MusicPlayerViewModel: ObservableObject {
                 || self.sleepTimer.isAfterNTracks
                 || self.sleepTimer.isQueueEnd
         }
+        // b49fix2 P1-7: restore the persisted sleep timer BEFORE
+        // the auto-resume decision below — a wall-clock timer that
+        // fired while the app was dead means the user asked for
+        // silence, not a surprise resume on launch.
+        let sleepFiredWhileDead = sleepTimer.restore()
         // Restore the persisted queue (the player restores playback
         // state itself; this only restores the queue list + index).
         // Lyrics are NOT fetched here: only the cache is read, so
@@ -270,8 +305,16 @@ final class MusicPlayerViewModel: ObservableObject {
                 isCurrentFav = MusicLibraryStore.isFav(song)
                 // b45-a: the restored song reads its own remembered
                 // lyric offset back, same as a live song switch.
+                // b49fix2 P2-1: the restore assignment runs with
+                // the guard up — without it, the restored song's
+                // per-song offset leaks into the global offset
+                // (the didSet on lyricOffsetMs saves it).
+                applyingPerSongOffset = true
                 lyricOffsetMs = MusicLyrics.perSongOffsetMs(for: song.identityKey)
                     ?? MusicLibraryStore.lyricOffsetMs()
+                applyingPerSongOffset = false
+                // b49fix2 #16: and its remembered lyric source.
+                lyricSourceOverride = lyricSourceOverrides[song.identityKey].flatMap { MusicPlatform(code: $0) }
                 loadLyrics(for: song, fetchIfMissing: false)
             }
         }
@@ -291,7 +334,8 @@ final class MusicPlayerViewModel: ObservableObject {
         // start-position parameter, so the seek happens once the
         // player reports a duration (see the duration sink).
         // An invalid checkpoint starts from 0.
-        if AutoResumeDecision.resumeIndex(
+        if !sleepFiredWhileDead,
+           AutoResumeDecision.resumeIndex(
             autoResumeEnabled: UserDefaults.standard.bool(forKey: SettingsStore.autoResumeKey),
             queueCount: queue.tracks.count,
             currentIndex: queue.index) != nil,
@@ -312,23 +356,45 @@ final class MusicPlayerViewModel: ObservableObject {
         // plays (see observePlayer), and this fires when the app
         // returns to the foreground with playback paused — both
         // re-check the deadline, so a timer never sleeps past its
-        // stop time. The view model lives for the app lifetime, so
-        // the observer is never removed; the closure holds self
-        // weakly and checkFire is a no-op without a deadline.
-        _ = NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+        // stop time.
+        // b49fix2 P1-30: the token is stored — the old `_ =`
+        // discard dropped this observer on arrival, so the
+        // foreground sleep-timer check never ran.
+        foregroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
             self?.sleepTimer.checkFire()
         }
         // Favourite sync (build 36, item 12): a toggle from any
         // row or card posts haoMusicFavChanged — refresh the
         // current song's star so the full player never shows a
         // stale favourite state while the song is playing.
-        _ = NotificationCenter.default.addObserver(forName: .haoMusicFavChanged, object: nil, queue: .main) { [weak self] _ in
+        // b49fix2 P1-30: same token fix — the star never refreshed
+        // because this observer died on arrival too.
+        favChangedObserver = NotificationCenter.default.addObserver(forName: .haoMusicFavChanged, object: nil, queue: .main) { [weak self] _ in
             guard let self = self, let song = self.currentSong else { return }
             // b36-item10: invalidate any in-flight background fav
             // check — its result predates this toggle.
             self.favCheckGeneration += 1
             self.isCurrentFav = MusicLibraryStore.isFav(song)
             self.syncNowPlayingLike()
+        }
+        // b49fix2 P1-2: a backup import replaces the store files
+        // under the queue — the live queue, the current song's
+        // favourite star and the mini fallback must re-read, or
+        // the player keeps serving the pre-import list and the
+        // next 切歌 writes the old list back over the import.
+        // (The double-post itself was fixed by the Shell lane;
+        // this is the view-model observation.)
+        backupImportedObserver = NotificationCenter.default.addObserver(forName: .haoBackupImported, object: nil, queue: .main) { [weak self] _ in
+            self?.reloadAfterBackupImport()
+        }
+        // b49fix2 P1-1: install the player's local-audio lookup —
+        // the downloaded file or audio-cache file for an item, or
+        // nil. It drives the manual crossfade, the offline
+        // selector and the prefetch "already cached" check, none
+        // of which ever had a lookup (the closure was declared
+        // and never assigned).
+        player.localAudioURL = { item in
+            MusicPlayerViewModel.localAudioURL(for: item)
         }
         // b41: remote next / previous (Dynamic Island / Control
         // Center / lock screen) run the SAME path as the in-app
@@ -345,6 +411,16 @@ final class MusicPlayerViewModel: ObservableObject {
         // favourite as the in-app heart, and likeCommand.isActive
         // follows the current song (see syncNowPlayingLike).
         player.onRemoteLike = { [weak self] in self?.toggleFavourite() }
+    }
+
+    deinit {
+        // b49fix2 P1-30: the observers live exactly as long as the
+        // tokens — remove them here (the VM lives for the app
+        // lifetime in practice, but a leaked observer is a stale
+        // favourite star waiting to happen).
+        if let token = foregroundObserver { NotificationCenter.default.removeObserver(token) }
+        if let token = favChangedObserver { NotificationCenter.default.removeObserver(token) }
+        if let token = backupImportedObserver { NotificationCenter.default.removeObserver(token) }
     }
 
     // MARK: - Observation
@@ -603,6 +679,9 @@ final class MusicPlayerViewModel: ObservableObject {
         lyricOffsetMs = MusicLyrics.perSongOffsetMs(for: song.identityKey)
             ?? MusicLibraryStore.lyricOffsetMs()
         applyingPerSongOffset = false
+        // b49fix2 #16: a song switch reads its remembered lyric
+        // source back (nil = the song's own platform).
+        lyricSourceOverride = lyricSourceOverrides[song.identityKey].flatMap { MusicPlatform(code: $0) }
         // b36-item10: the star keeps the previous song's state until
         // the background fav read lands — never flash a wrong state,
         // never block the switch on disk I/O.
@@ -648,7 +727,13 @@ final class MusicPlayerViewModel: ObservableObject {
         let path = song.localPath
         let key = song.identityKey
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let label = localFileQualityLabel(for: URL(fileURLWithPath: path))
+            // b49fix2 #21: resolve FIRST — a relative stored path
+            // is not a file URL (URL(fileURLWithPath:) would point
+            // at the process's working directory, not the file).
+            guard let url = LocalFileIndex.resolve(path, subdir: "local_music")
+                    ?? LocalFileIndex.resolve(path, subdir: DownloadEngine.downloadSubdir)
+            else { return }
+            let label = localFileQualityLabel(for: url)
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 guard self.actualQuality == nil,
@@ -702,6 +787,12 @@ final class MusicPlayerViewModel: ObservableObject {
     }
 
     func play(song: MusicSong, in tracks: [MusicSong]? = nil, startAt: Int? = nil, resumeFrom: Double? = nil, source: PlaySource? = nil, sourceDisplayName: String? = nil) {
+        // b49fix2 P1-1: a downloaded song played from any list
+        // (playlist, recent, search) must play its file, not
+        // re-resolve over the network — attach the download's file
+        // before the queue is built, so the playback item carries
+        // a local file URL and the coordinator returns it first.
+        let song = Self.withLocalFile(song)
         if queue.isCurrentTrack(song),
            let track = player.currentTrack,
            track.id == song.identityKey || track.id == song.songId {
@@ -790,6 +881,22 @@ final class MusicPlayerViewModel: ObservableObject {
         play(song: first, in: tracks, startAt: 0, source: source, sourceDisplayName: sourceDisplayName)
     }
 
+    /// Attach a downloaded file to a song that has none (b49fix2
+    /// P1-1): the copy's localPath makes toPlaybackItem() carry a
+    /// file URL, so the coordinator returns the file first and
+    /// offline playback works from any list — not just the
+    /// downloads page. Local-library songs already carry localPath
+    /// and pass through untouched.
+    private static func withLocalFile(_ song: MusicSong) -> MusicSong {
+        guard song.localPath.isEmpty else { return song }
+        guard let download = MusicLibraryStore.getDownloads().first(where: { $0.key == song.identityKey }),
+              let url = LocalFileIndex.resolve(download.filePath, subdir: DownloadEngine.downloadSubdir)
+        else { return song }
+        var copy = song
+        copy.localPath = url.path
+        return copy
+    }
+
     /// Play a downloaded / local song. The resolver (player leg)
     /// looks the file up by song id in the downloads / local index;
     /// this leg passes the same setQueue + requestPlay as remote.
@@ -805,7 +912,20 @@ final class MusicPlayerViewModel: ObservableObject {
     /// is what plays for it.
     func playLocal(song: MusicSong, fileURL: URL? = nil, in tracks: [MusicSong]? = nil, startAt: Int? = nil, source: PlaySource? = nil, sourceDisplayName: String? = nil) {
         var song = song
-        if let fileURL = fileURL { song.localPath = fileURL.path }
+        if let fileURL = fileURL {
+            song.localPath = fileURL.path
+        } else if !song.localPath.isEmpty {
+            // b49fix2 #21: resolve FIRST — a stored relative path
+            // (or a stale absolute one from before a container
+            // move) must become a real file URL before the item is
+            // built. Local files live under local_music, downloads
+            // under music_downloads; a path that resolves nowhere
+            // stays as-is (the player then fails honestly, as
+            // before).
+            let url = LocalFileIndex.resolve(song.localPath, subdir: "local_music")
+                ?? LocalFileIndex.resolve(song.localPath, subdir: DownloadEngine.downloadSubdir)
+            if let url = url { song.localPath = url.path }
+        }
         // B8: the same song is currently playing from a remote
         // stream — the play() shortcut below would just resume
         // that stream. Stop it first so the local file loads.
@@ -962,13 +1082,12 @@ final class MusicPlayerViewModel: ObservableObject {
             expectedItemId = song.identityKey
             startPlayback()
         } else {
-            // b49: the queue lost the song and the context cannot
-            // rebuild it — the old fallback called the bare
-            // play(song:), which collapsed the queue to one song
-            // AND deleted the persisted context. Never collapse:
-            // the playlist data is gone, so say so instead of
-            // silently re-playing or doing nothing.
-            showToast("歌单数据找不到了")
+            // b49fix2 P1-29: the queue lost the song and the
+            // context cannot rebuild it — but the song itself is
+            // right here, so play it as a single instead of
+            // leaving a dead button with only a toast. The
+            // single insert never touches the persisted context.
+            playSinglePreservingContext(song)
         }
         hapticTick()
     }
@@ -1022,12 +1141,26 @@ final class MusicPlayerViewModel: ObservableObject {
             expectedItemId = song.identityKey
             startPlayback()
         } else {
-            // b49: same as togglePlayPauseOrRetry above — never
-            // collapse the queue to one song; the playlist data
-            // is gone, so say so.
-            showToast("歌单数据找不到了")
+            // b49fix2 P1-29: same as togglePlayPauseOrRetry — play
+            // the song as a single, never a dead button + toast.
+            playSinglePreservingContext(song)
         }
         hapticTick()
+    }
+
+    /// Play one song as a single without touching the persisted
+    /// context (b49fix2 P1-29): the song is inserted after the
+    /// current one and played from there. The queue's other songs
+    /// stay, the context stays — a one-off play must never clear
+    /// or overwrite the playlist the user was in. The caller keeps
+    /// its own haptic + failure-clearing.
+    private func playSinglePreservingContext(_ song: MusicSong) {
+        var tracks = queue.tracks
+        let at = min(queue.index + 1, tracks.count)
+        tracks.insert(song, at: at)
+        queue = MusicQueue(tracks: tracks, index: at)
+        expectedItemId = song.identityKey
+        startPlayback()
     }
 
     func next() {
@@ -1482,6 +1615,45 @@ final class MusicPlayerViewModel: ObservableObject {
 
     // MARK: - Lyrics
 
+    /// The lyric source for a song (b49fix2 #16): the remembered
+    /// override, or the song's own platform.
+    func lyricSource(for song: MusicSong) -> MusicPlatform {
+        if let code = lyricSourceOverrides[song.identityKey],
+           let platform = MusicPlatform(code: code) {
+            return platform
+        }
+        return song.platform
+    }
+
+    /// Disk-cache key for a song's lyrics (b49fix2 #16): the plain
+    /// identityKey for the song's own platform (back-compatible
+    /// with every entry cached before the switch existed), a
+    /// suffixed key for an override source — otherwise switching
+    /// sources would keep serving the first source's cached copy.
+    private func lyricCacheKey(for song: MusicSong) -> String {
+        let source = lyricSource(for: song)
+        guard source != song.platform else { return song.identityKey }
+        return song.identityKey + "|lyrics:" + source.rawValue
+    }
+
+    /// Switch the lyric source for the current song (b49fix2 #16):
+    /// nil = follow the song ("跟随歌曲"). The choice is remembered
+    /// per song, and the lyrics reload from the new source right
+    /// away. A failed switch lands on the existing failed state
+    /// with its retry (the view's "未能加载歌词"), never a silent
+    /// blank screen.
+    func setLyricSource(_ platform: MusicPlatform?) {
+        guard let song = currentSong else { return }
+        if let platform = platform {
+            lyricSourceOverrides[song.identityKey] = platform.rawValue
+        } else {
+            lyricSourceOverrides.removeValue(forKey: song.identityKey)
+        }
+        UserDefaults.standard.set(lyricSourceOverrides, forKey: Self.lyricSourceOverridesKey)
+        lyricSourceOverride = platform
+        loadLyrics(for: song)
+    }
+
     private func loadLyrics(for song: MusicSong, fetchIfMissing: Bool = true) {
         lyricsLoaded = false
         lyricsLoadFailed = false
@@ -1492,17 +1664,21 @@ final class MusicPlayerViewModel: ObservableObject {
         // the store's serial background queue and publishes on main.
         // The network fetch below is unchanged, still guarded on
         // the song still being current.
-        let key = song.identityKey
-        MusicLibraryStore.cachedLyricsAsync(for: key) { [weak self] cached in
+        // b49fix2 #16: the cache key follows the lyric source —
+        // an override source has its own cache entry, or the
+        // switch would keep serving the first source's copy.
+        let key = lyricCacheKey(for: song)
+        let source = lyricSource(for: song)
+        MusicLibraryStore.cachedLyricsInfoAsync(for: key) { [weak self] cached in
             guard let self = self else { return }
-            guard self.currentSong?.identityKey == key else { return }
+            guard self.currentSong?.identityKey == song.identityKey else { return }
             if let cached = cached {
                 // b45-a: lyrics show the body only — credits /
                 // copyright / a leading "title - artist" header are
                 // filtered at display time (cached copies predate
                 // the filter, so it runs here, not only on fetch).
                 let body = MusicLyrics.filterBodyLines(
-                    MusicLyrics.toContractLines(cached),
+                    MusicLyrics.toContractLines(cached.lines),
                     title: song.title, artist: song.artist)
                 // b49: a cached copy whose last body line is far
                 // short of the song is a truncated fetch (an old
@@ -1512,8 +1688,11 @@ final class MusicPlayerViewModel: ObservableObject {
                 // fetch instead. Duration unknown (0) skips the
                 // check; empty lyrics stay "暂无歌词" without a
                 // fetch, as before.
+                // b49fix2 P2-42: a short-lived entry is a
+                // KNOWN-truncated fetch (long instrumental outro)
+                // — serve it, don't re-fetch on every play.
                 let truncated: Bool = {
-                    guard !body.isEmpty, song.dur > 0,
+                    guard !cached.shortLived, !body.isEmpty, song.dur > 0,
                           let lastTime = body.map(\.time).max() else { return false }
                     return lastTime < Double(song.dur) * 0.8
                 }()
@@ -1534,14 +1713,27 @@ final class MusicPlayerViewModel: ObservableObject {
                 album: song.album, coverURL: URL(string: song.cover), duration: TimeInterval(song.dur),
                 sourceID: song.platform.rawValue
             )
-            MusicLyricsAPI.shared.fetchLyrics(for: track) { [weak self] result in
+            // b49fix2 #16: the fetch follows the lyric source —
+            // the song's own platform fetches by id, any other
+            // platform searches it by title/artist first.
+            let handleFetch: (Lyrics?) -> Void = { [weak self] result in
                 guard let self = self else { return }
                 guard let result = result else {
+                    // b49fix2 P2-2: the nil branch had no
+                    // current-song guard while the non-nil branch
+                    // does — a stale fetch for song A arriving after
+                    // the switch to song B set B's load state
+                    // (failed / loaded) from A's empty answer.
+                    guard self.currentSong?.identityKey == song.identityKey else { return }
                     // §3.3 retry: nothing came back. Only a
                     // platform with a lyrics endpoint counts as
                     // a failed load — kg / mg have no endpoint,
                     // so their empty state stays "暂无歌词".
-                    self.lyricsLoadFailed = MusicLyricsAPI.hasLyricsEndpoint(song.platform)
+                    // b49fix2 #16: the endpoint check follows the
+                    // lyric SOURCE, not the song's platform — a
+                    // Kugou song with a NetEase source that fails
+                    // is a failed load, not an honest empty state.
+                    self.lyricsLoadFailed = MusicLyricsAPI.hasLyricsEndpoint(source)
                     self.lyricsLoaded = true
                     return
                 }
@@ -1560,21 +1752,26 @@ final class MusicPlayerViewModel: ObservableObject {
                 self.lyricsLoaded = true
                 // A11: keep the translation in the cache too — the old
                 // mapping dropped it, so a cached song never showed one.
-                // b49: do NOT cache a truncated fetch (last body line
-                // far short of the song) — it would poison the cache
-                // exactly like the version-1 entries did. The
-                // truncated lines still display; the next play just
-                // re-fetches.
+                // b49fix2 P2-42: a truncated fetch is still cached —
+                // under a 1 h short-lived marker — instead of being
+                // re-fetched on every play (this supersedes the b49
+                // no-cache rule: the marker, not the absence, is what
+                // keeps a genuinely truncated fetch from poisoning
+                // the cache — it expires, and the next play
+                // re-fetches). The truncated lines still display.
                 let truncated: Bool = {
                     guard !body.isEmpty, song.dur > 0,
                           let lastTime = body.map(\.time).max() else { return false }
                     return lastTime < Double(song.dur) * 0.8
                 }()
-                if !truncated {
-                    let stored = result.lines.map { StoredLyricLine(t: $0.time, text: $0.text, translation: $0.translation) }
-                    MusicLibraryStore.putLyrics(stored, for: song.identityKey, duration: TimeInterval(song.dur))
-                }
+                let stored = result.lines.map { StoredLyricLine(t: $0.time, text: $0.text, translation: $0.translation, romaji: $0.romaji) }
+                MusicLibraryStore.putLyrics(stored, for: key, duration: TimeInterval(song.dur), shortLived: truncated)
                 self.updateActiveLyric()
+            }
+            if source == song.platform {
+                MusicLyricsAPI.shared.fetchLyrics(for: track, completion: handleFetch)
+            } else {
+                MusicLyricsAPI.shared.fetchLyricsFromPlatform(source, for: track, completion: handleFetch)
             }
         }
     }
@@ -1723,6 +1920,54 @@ final class MusicPlayerViewModel: ObservableObject {
         currentPlayContext = context
     }
 
+    /// Re-read the queue + favourites after a backup import
+    /// replaced the store (b49fix2 P1-2). The imported queue
+    /// becomes the live queue; the current song's star re-reads;
+    /// the mini fallback follows. The player itself is left
+    /// alone — if it was playing, the coordinator keeps the
+    /// current item; the next 切歌 rebuilds from the imported
+    /// context (the import restores the persisted context key
+    /// too — the backup covers all UserDefaults values).
+    private func reloadAfterBackupImport() {
+        let saved = MusicLibraryStore.getQueue()
+        if !saved.songs.isEmpty {
+            queue = MusicQueue.fromQueueData(saved)
+            currentSong = queue.current
+            miniFallbackSong = queue.current
+            if let song = currentSong {
+                isCurrentFav = MusicLibraryStore.isFav(song)
+            }
+        } else {
+            // The import had no queue: clear the stale one rather
+            // than serving pre-import songs after the import.
+            queue = MusicQueue(tracks: [], index: 0)
+            currentSong = nil
+            miniFallbackSong = nil
+            isCurrentFav = false
+        }
+        restorePersistedPlayContext()
+        player.setQueueOnly(queue.toPlaybackItems(), startAt: queue.index)
+    }
+
+    /// Local file for a playback item: the item's own file first,
+    /// then the explicit download, then the audio cache (b49fix2
+    /// P1-1). Pure lookup — no network, no resolve. The item id
+    /// is the identityKey (`platform|songId`). The cache lookup
+    /// accepts any served tier (the prefetch pattern — the
+    /// requested tier is unknown here, and a wrong-tier hit is
+    /// still a playable file whose badge reports the actual tier
+    /// on open).
+    static func localAudioURL(for item: PlaybackItem) -> URL? {
+        if let fileURL = item.localFileURL { return fileURL }
+        if let download = MusicLibraryStore.getDownloads().first(where: { $0.key == item.id }),
+           let url = LocalFileIndex.resolve(download.filePath, subdir: DownloadEngine.downloadSubdir) {
+            return url
+        }
+        guard let entry = HaoAudioCache.entry(trackID: item.id, requestedQuality: "", sourceIsNetease: false)
+        else { return nil }
+        return HaoAudioCache.localURL(for: entry)
+    }
+
     private func recordPlayContext(source: PlaySource?, displayName: String?, tracks: [MusicSong]) {
         // b49sweep P1-6: a new play context starts a new FM /
         // heartbeat refill counter.
@@ -1769,7 +2014,10 @@ final class MusicPlayerViewModel: ObservableObject {
             return local.isEmpty ? nil : local
         case .downloads:
             // b46: explicit downloads, read live from the store.
-            let downloaded = MusicLibraryStore.getDownloads().map { $0.song }
+            // b49fix2 P1-1: attach each file, so a rebuilt queue
+            // plays from disk instead of re-resolving over the
+            // network.
+            let downloaded = MusicLibraryStore.getDownloads().map { Self.withLocalFile($0.song) }
             return downloaded.isEmpty ? nil : downloaded
         case .album, .artist, .chart, .daily, .heartbeat, .fm, .search, .discover:
             return PlaylistSnapshotStore.load(source: context.source)?.musicSongs
@@ -1794,6 +2042,23 @@ final class MusicPlayerViewModel: ObservableObject {
         guard let index = songs.firstIndex(where: { $0.identityKey == song.identityKey })
         else { return false }
         queue = MusicQueue(tracks: songs, index: index)
+        // b49fix2 P2-45: the rebuild deduped the list — re-record
+        // the deduped keys (and the snapshot) so the context agrees
+        // with the queue, or the counts stay mismatched forever and
+        // every next()/previous() at the list's end shows a false
+        // "歌单数据找不到了". recordPlayContext is NOT used here:
+        // it resets the FM/heartbeat refill counter, which a
+        // rebuild must not do (see extendFMQueueIfNeeded above).
+        if var updated = currentPlayContext {
+            updated.songKeys = songs.map { $0.identityKey }
+            updated.lastPlayedAt = Date().timeIntervalSince1970
+            currentPlayContext = updated
+        }
+        if let context = currentPlayContext {
+            PlaylistSnapshotStore.save(PlaylistSnapshot(
+                source: context.source, displayName: context.displayName, songs: songs))
+        }
+        persistPlayContext()
         return true
     }
 

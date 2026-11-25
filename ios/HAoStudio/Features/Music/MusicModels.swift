@@ -406,11 +406,15 @@ struct StoredLyricLine: Equatable {
     var t: Double
     var text: String
     var translation: String?
+    /// Romaji transliteration (NetEase `romalrc`, b49fix2 P2-22).
+    /// Absent on old cache entries — nil reads as "none".
+    var romaji: String?
 
-    init(t: Double, text: String, translation: String? = nil) {
+    init(t: Double, text: String, translation: String? = nil, romaji: String? = nil) {
         self.t = t
         self.text = text
         self.translation = translation
+        self.romaji = romaji
     }
 
     init(json: [String: Any]) {
@@ -418,11 +422,14 @@ struct StoredLyricLine: Equatable {
         self.text = MusicDict.string(json, "text")
         let translation = MusicDict.string(json, "translation")
         self.translation = translation.isEmpty ? nil : translation
+        let romaji = MusicDict.string(json, "romaji")
+        self.romaji = romaji.isEmpty ? nil : romaji
     }
 
     func toJSON() -> [String: Any] {
         var dict: [String: Any] = ["t": t, "text": text]
         if let translation = translation { dict["translation"] = translation }
+        if let romaji = romaji { dict["romaji"] = romaji }
         return dict
     }
 }

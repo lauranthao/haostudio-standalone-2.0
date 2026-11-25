@@ -509,7 +509,7 @@ struct MusicRecommendView: View {
                     palette: [.pink, .orange], size: cardSize
                 ) { startHeartbeat() }
                 MusicFeatureCollageCard(
-                    icon: "chart.bar", title: "我的雷达", subtitle: "听歌报告",
+                    icon: "chart.bar", title: "听歌报告", subtitle: "你的收听总结",
                     palette: [.green, .teal], size: cardSize
                 ) { path.append(.report) }
             }
@@ -550,7 +550,14 @@ struct MusicRecommendView: View {
     /// Home preview caps at 18 cards; the plaza page shows all.
     private func recommendedPlaylistsSection(width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            MusicCodaSectionHeader(title: "推荐歌单") { path.append(.plaza) }
+            // b49fix2 A8: this shelf is NetEase's plaza, so "全部"
+            // opens the plaza on wy — the 发现歌单 shelf below opens
+            // it on tx (the first of its merged platforms). Two
+            // shelves, two different plaza landings.
+            MusicCodaSectionHeader(title: "推荐歌单") {
+                MusicLibraryStore.setPlazaPlatform(.wy)
+                path.append(.plaza)
+            }
             if homeVM.recommendedLoading && homeVM.recommendedPlaylists.isEmpty {
                 HStack(spacing: 16) {
                     ForEach(0..<3, id: \.self) { _ in MusicSkeletonCard() }
@@ -792,7 +799,9 @@ struct MusicRecommendView: View {
                                     HStack(spacing: 12) {
                                         Text("\(index + 1)")
                                             .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                            .foregroundStyle(index < 3 ? theme.liveRed : theme.textSecondary)
+                                            // b49fix2 A17: red means LIVE in this app — chart
+                                            // ranks use the accent colour, not liveRed.
+                                            .foregroundStyle(index < 3 ? theme.accentText : theme.textSecondary)
                                             .frame(width: 28, alignment: .center)
                                         Text(song.title.isEmpty ? "未知歌曲" : song.title)
                                             .font(.system(size: 17, weight: .medium))
@@ -815,6 +824,20 @@ struct MusicRecommendView: View {
                             }
                         }
                     }
+                } else if homeVM.chartTracksFailed.contains(chart.id) {
+                    // b49fix2 P1-11: a failed chart offers a retry —
+                    // the old code showed skeletons with no way back
+                    // (the VM had cached the empty result for 30 min).
+                    Button(action: { homeVM.loadChartTracks(chart: chart, force: true) }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.clockwise")
+                            Text("加载失败，点按重试")
+                        }
+                        .font(.haoFootnoteStrong)
+                        .foregroundStyle(theme.accentText)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, 8)
                 } else {
                     VStack(spacing: 1) {
                         ForEach(0..<4, id: \.self) { _ in MusicSkeletonRow() }
@@ -837,7 +860,7 @@ struct MusicRecommendView: View {
             } else if homeVM.regionalHotSongs.isEmpty {
                 MusicEmptyState(
                     icon: "globe", title: "暂无热门歌曲",
-                    note: "分地区热门没有返回内容，稍后再试。",
+                    note: homeVM.regionalFailed ? "加载失败，请检查网络后重试。" : "分地区热门没有返回内容，稍后再试。",
                     onRetry: { homeVM.loadRegionalHot(force: true) }
                 )
             } else {
@@ -872,7 +895,14 @@ struct MusicRecommendView: View {
     /// plaza merged. Preview caps at 18 cards.
     private func discoveredPlaylistsSection(width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            MusicCodaSectionHeader(title: "发现歌单") { path.append(.plaza) }
+            // b49fix2 A8: this shelf merges the other platforms'
+            // plazas (tx/kg/kw), so "全部" opens the plaza on tx —
+            // the first of its merged platforms — not wy like the
+            // 推荐歌单 shelf above.
+            MusicCodaSectionHeader(title: "发现歌单") {
+                MusicLibraryStore.setPlazaPlatform(.tx)
+                path.append(.plaza)
+            }
             if homeVM.discoveredLoading && homeVM.discoveredPlaylists.isEmpty {
                 HStack(spacing: 16) {
                     ForEach(0..<3, id: \.self) { _ in MusicSkeletonCard() }

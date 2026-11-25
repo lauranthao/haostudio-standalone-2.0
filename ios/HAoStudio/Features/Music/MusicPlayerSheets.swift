@@ -168,7 +168,9 @@ struct MusicQualitySheet: View {
                         }
                     }
                 } header: {
-                    Text("播放音质（目标）")
+                    // b49fix2 A2: "目标" is jargon — the header
+                    // names the actual tier (the target quality).
+                    Text("播放音质（\(MusicLibraryStore.badgeLabel(for: coordinator.targetQuality))）")
                 } footer: {
                     // b49sweep P2-12: the footer describes both
                     // behaviours — a playing song re-resolves at the
