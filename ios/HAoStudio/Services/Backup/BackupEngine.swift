@@ -1379,6 +1379,9 @@ extension BackupEngineCore {
     ) -> CollectionWriteOutcome {
         MigrationStore.recentWriteQueue.sync { () -> CollectionWriteOutcome in
             let existing = MigrationStore.readJSONList(name: "hao_recent", documentsURL: documentsURL)
+            // b49fix21 D23-6: record the live value at merge
+            // time (see MigrationStore.recordLiveAtMerge).
+            MigrationStore.recordLiveAtMerge(file: "hao_recent", value: existing)
             let merged = MigrationStore.mergedRecentEntries(live: existing, incoming: incoming)
             guard let bytes = try? JSONSerialization.data(withJSONObject: merged, options: []) else {
                 return .serializationFailed
@@ -1411,6 +1414,9 @@ extension BackupEngineCore {
     ) -> CollectionWriteOutcome {
         MigrationStore.resumeWriteQueue.sync { () -> CollectionWriteOutcome in
             var existing = MigrationStore.readJSONDictionary(name: "musicResume", documentsURL: documentsURL)
+            // b49fix21 D23-6: record the live value at merge
+            // time (see MigrationStore.recordLiveAtMerge).
+            MigrationStore.recordLiveAtMerge(file: "musicResume", value: existing)
             for (key, value) in incoming {
                 existing[key] = value
             }
@@ -1489,6 +1495,9 @@ extension BackupEngineCore {
         }
         return queue.sync { () -> CollectionWriteOutcome in
             let existing = MigrationStore.readJSONList(name: name, documentsURL: documentsURL)
+            // b49fix21 D23-6: record the live value at merge
+            // time (see MigrationStore.recordLiveAtMerge).
+            MigrationStore.recordLiveAtMerge(file: name, value: existing)
             let merged = MigrationStore.mergedListEntries(live: existing, incoming: incoming, keyFor: keyFor, cap: cap, secondaryKeyFor: secondaryKeyFor, mapEntry: mapEntry)
             guard let bytes = try? JSONSerialization.data(withJSONObject: merged, options: []) else {
                 return .serializationFailed
@@ -1527,6 +1536,9 @@ extension BackupEngineCore {
         }
         return queue.sync { () -> CollectionWriteOutcome in
             let existing = MigrationStore.readJSONStringList(name: name, documentsURL: documentsURL)
+            // b49fix21 D23-6: record the live value at merge
+            // time (see MigrationStore.recordLiveAtMerge).
+            MigrationStore.recordLiveAtMerge(file: name, value: existing)
             let merged = MigrationStore.mergedStringList(live: existing, incoming: incoming, cap: cap)
             guard let bytes = try? JSONSerialization.data(withJSONObject: merged, options: []) else {
                 return .serializationFailed
@@ -1560,6 +1572,10 @@ extension BackupEngineCore {
     ) -> CollectionWriteOutcome {
         MigrationStore.listenLogWriteQueue.sync { () -> CollectionWriteOutcome in
             var existing = MigrationStore.readJSONList(name: "hao_listen", documentsURL: documentsURL)
+            // b49fix21 D23-6: record the live value at merge
+            // time, BEFORE the append (see
+            // MigrationStore.recordLiveAtMerge).
+            MigrationStore.recordLiveAtMerge(file: "hao_listen", value: existing)
             // b49fix19 P2-6: the split point is known here (live
             // entries first, incoming appended after), so the
             // secondary title+artist key dedupes only incoming
@@ -1584,9 +1600,14 @@ extension BackupEngineCore {
                 return .writeFailed
             }
             // b49fix20 D22-1: verify INSIDE the critical
-            // section (see mergeListEntries above).
+            // section (see mergeListEntries above). b49fix21
+            // D23-8: the light proof (count + head/tail identity
+            // — see MigrationStore.listenLightProof), not the
+            // full subset: a 3000-entry re-read + parse + full
+            // subset holds listenLogWriteQueue ~60 ms, and the
+            // full subset still runs at the final sweep.
             let reread = MigrationStore.readJSONList(name: "hao_listen", documentsURL: documentsURL)
-            guard MigrationStore.listKeysContainAll(actual: reread, expected: existing, file: "hao_listen") else {
+            guard MigrationStore.listenLightProof(actual: reread, expected: existing) else {
                 return .verifyFailed(merged)
             }
             return .written(merged)
@@ -1620,6 +1641,9 @@ extension BackupEngineCore {
     ) -> CollectionWriteOutcome {
         queue.sync { () -> CollectionWriteOutcome in
             var existing = MigrationStore.readJSONDictionary(name: name, documentsURL: documentsURL)
+            // b49fix21 D23-6: record the live value at merge
+            // time (see MigrationStore.recordLiveAtMerge).
+            MigrationStore.recordLiveAtMerge(file: name, value: existing)
             for (key, value) in incoming {
                 if name == "hao_daily",
                    let liveDay = existing[key] as? [[String: Any]],
@@ -1686,8 +1710,22 @@ extension BackupEngineCore {
     /// expected value that does not parse as a list/dict (the
     /// unparseable-bytes fallback) falls back to canonical
     /// byte equality: subset has nothing to compare.
+    /// b49fix21 D23-1: `finalSweep` is the final sweep only —
+    /// there, whole-file files ALSO verify by subset (see
+    /// MigrationStore.wholeFileSubsetVerifies), not canonical
+    /// byte equality. The in-section verify already proved the
+    /// write landed; the final sweep only proves the imported
+    /// content survived, and a live writer that
+    /// merged-preserved it (a resolver save, a download
+    /// persist, a favourite toggle, a search write) changes
+    /// the bytes without losing anything. Byte equality at the
+    /// final sweep used to fail the whole import — and roll
+    /// back every other merged file — for a file whose content
+    /// was intact. The immediate (non-final-sweep) calls keep
+    /// byte equality: the unknown-keys file has no live writer,
+    /// and a strict immediate proof is the right check there.
     private static func collectionVerifies(
-        relativePath: String, expectedBytes: Data, documentsURL: URL
+        relativePath: String, expectedBytes: Data, documentsURL: URL, finalSweep: Bool = false
     ) -> Bool {
         guard let actualData = try? Data(contentsOf: documentsURL.appendingPathComponent(relativePath)) else {
             return false
@@ -1703,6 +1741,32 @@ extension BackupEngineCore {
         // keeps it a valid queue dict; anything else fails).
         if base == "musicQueue" {
             return (try? JSONSerialization.jsonObject(with: actualData, options: [])) is [String: Any]
+        }
+        if finalSweep, !concurrentlyWrittenCollections.contains(base) {
+            // b49fix21 D23-1 (see the doc comment above):
+            // whole-file files verify by subset at the final
+            // sweep — lists by identity key, string lists by
+            // set subset, dicts by key only; a scalar falls
+            // back to canonical byte equality.
+            guard let expected = try? JSONSerialization.jsonObject(with: expectedBytes, options: []),
+                  let actual = try? JSONSerialization.jsonObject(with: actualData, options: [])
+            else { return actualData == expectedBytes }
+            if let expectedList = expected as? [[String: Any]],
+               let actualList = actual as? [[String: Any]] {
+                return MigrationStore.listKeysContainAll(actual: actualList, expected: expectedList, file: base)
+            }
+            if let expectedStrings = expected as? [String],
+               let actualStrings = actual as? [String] {
+                return MigrationStore.stringListContainsAll(actual: actualStrings, expected: expectedStrings)
+            }
+            if let expectedDict = expected as? [String: Any],
+               let actualDict = actual as? [String: Any] {
+                return dictContainsAll(actualDict, expectedDict, keyOnly: true)
+            }
+            guard let expectedCanonical = MigrationStore.canonicalJSONData(expected),
+                  let actualCanonical = MigrationStore.canonicalJSONData(actual)
+            else { return actualData == expectedBytes }
+            return actualCanonical == expectedCanonical
         }
         guard concurrentlyWrittenCollections.contains(base),
               let expected = try? JSONSerialization.jsonObject(with: expectedBytes, options: []),
@@ -1942,6 +2006,10 @@ extension BackupEngineCore {
         // report counts exactly the incoming songs the cap
         // dropped during THIS import.
         MigrationStore.resetDailyCapDroppedRecord()
+        // b49fix21 D23-6: clear the live-at-merge record — the
+        // rollback reads exactly the live values THIS import's
+        // merges saw.
+        MigrationStore.resetLiveAtMergeRecord()
         // b49fix19 P2-4: the live-history cap the merge uses —
         // 0 in the setting means unlimited (nil), absent means
         // the 50 default.
@@ -1964,6 +2032,10 @@ extension BackupEngineCore {
                 failureReason = "校验失败：\(write.key)"
                 break
             }
+            // b49fix21 D23-9: mark this default written +
+            // verified — only now is it restorable by the
+            // rollback (see BackupJournal.writtenDefaults).
+            journal.recordWrittenDefault(key: write.key, value: write.value)
             appliedKeys += 1
         }
 
@@ -2172,14 +2244,42 @@ extension BackupEngineCore {
         // and before the success report — a failure here is
         // loud (fail + preserving rollback), never silent.
         // musicQueue verifies by shape only (a song switch
-        // after the write legitimately replaced it). Payload
-        // files are not re-verified here: they were
-        // size-verified at extraction and no live writer
-        // touches them.
+        // after the write legitimately replaced it). b49fix21
+        // D23-1: whole-file files verify by subset at this
+        // sweep (finalSweep: true), not byte equality — a live
+        // writer that merged-preserved the import's content
+        // changes the bytes without losing anything.
         if failureReason == nil {
             for relativePath in expectedCollectionBytes.keys.sorted() {
-                guard collectionVerifies(relativePath: relativePath, expectedBytes: expectedCollectionBytes[relativePath]!, documentsURL: documentsURL) else {
+                guard collectionVerifies(relativePath: relativePath, expectedBytes: expectedCollectionBytes[relativePath]!, documentsURL: documentsURL, finalSweep: true) else {
                     failureReason = "最终校验失败：\(relativePath)"
+                    break
+                }
+            }
+        }
+
+        // b49fix21 D23-10: re-verify payload SIZES at the final
+        // sweep too. The old comment claimed "no live writer
+        // touches them", which is false for music_downloads —
+        // a live download completing during the payload phase
+        // (.part promoted onto the same target name) overwrites
+        // an unpacked payload file, and the final sweep never
+        // re-checked it, so the import passed silently with the
+        // wrong file in place. Size-only (attributes, no file
+        // read): a same-name overwrite with a different size
+        // fails loud here and rolls back; local_music /
+        // wallpapers have no live writer and re-verify
+        // trivially. A same-size overwrite is indistinguishable
+        // by size alone and is accepted as vanishingly unlikely
+        // (it would also be a valid download of the same name
+        // and size).
+        if failureReason == nil {
+            for file in planned.payloadFiles where writtenPayloadPaths.contains(file.relativePath) {
+                let url = documentsURL.appendingPathComponent(file.relativePath)
+                guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue,
+                      size == Int(file.entry.uncompressedSize)
+                else {
+                    failureReason = "最终校验失败：\(file.relativePath)"
                     break
                 }
             }
@@ -2194,7 +2294,7 @@ extension BackupEngineCore {
             // increments made during the import (see
             // restoreFilesFromSnapshot) instead of writing the
             // snapshot bytes back whole.
-            let (rollbackFailures, keptLive) = rollback(
+            let (rollbackFailures, keptLive, keptLiveDefaults) = rollback(
                 journal: journal, snapshotDir: snapshotDir,
                 documentsURL: documentsURL, defaults: defaults,
                 writtenBytes: expectedCollectionBytes,
@@ -2207,10 +2307,12 @@ extension BackupEngineCore {
             if rollbackFailures.isEmpty {
                 detail = reason + "，已全量回滚"
                     + (keptLive.isEmpty ? "" : "（导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：" + keptLive.joined(separator: "、") + "）")
+                    + (keptLiveDefaults.isEmpty ? "" : "（导入期间被改写的设置已保留 live 值：" + keptLiveDefaults.joined(separator: "、") + "）")
             } else {
                 detail = reason + "，回滚未完成，未恢复："
                     + rollbackFailures.joined(separator: "、")
                     + (keptLive.isEmpty ? "" : "；导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：" + keptLive.joined(separator: "、"))
+                    + (keptLiveDefaults.isEmpty ? "" : "；导入期间被改写的设置已保留 live 值：" + keptLiveDefaults.joined(separator: "、"))
             }
             return BackupImportDetail(
                 outcome: .failed, appliedKeys: 0, appliedCollections: 0,
@@ -2229,8 +2331,15 @@ extension BackupEngineCore {
         // b49fix20 D22-8: sweep both unknown-keys files
         // against the current mapping table (see
         // MigrationStore.sweepUnknownKeysFiles) — after the
-        // final sweep above, and only on success.
-        MigrationStore.sweepUnknownKeysFiles(documentsURL: documentsURL)
+        // final sweep above, and only on success. b49fix21
+        // D23-5: only keys THIS import installed (written
+        // collections + planned default writes) — a key this
+        // backup never carried keeps its isolation.
+        let installedKeys = Set(expectedCollectionBytes.keys.compactMap { path -> String? in
+            guard !path.contains("/"), path.hasSuffix(".json") else { return nil }
+            return String(path.dropLast(".json".count))
+        }).union(planned.defaultWrites.map { $0.key })
+        MigrationStore.sweepUnknownKeysFiles(documentsURL: documentsURL, installedKeys: installedKeys)
         var warnings = planned.warnings + verifyWarnings
         // b49fix20 D22-7: days that exceeded the 20-song cap
         // dropped incoming songs — counted, never silent.
@@ -2778,14 +2887,14 @@ extension BackupEngineCore {
         defaults: UserDefaults,
         writtenBytes: [String: Data]? = nil,
         writtenPayloadPaths: Set<String> = []
-    ) -> (failures: [String], keptLive: [String]) {
-        journal.restore(defaults: defaults)
+    ) -> (failures: [String], keptLive: [String], keptLiveDefaults: [String]) {
+        let keptLiveDefaults = journal.restore(defaults: defaults)
         let restored = restoreFilesFromSnapshot(
             snapshotDir: snapshotDir, documentsURL: documentsURL,
             writtenBytes: writtenBytes,
             writtenPayloadPaths: writtenPayloadPaths
         )
-        return (restored.failures, restored.keptLive)
+        return (restored.failures, restored.keptLive, keptLiveDefaults)
     }
 
     /// Normalises a restored history file (b49fix20 D22-10):
@@ -2894,7 +3003,11 @@ extension BackupEngineCore {
                     let restored = MigrationStore.restoredPreservingLive(
                         prior: prior, written: writtenBytes[relativePath], current: current,
                         file: String(relativePath.dropLast(".json".count)),
-                        kind: restoreKind(for: relativePath)
+                        kind: restoreKind(for: relativePath),
+                        // b49fix21 D23-6: the live value the merge
+                        // read at merge time (nil when this import
+                        // never merged the file — the old rule).
+                        liveAtMerge: MigrationStore.liveAtMerge(for: String(relativePath.dropLast(".json".count)))
                     )
                     switch restored {
                     case .data(let bytes):
@@ -2966,7 +3079,11 @@ extension BackupEngineCore {
                     let restored = MigrationStore.restoredPreservingLive(
                         prior: nil, written: writtenBytes[relativePath], current: current,
                         file: String(relativePath.dropLast(".json".count)),
-                        kind: restoreKind(for: relativePath)
+                        kind: restoreKind(for: relativePath),
+                        // b49fix21 D23-6: the live value the merge
+                        // read at merge time (nil when this import
+                        // never merged the file — the old rule).
+                        liveAtMerge: MigrationStore.liveAtMerge(for: String(relativePath.dropLast(".json".count)))
                     )
                     switch restored {
                     case .data(let bytes):
@@ -3089,20 +3206,45 @@ extension BackupEngineCore {
 /// the durable snapshot folder; only defaults need the journal.
 private struct BackupJournal {
     var priorDefaults: [(key: String, value: Any?)] = []
+    /// Defaults this attempt actually wrote AND verified
+    /// (b49fix21 D23-9 — same rule as MigrationJournal):
+    /// key -> the written value. The restore only ever puts
+    /// back keys in this map, and keeps the live value when
+    /// current != written. `recordDefault` stays BEFORE the
+    /// write (it must read the PRIOR value); the
+    /// written-marking below is what moves after success.
+    var writtenDefaults: [String: Any] = [:]
 
     mutating func recordDefault(key: String, defaults: UserDefaults) {
         if priorDefaults.contains(where: { $0.key == key }) { return }
         priorDefaults.append((key: key, value: defaults.object(forKey: key)))
     }
 
-    func restore(defaults: UserDefaults) {
+    /// Marks one default as successfully written + verified.
+    /// Called by the import loop after its verify passes.
+    mutating func recordWrittenDefault(key: String, value: Any) {
+        writtenDefaults[key] = value
+    }
+
+    /// Restores the journalled prior defaults — only those this
+    /// attempt actually wrote + verified (b49fix21 D23-9), and
+    /// only when the live value still equals the written one.
+    /// Returns the defaults whose live value was kept.
+    func restore(defaults: UserDefaults) -> [String] {
+        var keptLiveDefaults: [String] = []
         for prior in priorDefaults {
+            guard let writtenValue = writtenDefaults[prior.key] else { continue }
+            guard MigrationStore.defaultsValuesEqual(defaults.object(forKey: prior.key), writtenValue) else {
+                keptLiveDefaults.append(prior.key)
+                continue
+            }
             if let value = prior.value {
                 defaults.set(value, forKey: prior.key)
             } else {
                 defaults.removeObject(forKey: prior.key)
             }
         }
+        return keptLiveDefaults
     }
 }
 

@@ -1011,4 +1011,244 @@ final class MigrationStoreTests: XCTestCase {
         XCTAssertEqual(report.outcome, .failed)
         XCTAssertEqual(report.warnings, ["影视历史有 1 条记录格式不符，已跳过"])
     }
+
+    func testFix21WholeFileSubsetVerifies() {
+        // D23-1: the final sweep subsets whole-file files by
+        // shape — a live writer that merged-preserved the
+        // import's content changes the bytes without losing
+        // anything, so byte equality must not fail the import.
+        // Resolver dict: key-only, a live-changed value and a
+        // live-added key still pass.
+        writeJSONFile("hao_resolver_speed",
+                      ["wy": ["avg": 999], "qq": ["avg": 300], "lx": ["avg": 50]])
+        XCTAssertTrue(MigrationStore.wholeFileSubsetVerifies(
+            name: "hao_resolver_speed",
+            expected: ["wy": ["avg": 120], "qq": ["avg": 300]] as [String: Any],
+            documentsURL: docs))
+        XCTAssertFalse(MigrationStore.wholeFileSubsetVerifies(
+            name: "hao_resolver_speed",
+            expected: ["wy": ["avg": 120], "missing": ["avg": 1]] as [String: Any],
+            documentsURL: docs))
+        // Download tasks: identity is request.key, so a live
+        // typed round-trip that drops an unknown field still
+        // passes.
+        writeJSONFile("downloadTasks", [["request": ["key": "k1"]]])
+        XCTAssertTrue(MigrationStore.wholeFileSubsetVerifies(
+            name: "downloadTasks",
+            expected: [["request": ["key": "k1"], "extra": "x"]],
+            documentsURL: docs))
+        XCTAssertFalse(MigrationStore.wholeFileSubsetVerifies(
+            name: "downloadTasks",
+            expected: [["request": ["key": "k1"]], ["request": ["key": "k2"]]],
+            documentsURL: docs))
+        // Video favourites identify by id, not bytes.
+        writeJSONFile("hao_video_fav", [["id": "v1"]])
+        XCTAssertTrue(MigrationStore.wholeFileSubsetVerifies(
+            name: "hao_video_fav",
+            expected: [["id": "v1", "title": "T"]],
+            documentsURL: docs))
+        // Search histories are string subsets.
+        writeJSONFile("hao_video_search_hist", ["a", "b", "c"])
+        XCTAssertTrue(MigrationStore.wholeFileSubsetVerifies(
+            name: "hao_video_search_hist", expected: ["a", "b"], documentsURL: docs))
+        XCTAssertFalse(MigrationStore.wholeFileSubsetVerifies(
+            name: "hao_video_search_hist", expected: ["a", "z"], documentsURL: docs))
+        // Scalars fall back to value equality.
+        try! Data("5".utf8).write(to: docs.appendingPathComponent("hao_test_scalar.json"),
+                                  options: [.atomic])
+        XCTAssertTrue(MigrationStore.wholeFileSubsetVerifies(
+            name: "hao_test_scalar", expected: 5, documentsURL: docs))
+        XCTAssertFalse(MigrationStore.wholeFileSubsetVerifies(
+            name: "hao_test_scalar", expected: 6, documentsURL: docs))
+    }
+
+    func testFix21MergedDailyDayNeverTruncatesLive() {
+        // D23-7: the cap is max(20, live count) — a live day
+        // longer than 20 (left by a fix19 no-cap import) is
+        // never truncated, and the dropped count is the incoming
+        // entries past the live-sized cap, by identity.
+        MigrationStore.resetDailyCapDroppedRecord()
+        let live25 = (0..<25).map { recentSong("live-\($0)") }
+        let incoming5 = (0..<5).map { recentSong("in-\($0)") }
+        let kept = MigrationStore.mergedDailyDay(live: live25, incoming: incoming5)
+        XCTAssertEqual(kept.count, 25)
+        XCTAssertEqual(kept.last?["songId"] as? String, "live-24")
+        XCTAssertEqual(MigrationStore.dailyCapDroppedDuringImport(), 5)
+        MigrationStore.resetDailyCapDroppedRecord()
+        let keptNoIncoming = MigrationStore.mergedDailyDay(live: live25, incoming: [])
+        XCTAssertEqual(keptNoIncoming.count, 25)
+        XCTAssertEqual(MigrationStore.dailyCapDroppedDuringImport(), 0)
+        MigrationStore.resetDailyCapDroppedRecord()
+        // An incoming song deduped against a live song (same
+        // songId under the lx: prefix) is not a drop.
+        let dup = MigrationStore.mergedDailyDay(
+            live: live25,
+            incoming: [["platform": "lx:netease", "songId": "live-0",
+                        "title": "tlive-0", "artist": "a", "album": ""]])
+        XCTAssertEqual(dup.count, 25)
+        XCTAssertEqual(MigrationStore.dailyCapDroppedDuringImport(), 0)
+        MigrationStore.resetDailyCapDroppedRecord()
+        // With a small live day the 20 cap still applies.
+        let big = MigrationStore.mergedDailyDay(
+            live: [], incoming: (0..<30).map { recentSong("in-\($0)") })
+        XCTAssertEqual(big.count, 20)
+        XCTAssertEqual(MigrationStore.dailyCapDroppedDuringImport(), 10)
+        MigrationStore.resetDailyCapDroppedRecord()
+    }
+
+    func testFix21ListenLightProof() {
+        // D23-8: the hao_listen in-section verify is a light
+        // proof (count + head/tail identity); the full subset
+        // stays at the final sweep, so a middle change passes
+        // here and is caught there.
+        func listen(_ id: String, at: Int) -> [String: Any] {
+            ["platform": "wy", "songId": id, "at": at]
+        }
+        let expected = (0..<3000).map { listen("s\($0)", at: $0) }
+        XCTAssertTrue(MigrationStore.listenLightProof(actual: expected, expected: expected))
+        var middleChanged = expected
+        middleChanged[1500] = listen("other", at: 1500)
+        XCTAssertTrue(MigrationStore.listenLightProof(actual: middleChanged, expected: expected))
+        XCTAssertFalse(MigrationStore.listenLightProof(
+            actual: Array(expected.dropLast()), expected: expected))
+        var headChanged = expected
+        headChanged[0] = listen("other", at: 0)
+        XCTAssertFalse(MigrationStore.listenLightProof(actual: headChanged, expected: expected))
+        var tailChanged = expected
+        tailChanged[2999] = listen("other", at: 2999)
+        XCTAssertFalse(MigrationStore.listenLightProof(actual: tailChanged, expected: expected))
+    }
+
+    func testFix21RestoredPreservingLiveUsesLiveAtMerge() {
+        // D23-6: the rollback takes the live value at merge
+        // time, so a live change in the snapshot -> merge-read
+        // window is preserved instead of reverted to prior.
+        func data(_ value: Any) -> Data {
+            try! JSONSerialization.data(withJSONObject: value, options: [])
+        }
+        func ids(_ result: MigrationStore.RestoredFile) -> [String]? {
+            guard case .data(let bytes) = result else { return nil }
+            let list = try! JSONSerialization.jsonObject(with: bytes, options: []) as? [[String: Any]]
+            return list?.compactMap { $0["id"] as? String }
+        }
+        // A prior entry the import wrote but live had already
+        // deleted before the merge read stays deleted.
+        XCTAssertEqual(ids(MigrationStore.restoredPreservingLive(
+            prior: data([["id": "a"], ["id": "b"]]),
+            written: data([["id": "a"], ["id": "b"], ["id": "c"]]),
+            current: data([["id": "a"], ["id": "b"], ["id": "c"]]),
+            file: "hao_lists", kind: .mergeList,
+            liveAtMerge: data([["id": "b"]]))), ["b"])
+        // A cap-dropped entry live-changed before the merge read
+        // restores with the merge-time live value, not prior.
+        let capDropped = MigrationStore.restoredPreservingLive(
+            prior: data([["id": "a", "v": 1], ["id": "x", "v": 1]]),
+            written: data([["id": "a", "v": 1]]),
+            current: data([["id": "a", "v": 1]]),
+            file: "hao_lists", kind: .mergeList,
+            liveAtMerge: data([["id": "a", "v": 1], ["id": "x", "v": 2]]))
+        guard case .data(let capBytes) = capDropped else {
+            XCTFail("expected .data, got \(capDropped)")
+            return
+        }
+        let capList = try! JSONSerialization.jsonObject(with: capBytes, options: []) as? [[String: Any]]
+        XCTAssertEqual(capList?.first { ($0["id"] as? String) == "x" }?["v"] as? Int, 2)
+        // Without liveAtMerge the old rule applies unchanged.
+        let fallback = MigrationStore.restoredPreservingLive(
+            prior: data([["id": "a", "v": 1], ["id": "x", "v": 1]]),
+            written: data([["id": "a", "v": 1]]),
+            current: data([["id": "a", "v": 1]]),
+            file: "hao_lists", kind: .mergeList)
+        guard case .data(let fallbackBytes) = fallback else {
+            XCTFail("expected .data, got \(fallback)")
+            return
+        }
+        let fallbackList = try! JSONSerialization.jsonObject(with: fallbackBytes, options: []) as? [[String: Any]]
+        XCTAssertEqual(fallbackList?.first { ($0["id"] as? String) == "x" }?["v"] as? Int, 1)
+    }
+
+    func testFix21UnknownKeysSweepKeepsUninstalledKeys() {
+        // D23-5: the unknown-keys sweep only clears keys THIS
+        // import installed. A backup without downloadTasks
+        // leaves its isolated record alone — the unknown file
+        // may be its only copy.
+        writeJSONFile("migration_unknown_keys",
+                      ["downloadTasks": [["id": "x"]], "weird_key": ["v"]])
+        writeSnapshot(["hao_fav_playlists": jsonString(["p1", "p2"])])
+
+        let report = runMigration()
+
+        XCTAssertEqual(report.outcome, .migrated)
+        let installed = readJSONFile("hao_fav_playlists") as? [String]
+        XCTAssertEqual(installed, ["p1", "p2"])
+        let unknown = readJSONFile("migration_unknown_keys") as? [String: Any]
+        XCTAssertNotNil(unknown?["downloadTasks"])
+        XCTAssertNotNil(unknown?["weird_key"])
+    }
+
+    func testFix21JournalRestoreDefaultsGuard() {
+        // D23-9: the rollback restores only defaults this
+        // attempt actually wrote + verified, and keeps the live
+        // value when current != written (same rule as files).
+        // (a) Live changed after the write: keepCurrent.
+        var journal = MigrationJournal()
+        journal.recordDefault(key: "k1", defaults: defaults)
+        defaults.set(2, forKey: "k1")
+        journal.recordWrittenDefault(key: "k1", value: 2)
+        defaults.set(3, forKey: "k1")
+        let kept = journal.restore(documentsURL: docs, defaults: defaults)
+        XCTAssertEqual(kept.keptLiveDefaults, ["k1"])
+        XCTAssertEqual(defaults.integer(forKey: "k1"), 3)
+        // (b) Unchanged since the write: restored to prior.
+        var journal2 = MigrationJournal()
+        defaults.set(1, forKey: "k2")
+        journal2.recordDefault(key: "k2", defaults: defaults)
+        defaults.set(2, forKey: "k2")
+        journal2.recordWrittenDefault(key: "k2", value: 2)
+        let restored = journal2.restore(documentsURL: docs, defaults: defaults)
+        XCTAssertTrue(restored.keptLiveDefaults.isEmpty)
+        XCTAssertEqual(defaults.integer(forKey: "k2"), 1)
+        // (c) Recorded but never written + verified: not restored.
+        var journal3 = MigrationJournal()
+        defaults.set(5, forKey: "k3")
+        journal3.recordDefault(key: "k3", defaults: defaults)
+        defaults.set(9, forKey: "k3")
+        let skipped = journal3.restore(documentsURL: docs, defaults: defaults)
+        XCTAssertTrue(skipped.keptLiveDefaults.isEmpty)
+        XCTAssertEqual(defaults.integer(forKey: "k3"), 9)
+        // (d) Prior absent + written + unchanged: removed.
+        var journal4 = MigrationJournal()
+        journal4.recordDefault(key: "k4", defaults: defaults)
+        defaults.set(2, forKey: "k4")
+        journal4.recordWrittenDefault(key: "k4", value: 2)
+        let removed = journal4.restore(documentsURL: docs, defaults: defaults)
+        XCTAssertTrue(removed.keptLiveDefaults.isEmpty)
+        XCTAssertNil(defaults.object(forKey: "k4"))
+    }
+
+    func testFix21ResolverBackfillAfterImport() {
+        // D23-3: a cooldown created before the import learns the
+        // imported speeds at the next save — no restart needed.
+        // `now` is frozen so record() never trips the auto-save
+        // threshold mid-test.
+        let cooldown = ResolverCooldown(documentsDirectory: docs)
+        cooldown.now = { Date(timeIntervalSince1970: 1_700_000_000) }
+        XCTAssertEqual(cooldown.averageMs("wy"), ResolverCooldown.unknownSpeedMs)
+        // Simulate the import installing speeds on disk.
+        writeJSONFile("hao_resolver_speed",
+                      ["wy": ["avg": 120, "fails": 2, "cooled": 1_795_000_000_000],
+                       "qq": ["avg": 300]])
+        cooldown.saveNow()
+        XCTAssertEqual(cooldown.averageMs("wy"), 120)
+        XCTAssertEqual(cooldown.averageMs("qq"), 300)
+        XCTAssertEqual(cooldown.fails["wy"], 2)
+        XCTAssertNotNil(cooldown.cooledUntil["wy"])
+        // Memory-known keys still win disk.
+        cooldown.record("lx", outcome: .success, milliseconds: 200)
+        XCTAssertEqual(cooldown.averageMs("lx"), 200)
+        writeJSONFile("hao_resolver_speed",
+                      ["lx": ["avg": 50], "wy": ["avg": 120]])
+        cooldown.saveNow()
+        XCTAssertEqual(cooldown.averageMs("lx"), 200)
+    }
 }

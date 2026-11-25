@@ -222,8 +222,21 @@ final class ResolverCooldown {
     /// recordings are fresher than the backup's). No observer
     /// is added: this object is driven from the resolver's
     /// serial work queue, and a NotificationCenter observer
-    /// would touch its state from an arbitrary thread; the
-    /// in-memory ranking staleness self-heals at the next save.
+    /// would touch its state from an arbitrary thread. b49fix21
+    /// D23-3: the merge also BACKFILLS the in-memory dicts —
+    /// before this, the disk merge lived only in the local
+    /// `map`, so imported speeds were safe on disk but
+    /// invisible to averageMs()/ranking until the next launch
+    /// (the old comment's "in-memory ranking staleness
+    /// self-heals at the next save" was wrong — the save never
+    /// touched memory). The backfill runs inside saveLocked,
+    /// i.e. on collectionWriteQueue via save() — the same
+    /// serialisation the disk merge already rides, so no new
+    /// queue is introduced (record() calls save()
+    /// synchronously at its threshold, so a record on the
+    /// resolver queue cannot interleave with this backfill;
+    /// the pre-existing cross-queue reads of these dicts in
+    /// saveLocked are unchanged).
     private func saveLocked() {
         guard let dir = documentsDirectory ?? LocalStore.documentsDirectoryOrNil() else { return }
         lastSaveAt = now()
@@ -238,6 +251,17 @@ final class ResolverCooldown {
            let disk = try? JSONDecoder().decode([String: ResolverSpeedRecord].self, from: diskData) {
             for (key, record) in disk where map[key] == nil {
                 map[key] = record
+                // b49fix21 D23-3: backfill — map[key] == nil
+                // means memory recorded nothing for this key,
+                // so the imported record is the only speed data
+                // for it. Memory-known keys still win disk (the
+                // where clause above); this branch never
+                // overwrites a live recording.
+                if let avg = record.avg { averages[key] = avg }
+                if let fails = record.fails { self.fails[key] = fails }
+                if let ms = record.cooledUntilMs {
+                    cooledUntil[key] = Date(timeIntervalSince1970: TimeInterval(ms) / 1000.0)
+                }
             }
         }
         guard let data = try? JSONEncoder().encode(map) else { return }

@@ -1787,6 +1787,14 @@ struct BackupSnapshotView: View {
             }
             var text = "已恢复 \(result.restoredKeys) 个设置、\(result.restoredFiles) 个文件。导入后新建的歌单、下载不受影响。"
             text += safetyNetTaken ? "恢复前已为当前状态保存一份快照。" : "恢复前未能保存安全网快照。"
+            // b49fix21 D23-2: history entries the restore
+            // normalised away (D22-10) — the count used to live
+            // only in historyNormalizedDropped and never
+            // reached the message. Same wording as the import
+            // warnings.
+            for line in historyDroppedLines(for: result) {
+                text += "\n" + line
+            }
             return text
         }
         var lines = ["恢复未完成："]
@@ -1799,8 +1807,26 @@ struct BackupSnapshotView: View {
         if !result.failedFiles.isEmpty {
             lines.append("未恢复的文件：\(result.failedFiles.joined(separator: "、"))。")
         }
+        // b49fix21 D23-2: same dropped-history lines as the
+        // success branch — a partial restore normalises the
+        // history files it did restore, and those drops are
+        // owed to the user too.
+        lines += historyDroppedLines(for: result)
         lines.append(safetyNetLine)
         return lines.joined(separator: "\n")
+    }
+
+    /// One line per history file the restore normalised
+    /// (b49fix21 D23-2): "影视历史有 N 条记录格式不符，已跳过"
+    /// / "直播历史有 N 条记录格式不符，已跳过" — the same
+    /// wording the import warnings use for the same drops.
+    private static func historyDroppedLines(for result: BackupEngineCore.SnapshotRestoreResult) -> [String] {
+        var lines: [String] = []
+        for (path, count) in result.historyNormalizedDropped.sorted(by: { $0.key < $1.key }) where count > 0 {
+            let kind = path.hasPrefix("hao_video_hist") ? "影视" : "直播"
+            lines.append("\(kind)历史有 \(count) 条记录格式不符，已跳过。")
+        }
+        return lines
     }
 }
 

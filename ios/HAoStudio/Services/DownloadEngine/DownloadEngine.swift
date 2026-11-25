@@ -718,6 +718,22 @@ final class DownloadEngine: NSObject {
             }
             records.removeValue(forKey: key)
             order.removeAll { $0 == key }
+            // b49fix21 D23-4: prune the deleted key from the
+            // disk mirror BEFORE persistLocked — the mirror
+            // merge re-adds any disk task memory doesn't know,
+            // so a just-deleted task would resurrect into the
+            // mirror (and, since this round, into the catalog
+            // at the next restore) if it were left there. The
+            // old comment's "a deleted task is already absent
+            // from disk" was only true before the fix20 merge
+            // existed: shipped 0.0.2 has no merge, so shipped
+            // mirrors are clean — but the merge is live in this
+            // tree, so the prune must land with it.
+            MigrationStore.collectionWriteQueue.sync {
+                var diskTasks: [DownloadTaskInfo] = LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: [DownloadTaskInfo]())
+                diskTasks.removeAll { $0.request.key == key }
+                LocalStore.saveCollection(named: DownloadEngine.tasksCollection, value: diskTasks)
+            }
             persistLocked()
         }
     }
@@ -1278,29 +1294,44 @@ final class DownloadEngine: NSObject {
 
     private func persistLocked() {
         let infos = order.compactMap { records[$0]?.info }
-        // b45-F: downloads.json with a monotonic revision — a slow
-        // old save can never overwrite a newer pause / cancel.
-        // The LocalStore collection stays as a compatibility mirror.
-        catalogRevision += 1
-        DownloadCatalogStore.save(DownloadCatalogFile(revision: catalogRevision, tasks: infos))
-        // b49fix18 D-7: the mirror write takes
-        // MigrationStore.collectionWriteQueue, the same queue
-        // the backup import / rollback takes for downloadTasks
-        // — a state mutation landing inside the restore's
-        // remove → copy gap no longer cancels the rollback.
-        // The catalog (the primary index) is untouched by the
-        // import, so only the mirror needs the queue. The
-        // import never calls into DownloadEngine, so taking
-        // the queue here cannot deadlock.
-        MigrationStore.collectionWriteQueue.sync {
+        // b49fix21 D23-4: reconcile the disk mirror into the
+        // catalog too. The mirror merge below used to keep
+        // imported tasks alive only in the mirror file, and
+        // restorePersistedTasks ignored the mirror whenever a
+        // catalog existed — so an imported task never appeared
+        // after a restart (only a fresh install with no catalog
+        // ever saw it). The merged list is computed on
+        // collectionWriteQueue first (the mirror's queue — the
+        // import writes downloadTasks on it), then the catalog
+        // is written from the merged list, so the catalog is
+        // the reconciled index from the next persist on. A
+        // second import without downloadTasks can no longer
+        // wipe previously imported tasks either: they already
+        // live in the catalog by then. Imported tasks become
+        // visible in the UI after the next relaunch (the
+        // engine's live records are rebuilt at restore — see
+        // restorePersistedTasks); a persist-time record
+        // creation would need the restore loop's file-state
+        // normalisation (completed-with-missing-file -> failed,
+        // final-file claim, legacy .part adoption) duplicated
+        // here, which is not done — the restore-time merge is
+        // the single normalisation point.
+        let merged: [DownloadTaskInfo] = MigrationStore.collectionWriteQueue.sync {
+            // b49fix18 D-7: the mirror write takes
+            // MigrationStore.collectionWriteQueue, the same queue
+            // the backup import / rollback takes for downloadTasks
+            // — a state mutation landing inside the restore's
+            // remove → copy gap no longer cancels the rollback.
+            // The catalog (the primary index) is untouched by the
+            // import, so only the mirror needs the queue. The
+            // import never calls into DownloadEngine, so taking
+            // the queue here cannot deadlock.
             // b49fix20 D22-2: merge the disk mirror first — the
             // mirror used to be written from memory only, so a
             // persist landing after a backup import wiped the
             // imported tasks (the import never touches the
             // primary downloads.json, so the only source of
-            // disk-only tasks is the import itself; a deleted
-            // task is already absent from disk, since every
-            // deletion persists synchronously).
+            // disk-only tasks is the import itself).
             var merged = infos
             let diskTasks: [DownloadTaskInfo] = LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: [DownloadTaskInfo]())
             let memoryKeys = Set(infos.map { $0.request.key })
@@ -1308,7 +1339,13 @@ final class DownloadEngine: NSObject {
                 merged.append(task)
             }
             LocalStore.saveCollection(named: DownloadEngine.tasksCollection, value: merged)
+            return merged
         }
+        // b45-F: downloads.json with a monotonic revision — a slow
+        // old save can never overwrite a newer pause / cancel.
+        // The LocalStore collection stays as a compatibility mirror.
+        catalogRevision += 1
+        DownloadCatalogStore.save(DownloadCatalogFile(revision: catalogRevision, tasks: merged))
         // b49fix2 P2-59: every state mutation re-derives activity
         // (start/stop of the app-root background task).
         refreshActivityLocked()
@@ -1324,7 +1361,24 @@ final class DownloadEngine: NSObject {
         let infos: [DownloadTaskInfo]
         if let catalog = catalog {
             catalogRevision = catalog.revision
-            infos = catalog.tasks
+            var catalogTasks = catalog.tasks
+            // b49fix21 D23-4: reconcile mirror-only tasks into
+            // the restored set — the import writes the
+            // downloadTasks mirror, never the catalog, so a
+            // mirror-only task is an imported task, and the
+            // mirror used to be ignored outright whenever a
+            // catalog existed. Catalog tasks win on key
+            // collision; mirror-only tasks go through the same
+            // normalisation loop below (in-flight -> paused,
+            // filename re-sanitised, completed-with-missing-file
+            // -> failed). A deleted task cannot resurrect here:
+            // delete() prunes the disk mirror before persisting
+            // (see delete), so a deleted key is absent from
+            // both the catalog and the mirror.
+            let mirrorTasks: [DownloadTaskInfo] = LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: [])
+            let catalogKeys = Set(catalogTasks.map { $0.request.key })
+            catalogTasks += mirrorTasks.filter { !catalogKeys.contains($0.request.key) }
+            infos = catalogTasks
         } else {
             infos = LocalStore.loadCollection(named: DownloadEngine.tasksCollection, default: [])
         }
