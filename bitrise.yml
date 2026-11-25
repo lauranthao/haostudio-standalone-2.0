@@ -117,6 +117,6 @@ workflows:
             # embedded.mobileprovision). Ship the same bytes as a
             # .zip — an IPA is a zip — so the step uploads it as a
             # generic file; it is renamed back to .ipa after download.
-            cp HAoStudio.ipa "$BITRISE_DEPLOY_DIR/HAoStudio-standalone-v2.1.1.zip"
+            cp HAoStudio.ipa "$BITRISE_DEPLOY_DIR/HAoStudio-standalone-v2.1.2.zip"
             ls -lh "$BITRISE_DEPLOY_DIR/"
     - deploy-to-bitrise-io@2: {}
