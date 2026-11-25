@@ -117,6 +117,18 @@ final class VideoSearchViewModel: ObservableObject {
         search(lastQuery)
     }
 
+    /// Retry only the failed load-more page (sweep-4 P2-48): the
+    /// banner's retry used to re-run the whole search from page 1
+    /// and blank the loaded grid. The failed page is retried in
+    /// place — cmsPage was never advanced past it, so the same
+    /// page is re-issued; cmsHasMore is restored first (the
+    /// failure cleared it), so the guard lets the retry through.
+    func retryLoadMoreCMS() {
+        guard !cmsLoadingMore, !lastQuery.isEmpty else { return }
+        cmsHasMore = true
+        loadMoreCMS()
+    }
+
     /// Next CMS source-page, appended (b49 sweep #22). A failure
     /// keeps the loaded results and surfaces as a banner over
     /// them; paging ends either way for this query.
@@ -131,6 +143,7 @@ final class VideoSearchViewModel: ObservableObject {
             switch result {
             case .success(let items):
                 self.cmsPage = nextPage
+                self.cmsErrorMessage = nil
                 var seen = Set(self.results.map { "\($0.sourceId ?? -1)|\($0.id)" })
                 for item in items where seen.insert("\(item.sourceId ?? -1)|\(item.id)").inserted {
                     self.results.append(item)
@@ -234,7 +247,13 @@ struct VideoSearchView: View {
                                     Text(error)
                                         .font(.haoFootnote)
                                     Spacer()
-                                    Button("重试") { viewModel.retrySearch() }
+                                    // sweep-4 P2-48: results are
+                                    // non-empty, so this error is a
+                                    // load-more failure — retry only
+                                    // that page, never the whole
+                                    // search (which would blank the
+                                    // grid).
+                                    Button("重试") { viewModel.retryLoadMoreCMS() }
                                         .font(.haoFootnote)
                                         .foregroundStyle(theme.accentText)
                                 }

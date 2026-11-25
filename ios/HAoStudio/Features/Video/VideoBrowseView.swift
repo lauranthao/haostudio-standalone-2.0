@@ -10,8 +10,10 @@
 // category pre-selected and loading immediately — never an empty
 // "pick a type first" dead end. CMS has no all-types endpoint, so
 // there is no merged all-types grid; per-row "全部" opens the page
-// pre-selected to that row's type, and the "每日推荐" row opens it
-// with no type (first category). No fake "每日推荐" type is invented.
+// pre-selected to that row's type, and the "每日推荐" row opens its
+// own list view (VideoDailyListView, sweep-3 A16) instead of this
+// page — daily picks have no single type, and no fake "daily" type
+// is invented.
 //
 // The view-model copies the EmbyCategoryViewModel generation guard
 // (stale-page drop + re-issue); VideoCategoryViewModel has none, so
@@ -41,6 +43,19 @@ final class VideoBrowseViewModel: ObservableObject {
     /// failure — an empty library stays an empty state, never an
     /// error state.
     @Published private(set) var errorMessage: String?
+    /// The category list itself failed to load (sweep-2 P1-10):
+    /// a dead CMS used to collapse to an empty category list with
+    /// no failure signal, so the page showed "这个分类下没有内容"
+    /// for a source that never answered. Set only on that failure;
+    /// the grid's error card shows instead of the empty state, and
+    /// its retry re-runs loadMeta (not reload — reload is gated on
+    /// ready, which never becomes true without categories).
+    @Published private(set) var metaError: String?
+    /// The category list is still loading (first paint): until it
+    /// lands the grid shows a spinner, not the empty state — the
+    /// empty state flashing before any fetch completes reads as
+    /// "this category has no content" too.
+    @Published private(set) var metaLoading = true
 
     /// Changing any of these reloads the grid from page 0 (one
     /// mechanism only: didSet + the ready gate below). The oldValue
@@ -110,19 +125,32 @@ final class VideoBrowseViewModel: ObservableObject {
     /// hidden-category prefs apply via visibleCategories, so a
     /// hidden category never reappears here. Then the grid loads.
     private func loadMeta() {
-        gateway.fetchTypeNames { [weak self] names in
+        metaLoading = true
+        metaError = nil
+        errorMessage = nil
+        gateway.fetchTypeNamesResult { [weak self] result in
             guard let self = self else { return }
-            self.categories = VideoLibraryStore.visibleCategories(
-                names, prefs: VideoLibraryStore.categoryPrefs())
-            if let current = self.selectedType, self.categories.contains(current) {
-                // Keep the user's pick across a refresh.
-            } else if let initial = self.initialType, self.categories.contains(initial) {
-                self.selectedType = initial
-            } else {
-                self.selectedType = self.categories.first
+            self.metaLoading = false
+            switch result {
+            case .success(let names):
+                self.categories = VideoLibraryStore.visibleCategories(
+                    names, prefs: VideoLibraryStore.categoryPrefs())
+                if let current = self.selectedType, self.categories.contains(current) {
+                    // Keep the user's pick across a refresh.
+                } else if let initial = self.initialType, self.categories.contains(initial) {
+                    self.selectedType = initial
+                } else {
+                    self.selectedType = self.categories.first
+                }
+                self.ready = true
+                self.reload()
+            case .failure(let error):
+                // Dead CMS: no categories, no grid load — the view
+                // shows the meta error card with a retry (sweep-2
+                // P1-10). ready stays false, so reload() stays a
+                // no-op until a retry lands the list.
+                self.metaError = error.message
             }
-            self.ready = true
-            self.reload()
         }
         gateway.fetchEmbyLibraries { [weak self] libs in
             self?.libraries = libs
@@ -422,6 +450,14 @@ struct VideoBrowseView: View {
                     // nothing on top of the grid in this mode.
                     gridScrollView
                 } else {
+                    // sweep-3 A11: the type chips are the fast path
+                    // for the primary filter — they used to live
+                    // only in the drag drawer, where a first-time
+                    // user never found them. The drawer stays for
+                    // the full picker (history / favourites /
+                    // libraries / genres).
+                    typeChipRow
+                        .padding(.top, 12)
                     cmsFilterRows
                         .padding(.top, 12)
                     gridScrollView
@@ -458,9 +494,27 @@ struct VideoBrowseView: View {
 
     // MARK: - CMS filter rows
 
-    /// Area / year / sort only. The type list left the top row:
-    /// it lives in the sidebar now (build 36, item 19 — one
-    /// picker for the list, not two).
+    /// Visible type chips (sweep-3 A11): the primary type filter
+    /// as a horizontal chip row, same capsule style as the filter
+    /// chips below. Empty while the category list loads (or
+    /// failed) — the row hides itself instead of showing a dead
+    /// strip.
+    private var typeChipRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(viewModel.categories, id: \.self) { type in
+                    filterChip(label: type, selected: viewModel.selectedType == type) {
+                        viewModel.selectedType = type
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    /// Area / year / sort only. The type list is the chip row
+    /// above (sweep-3 A11) and the sidebar's full picker — the
+    /// drawer alone hid the primary filter from first-time users.
     private var cmsFilterRows: some View {
         VStack(alignment: .leading, spacing: 12) {
             filterRow(title: "地区", options: Self.areaOptions, selected: viewModel.area) {
@@ -480,10 +534,30 @@ struct VideoBrowseView: View {
 
     private var gridSection: some View {
         Group {
-            if viewModel.items.isEmpty && viewModel.isLoading {
+            if viewModel.items.isEmpty && (viewModel.isLoading || (viewModel.mode != "emby" && viewModel.metaLoading)) {
                 ProgressView()
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 32)
+            } else if let metaError = viewModel.metaError, viewModel.items.isEmpty, viewModel.categories.isEmpty, viewModel.mode != "emby" {
+                // sweep-2 P1-10: the category list itself never
+                // answered — a dead CMS, not an empty category.
+                // The retry re-runs loadMeta (reload is gated on
+                // ready, which never becomes true without
+                // categories).
+                VStack(spacing: 12) {
+                    MusicEmptyState(
+                        icon: "wifi.exclamationmark",
+                        title: "连不上影视源",
+                        note: metaError
+                    )
+                    Button("重试") { viewModel.refresh() }
+                        .font(.haoSubheadStrong)
+                        .foregroundStyle(theme.onAccent)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(theme.accent, in: Capsule())
+                }
+                .padding(.horizontal, 16)
             } else if let error = viewModel.errorMessage, viewModel.items.isEmpty {
                 VStack(spacing: 12) {
                     MusicEmptyState(
@@ -511,14 +585,24 @@ struct VideoBrowseView: View {
             } else {
                 // A failed refresh kept the old grid: show the error
                 // as a compact banner instead of hiding the results
-                // behind an error card.
-                if let error = viewModel.errorMessage {
+                // behind an error card. A failed category list
+                // (metaError, CMS mode) banners here too — the grid
+                // is still the last good one, and the retry re-runs
+                // loadMeta for it instead of reloading the grid.
+                if let error = viewModel.errorMessage ?? (viewModel.mode == "emby" ? nil : viewModel.metaError) {
                     HStack(spacing: 8) {
                         Image(systemName: "wifi.exclamationmark")
+                            .accessibilityHidden(true)
                         Text(error)
                             .font(.haoFootnote)
                         Spacer()
-                        Button("重试") { viewModel.reload() }
+                        Button("重试") {
+                            if viewModel.metaError != nil && viewModel.mode != "emby" {
+                                viewModel.refresh()
+                            } else {
+                                viewModel.reload()
+                            }
+                        }
                             .font(.haoFootnote)
                             .foregroundStyle(theme.accentText)
                     }
@@ -680,6 +764,7 @@ private struct BrowseSidebarView: View {
                 if let icon = icon {
                     Image(systemName: icon)
                         .font(.haoFootnoteStrong)
+                        .accessibilityHidden(true)
                 }
                 Text(label)
                     .font(.haoSubhead)

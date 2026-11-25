@@ -49,8 +49,38 @@ final class VideoDetailViewModel: ObservableObject {
     /// selection churn during load() must not re-resolve the same
     /// episode twice.
     private var downloadCheckKey: String?
+    /// Debounce work for the downloadability resolve (sweep-4
+    /// P2-49): every line/episode tap fired a resolve and greyed
+    /// the download button while it ran; rapid taps now settle
+    /// for 0.35 s first and fire a single resolve.
+    private var downloadResolveWork: DispatchWorkItem?
+    /// Alternate CMS sources carrying this same title (sweep-2
+    /// P1-8): the empty state used to say "换个片源试试" with
+    /// nowhere to switch to. Loaded lazily when a CMS detail
+    /// lands with no lines (or fails outright); empty = no other
+    /// source has it.
+    @Published private(set) var altSources: [AltVideoSource] = []
+    /// The alternate-source search is in flight. While true the
+    /// empty state says it is looking, instead of claiming no
+    /// other source exists.
+    @Published private(set) var altSourcesLoading = false
+    /// Whether the resume selection has been applied for the
+    /// current load (sweep-4 P1-23): the gateway publishes twice
+    /// (CMS detail, then the Douban-merged detail), and the
+    /// completion re-applied the resume selection on every
+    /// publish — a user who changed episode/line between the
+    /// two publishes was snapped back to the resume episode.
+    /// Reset in load(); set only when a selection is actually
+    /// applied, so a first publish with no lines at all retries
+    /// on the second publish instead of giving up.
+    private var didApplyResumeSelection = false
 
-    let item: VideoItem
+    /// The item this detail is for. `var`, not `let` (sweep-2
+    /// P1-8): switching to an alternate source rebuilds it on
+    /// the other source's vod id and reloads. Title/year/cover
+    /// carry over, so the resume bookmark (keyed by title +
+    /// year) still applies on the new source.
+    private(set) var item: VideoItem
     private let gateway: VideoDataGateway
     /// Resolved in init: an explicit source wins, otherwise the
     /// item decides (VideoItem.detailSource — Emby items carry no
@@ -125,13 +155,21 @@ final class VideoDetailViewModel: ObservableObject {
         detail = nil
         downloadCheckKey = nil
         downloadAvailable = nil
+        downloadResolveWork?.cancel()
+        altSources = []
+        altSourcesLoading = false
+        didApplyResumeSelection = false
         let completion: (VideoDetail?) -> Void = { [weak self] loaded in
             guard let self = self else { return }
             self.isLoading = false
             self.detail = loaded
             let entry = VideoLibraryStore.historyEntry(title: self.item.title, year: self.item.year)
             self.isWatched = entry != nil
-            if let resume = self.resume, let loaded = loaded {
+            // sweep-4 P1-23: apply the resume selection only on
+            // the first publish that can actually apply one. The
+            // gateway publishes twice; the second publish must
+            // not snap a user-changed selection back.
+            if !self.didApplyResumeSelection, let resume = self.resume, let loaded = loaded {
                 // The resume episode may live on a later line
                 // (Emby lines are seasons) — search all lines,
                 // not just the first playable one. The recorded
@@ -141,17 +179,25 @@ final class VideoDetailViewModel: ObservableObject {
                     lines: loaded.lines, resume: resume, lineName: entry?.lineName) {
                     self.selectedLineIndex = selection.lineIndex
                     self.selectedEpisodeIndex = selection.episodeIndex
+                    self.didApplyResumeSelection = true
                 } else if let line = loaded.firstPlayableLine {
                     self.selectedLineIndex = loaded.lines.firstIndex(where: { $0.id == line.id }) ?? 0
                     if let index = line.episodes.firstIndex(where: { $0.name == resume.episodeName }) {
                         self.selectedEpisodeIndex = index
                     }
+                    self.didApplyResumeSelection = true
                 }
             }
             // b49 sweep #8: resolve downloadability for the
             // selected episode (no-op when the selection didSet
             // already checked this exact episode — the key guard).
             self.refreshDownloadAvailability()
+            // sweep-2 P1-8: no playable lines on a CMS title —
+            // look for the same title on other sources, so the
+            // "换个片源试试" line has somewhere to go.
+            if self.source == .cms, loaded?.lines.isEmpty != false {
+                self.loadAltSources()
+            }
         }
         switch source {
         case .cms:
@@ -193,8 +239,11 @@ final class VideoDetailViewModel: ObservableObject {
     /// publish it (b49 sweep #8). Called when the detail lands
     /// and whenever the selection changes (didSet above). Emby
     /// never downloads (see downloadSelected) — no resolve is
-    /// issued for it.
+    /// issued for it. The resolve is debounced (sweep-4 P2-49):
+    /// rapid line/episode taps settle for 0.35 s first, so the
+    /// button greys once instead of once per tap.
     func refreshDownloadAvailability() {
+        downloadResolveWork?.cancel()
         guard source != .emby, let detail = detail,
               let line = selectedLine, let episode = selectedEpisode else {
             downloadAvailable = false
@@ -204,10 +253,44 @@ final class VideoDetailViewModel: ObservableObject {
         guard key != downloadCheckKey else { return }
         downloadCheckKey = key
         downloadAvailable = nil
-        gateway.checkDownloadable(detail: detail, episode: episode, line: line) { [weak self] ok in
-            guard let self = self, self.downloadCheckKey == key else { return }
-            self.downloadAvailable = ok
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.gateway.checkDownloadable(detail: detail, episode: episode, line: line) { [weak self] ok in
+                guard let self = self, self.downloadCheckKey == key else { return }
+                self.downloadAvailable = ok
+            }
         }
+        downloadResolveWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
+    /// Search other CMS sources for this same title (sweep-2
+    /// P1-8). Runs only when the detail landed with no playable
+    /// lines (or failed outright) — a title that plays needs no
+    /// switcher. Guarded by the loading flag so the gateway's
+    /// second publish does not start a second search.
+    private func loadAltSources() {
+        guard !altSourcesLoading else { return }
+        altSourcesLoading = true
+        gateway.altSources(title: item.title, year: item.year ?? "", excludeSourceId: item.sourceId ?? -1) { [weak self] alts in
+            guard let self = self else { return }
+            self.altSources = alts
+            self.altSourcesLoading = false
+        }
+    }
+
+    /// Switch the detail to an alternate source (sweep-2 P1-8):
+    /// rebuild the item on the other source's vod id and reload.
+    /// Title/year/cover carry over, so the resume bookmark
+    /// (keyed by title + year) still applies on the new source.
+    func switchToAltSource(_ alt: AltVideoSource) {
+        item = VideoItem(
+            id: alt.vodId, title: item.title, coverURL: item.coverURL,
+            year: item.year, typeName: item.typeName, remarks: item.remarks,
+            sourceId: alt.source)
+        selectedLineIndex = 0
+        selectedEpisodeIndex = 0
+        load()
     }
 
     /// Queue the selected episode for download. The result is a
@@ -326,6 +409,11 @@ struct VideoDetailContentView: View {
     /// persisted — the next visit hides again (Flutter parity).
     @State private var spoilerSynopsisRevealed = false
     @State private var spoilerCoverRevealed = false
+    /// Width of the episode grid's container, measured on layout
+    /// (sweep-4 B13): 4 columns on phones, 6 once the content is
+    /// 600pt or wider, so iPad episode buttons stay tappable
+    /// instead of stretching to ~180pt. 0 until the first pass —
+    /// 4 columns, the phone layout.
 
     /// Spoiler blur for this title's cover (Flutter detail-page
     /// parity: unwatched + switch on + not yet tapped).
@@ -364,7 +452,9 @@ struct VideoDetailContentView: View {
                             title: viewModel.source == .emby ? "暂无可播内容" : "暂无可播剧集",
                             note: viewModel.source == .emby
                                 ? "Emby 没有返回这部影片的播放地址，检查服务器连接后重试。"
-                                : "该片源没有返回播放线路，换个片源试试。"
+                                : viewModel.altSources.isEmpty && !viewModel.altSourcesLoading
+                                    ? "该片源没有返回播放线路，其他片源也没有这部影片。"
+                                    : "该片源没有返回播放线路，换个片源试试。"
                         )
                         // A failed detail fetch used to leave this
                         // state with no way back except leaving the
@@ -376,6 +466,50 @@ struct VideoDetailContentView: View {
                         // whenever the mini player is showing — it
                         // lands under the floating mini / tab bar
                         // until the user discovers the scroll.
+                        // sweep-2 P1-8: the alternate sources for
+                        // this title, as real rows — the empty state
+                        // used to say "换个片源试试" with nowhere
+                        // to switch to. Hidden when the search
+                        // found nothing (the note says so instead).
+                        if viewModel.source == .cms {
+                            if viewModel.altSourcesLoading {
+                                HStack(spacing: 8) {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                    Text("正在查找其他片源…")
+                                        .font(.haoFootnote)
+                                        .foregroundStyle(theme.textMuted)
+                                }
+                                .padding(.top, 4)
+                            } else if !viewModel.altSources.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("其他片源")
+                                        .font(.haoFootnoteMedium)
+                                        .foregroundStyle(theme.textSecondary)
+                                    ForEach(viewModel.altSources, id: \.source) { alt in
+                                        Button(action: { viewModel.switchToAltSource(alt) }) {
+                                            HStack {
+                                                Text(alt.name)
+                                                    .font(.haoDenseBody)
+                                                    .foregroundStyle(theme.textPrimary)
+                                                Spacer()
+                                                Text("切换")
+                                                    .font(.haoFootnote)
+                                                    .foregroundStyle(theme.accentText)
+                                                Image(systemName: "chevron.right")
+                                                    .font(.haoFootnote)
+                                                    .foregroundStyle(theme.textMuted)
+                                            }
+                                            .padding(.horizontal, 16)
+                                            .padding(.vertical, 12)
+                                            .background(theme.surfaceStrong, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel("切换到片源\(alt.name)")
+                                    }
+                                }
+                            }
+                        }
                     }
                     Spacer(minLength: 24)
                 }
@@ -629,6 +763,7 @@ struct VideoDetailContentView: View {
                     .background(theme.accentSoft, in: Capsule())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(viewModel.isFavourite ? "已收藏，点击取消收藏" : "收藏")
                 .haoSensoryFeedback(.selection, trigger: viewModel.isFavourite)
             // b49 sweep #8: hidden when the selected episode
             // cannot download (HLS — the resolve said m3u8 — or
@@ -644,6 +779,7 @@ struct VideoDetailContentView: View {
                         .background(theme.accentSoft, in: Capsule())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("下载本集")
                 .disabled(!viewModel.canPlay || viewModel.downloadAvailable == nil)
                 .opacity(viewModel.canPlay && viewModel.downloadAvailable != nil ? 1 : 0.5)
             }
@@ -739,13 +875,20 @@ struct VideoDetailContentView: View {
         }
     }
 
+    /// Episode columns (sweep-4 B13): 4 on phones, 6 once the
+    /// content is 600pt or wider (iPad). See gridWidth above.
+    private var episodeColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 10),
+              count: gridWidth >= 600 ? 6 : 4)
+    }
+
     private var episodeGrid: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("选集")
                 .font(.haoSectionTitle)
                 .foregroundStyle(theme.textPrimary)
             LazyVGrid(
-                columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
+                columns: episodeColumns,
                 spacing: 10
             ) {
                 ForEach(Array((viewModel.selectedLine?.episodes ?? []).enumerated()), id: \.element.id) { index, episode in
@@ -770,6 +913,15 @@ struct VideoDetailContentView: View {
                     .buttonStyle(.plain)
                 }
             }
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { gridWidth = geo.size.width }
+                        .onChange(of: geo.size.width) { _, width in
+                            gridWidth = width
+                        }
+                }
+            )
         }
     }
 }

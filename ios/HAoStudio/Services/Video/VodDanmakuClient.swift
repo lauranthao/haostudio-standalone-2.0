@@ -580,28 +580,30 @@ final class VodDanmakuClient: VodDanmakuProvider {
 
     // MARK: VodDanmakuProvider
 
-    func fetchDanmaku(for episode: PlayEpisode, completion: @escaping ([DanmakuItem]) -> Void) {
-        fetchCandidates(title: title, episode: episode.name) { [weak self] candidates in
+    func fetchDanmaku(for episode: PlayEpisode, completion: @escaping ([DanmakuItem], Bool) -> Void) {
+        fetchCandidates(title: title, episode: episode.name) { [weak self] candidates, transportFailed in
             guard let self = self else {
-                completion([])
+                completion([], true)
                 return
             }
             guard let candidates = candidates,
                   let candidate = VodDanmakuParsers.selectCandidate(candidates, queryTitle: self.title, year: self.year) else {
-                completion([])
+                // No candidate: either the transport failed (flag)
+                // or this title simply has no danmaku entry.
+                completion([], transportFailed)
                 return
             }
-            self.fetchComments(for: candidate) { comments in
+            self.fetchComments(for: candidate) { comments, commentsFailed in
                 guard let comments = comments else {
-                    completion([])
+                    completion([], commentsFailed)
                     return
                 }
                 let items = comments.map { $0.toDanmakuItem() }.sorted { $0.timeSeconds < $1.timeSeconds }
                 if let cap = self.maxTimelineItems, items.count > cap {
-                    completion(VodDanmakuParsers.uniformSampleTimeline(items, maxCount: cap))
+                    completion(VodDanmakuParsers.uniformSampleTimeline(items, maxCount: cap), false)
                     return
                 }
-                completion(items)
+                completion(items, false)
             }
         }
     }
@@ -612,20 +614,23 @@ final class VodDanmakuClient: VodDanmakuProvider {
     /// shown by the CMS, e.g. `第1集`). Nil on any failure / empty.
     /// An empty 200 is retried once after `emptyRetryDelay`: a cold
     /// fetch occasionally returns empty once, and "no danmaku" is
-    /// never a permanent answer.
-    func fetchCandidates(title: String, episode: String, completion: @escaping ([VodDanmakuCandidate]?) -> Void) {
+    /// never a permanent answer. The Bool is `transportFailed`:
+    /// true only when the request itself failed (no response /
+    /// no body) — an empty list after the retry is "no entry",
+    /// not a failure (sweep-4 P2-9).
+    func fetchCandidates(title: String, episode: String, completion: @escaping ([VodDanmakuCandidate]?, Bool) -> Void) {
         // Single assembly point: base path (a reverse-proxy
         // prefix survives) + optional token prefix + API path.
         // Hop 2 is untouched — it reuses the server's URL.
         guard let url = VodDanmakuApiConfig.hop1Url(baseUrl: baseUrl, token: token, title: title, episode: episode) else {
-            completion(nil)
+            completion(nil, true)
             return
         }
         var attempt = 0
         func step() {
             fetchWithRetry(url: url, timeout: hop1Timeout) { result in
                 guard let result = result else {
-                    completion(nil)
+                    completion(nil, true)
                     return
                 }
                 var list: [VodDanmakuCandidate]?
@@ -637,11 +642,11 @@ final class VodDanmakuClient: VodDanmakuProvider {
                     // Transport already failed (and already retried
                     // what was retryable) — return immediately
                     // without waiting.
-                    completion(nil)
+                    completion(nil, true)
                     return
                 }
                 if let list = list, !list.isEmpty {
-                    completion(list)
+                    completion(list, false)
                     return
                 }
                 // Empty result (empty body or `[]`): one delayed
@@ -653,7 +658,7 @@ final class VodDanmakuClient: VodDanmakuProvider {
                     }
                     return
                 }
-                completion(nil)
+                completion(nil, false)
             }
         }
         step()
@@ -662,18 +667,20 @@ final class VodDanmakuClient: VodDanmakuProvider {
     // MARK: Hop 2 — comments
 
     /// All comments for `candidate`. Nil on any failure / empty.
-    func fetchComments(for candidate: VodDanmakuCandidate, completion: @escaping ([VodDanmakuComment]?) -> Void) {
+    /// The Bool is `transportFailed`, same meaning as hop 1: an
+    /// empty-but-answered body is "no comments", not a failure.
+    func fetchComments(for candidate: VodDanmakuCandidate, completion: @escaping ([VodDanmakuComment]?, Bool) -> Void) {
         guard let url = VodDanmakuParsers.rewriteCommentUrlToJson(candidate.url, baseUrl: baseUrl) else {
-            completion(nil)
+            completion(nil, true)
             return
         }
         fetchWithRetry(url: url, timeout: hop2Timeout) { result in
-            guard let body = result?.body, !body.isEmpty else {
-                completion(nil)
+            guard let result = result, let body = result.body, !body.isEmpty else {
+                completion(nil, true)
                 return
             }
             let comments = VodDanmakuParsers.parseCommentsJson(body)
-            completion(comments.isEmpty ? nil : comments)
+            completion(comments.isEmpty ? nil : comments, false)
         }
     }
 

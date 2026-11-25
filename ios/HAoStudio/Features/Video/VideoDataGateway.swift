@@ -78,6 +78,12 @@ protocol VideoDataGateway {
     func fetchHome(completion: @escaping ([VideoHomeRow]) -> Void)
     /// Category names for the tab's category strip.
     func fetchTypeNames(completion: @escaping ([String]) -> Void)
+    /// Category names with a failure signal (sweep-2 P1-10): the
+    /// old fetchTypeNames collapses a dead CMS to [], which the
+    /// browse page read as "this category has no content".
+    /// Failure = no source answered at all; an empty success =
+    /// the sources answered but list no types.
+    func fetchTypeNamesResult(completion: @escaping (Result<[String], VideoFetchError>) -> Void)
     /// One category page (0-based). Empty page = end of list.
     /// `area` / `year` / `by` are the CmsClient filter values
     /// ("all" / "all" / "" = unfiltered, exactly what the old
@@ -159,6 +165,16 @@ protocol VideoDataGateway {
         line: PlayLine,
         completion: @escaping (Bool) -> Void
     )
+
+    /// Other CMS sources carrying this same title (sweep-2 P1-8):
+    /// the detail page used to say "换个片源试试" with nowhere
+    /// to switch to. Empty when no other source has the title.
+    func altSources(
+        title: String,
+        year: String,
+        excludeSourceId: Int,
+        completion: @escaping ([AltVideoSource]) -> Void
+    )
 }
 
 /// Default for the newest gateway method: gateways that predate
@@ -182,6 +198,14 @@ extension VideoDataGateway {
         completion(.failure(.unreachable()))
     }
 
+    /// Default for fetchTypeNamesResult (sweep-2 P1-10): stubs
+    /// that predate it answer success with whatever the old
+    /// fetchTypeNames returns. The real gateway overrides it
+    /// below with the anyOk signal.
+    func fetchTypeNamesResult(completion: @escaping (Result<[String], VideoFetchError>) -> Void) {
+        fetchTypeNames { completion(.success($0)) }
+    }
+
     /// Default for checkDownloadable (b49 sweep #8): stubs that
     /// predate it answer "not downloadable". The real gateway
     /// overrides it below.
@@ -192,6 +216,18 @@ extension VideoDataGateway {
         completion: @escaping (Bool) -> Void
     ) {
         completion(false)
+    }
+
+    /// Default for altSources (sweep-2 P1-8): stubs that predate
+    /// it answer "no other source". The real gateway overrides
+    /// it below.
+    func altSources(
+        title: String,
+        year: String,
+        excludeSourceId: Int,
+        completion: @escaping ([AltVideoSource]) -> Void
+    ) {
+        completion([])
     }
 }
 
@@ -256,19 +292,36 @@ final class RealVideoDataGateway: VideoDataGateway {
     func fetchTypeNames(completion: @escaping ([String]) -> Void) {
         // Same priority order as CmsClient.home: kVideoTypePriority
         // first, then the rest alphabetically.
-        cms.typeMap { map in
-            var names = Array(map.keys)
-            names.sort { a, b in
-                let ia = kVideoTypePriority.firstIndex(of: a) ?? -1
-                let ib = kVideoTypePriority.firstIndex(of: b) ?? -1
-                if ia >= 0 && ib >= 0 { return ia < ib }
-                if ia >= 0 { return true }
-                if ib >= 0 { return false }
-                return a < b
-            }
-            let sorted = names
-            DispatchQueue.main.async { completion(sorted) }
+        cms.typeMap { map, _ in
+            DispatchQueue.main.async { completion(Self.sortedTypeNames(map)) }
         }
+    }
+
+    /// Category names with the dead-source signal (sweep-2 P1-10):
+    /// failure when no source answered at all — the old
+    /// fetchTypeNames collapses that to [], which the browse page
+    /// read as "this category has no content".
+    func fetchTypeNamesResult(completion: @escaping (Result<[String], VideoFetchError>) -> Void) {
+        cms.typeMap { map, anyOk in
+            DispatchQueue.main.async {
+                completion(anyOk ? .success(Self.sortedTypeNames(map)) : .failure(.unreachable))
+            }
+        }
+    }
+
+    /// Shared sort for both type-name entry points (priority order
+    /// first, then alphabetical).
+    private static func sortedTypeNames(_ map: [String: CmsTypeEntry]) -> [String] {
+        var names = Array(map.keys)
+        names.sort { a, b in
+            let ia = kVideoTypePriority.firstIndex(of: a) ?? -1
+            let ib = kVideoTypePriority.firstIndex(of: b) ?? -1
+            if ia >= 0 && ib >= 0 { return ia < ib }
+            if ia >= 0 { return true }
+            if ib >= 0 { return false }
+            return a < b
+        }
+        return names
     }
 
     func fetchByType(_ type: String, page: Int, area: String, year: String, by: String, completion: @escaping (Result<VideoItemPage, VideoFetchError>) -> Void) {
@@ -564,15 +617,26 @@ final class RealVideoDataGateway: VideoDataGateway {
             DispatchQueue.main.async { completion(false) }
             return
         }
-        cms.resolvePlayURL(detail: detail, episode: episode, line: line, excluding: []) { url in
+        // sweep-4 P2-49: HLS is read from the resolver's own
+        // evidence (suffix or #EXTM3U body), not the suffix
+        // alone — an extension-less HLS URL used to pass this
+        // gate and then save only the playlist file.
+        cms.resolvePlayURLWithKind(detail: detail, episode: episode, line: line, excluding: []) { url, isHLS in
             DispatchQueue.main.async {
-                guard let url = url else {
-                    completion(false)
-                    return
-                }
-                completion(url.pathExtension.lowercased() != "m3u8")
+                completion(url != nil && !isHLS)
             }
         }
+    }
+
+    /// Other CMS sources carrying this same title (sweep-2 P1-8).
+    /// The CmsClient search already answers on the main queue.
+    func altSources(
+        title: String,
+        year: String,
+        excludeSourceId: Int,
+        completion: @escaping ([AltVideoSource]) -> Void
+    ) {
+        cms.altSources(title: title, year: year, excludeSourceId: excludeSourceId, completion: completion)
     }
 
     /// Queue one episode for download. The URL resolves the same
@@ -601,8 +665,8 @@ final class RealVideoDataGateway: VideoDataGateway {
             DispatchQueue.main.async { completion(false) }
             return
         }
-        cms.resolvePlayURL(detail: detail, episode: episode, line: line, excluding: []) { url in
-            guard let url = url, url.pathExtension.lowercased() != "m3u8" else {
+        cms.resolvePlayURLWithKind(detail: detail, episode: episode, line: line, excluding: []) { url, isHLS in
+            guard let url = url, !isHLS else {
                 DispatchQueue.main.async { completion(false) }
                 return
             }

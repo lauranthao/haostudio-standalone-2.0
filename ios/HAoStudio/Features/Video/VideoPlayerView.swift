@@ -226,6 +226,34 @@ final class VideoPlayerViewModel: ObservableObject {
     var currentEngine: VideoEngine? { engine?.currentEngine }
     var diagnostics: VideoPlaybackDiagnostics { engine?.diagnostics ?? .empty }
 
+    /// Dolby Vision P5 (or unknown profile) playing on an ffmpeg
+    /// kernel (sweep-4 P1-16): the picture is green/pink — only
+    /// the system player (AVPlayer) decodes P5 correctly. Facts
+    /// ride the URL (Emby `hao_*`); CMS URLs carry no markers, so
+    /// this never fires for CMS — the honest limit, documented on
+    /// VideoDriver's transcode branch. State-driven: the pill stays
+    /// while the condition holds, no timer. Re-evaluated on every
+    /// body pass; the position timer ticks while playing, so the
+    /// pill appears at latest on the next tick after the open.
+    var dolbyVisionColorWarning: Bool {
+        guard let facts = diagnostics.facts, facts.hasNoHdr10BaseLayer else { return false }
+        return diagnostics.engine == .mpv || diagnostics.engine == .ijk
+    }
+
+    /// Whether the one-tap switch to the system player is
+    /// available for the current DV P5 stream (false when no
+    /// AVPlayer candidate remains — an MKV whose Emby transcode
+    /// failed — so the view never renders a dead button).
+    var canSwitchToSystemPlayerForDolbyVision: Bool {
+        (coordinator.vodDriver as? VideoDriver)?.canSwitchToSystemPlayerForDolbyVision() ?? false
+    }
+
+    /// Switch the current DV P5 stream to the system player, at
+    /// the current position. No-op when the driver cannot switch.
+    func switchToSystemPlayerForDolbyVision() {
+        _ = (coordinator.vodDriver as? VideoDriver)?.switchToSystemPlayerForDolbyVision()
+    }
+
     /// Push the settings to the engine + danmaku layer and persist
     /// them. Called on engine attach and on every settings change.
     /// Audio / subtitle track picks are pushed to the driver,
@@ -1008,6 +1036,14 @@ struct VideoPlayerView: View {
     @EnvironmentObject private var settingsStore: SettingsStore
     @Environment(\.haoTheme) private var theme
     @Environment(\.dismiss) private var dismiss
+    /// Dynamic Type is capped at .accessibility1 on this fixed
+    /// chrome (sweep-4 B11): the landscape player has no room for
+    /// larger text — top/bottom bars, pills and the seek bar are
+    /// fixed-size, and beyond accessibility1 the titles, times and
+    /// pills would overlap or clip. The cap rides the root ZStack
+    /// below, so the settings sheet presented from here inherits
+    /// it too (its rows are fixed chrome as well).
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @State private var controlsVisible = true
     @State private var showingMore = false
@@ -1215,51 +1251,55 @@ struct VideoPlayerView: View {
                     .padding(.vertical, 6)
                     .background(theme.accentOnVideo, in: Capsule())
             }
-            if videoPlayer.seekFailed {
-                VStack {
-                    Spacer()
+            // Transient bottom pills — drag-seek-failed toast,
+            // resume-seek-failed toast (b49 sweep #19), stall
+            // indicator (b49 sweep #9), and the skip-intro /
+            // skip-credits buttons — live in ONE VStack
+            // (sweep-4 P2-47): four separate `VStack { Spacer() …
+            // .padding(.bottom, 120) }` overlays rendered on top
+            // of each other whenever two showed at once. The
+            // toasts keep `.allowsHitTesting(false)` each, so
+            // taps still reach the gesture layer; the skip
+            // buttons stay tappable.
+            VStack(spacing: 8) {
+                Spacer()
+                if videoPlayer.seekFailed {
                     Text("定位失败，已回到实际位置")
                         .font(.haoFootnoteMedium)
                         .foregroundStyle(.white)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
                         .haoDarkGlassCapsule(darkness: 0.7)
-                        .padding(.bottom, 120)
+                        .allowsHitTesting(false)
                         .onAppear {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                                 videoPlayer.clearSeekFailed()
                             }
                         }
                 }
-            }
-            // b49 sweep #19: the resume seek failed — playback
-            // restarted from 0 and the stored resume is kept until
-            // playback passes the old target. Same toast language
-            // as the seek-failed pill above.
-            if videoPlayer.resumeSeekFailed {
-                VStack {
-                    Spacer()
+                // b49 sweep #19: the resume seek failed — playback
+                // restarted from 0 and the stored resume is kept until
+                // playback passes the old target. Same toast language
+                // as the seek-failed pill above.
+                if videoPlayer.resumeSeekFailed {
                     Text("续播定位失败，从头播放")
                         .font(.haoFootnoteMedium)
                         .foregroundStyle(.white)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
                         .haoDarkGlassCapsule(darkness: 0.7)
-                        .padding(.bottom, 120)
+                        .allowsHitTesting(false)
                         .onAppear {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                                 videoPlayer.clearResumeSeekFailed()
                             }
                         }
                 }
-            }
-            // b49 sweep #9: stall warning, mirrored from the
-            // driver — the watchdog publishes it 4 s into a stall
-            // and clears it on recovery. Same text as the Live
-            // player ("加载缓慢…"), so both players read alike.
-            if videoPlayer.isStalled, !videoPlayer.loadFailed {
-                VStack {
-                    Spacer()
+                // b49 sweep #9: stall warning, mirrored from the
+                // driver — the watchdog publishes it 4 s into a stall
+                // and clears it on recovery. Same text as the Live
+                // player ("加载缓慢…"), so both players read alike.
+                if videoPlayer.isStalled, !videoPlayer.loadFailed {
                     HStack(spacing: 6) {
                         ProgressView()
                             .tint(.white)
@@ -1271,49 +1311,44 @@ struct VideoPlayerView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
                     .haoDarkGlassCapsule(darkness: 0.7)
-                    .padding(.bottom, 120)
+                    .allowsHitTesting(false)
                 }
-            }
-            // Loading / failure state (B3): a spinner while the
-            // open is in flight, and a failure card with a retry
-            // when it failed outright — never a bare black frame
-            // with a dead play button. The stack is content-sized
-            // and centred, so taps outside it still reach the
-            // gesture layer underneath.
-            if videoPlayer.loadFailed {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.white.opacity(0.8))
-                    Text("加载失败")
-                        .font(.haoCalloutStrong)
-                        .foregroundStyle(.white)
-                    Text(videoPlayer.failureDetail ?? "该集暂时无法播放，换个线路或重试。")
-                        .font(.haoFootnote)
-                        .foregroundStyle(.white.opacity(0.72))
-                    Button("重试") { videoPlayer.retry() }
-                        .font(.haoSubheadStrong)
-                        .foregroundStyle(haoOnAccentFor(theme.accentOnVideo))
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 10)
-                        .background(theme.accentOnVideo, in: Capsule())
-                        .buttonStyle(.plain)
+                // sweep-4 P1-16: known Dolby Vision P5 (or unknown
+                // profile) on an ffmpeg kernel renders green/pink —
+                // only the system player decodes P5 correctly.
+                // State-driven, no timer: the pill stays while the
+                // condition holds. The button only renders when the
+                // driver can actually switch (an MKV whose Emby
+                // transcode failed has no AVPlayer candidate — then
+                // the notice stands alone, never a dead button).
+                // Tappable like the skip buttons below, not a toast.
+                if videoPlayer.dolbyVisionColorWarning, !videoPlayer.loadFailed {
+                    HStack(spacing: 10) {
+                        Text("杜比视界 P5 · 当前播放器色彩异常")
+                            .font(.haoFootnoteMedium)
+                            .foregroundStyle(.white)
+                        if videoPlayer.canSwitchToSystemPlayerForDolbyVision {
+                            Rectangle()
+                                .fill(.white.opacity(0.4))
+                                .frame(width: 1, height: 14)
+                            Button("改用系统播放器") { videoPlayer.switchToSystemPlayerForDolbyVision() }
+                                .font(.haoFootnoteMedium)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(.white)
+                                .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .haoDarkGlassCapsule(darkness: 0.7)
                 }
-            } else if videoPlayer.isLoading {
-                VStack(spacing: 12) {
-                    ProgressView()
-                        .tint(.white)
-                    Text("正在加载…")
-                        .font(.haoDenseBody)
-                        .foregroundStyle(.white.opacity(0.8))
-                }
-            }
-            // S7 wiring: skip-intro / skip-credits pills. Shown
-            // regardless of controlsVisible — the auto3s countdown
-            // is time-sensitive, and a tap seeks at once.
-            if videoPlayer.skipIntroPill != nil || videoPlayer.skipCreditsPill {
-                VStack {
-                    Spacer()
+                // S7 wiring: skip-intro / skip-credits pills. Shown
+                // regardless of controlsVisible — the auto3s countdown
+                // is time-sensitive, and a tap seeks at once. They
+                // share this stack (sweep-4 P2-47) so they stack
+                // above a toast instead of rendering over it; the
+                // buttons stay tappable (no hit-testing kill here).
+                if videoPlayer.skipIntroPill != nil || videoPlayer.skipCreditsPill {
                     HStack(spacing: 10) {
                         if let pill = videoPlayer.skipIntroPill {
                             Button(pill) { videoPlayer.skipIntroNow() }
@@ -1334,10 +1369,63 @@ struct VideoPlayerView: View {
                                 .buttonStyle(.plain)
                         }
                     }
-                    .padding(.bottom, 120)
+                }
+            }
+            .padding(.bottom, 120)
+            // Loading / failure state (B3): a spinner while the
+            // open is in flight, and a failure card with a retry
+            // when it failed outright — never a bare black frame
+            // with a dead play button. The stack is content-sized
+            // and centred, so taps outside it still reach the
+            // gesture layer underneath.
+            if videoPlayer.loadFailed {
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.white.opacity(0.8))
+                    Text("加载失败")
+                        .font(.haoCalloutStrong)
+                        .foregroundStyle(.white)
+                    // sweep-2 P2-8: the card used to promise a line
+                    // switch ("换个线路或重试") and offer only a
+                    // retry. It now offers the switch for real when
+                    // another line exists, and says only "请重试"
+                    // when this is the only line.
+                    Text(videoPlayer.failureDetail ?? (hasMultipleLines ? "该集暂时无法播放，换个线路或重试。" : "该集暂时无法播放，请重试。"))
+                        .font(.haoFootnote)
+                        .foregroundStyle(.white.opacity(0.72))
+                    HStack(spacing: 12) {
+                        if hasMultipleLines {
+                            Button("换线路") { switchToNextLine() }
+                                .font(.haoSubheadStrong)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 10)
+                                .background(.white.opacity(0.18), in: Capsule())
+                                .buttonStyle(.plain)
+                        }
+                        Button("重试") { videoPlayer.retry() }
+                            .font(.haoSubheadStrong)
+                            .foregroundStyle(haoOnAccentFor(theme.accentOnVideo))
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 10)
+                            .background(theme.accentOnVideo, in: Capsule())
+                            .buttonStyle(.plain)
+                    }
+                }
+            } else if videoPlayer.isLoading {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .tint(.white)
+                    Text("正在加载…")
+                        .font(.haoDenseBody)
+                        .foregroundStyle(.white.opacity(0.8))
                 }
             }
         }
+        // sweep-4 B11: cap Dynamic Type at .accessibility1 on the
+        // fixed player chrome (see dynamicTypeSize above).
+        .environment(\.dynamicTypeSize, min(dynamicTypeSize, .accessibility1))
         .onAppear {
             VideoOrientation.lockLandscape()
             isLandscape = true
@@ -1482,6 +1570,7 @@ struct VideoPlayerView: View {
                     .haoGlassCircle()
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("关闭")
             VStack(alignment: .leading, spacing: 2) {
                 Text(videoPlayer.detail?.item.title ?? "")
                     .font(.haoCalloutStrong)
@@ -1506,6 +1595,7 @@ struct VideoPlayerView: View {
                     .haoGlassCircle()
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("更多设置")
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
@@ -1616,6 +1706,21 @@ struct VideoPlayerView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7, execute: work)
     }
 
+    /// True when the current title has more than one playback
+    /// line (sweep-2 P2-8): the failure card only offers
+    /// "换线路" then.
+    private var hasMultipleLines: Bool {
+        (videoPlayer.detail?.lines.count ?? 0) > 1
+    }
+
+    /// Cycle to the next line and re-open the current episode
+    /// on it (sweep-2 P2-8). `selectLine` keeps the episode and
+    /// resumes at the current position when known.
+    private func switchToNextLine() {
+        guard let lines = videoPlayer.detail?.lines, lines.count > 1 else { return }
+        videoPlayer.selectLine((videoPlayer.lineIndex + 1) % lines.count)
+    }
+
     private var bottomControls: some View {
         VStack(spacing: 10) {
             VideoSeekBar(
@@ -1632,6 +1737,23 @@ struct VideoPlayerView: View {
                     }
                 }
             )
+            // B9: the seek bar is a custom drag view — VoiceOver
+            // reads it as one adjustable element with the current
+            // time, and swiping up/down seeks ±10 s.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("播放进度")
+            .accessibilityValue("\(videoTimeText(seconds: videoPlayer.position))，共 \(videoTimeText(seconds: videoPlayer.duration))")
+            .accessibilityAdjustableAction { direction in
+                let current = videoPlayer.dragPosition ?? videoPlayer.position
+                switch direction {
+                case .increment:
+                    videoPlayer.seek(to: min(videoPlayer.duration, current + 10))
+                case .decrement:
+                    videoPlayer.seek(to: max(0, current - 10))
+                @unknown default:
+                    break
+                }
+            }
             HStack(spacing: 24) {
                 Text(videoTimeText(seconds: videoPlayer.dragPosition ?? videoPlayer.position))
                     .font(.haoCaptionMedium)
@@ -1655,6 +1777,7 @@ struct VideoPlayerView: View {
                         .frame(width: 48, height: 48)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(videoPlayer.isPlaying ? "暂停" : "播放")
                 Button(action: { isLandscape.toggle() }) {
                     Image(systemName: isLandscape
                           ? "arrow.down.right.and.arrow.up.left"
@@ -1664,6 +1787,7 @@ struct VideoPlayerView: View {
                         .frame(width: 48, height: 48)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(isLandscape ? "退出全屏" : "全屏")
             }
             .padding(.horizontal, 20)
         }
@@ -1870,9 +1994,37 @@ enum VideoOrientation {
     /// the old player controller's class name outright (it guards
     /// the deleted controller file), so the rotation nudge goes
     /// through the scene API instead — same effect, no banned name.
+    /// Lock the whole app to landscape. Matches the landscape
+    /// orientation the phone is actually held in (sweep-4 P2-26):
+    /// forcing landscape-right when the phone is held
+    /// landscape-left put the picture upside down relative to
+    /// the user's hands. `UIDevice.current.orientation` only
+    /// updates while orientation notifications are being
+    /// generated, and nothing in the app starts them, so the
+    /// first lock starts them once (a static `let` runs once).
+    /// Device vs interface orientation are mirrored: a device
+    /// held landscape-left (home button right) shows a
+    /// landscape-right interface, and vice versa — the returned
+    /// value is the INTERFACE orientation, used for both the
+    /// device setValue and the scene mask, which must agree.
+    /// Unknown / flat / portrait falls back to landscape-right.
+    private static let startOrientationNotifications: Void = {
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+    }()
+
     static func lockLandscape() {
-        setDeviceOrientation(.landscapeRight)
-        requestSceneOrientation(.landscapeRight)
+        _ = startOrientationNotifications
+        let orientation: UIInterfaceOrientation
+        switch UIDevice.current.orientation {
+        case .landscapeLeft:
+            orientation = .landscapeRight
+        case .landscapeRight:
+            orientation = .landscapeLeft
+        default:
+            orientation = .landscapeRight
+        }
+        setDeviceOrientation(orientation)
+        requestSceneOrientation(orientation == .landscapeLeft ? .landscapeLeft : .landscapeRight)
     }
 
     static func unlockPortrait() {

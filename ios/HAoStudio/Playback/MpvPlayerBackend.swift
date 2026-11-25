@@ -499,8 +499,16 @@ final class MpvPlayerBackend: NSObject, VideoPlayerBackend, LiveAudioOnlyCapable
         guard !isShutdown else { return }
         isShutdown = true
         finishOpen(false)
-        NotificationCenter.default.removeObserver(self, name: UIApplication.didEnterBackgroundNotification, object: nil)
-        NotificationCenter.default.removeObserver(self, name: UIApplication.willEnterForegroundNotification, object: nil)
+        // sweep-4 P2-58: the background/foreground observers are
+        // NOT removed here. open() starts with shutdown(), so
+        // removing them here dropped them before the first
+        // playback ever ran — and nothing re-added them, so the
+        // backend never learned the app backgrounded again
+        // (isBackgrounded stayed false, frames kept rendering
+        // behind the lock screen). The handlers only flip the
+        // isBackgrounded flag and renderIfNeeded is guarded on
+        // !isShutdown, so leaving them registered across a
+        // shutdown is safe. They are removed in deinit only.
         // Ordered teardown (b36 item 5 — the back-out crash):
         // the old code freed the render context and destroyed
         // the core while the event loop could still be inside
@@ -578,6 +586,10 @@ final class MpvPlayerBackend: NSObject, VideoPlayerBackend, LiveAudioOnlyCapable
 
     deinit {
         shutdown()
+        // sweep-4 P2-58: the only place the background/foreground
+        // observers are removed (see shutdown()).
+        NotificationCenter.default.removeObserver(self, name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.removeObserver(self, name: UIApplication.willEnterForegroundNotification, object: nil)
     }
 
     // MARK: - mpv helpers

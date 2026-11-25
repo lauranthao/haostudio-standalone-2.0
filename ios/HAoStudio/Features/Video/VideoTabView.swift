@@ -29,9 +29,13 @@ enum VideoDestination: Hashable {
     case embyGenre(libraryId: String?, genre: String)
     /// Browse page (build 36 item 18). nil = no type pre-selected
     /// (first visible category); non-nil = pre-selected type.
-    /// The "每日推荐" row passes nil: daily picks have no single
-    /// type, and no fake "daily" type is invented.
     case browse(String?)
+    /// The "每日推荐" row's own list (sweep-3 A16): daily picks
+    /// have no single type, and no fake "daily" type is invented
+    /// — the row's "全部" used to open the browse page with nil
+    /// (first category), which is not the daily list at all. The
+    /// list is the row's items as loaded, shown as a static grid.
+    case dailyList([VideoItem])
 }
 
 @MainActor
@@ -141,9 +145,37 @@ struct VideoTabView: View {
     /// not advance under the fullscreen player, in Emby mode, on
     /// another tab, or while backgrounded.
     @State private var heroTimerActive = false
+    /// Whether the user is mid-drag on the hero (sweep-4 P2-19):
+    /// the timer used to fire mid-swipe and fight the drag,
+    /// advancing the page the user was already moving.
+    @State private var isHeroDragging = false
+    /// When the user last interacted with the hero (sweep-4
+    /// P2-19): the timer stays quiet for a full 5 s after a
+    /// manual swipe, so it never advances right on the heels of
+    /// the page the user just chose.
+    @State private var lastHeroInteraction = Date.distantPast
 
     @Environment(\.haoTheme) private var theme
     @Environment(\.scenePhase) private var scenePhase
+    @EnvironmentObject private var settingsStore: SettingsStore
+    /// Hero items the user has revealed past the spoiler guard
+    /// (sweep-3 A18): per item id, never persisted — the next
+    /// visit hides again, like the detail cover's reveal.
+    @State private var heroSpoilerRevealed: Set<String> = []
+
+    /// Whether this hero page hides behind the spoiler guard
+    /// (sweep-3 A18): the hero art is already blurred 24 by
+    /// design, so the readable leak is the title + meta text —
+    /// an unwatched title's hero shows the reveal pill instead
+    /// of the title until tapped. Watched titles and the
+    /// spoiler setting off never hide.
+    private func isHeroBlurred(item: VideoItem) -> Bool {
+        spoilerCoverBlurred(
+            blurUnwatched: settingsStore.blurUnwatchedPosters,
+            watched: viewModel.watchedKeys.contains(
+                VideoResumeKey.key(title: item.title, year: item.year)),
+            revealed: heroSpoilerRevealed.contains(item.id))
+    }
 
     /// Hero pages: the daily row first (VidHub's featured
     /// banner), else the first row; max 5.
@@ -230,6 +262,8 @@ struct VideoTabView: View {
                         onOpenHistory: { path.append(.history) },
                         onOpenFavourites: { path.append(.favourites) }
                     )
+                case .dailyList(let items):
+                    VideoDailyListView(items: items, onSelect: { path.append(.detail($0)) })
                 }
             }
             .onAppear {
@@ -323,7 +357,13 @@ struct VideoTabView: View {
                         if viewModel.homeRefreshFailed {
                             HStack(spacing: 8) {
                                 Image(systemName: "wifi.exclamationmark")
-                                Text("影视源没有响应，显示 \(viewModel.homeCacheAgeText) 的缓存")
+                                // (sweep-4 P2-53) homeCacheAgeText
+                                // is "旧缓存" when the cache
+                                // predates timestamps — "显示 旧缓存
+                                // 的缓存" reads as a stutter.
+                                Text(viewModel.homeCacheAgeText == "旧缓存"
+                                    ? "影视源没有响应，显示旧缓存"
+                                    : "影视源没有响应，显示 \(viewModel.homeCacheAgeText) 的缓存")
                                     .font(.haoFootnote)
                                 Spacer()
                                 Button("重试") { viewModel.loadFresh() }
@@ -363,40 +403,64 @@ struct VideoTabView: View {
     private var heroCarousel: some View {
         TabView(selection: $heroIndex) {
             ForEach(Array(heroItems.enumerated()), id: \.element.id) { index, item in
-                Button(action: { path.append(.detail(item)) }) {
+                // sweep-3 A18: a spoiler-hidden page reveals on
+                // tap instead of opening the detail — same rule as
+                // the detail cover's "点按查看海报".
+                Button(action: {
+                    if isHeroBlurred(item: item) {
+                        heroSpoilerRevealed.insert(item.id)
+                    } else {
+                        path.append(.detail(item))
+                    }
+                }) {
                     ZStack(alignment: .bottomLeading) {
                         heroArt(item: item)
                         LinearGradient(
                             colors: [Color.black.opacity(0), Color.black.opacity(0.75)],
                             startPoint: .top, endPoint: .bottom
                         )
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.title)
-                                // b42 polish: 22 -> 24 — the hero
-                                // title is the page's one big moment
-                                // (VidHub's banner), and 24 bold
-                                // carries it instead of reading like
-                                // a section header.
-                                .font(.system(size: 24, weight: .bold))
-                                .foregroundStyle(.white)
-                                .lineLimit(1)
+                        if isHeroBlurred(item: item) {
                             HStack(spacing: 6) {
-                                if let year = item.year, !year.isEmpty {
-                                    Text(year)
-                                }
-                                if let type = item.typeName, !type.isEmpty {
-                                    Text(type)
-                                }
-                                if let remarks = item.remarks, !remarks.isEmpty {
-                                    Text(remarks)
-                                }
+                                Image(systemName: "eye")
+                                    .font(.haoDenseTitle)
+                                Text("点按查看海报")
+                                    .font(.haoDenseTitle)
                             }
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.85))
-                            .lineLimit(1)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .haoDarkGlassCapsule(darkness: 0.6)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 28)
+                        } else {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(item.title)
+                                    // b42 polish: 22 -> 24 — the hero
+                                    // title is the page's one big moment
+                                    // (VidHub's banner), and 24 bold
+                                    // carries it instead of reading like
+                                    // a section header.
+                                    .font(.system(size: 24, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(1)
+                                HStack(spacing: 6) {
+                                    if let year = item.year, !year.isEmpty {
+                                        Text(year)
+                                    }
+                                    if let type = item.typeName, !type.isEmpty {
+                                        Text(type)
+                                    }
+                                    if let remarks = item.remarks, !remarks.isEmpty {
+                                        Text(remarks)
+                                    }
+                                }
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.85))
+                                .lineLimit(1)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 28)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 28)
                     }
                 }
                 .buttonStyle(.plain)
@@ -405,6 +469,18 @@ struct VideoTabView: View {
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
         .frame(height: heroHeight)
+        // sweep-4 P2-19: a simultaneous drag gesture tracks the
+        // user's swipe without stealing it from the TabView's own
+        // paging gesture — while a drag is in flight (or within
+        // 5 s after one) the timer stays out.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isHeroDragging = true }
+                .onEnded { _ in
+                    isHeroDragging = false
+                    lastHeroInteraction = Date()
+                }
+        )
         .overlay(alignment: .bottom) {
             // Custom capsule dots (TV-App-SwiftUI): the selected
             // dot is a wide white capsule, the rest are small
@@ -421,8 +497,12 @@ struct VideoTabView: View {
         .onReceive(heroTimer) { _ in
             // b49 sweep #23: the publisher fires forever — advance
             // only while the hero is actually visible, the app is
-            // foreground, and no page is pushed on top.
+            // foreground, and no page is pushed on top. sweep-4
+            // P2-19 adds the drag gate: never mid-swipe, and never
+            // within 5 s after a manual swipe.
             guard heroTimerActive, scenePhase == .active, path.isEmpty,
+                  !isHeroDragging,
+                  Date().timeIntervalSince(lastHeroInteraction) > 5,
                   heroItems.count > 1 else { return }
             withAnimation(.easeInOut(duration: 0.4)) {
                 heroIndex = (heroIndex + 1) % heroItems.count
@@ -577,10 +657,16 @@ struct VideoTabView: View {
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 // Same 14pt medium accent style as the continue
-                // section's "全部". The daily row passes nil (first
-                // visible category); every other row passes its own
-                // type.
-                Button("全部") { path.append(.browse(row.id == "daily" ? nil : row.title)) }
+                // section's "全部". The daily row opens its own
+                // list (sweep-3 A16); every other row passes its
+                // own type to the browse page.
+                Button("全部") {
+                    if row.id == "daily" {
+                        path.append(.dailyList(row.items))
+                    } else {
+                        path.append(.browse(row.title))
+                    }
+                }
                     .font(.haoDenseBody)
                     .foregroundStyle(theme.accentText)
             }
@@ -713,4 +799,40 @@ func videoTimeText(seconds: Double) -> String {
         return String(format: "%d:%02d:%02d", hours, minutes, secs)
     }
     return String(format: "%d:%02d", minutes, secs)
+}
+
+/// The "每日推荐" row's full list (sweep-3 A16): the row's items
+/// as loaded, in the shared poster grid — a static snapshot, no
+/// filters, no paging (the daily list is one fetch, not a
+/// browsable category). The row's "全部" used to open the browse
+/// page with no type (first category), which is not the daily
+/// list at all.
+struct VideoDailyListView: View {
+    var items: [VideoItem]
+    var onSelect: (VideoItem) -> Void
+
+    @Environment(\.haoTheme) private var theme
+
+    var body: some View {
+        ScrollView {
+            if items.isEmpty {
+                MusicEmptyState(
+                    icon: "film",
+                    title: "今日暂无推荐",
+                    note: "每日推荐为空，稍后再来看看。"
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 32)
+            } else {
+                VideoPosterGrid(items: items) { onSelect($0) }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 16)
+                Spacer(minLength: 16)
+            }
+        }
+        .haoBottomChromeContentPadding()
+        .background(theme.scaffoldBackground)
+        .navigationTitle("每日推荐")
+        .navigationBarTitleDisplayMode(.inline)
+    }
 }

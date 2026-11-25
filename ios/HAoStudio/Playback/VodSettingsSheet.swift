@@ -135,7 +135,7 @@ struct VodSettingsSheet: View {
     private var danmakuAvailability: VodDanmakuAvailability {
         VodDanmakuAvailability.resolve(
             isLoading: danmaku.isLoading, didLoad: danmaku.didLoad,
-            itemCount: danmaku.items.count)
+            itemCount: danmaku.items.count, loadFailed: danmaku.loadFailed)
     }
 
     var body: some View {
@@ -162,7 +162,9 @@ struct VodSettingsSheet: View {
                 } header: {
                     Text("倍速")
                 } footer: {
-                    Text("仅影视可用；长按画面可临时 2x 播放，松开恢复这里的速度。")
+                    // sweep-3 A25: "仅影视可用" was a tautology —
+                    // this whole sheet is the VOD player.
+                    Text("长按画面可临时 2x 播放，松开恢复这里的速度。")
                 }
 
                 if danmakuAvailability != .unavailable {
@@ -189,6 +191,19 @@ struct VodSettingsSheet: View {
                                     .tint(theme.accent)
                             }
                             if isCustomDanmakuAddress {
+                                Button("重新加载弹幕") { onReloadDanmaku?() }
+                                    .foregroundStyle(theme.accentText)
+                            }
+                        case .failed:
+                            // The danmaku server could not be
+                            // reached — a visible state with a
+                            // retry, not a silently hidden section
+                            // (sweep-4 P2-9). Distinct from
+                            // "this title has no danmaku", which
+                            // hides the section entirely.
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("弹幕加载失败")
+                                    .foregroundColor(theme.textSecondary)
                                 Button("重新加载弹幕") { onReloadDanmaku?() }
                                     .foregroundStyle(theme.accentText)
                             }
@@ -299,13 +314,14 @@ struct VodSettingsSheet: View {
                 }
 
                 if engine == .mpv {
+                    // sweep-3 A25: the "仅 MPV 引擎支持" footer was
+                    // a tautology — this whole section only renders
+                    // when the engine is MPV.
                     Section {
                         Toggle("对白增强", isOn: $state.dialogueBoostEnabled)
                             .tint(theme.accent)
                     } header: {
                         Text("音频")
-                    } footer: {
-                        Text("仅 MPV 引擎支持")
                     }
                 }
 

@@ -112,10 +112,14 @@ enum DoubanParsers {
     /// cap), so entries expire instead of serving stale data.
     static let detailTTL: TimeInterval = idMapTTL
 
-    /// True when a cached detail carries no usable content at all
-    /// (b49 sweep #7 — the length check): an empty overview with
-    /// no cast, no score and no poster is a truncated write, not
-    /// a sparse film, and must refetch instead of being served.
+    /// True when a fetched detail carries no usable content at
+    /// all. Used ONLY at assemble time, together with the
+    /// mobile-page failure flag (sweep-4 P2-52): an empty detail
+    /// from a failed fetch is a truncated write and must not be
+    /// cached, but a complete fetch that returns nothing usable
+    /// IS cached — the film is genuinely sparse, and the old
+    /// read-path check refetched it on every open and never
+    /// cached it.
     static func detailIsEmpty(_ detail: DoubanDetail) -> Bool {
         detail.overview.isEmpty && detail.castNames.isEmpty &&
         detail.score == nil && detail.poster.isEmpty
@@ -412,12 +416,14 @@ final class MemoryDoubanCache: DoubanCache {
     private var disabled = false
 
     func detail(id: String) -> DoubanDetail? {
-        // b49 sweep #7: same TTL + completeness rule as the file
-        // cache — an expired or truncated entry is a miss.
+        // b49 sweep #7: entries expire (7 days). A cached entry
+        // is a completed fetch — sparse films included — so
+        // there is no emptiness check here (sweep-4 P2-52):
+        // the truncation decision is made at assemble time,
+        // where the fetch itself can be judged short.
         guard let at = detailTimes[id],
               Date().timeIntervalSince(at) < DoubanParsers.detailTTL,
-              let cached = details[id],
-              !DoubanParsers.detailIsEmpty(cached) else {
+              let cached = details[id] else {
             if detailTimes[id] != nil {
                 details.removeValue(forKey: id)
                 detailTimes.removeValue(forKey: id)
@@ -431,7 +437,12 @@ final class MemoryDoubanCache: DoubanCache {
         details[id] = detail
         detailTimes[id] = Date()
         if details.count > 200 {
-            details.removeValue(forKey: details.keys.first ?? "")
+            // (sweep-4 P2-52) Evict the timestamp with the
+            // detail: the old code left detailTimes growing
+            // without bound.
+            let evicted = details.keys.first ?? ""
+            details.removeValue(forKey: evicted)
+            detailTimes.removeValue(forKey: evicted)
         }
     }
 
@@ -530,14 +541,16 @@ final class FileDoubanCache: DoubanCache {
 
     func detail(id: String) -> DoubanDetail? {
         // b49 sweep #7: detail entries expire (7 days, same as the
-        // id map) and a truncated entry is a miss — the old code
-        // returned the entry regardless of its stored `at`, so a
-        // stale or truncated detail lived until the 200-entry cap
-        // evicted it.
+        // id map). A cached entry is a completed fetch — sparse
+        // films included — so there is no emptiness check here
+        // (sweep-4 P2-52): the truncation decision is made at
+        // assemble time, where the fetch itself can be judged
+        // short. A negative age (clock skew — the stored `at`
+        // is newer than now) is clamped to 0 instead of
+        // treating a good entry as expired and deleting it.
         guard let entry = readDetails()[id] else { return nil }
-        let ageMs = Int(Date().timeIntervalSince1970 * 1000) - entry.at
-        guard ageMs >= 0, Double(ageMs) < DoubanParsers.detailTTL * 1000,
-              !DoubanParsers.detailIsEmpty(entry.detail) else {
+        let ageMs = max(0, Int(Date().timeIntervalSince1970 * 1000) - entry.at)
+        guard Double(ageMs) < DoubanParsers.detailTTL * 1000 else {
             removeDetail(id: id)
             return nil
         }
@@ -568,8 +581,8 @@ final class FileDoubanCache: DoubanCache {
         guard let entry = value as? [String: Any],
               let id = entry["id"] as? String, !id.isEmpty,
               let at = entry["at"] as? NSNumber else { return nil }
-        let ageMs = Int(Date().timeIntervalSince1970 * 1000) - at.intValue
-        if ageMs >= 0 && Double(ageMs) < DoubanParsers.idMapTTL * 1000 { return id }
+        let ageMs = max(0, Int(Date().timeIntervalSince1970 * 1000) - at.intValue)
+        if Double(ageMs) < DoubanParsers.idMapTTL * 1000 { return id }
         return nil
     }
 
@@ -921,11 +934,11 @@ final class DoubanService {
         ]
         fetchText(url: url, headers: headers, timeout: 10) { html in
             let mp = DoubanParsers.parseMPage(html)
-            self.fetchCastPhotos(id: id, abstract: abstract, base: base, year: year, poster: mp.poster, overview: mp.overview, score: abstract.score ?? mp.score, finish: finish)
+            self.fetchCastPhotos(id: id, abstract: abstract, base: base, year: year, poster: mp.poster, overview: mp.overview, score: abstract.score ?? mp.score, mobilePageFailed: html == nil, finish: finish)
         }
     }
 
-    private func fetchCastPhotos(id: String, abstract: DoubanDetail, base: String, year: String, poster: String, overview: String, score: String?, finish: @escaping (DoubanDetail?) -> Void) {
+    private func fetchCastPhotos(id: String, abstract: DoubanDetail, base: String, year: String, poster: String, overview: String, score: String?, mobilePageFailed: Bool, finish: @escaping (DoubanDetail?) -> Void) {
         // Desktop page (cast avatars) + Baike lookups in parallel;
         // a failed/slow side degrades to [:] and never kills the
         // detail. In production the desktop page is login-walled,
@@ -950,7 +963,7 @@ final class DoubanService {
         let castNames = abstract.castNames
         if castNames.isEmpty {
             group.notify(queue: .global()) {
-                self.assembleDetail(id: id, abstract: abstract, base: base, year: year, poster: poster, overview: overview, score: score, byName: desktopPhotos, finish: finish)
+                self.assembleDetail(id: id, abstract: abstract, base: base, year: year, poster: poster, overview: overview, score: score, byName: desktopPhotos, mobilePageFailed: mobilePageFailed, finish: finish)
             }
             return
         }
@@ -971,12 +984,12 @@ final class DoubanService {
             group.notify(queue: .global()) {
                 var byName = baikePhotos
                 for (name, photo) in desktopPhotos { byName[name] = photo }
-                self.assembleDetail(id: id, abstract: abstract, base: base, year: year, poster: poster, overview: overview, score: score, byName: byName, finish: finish)
+                self.assembleDetail(id: id, abstract: abstract, base: base, year: year, poster: poster, overview: overview, score: score, byName: byName, mobilePageFailed: mobilePageFailed, finish: finish)
             }
         }
     }
 
-    private func assembleDetail(id: String, abstract: DoubanDetail, base: String, year: String, poster: String, overview: String, score: String?, byName: [String: String], finish: @escaping (DoubanDetail?) -> Void) {
+    private func assembleDetail(id: String, abstract: DoubanDetail, base: String, year: String, poster: String, overview: String, score: String?, byName: [String: String], mobilePageFailed: Bool, finish: @escaping (DoubanDetail?) -> Void) {
         let castPhotos = abstract.castNames.map { byName[$0] ?? "" }
         let detail = DoubanDetail(
             id: id,
@@ -994,7 +1007,15 @@ final class DoubanService {
             castPhotos: castPhotos,
             episodes: abstract.episodes
         )
-        cache.setDetail(id: id, detail: detail)
+        // (sweep-4 P2-52) Only a fetch that was actually SHORT is
+        // left uncached: an empty detail from a failed mobile
+        // page is a truncated write, not a sparse film. A
+        // complete fetch that returns nothing usable IS cached —
+        // the film is genuinely sparse. The assembled detail is
+        // returned to the caller either way.
+        if !(DoubanParsers.detailIsEmpty(detail) && mobilePageFailed) {
+            cache.setDetail(id: id, detail: detail)
+        }
         finish(detail)
     }
 }

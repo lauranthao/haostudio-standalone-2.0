@@ -198,6 +198,18 @@ struct VideoStreamFacts: Equatable {
         (width != nil && width! >= 3840) || (height != nil && height! >= 2160)
     }
 
+    /// True when this stream's Dolby Vision profile has no HDR10
+    /// base layer — profile 5, or a DV stream whose profile the
+    /// server did not report: every bundled ffmpeg kernel (MPV /
+    /// IJK) renders it green/pink, and only AVPlayer decodes it
+    /// correctly. Profiles 7 and 8 keep an HDR10 base layer and
+    /// play correctly on the ffmpeg kernels. (sweep-4 P1-16: the
+    /// notice pill, the switch-to-system-player, and the driver's
+    /// Emby transcode redirect all key on this one predicate.)
+    var hasNoHdr10BaseLayer: Bool {
+        dolbyVision && dvProfile != 7 && dvProfile != 8
+    }
+
     var isEmpty: Bool {
         container == nil && videoCodec == nil && audioCodec == nil &&
         !dolbyVision && dvProfile == nil && width == nil &&
@@ -449,16 +461,26 @@ func videoCandidatesFor(
 
 /// 1080p ceiling for CMS (b49 sweep #25): a stream URL that
 /// names a higher resolution (2160 / 3840 / 4K / UHD as a
-/// quality token, e.g. `…_2160p.m3u8` or `…/4k/…`) exceeds the
-/// ceiling. The match is token-bounded (a separator or string
-/// edge on both sides), so a hash that merely contains `4k`
-/// does not trip it. No signal = within the ceiling.
+/// quality token) exceeds the ceiling. Only filename/segment
+/// quality tokens count (sweep-4 P2-50): the old whole-URL
+/// regex also matched a `:3840` port, a `uhd-` directory, or a
+/// `4k` slug in the path. Path segments count only when the
+/// WHOLE segment is a quality token (`/4k/index.m3u8`); the
+/// filename is quality-labelled (`…_2160p.m3u8`), so a token
+/// bounded by separators counts there. No signal = within the
+/// ceiling.
 func videoURLExceeds1080p(_ url: URL) -> Bool {
-    let s = url.absoluteString.lowercased()
+    let components = url.pathComponents.map { $0.lowercased() }
+    guard !components.isEmpty else { return false }
+    let qualityTokens: Set<String> = ["2160p", "2160", "3840", "4k", "uhd"]
+    for component in components.dropLast() where qualityTokens.contains(component) {
+        return true
+    }
+    guard let filename = components.last else { return false }
     guard let re = try? NSRegularExpression(
         pattern: "(?:^|[^a-z0-9])(2160p?|3840|4k|uhd)(?:[^a-z0-9]|$)",
         options: []) else { return false }
-    return re.firstMatch(in: s, options: [], range: NSRange(s.startIndex..., in: s)) != nil
+    return re.firstMatch(in: filename, options: [], range: NSRange(filename.startIndex..., in: filename)) != nil
 }
 
 /// Prefer ≤1080p variants, stable: candidates that do not exceed

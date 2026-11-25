@@ -94,7 +94,7 @@ final class VodDanmakuApiUrlTests: XCTestCase {
             title: "狂飙", year: "2023",
             baseUrl: "https://example.com/danmu", token: "tok9", fetcher: fetcher)
         let exp = expectation(description: "candidates")
-        client.fetchCandidates(title: "狂飙", episode: "第1集") { candidates in
+        client.fetchCandidates(title: "狂飙", episode: "第1集") { candidates, _ in
             XCTAssertEqual(candidates?.count, 1)
             exp.fulfill()
         }
@@ -111,7 +111,7 @@ final class VodDanmakuApiUrlTests: XCTestCase {
         // Empty list retries once after 2 s, then completes nil.
         let client = VodDanmakuClient(title: "狂飙", year: "2023", fetcher: fetcher)
         let exp = expectation(description: "candidates")
-        client.fetchCandidates(title: "狂飙", episode: "第1集") { _ in exp.fulfill() }
+        client.fetchCandidates(title: "狂飙", episode: "第1集") { _, _ in exp.fulfill() }
         waitForExpectations(timeout: 10)
         XCTAssertEqual(captured?.host, "danmu-api-production-60e143e3.up.railway.app")
         XCTAssertEqual(captured?.path, "/api/v2/fongmi/danmaku")

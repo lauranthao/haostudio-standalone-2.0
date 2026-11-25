@@ -67,6 +67,17 @@ final class EmbySearchViewModel: ObservableObject {
         search(lastQuery)
     }
 
+    /// Retry only the failed load-more page (sweep-4 P2-48): the
+    /// banner's retry used to re-run the whole search from page 1
+    /// and blank the loaded grid. startIndex was never advanced
+    /// past the failed page, so the same page is re-issued;
+    /// hasMore is restored first (the failure cleared it).
+    func retryLoadMore() {
+        guard !loadingMore, !lastQuery.isEmpty else { return }
+        hasMore = true
+        loadMore()
+    }
+
     /// Next server page, appended (b49 sweep #22). A failure
     /// keeps the loaded results and surfaces as a banner over
     /// them; paging ends either way for this query.
@@ -81,6 +92,7 @@ final class EmbySearchViewModel: ObservableObject {
             switch result {
             case .success(let items):
                 self.startIndex = nextStart
+                self.errorMessage = nil
                 var seen = Set(self.results.map { "\($0.sourceId ?? -1)|\($0.id)" })
                 for item in items where seen.insert("\(item.sourceId ?? -1)|\(item.id)").inserted {
                     self.results.append(item)
@@ -146,7 +158,13 @@ struct EmbySearchView: View {
                                     Text(error)
                                         .font(.haoFootnote)
                                     Spacer()
-                                    Button("重试") { viewModel.retrySearch() }
+                                    // sweep-4 P2-48: results are
+                                    // non-empty, so this error is a
+                                    // load-more failure — retry only
+                                    // that page, never the whole
+                                    // search (which would blank the
+                                    // grid).
+                                    Button("重试") { viewModel.retryLoadMore() }
                                         .font(.haoFootnote)
                                         .foregroundStyle(theme.accentText)
                                 }

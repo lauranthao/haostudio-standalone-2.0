@@ -41,5 +41,12 @@ struct DanmakuItem: Equatable {
 /// of the Flutter `vod_danmaku_client.dart`; consumed by
 /// VodDanmakuLayer (Leg A). Read-only: the app never sends danmaku.
 protocol VodDanmakuProvider {
-    func fetchDanmaku(for episode: PlayEpisode, completion: @escaping ([DanmakuItem]) -> Void)
+    /// Fetch danmaku for one episode. The Bool is `failed`:
+    /// true when the danmaku server could not be reached at
+    /// all (transport failure in either hop) — as opposed to
+    /// "this title has no danmaku", which answers [] + false.
+    /// The layer surfaces a visible failure state from it
+    /// (sweep-4 P2-9): a silent [] used to read exactly like
+    /// "no danmaku for this episode".
+    func fetchDanmaku(for episode: PlayEpisode, completion: @escaping ([DanmakuItem], Bool) -> Void)
 }

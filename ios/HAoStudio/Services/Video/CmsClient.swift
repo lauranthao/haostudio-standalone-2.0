@@ -452,6 +452,15 @@ enum VideoSourceStore {
                !decoded.isEmpty {
                 return mergeDefaults(decoded)
             }
+            // Fresh install (or wiped file): returning the
+            // defaults without recording the applied set would
+            // make the NEXT revision bump unable to tell a
+            // user-deleted default from an upstream-deleted one
+            // — a deleted default would be silently re-appended
+            // (sweep-4 P2-3). Record now, exactly like
+            // resetToDefaults does.
+            UserDefaults.standard.set(currentDefaultURLs(), forKey: appliedKey)
+            UserDefaults.standard.set(CmsClient.sourcesRevision, forKey: revisionKey)
             return CmsClient.defaultSources
         }
         return mergeDefaults(raw)
@@ -581,25 +590,66 @@ enum CmsSourceSpeedStore {
     private static var memory: [String: Double] = {
         LocalStore.loadCollection(named: collectionName, default: [:])
     }()
+    /// Serialises memory/dirty/flushWork: record() is called
+    /// from fetcher callbacks on arbitrary queues.
+    private static let lock = NSLock()
+    private static var dirty = false
+    private static var flushWork: DispatchWorkItem?
 
+    /// Record one measurement. Writes to disk are BATCHED
+    /// (sweep-4 P2-18): the old code saved the whole collection
+    /// on every fetch. A 5 s debounce flushes at most once per
+    /// burst; a kill inside the window loses only speed hints,
+    /// never user data.
     static func record(apiUrl: String, milliseconds: Double) {
         guard milliseconds.isFinite, milliseconds >= 0 else { return }
+        lock.lock()
         let old = memory[apiUrl]
         let next = old == nil ? milliseconds : old! * 0.7 + milliseconds * 0.3
         memory[apiUrl] = next
-        LocalStore.saveCollection(named: collectionName, value: memory)
+        dirty = true
+        if flushWork == nil {
+            let work = DispatchWorkItem {
+                lock.lock()
+                flushWork = nil
+                lock.unlock()
+                flush()
+            }
+            flushWork = work
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: work)
+        }
+        lock.unlock()
+    }
+
+    /// Flush pending measurements to disk now (no-op when
+    /// nothing changed). Test seam + the debounced writer above.
+    static func flush() {
+        lock.lock()
+        guard dirty else {
+            lock.unlock()
+            return
+        }
+        dirty = false
+        let snapshot = memory
+        lock.unlock()
+        LocalStore.saveCollection(named: collectionName, value: snapshot)
     }
 
     static func latency(apiUrl: String) -> Double? {
-        memory[apiUrl]
+        lock.lock()
+        defer { lock.unlock() }
+        return memory[apiUrl]
     }
 
     /// Effective order: measured latency when known, else the
     /// shipped-sort seed (`sort * 100` ms nominal).
     static func order(_ sources: [VideoSource]) -> [VideoSource] {
-        sources.sorted { a, b in
-            let ma = memory[a.apiUrl] ?? Double(a.sort) * 100
-            let mb = memory[b.apiUrl] ?? Double(b.sort) * 100
+        lock.lock()
+        let snapshot = memory
+        lock.unlock()
+        return sources.sorted { a, b in
+            let ma = snapshot[a.apiUrl] ?? Double(a.sort) * 100
+            let mb = snapshot[b.apiUrl] ?? Double(b.sort) * 100
             if ma != mb { return ma < mb }
             return a.sort < b.sort
         }
@@ -625,9 +675,25 @@ struct CmsTypeEntry {
 struct AltVideoSource: Equatable {
     let source: Int
     let vodId: String
+    /// Display name of the source (sweep-2 P1-8): the detail
+    /// page shows the alternate sources as tappable rows.
+    let name: String
 }
 
 /// By-type page result.
+///
+/// Paging model (sweep-4 P2-6/P2-12): one logical page is one
+/// 10-CMS-page WINDOW for filtered queries (the filter runs
+/// client-side, so a single CMS page would usually come back
+/// empty), and one CMS page unfiltered. A filtered page can
+/// therefore hold up to ~200 items — slicing it to 20 would
+/// silently drop the rest of the window, because the next
+/// logical page fetches the NEXT window. `total` is the
+/// window's filtered count for filtered queries (the global
+/// filtered total would need scanning every window) and the
+/// source's global total unfiltered; `pagecount` is the total
+/// number of windows (filtered) or CMS pages (unfiltered),
+/// which is what `hasMore` (page + 1 < pagecount) reads.
 struct VideoByTypeResult {
     let name: String
     let page: Int
@@ -797,12 +863,13 @@ final class CmsClient: VideoPlayURLResolver {
         return VideoDetail(item: item, lines: lines, meta: meta)
     }
 
-    /// Probe check: pass when the JSON has `list[]` or `class[]`
-    /// (or `code == 0`).
+    /// Probe check: pass only when the JSON has a NON-EMPTY
+    /// `list[]` or `class[]`. A source answering "ok, nothing"
+    /// (code 0 with an empty list) used to count as healthy and
+    /// ranked above dead sources (sweep-4 P2-17).
     static func isProbeOk(_ json: [String: Any]) -> Bool {
-        if VideoJSON.asInt(json["code"]) == 0 && json["code"] != nil { return true }
-        if json["list"] is [Any] { return true }
-        if json["class"] is [Any] { return true }
+        if let list = json["list"] as? [Any], !list.isEmpty { return true }
+        if let cls = json["class"] as? [Any], !cls.isEmpty { return true }
         return false
     }
 
@@ -899,13 +966,20 @@ final class CmsClient: VideoPlayURLResolver {
     /// Serial search over enabled sources in speed order.
     /// Page 1: 3 s per source, 15 s overall budget, sequential
     /// fallback is the loop itself (serial by design). Later
-    /// pages: 6 s overall, no fallback. Completion carries the
-    /// ranked items and whether ANY source answered at all
-    /// (false + empty = "video source unreachable").
+    /// pages fan out in PARALLEL (sweep-4 P1-22): the old 6 s
+    /// serial budget only reached ~2 of 12 sources, so titles
+    /// on later sources never appeared on page 2+. Completion
+    /// carries the ranked items and whether ANY source answered
+    /// at all (false + empty = "video source unreachable").
     func search(query: String, page: Int = 1, completion: @escaping ([VideoItem], Bool) -> Void) {
+        if page != 1 {
+            searchParallel(query: query, page: page, completion: completion)
+            return
+        }
+        let started = Date()
         var rows: [CmsSearchRow] = []
         var anyOk = false
-        let deadline = Date().addingTimeInterval(page == 1 ? 15 : 6)
+        let deadline = Date().addingTimeInterval(15)
         let perSource: TimeInterval = 3
         var index = 0
         func finish() {
@@ -918,7 +992,7 @@ final class CmsClient: VideoPlayURLResolver {
                 finish()
                 return
             }
-            if page == 1 && !rows.isEmpty {
+            if !rows.isEmpty {
                 // Early exit only when a rank-0 exact-title match
                 // is already in hand (b49 sweep #4): stopping at
                 // 40 deduped items regardless of match quality
@@ -928,6 +1002,17 @@ final class CmsClient: VideoPlayURLResolver {
                 let ranked = CmsClient.dedupeAndRankSearch(rows, query: query)
                 let qn = videoQueryParts(query).qn
                 if ranked.contains(where: { videoNormTitle($0.title) == qn }) {
+                    finish()
+                    return
+                }
+                // (sweep-4 P1-28) Time-based early exit: a full
+                // ranked page in hand after 2 s is enough — keep
+                // scanning only while the page is thin or the
+                // budget is fresh. Without this a non-exact query
+                // spins to the full 15 s budget with zero
+                // incremental results on screen (the search page
+                // shows only a spinner until finish()).
+                if ranked.count >= 20, Date().timeIntervalSince(started) > 2 {
                     finish()
                     return
                 }
@@ -941,6 +1026,45 @@ final class CmsClient: VideoPlayURLResolver {
             }
         }
         step()
+    }
+
+    /// Parallel search for page > 1: every enabled source at
+    /// once (3 s each), 15 s overall budget — the same budget
+    /// page 1 gets. Results are ranked the same way; dedupe
+    /// keeps the first-seen item per title|year (completion
+    /// order is racy, but the exact-title replacement rule
+    /// makes the outcome deterministic where it matters).
+    private func searchParallel(query: String, page: Int, completion: @escaping ([VideoItem], Bool) -> Void) {
+        var rows: [CmsSearchRow] = []
+        var anyOk = false
+        let lock = NSLock()
+        var finished = false
+        let group = DispatchGroup()
+        func finish() {
+            lock.lock()
+            guard !finished else {
+                lock.unlock()
+                return
+            }
+            finished = true
+            let capturedRows = rows
+            let capturedOk = anyOk
+            lock.unlock()
+            let ranked = CmsClient.dedupeAndRankSearch(capturedRows, query: query)
+            DispatchQueue.main.async { completion(ranked, capturedOk) }
+        }
+        for source in sources {
+            group.enter()
+            searchOne(source: source, query: query, page: page, timeout: 3) { found, answered in
+                lock.lock()
+                if answered { anyOk = true }
+                rows.append(contentsOf: found)
+                lock.unlock()
+                group.leave()
+            }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 15) { finish() }
+        group.notify(queue: .global()) { finish() }
     }
 
     // MARK: - Detail
@@ -1001,7 +1125,7 @@ final class CmsClient: VideoPlayURLResolver {
                     let name = VideoJSON.asString(raw["vod_name"])
                     let y = VideoJSON.asString(raw["vod_year"])
                     if videoNormTitle(name) == qn && (year.isEmpty || y.isEmpty || y == year) {
-                        out.append(AltVideoSource(source: source.id, vodId: VideoJSON.asString(raw["vod_id"])))
+                        out.append(AltVideoSource(source: source.id, vodId: VideoJSON.asString(raw["vod_id"]), name: source.name))
                         break
                     }
                 }
@@ -1027,10 +1151,20 @@ final class CmsClient: VideoPlayURLResolver {
     /// other sources become candidates). 10-min cache; a partial
     /// table (fewer than half the play sources answered) is NOT
     /// cached. Concurrent callers share one in-flight fetch.
-    func typeMap(completion: @escaping ([String: CmsTypeEntry]) -> Void) {
+    /// `timeout` is the overall cap (default 6 s); home() passes
+    /// 3 s (sweep-4 P2-7) so its 9 s row budget is not mostly
+    /// eaten by the map fetch.
+    /// The type map: type_name → entry, from every play source's
+    /// `?ac=list` class table (sweep-2 P1-10: the Bool is `anyOk`
+    /// — true when at least one source answered at all. A dead
+    /// CMS used to collapse to an empty map with no failure
+    /// signal, so the browse page read it as "this category has
+    /// no content". An empty map with anyOk means the sources
+    /// answered but list no types — genuinely empty.)
+    func typeMap(timeout: TimeInterval = 6, completion: @escaping ([String: CmsTypeEntry], Bool) -> Void) {
         if let cached = typeMapCache, let at = typeMapAt,
            Date().timeIntervalSince(at) < 600 {
-            completion(cached)
+            completion(cached, true)
             return
         }
         typeMapLock.lock()
@@ -1056,12 +1190,12 @@ final class CmsClient: VideoPlayURLResolver {
                 group.leave()
             }
         }
-        // 6 s overall cap: a partial map is fine, home rows come
+        // Overall cap: a partial map is fine, home rows come
         // from the types that did answer.
         let timeoutWork = DispatchWorkItem { [weak self] in
             self?.finishTypeMap(playSources: playSources)
         }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 6, execute: timeoutWork)
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutWork)
         group.notify(queue: .global()) { [weak self] in
             timeoutWork.cancel()
             self?.finishTypeMap(playSources: playSources)
@@ -1100,8 +1234,12 @@ final class CmsClient: VideoPlayURLResolver {
             typeMapCache = map
             typeMapAt = Date()
         }
+        // sweep-2 P1-10: anyOk is "a source answered", not "the
+        // map is non-empty" — a source can answer with no class
+        // table, and that is genuinely empty, not a dead source.
+        let anyOk = !tables.isEmpty
         DispatchQueue.main.async {
-            for completion in pending { completion(map) }
+            for completion in pending { completion(map, anyOk) }
         }
     }
 
@@ -1210,6 +1348,59 @@ final class CmsClient: VideoPlayURLResolver {
         step()
     }
 
+    /// Filtered parent window: every child × every CMS page in
+    /// the 10-page window, in parallel (10 in flight, 5 s per
+    /// fetch, 12 s overall bound). Results stay grouped per
+    /// child for the round-robin interleave. Nil pages = no
+    /// fetch answered at all (the caller falls through to the
+    /// next candidate source); an empty-but-answered window
+    /// returns an empty list with the max pagecount seen.
+    private func fetchParentWindow(source: VideoSource, childTypeIds: [String], page: Int, extraQuery: String, completion: @escaping ([(rows: [CmsSearchRow], total: Int, pagecount: Int)]?, Int) -> Void) {
+        let window = 10
+        let cmsPages = (0..<window).map { page * window + 1 + $0 }
+        var perChild: [[(rows: [CmsSearchRow], total: Int, pagecount: Int)]] = Array(repeating: [], count: childTypeIds.count)
+        var maxPagecount = 1
+        var answered = false
+        let lock = NSLock()
+        var finished = false
+        let group = DispatchGroup()
+        let semaphore = DispatchSemaphore(value: 10)
+        func finish() {
+            lock.lock()
+            guard !finished else {
+                lock.unlock()
+                return
+            }
+            finished = true
+            let pages = perChild.flatMap { $0 }
+            let ok = answered
+            let maxPc = maxPagecount
+            lock.unlock()
+            completion(ok ? pages : nil, maxPc)
+        }
+        for (ci, childId) in childTypeIds.enumerated() {
+            for cmsPage in cmsPages {
+                group.enter()
+                DispatchQueue.global().async {
+                    semaphore.wait()
+                    self.fetchTypePage(source: source, typeId: childId, page: cmsPage, extraQuery: extraQuery) { result in
+                        if let result = result {
+                            lock.lock()
+                            perChild[ci].append(result)
+                            maxPagecount = max(maxPagecount, result.pagecount)
+                            answered = true
+                            lock.unlock()
+                        }
+                        semaphore.signal()
+                        group.leave()
+                    }
+                }
+            }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 12) { finish() }
+        group.notify(queue: .global()) { finish() }
+    }
+
     /// Fetch one page per child type id, at most 5 in flight at
     /// once. Results stay in child order.
     private func fetchChildPages(source: VideoSource, childTypeIds: [String], page: Int, completion: @escaping ([(rows: [CmsSearchRow], total: Int, pagecount: Int)?]) -> Void) {
@@ -1243,6 +1434,10 @@ final class CmsClient: VideoPlayURLResolver {
     /// First 12 types (priority order), each raced against its own
     /// 8 s timeout; keep rows with items; sort rows by count desc,
     /// take top 10. Total budget 9 s. 60 s repeat-call throttle.
+    /// The type map gets a 3 s cap here (sweep-4 P2-7): at the
+    /// old 6 s cap the map ate most of the 9 s budget and the 12
+    /// row fetches raced against ~3 s, so a slow network showed
+    /// few/zero rows. Rows keep their own budget below.
     func home(completion: @escaping ([VideoHomeRow]) -> Void) {
         let key = sources.map { $0.apiUrl }.joined(separator: ",")
         if let cached = homeCache, homeCacheKey == key, let at = homeCacheAt,
@@ -1251,7 +1446,7 @@ final class CmsClient: VideoPlayURLResolver {
             return
         }
         let started = Date()
-        typeMap { map in
+        typeMap(timeout: 3) { map, _ in
             var names = Array(map.keys)
             names.sort { a, b in
                 let ia = kVideoTypePriority.firstIndex(of: a) ?? -1
@@ -1278,9 +1473,14 @@ final class CmsClient: VideoPlayURLResolver {
                 finished = true
                 let rows = got.sorted { (counts[$0.id] ?? 0) > (counts[$1.id] ?? 0) }
                 let top = Array(rows.prefix(10))
-                self.homeCache = top
-                self.homeCacheAt = Date()
-                self.homeCacheKey = key
+                // (sweep-4 P2-14) Only cache a non-empty result:
+                // a flaky load used to poison the home screen
+                // with an empty cache for 60 s.
+                if !top.isEmpty {
+                    self.homeCache = top
+                    self.homeCacheAt = Date()
+                    self.homeCacheKey = key
+                }
                 DispatchQueue.main.async { completion(top) }
             }
             for name in names.prefix(12) {
@@ -1372,6 +1572,25 @@ final class CmsClient: VideoPlayURLResolver {
         }
     }
 
+    /// Server-side pre-filter for by-type fetches (the real
+    /// filter is client-side — filterByTypeItems — because the
+    /// region lives in `vod_area`, which the item does not
+    /// carry). Shared by the leaf and parent paths so the two
+    /// can never disagree about which params are sent.
+    static func typeFilterQuery(area: String, year: String, by: String) -> String {
+        var extraQuery = ""
+        if area != "all" && area != "other" {
+            extraQuery += "&area=\((area.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? area))"
+        }
+        if year != "all" && year != "earlier" {
+            extraQuery += "&year=\((year.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? year))"
+        }
+        if by == "hits" || by == "score" {
+            extraQuery += "&by=\(by)"
+        }
+        return extraQuery
+    }
+
     private func byLeafType(name: String, entry: CmsTypeEntry, page: Int, area: String, year: String, by: String, completion: @escaping (VideoByTypeResult?) -> Void) {
         let filtered = area != "all" || year != "all"
         let window = 10
@@ -1401,16 +1620,7 @@ final class CmsClient: VideoPlayURLResolver {
             // -9...0 for page 0 — this overload had no callers, so
             // nothing ever caught it (build 36 item 18).
             let pagesToFetch = filtered ? (0..<window).map { page * window + 1 + $0 } : [page + 1]
-            var extraQuery = ""
-            if area != "all" && area != "other" {
-                extraQuery += "&area=\((area.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? area))"
-            }
-            if year != "all" && year != "earlier" {
-                extraQuery += "&year=\((year.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? year))"
-            }
-            if by == "hits" || by == "score" {
-                extraQuery += "&by=\(by)"
-            }
+            let extraQuery = CmsClient.typeFilterQuery(area: area, year: year, by: by)
             let group = DispatchGroup()
             var raws: [[String: Any]?] = Array(repeating: nil, count: pagesToFetch.count)
             let lock = NSLock()
@@ -1461,6 +1671,7 @@ final class CmsClient: VideoPlayURLResolver {
         // — capping at 20 would silently drop items the old path
         // showed.
         let filtered = area != "all" || year != "all"
+        let window = 10
         let attempts = Array(([entry] + entry.candidates).prefix(4))
         var anyOk = false
         var bestPagecount = 1
@@ -1481,6 +1692,34 @@ final class CmsClient: VideoPlayURLResolver {
                 return
             }
             if target.isParent {
+                if filtered {
+                    // Filtered parents search a 10-CMS-page
+                    // window per child, like the leaf path
+                    // (sweep-4 P2-13): the old single page per
+                    // child made area/year filters on parent
+                    // categories search thinly.
+                    fetchParentWindow(
+                        source: source, childTypeIds: target.childTypeIds, page: page,
+                        extraQuery: CmsClient.typeFilterQuery(area: area, year: year, by: by)
+                    ) { pages, maxPagecount in
+                        guard let pages = pages, !pages.isEmpty else {
+                            step()
+                            return
+                        }
+                        anyOk = true
+                        let pagecount = max(1, Int(ceil(Double(maxPagecount) / Double(window))))
+                        bestPagecount = max(bestPagecount, pagecount)
+                        let rows = CmsClient.interleaveTypeRows(pages.map { $0.rows })
+                        if rows.isEmpty {
+                            step()
+                            return
+                        }
+                        let items = CmsClient.filterByTypeItems(rows, area: area, year: year, by: by)
+                        let result = VideoByTypeResult(name: name, page: page, pagecount: pagecount, total: items.count, items: items)
+                        DispatchQueue.main.async { completion(result) }
+                    }
+                    return
+                }
                 fetchChildPages(source: source, childTypeIds: target.childTypeIds, page: page + 1) { fetched in
                     let pages = fetched.compactMap { $0 }
                     if pages.isEmpty {
@@ -1657,12 +1896,20 @@ final class CmsClient: VideoPlayURLResolver {
     // MARK: - VideoPlayURLResolver
 
     /// Resolve a playable URL for one episode on one line.
-    /// Candidates: the episode at the same index on every line,
-    /// requested line first, then the other lines in parse order
-    /// (m3u8 lines first — the parse already orders them). URLs in
-    /// `excluding` are never handed out twice. The FIRST
+    /// Candidates: the episode on the requested line first, then
+    /// the SAME episode (matched by NAME) on every other line.
+    /// URLs in `excluding` are never handed out twice. The FIRST
     /// non-excluded candidate wins; nil only when every line's
     /// episode is excluded or missing.
+    ///
+    /// Cross-line fallback matches by episode NAME, not index
+    /// (sweep-4 P1-7): lines carry different episode counts /
+    /// orders, so the same index on another line can be a
+    /// different episode — the player would silently play the
+    /// wrong one. Same-name lines are no longer skipped either
+    /// (sweep-4 P2-15): two lines sharing a name used to lose
+    /// the second as a fallback candidate — candidates are
+    /// deduped by URL instead, keeping first-seen order.
     ///
     /// Second-level fetch (b38 item 7 §4): some sources (ids 1/12/14
     /// — 红牛/金鹰/厂长 — and /share/ pages) return an HTML player
@@ -1678,13 +1925,30 @@ final class CmsClient: VideoPlayURLResolver {
     /// starting with #EXTM3U) means the URL was a stream behind an
     /// odd path after all, so the original URL is handed out.
     func resolvePlayURL(detail: VideoDetail, episode: PlayEpisode, line: PlayLine, excluding: [URL], completion: @escaping (URL?) -> Void) {
+        resolvePlayURLWithKind(detail: detail, episode: episode, line: line, excluding: excluding) { url, _ in
+            completion(url)
+        }
+    }
+
+    /// Same resolution as `resolvePlayURL`, plus whether the
+    /// handed-out URL is an HLS playlist (sweep-4 P2-49): the
+    /// download gate used to test only the `.m3u8` suffix, so an
+    /// extension-less HLS URL (a playlist behind an odd path,
+    /// detected here by its #EXTM3U body) was treated as a
+    /// downloadable file. The flag comes from the resolver's own
+    /// evidence — the suffix, or the fetched body — never from a
+    /// second probe. Callers that only play keep using
+    /// `resolvePlayURL` (the `VideoPlayURLResolver` seam is
+    /// unchanged).
+    func resolvePlayURLWithKind(detail: VideoDetail, episode: PlayEpisode, line: PlayLine, excluding: [URL], completion: @escaping (URL?, Bool) -> Void) {
         let excluded = Set(excluding.map { $0.absoluteString })
         var candidates: [URL] = []
         if let url = line.episode(at: episode.index)?.url {
             candidates.append(url)
         }
-        for other in detail.lines where other.name != line.name {
-            if let url = other.episode(at: episode.index)?.url {
+        for other in detail.lines {
+            if let otherEpisode = other.episodes.first(where: { $0.name == episode.name }),
+               let url = otherEpisode.url {
                 candidates.append(url)
             }
         }
@@ -1693,6 +1957,12 @@ final class CmsClient: VideoPlayURLResolver {
         if candidates.isEmpty, let url = episode.url {
             candidates.append(url)
         }
+        // Dedupe by URL: the requested line is also in
+        // detail.lines (and same-name lines can now contribute
+        // the same URL), so the same stream must not appear
+        // twice in the candidate list.
+        var seenURLs: Set<String> = []
+        candidates = candidates.filter { seenURLs.insert($0.absoluteString).inserted }
         // 1080p ceiling (b49 sweep #25): when the lines offer the
         // same episode at several resolutions, try the ≤1080p
         // variants first; an over-ceiling URL is still tried when
@@ -1704,10 +1974,14 @@ final class CmsClient: VideoPlayURLResolver {
     /// Walk the candidates in order, resolving each one: a direct
     /// stream is handed out immediately; a page-like URL gets one
     /// second-level fetch (see resolvePlayURL). Nil when the list
-    /// is exhausted.
-    private func resolveNextCandidate(candidates: [URL], index: Int, excluded: Set<String>, completion: @escaping (URL?) -> Void) {
+    /// is exhausted. The Bool is `isHLS`: true when the URL is a
+    /// playlist — by its `.m3u8` suffix, or by a fetched body
+    /// starting with #EXTM3U (sweep-4 P2-49). A 200 with binary
+    /// bytes (body decodes to nil) is a media file, not a
+    /// playlist — a text playlist would have decoded.
+    private func resolveNextCandidate(candidates: [URL], index: Int, excluded: Set<String>, completion: @escaping (URL?, Bool) -> Void) {
         guard index < candidates.count else {
-            completion(nil)
+            completion(nil, false)
             return
         }
         let url = candidates[index]
@@ -1716,29 +1990,29 @@ final class CmsClient: VideoPlayURLResolver {
             return
         }
         if Self.isDirectStreamURL(url) {
-            completion(url)
+            completion(url, url.pathExtension.lowercased() == "m3u8")
             return
         }
         textFetcher(url, ["User-Agent": Self.userAgent], 5) { [weak self] status, body in
             guard let self else {
-                completion(nil)
+                completion(nil, false)
                 return
             }
             // A stream behind an odd path: binary bytes decode as
             // nil, a playlist body starts with #EXTM3U — hand out
             // the original URL, not the next candidate.
             if status == 200, body == nil {
-                completion(url)
+                completion(url, false)
                 return
             }
             if status == 200, let body = body, body.contains("#EXTM3U") {
-                completion(url)
+                completion(url, true)
                 return
             }
             if status == 200, let body = body,
                let stream = Self.extractEmbeddedStreamURL(html: body, pageURL: url),
                !excluded.contains(stream.absoluteString) {
-                completion(stream)
+                completion(stream, stream.pathExtension.lowercased() == "m3u8")
                 return
             }
             self.resolveNextCandidate(candidates: candidates, index: index + 1, excluded: excluded, completion: completion)
@@ -1746,11 +2020,14 @@ final class CmsClient: VideoPlayURLResolver {
     }
 
     /// True when the URL is already a stream by its path extension
-    /// (.m3u8/.mp4/.flv/.mkv/.mov/.m4v/.ts/.webm, case-insensitive).
+    /// (.m3u8/.mp4/.flv/.mkv/.mov/.m4v/.webm, case-insensitive).
     /// Anything else (no extension, .html, /play/<id>, /share/…)
     /// is treated as a play page and gets the second-level fetch.
+    /// NOTE: `.ts` is deliberately NOT in the list (sweep-4
+    /// P2-16): a lone .ts segment is a few seconds of video, not
+    /// a stream — handing it out played a clip and then stopped.
     static func isDirectStreamURL(_ url: URL) -> Bool {
-        ["m3u8", "mp4", "flv", "mkv", "mov", "m4v", "ts", "webm"]
+        ["m3u8", "mp4", "flv", "mkv", "mov", "m4v", "webm"]
             .contains(url.pathExtension.lowercased())
     }
 

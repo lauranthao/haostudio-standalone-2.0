@@ -147,9 +147,12 @@ struct VideoPosterCard: View {
     }
 }
 
-/// A poster grid that fits three columns with the card's own
-/// metrics (never a hardcoded child aspect ratio elsewhere).
-/// `isEmby` forwards to every card (Emby token header loading).
+/// A poster grid with the card's own metrics (never a hardcoded
+/// child aspect ratio elsewhere). The column count follows the
+/// container width (sweep-4 B13): 3 on phones, 4 on mid widths,
+/// 5 on wide iPad landscape — so iPad cards stay near phone size
+/// instead of stretching to ~500pt. `isEmby` forwards to every
+/// card (Emby token header loading).
 /// `watchedKeys` defaults to the store's watched set, so every
 /// grid shows the same "already watched" checkmark the home rows
 /// show (callers with a live list pass their own set instead).
@@ -162,11 +165,19 @@ struct VideoPosterGrid: View {
     var isEmby: Bool = false
     var onTap: (VideoItem) -> Void
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
-    ]
+    /// Width of the grid's container, measured on layout (0 until
+    /// the first pass — 3 columns, the phone layout). The grid's
+    /// width is set by its parent, never by the column count, so
+    /// writing it back cannot loop.
+    @State private var containerWidth: CGFloat = 0
+
+    private var columns: [GridItem] {
+        let count: Int
+        if containerWidth >= 900 { count = 5 }
+        else if containerWidth >= 600 { count = 4 }
+        else { count = 3 }
+        return Array(repeating: GridItem(.flexible(), spacing: 12), count: count)
+    }
 
     var body: some View {
         LazyVGrid(columns: columns, spacing: 20) {
@@ -180,5 +191,14 @@ struct VideoPosterGrid: View {
                 )
             }
         }
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { containerWidth = geo.size.width }
+                    .onChange(of: geo.size.width) { _, width in
+                        containerWidth = width
+                    }
+            }
+        )
     }
 }

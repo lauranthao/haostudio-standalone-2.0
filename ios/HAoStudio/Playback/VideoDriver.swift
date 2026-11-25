@@ -199,10 +199,12 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     /// tests inject a fake backend.
     var makeBackend: (VideoEngine) -> VideoPlayerBackend = { PlayerKernel.makeBackend(engine: $0) }
 
-    /// Auto-advance to the next episode in the same line when one
-    /// ends. Default on (Flutter behaviour); C leg binds it to the
-    /// setting when the settings UI lands.
-    var autoAdvanceToNextEpisode = true
+    /// Auto-advance is gated by the stored
+    /// `hao_video_auto_next` setting alone (read inline at both
+    /// advance sites). The old `autoAdvanceToNextEpisode` var
+    /// (sweep-4 P2-54) was written by nothing and always true —
+    /// a dead switch shadowing the real setting — so it is
+    /// deleted rather than wired.
 
     /// Once-per-episode guard for the driver's near-end advance
     /// (b49 sweep #20): the driver owns auto-advance outright
@@ -304,6 +306,23 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     private var fellBackForSoftwareDecode = false
 
     private var openTimeoutWork: DispatchWorkItem?
+    /// Background task spanning one open request (resolve +
+    /// open), same shape as NativeMusicPlayer's
+    /// switchBackgroundTask (b44): without it the open's
+    /// main-queue timeouts freeze while the app is suspended and
+    /// fire the instant it returns, killing a healthy open — and
+    /// a resolve that finishes while suspended auto-starts the
+    /// open on unlock. Begun in startNewPlayback, ended at every
+    /// terminal point of the request (success, failure,
+    /// supersede, stop, release). The expiration handler fails
+    /// the pending request now instead of leaving it hung.
+    private var openBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+    /// Interruption observer token (sweep-2 P1-6) + whether
+    /// playback was live when the interruption began. Stored,
+    /// not discarded: a block-based observer dies the moment its
+    /// token is dropped (music VM lesson, b49 sweep-4).
+    private var interruptionObserver: NSObjectProtocol?
+    private var wasPlayingBeforeInterruption: Bool = false
     private var positionTimer: Timer?
     private var fpsSampler = VideoFpsSampler()
     private var lastFps: Double = 0
@@ -385,15 +404,97 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             guard let self = self else { return }
             self.embyReporter.noteStopped(positionSeconds: self.position)
         }
+        // (sweep-2 P1-6) Audio-session interruption: a phone
+        // call / Siri must pause VOD like it pauses music, and
+        // resume afterwards when the system says so. AVPlayer
+        // auto-pauses but never auto-resumes; MPV/IJK do not
+        // even pause — the driver pauses + resumes explicitly.
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] note in self?.handleInterruption(note) }
     }
 
     deinit {
         positionTimer?.invalidate()
         openTimeoutWork?.cancel()
+        endOpenBackgroundTask()
         fpsSampler.stop()
         backend?.shutdown()
         if let observer = embyConfigChangedObserver {
             NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = interruptionObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    // MARK: - Interruption + open background task
+
+    /// Mirror of NativeMusicPlayer.handleInterruption: pause on
+    /// `.began` (remembering that playback was live), resume on
+    /// `.ended` only when the system says `.shouldResume`.
+    private func handleInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeRaw = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeRaw) else { return }
+        switch type {
+        case .began:
+            guard isPlaying else { return }
+            wasPlayingBeforeInterruption = true
+            pause()
+        case .ended:
+            guard wasPlayingBeforeInterruption else { return }
+            wasPlayingBeforeInterruption = false
+            if let optionsRaw = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
+                let options = AVAudioSession.InterruptionOptions(rawValue: optionsRaw)
+                if options.contains(.shouldResume) { resume() }
+            }
+        @unknown default:
+            break
+        }
+    }
+
+    /// Begin the background task that keeps one open request
+    /// alive in background (sweep-2 P2-18 / sweep-4 P1-32).
+    /// Ends any previous task first (one request at a time).
+    /// No-op when tasks are unavailable (beginBackgroundTask
+    /// returns .invalid) — the open timeouts still bound the
+    /// request, they just freeze while suspended.
+    private func beginOpenBackgroundTask() {
+        endOpenBackgroundTask()
+        openBackgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
+            self?.handleOpenBackgroundTaskExpired()
+        }
+    }
+
+    private func endOpenBackgroundTask() {
+        guard openBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(openBackgroundTask)
+        openBackgroundTask = .invalid
+    }
+
+    /// The system ran out of background time before the open
+    /// settled: fail the pending request now (on main) instead
+    /// of leaving it hung until the frozen timeout fires on
+    /// foreground return. The generation bump supersedes the
+    /// in-flight resolve/open so its late completion drops
+    /// instead of retrying a request that already failed.
+    private func handleOpenBackgroundTaskExpired() {
+        ensureMain {
+            self.endOpenBackgroundTask()
+            guard let item = self.pendingItem else { return }
+            self.pendingItem = nil
+            _ = self.nextGeneration()
+            self.openTimeoutWork?.cancel()
+            self.openTimeoutWork = nil
+            self.activeLadder = nil
+            self.backend?.shutdown()
+            self.backend = nil
+            self.isLoading = false
+            self.playRequested = false
+            self.recomputePlayingState()
+            self.recordFailure(error: .timeout, hadURL: self.currentURL != nil)
+            self.onEpisodeFailed?(item, .timeout)
         }
     }
 
@@ -610,6 +711,10 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
     /// unchanged but the line is new).
     private func startNewPlayback(item: PlaybackItem) {
         self.stopBackendForNewRequest()
+        // (sweep-2 P2-18) The resolve + open span a background
+        // task, so locking the phone mid-resolve cannot freeze
+        // the open's timeouts or auto-start it on unlock.
+        self.beginOpenBackgroundTask()
         // #3: one token per request. Two rapid line switches re-open
         // the SAME episode id (switchLine / reopen*), so the old
         // pendingItem?.id check cannot tell the resolves apart —
@@ -638,6 +743,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                 guard let url = url else {
                     self.isLoading = false
                     self.pendingItem = nil
+                    self.endOpenBackgroundTask()
                     self.recordFailure(error: .noPlayableURL, hadURL: false)
                     self.onEpisodeFailed?(item, .noPlayableURL)
                     return
@@ -648,6 +754,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         if self.resolveURL == nil {
             self.isLoading = false
             self.pendingItem = nil
+            self.endOpenBackgroundTask()
             self.recordFailure(error: .noPlayableURL, hadURL: false)
             self.onEpisodeFailed?(item, .noPlayableURL)
         }
@@ -707,6 +814,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
                 case .failure(let transcodeError):
                     self.isLoading = false
                     self.pendingItem = nil
+                    self.endOpenBackgroundTask()
                     self.recordFailure(error: transcodeError, hadURL: true)
                     self.onEpisodeFailed?(item, transcodeError)
                 }
@@ -715,6 +823,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         }
         isLoading = false
         pendingItem = nil
+        endOpenBackgroundTask()
         recordFailure(error: error, hadURL: true)
         onEpisodeFailed?(item, error)
     }
@@ -768,7 +877,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             // P5 in MKV has no detection and no transcode server).
             if !self.transcodeAttemptedForRequest,
                let facts = VideoStreamFacts.parse(url: url),
-               facts.dolbyVision, facts.dvProfile != 7, facts.dvProfile != 8,
+               facts.hasNoHdr10BaseLayer,
                !PlayerKernel.candidatesFor(url: url, dvDowngradeToHdr: self.dvP8Downgrade).contains(.avplayer),
                let transcodeURL = EmbyClient.transcodedHlsUrl(fromStreamUrl: url.absoluteString) {
                 self.transcodeAttemptedForRequest = true
@@ -1139,9 +1248,18 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         if startPosition > 0 {
             let target = startPosition
             startPosition = 0
+            // (sweep-4 P1-4) Capture the generation + item: a
+            // seek that completes after the episode was replaced
+            // must not set this episode's failed-resume floor or
+            // overwrite its position. Without the guard, switching
+            // episodes while A's seek is in flight poisons B.
+            let seekGen = gen
+            let seekItemId = item.id
             backend.seek(to: target) { [weak self] ok in
                 guard let self = self else { return }
                 self.ensureMain {
+                    guard seekGen == self.generation,
+                          self.currentEpisode?.id == seekItemId else { return }
                     if ok {
                         self.failedResumeTarget = nil
                     } else {
@@ -1153,6 +1271,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         }
         recomputePlayingState()
         finish(.success(()))
+        endOpenBackgroundTask()
         onEpisodeStarted?(item)
         // Emby (build 36, item 13): report playback start to the
         // server. Only an Emby stream URL yields an id — CMS
@@ -1552,6 +1671,61 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         return true
     }
 
+    /// Whether the current stream can be switched to the system
+    /// player (AVPlayer) to escape wrong Dolby Vision colours
+    /// (sweep-4 P1-16): a known DV-no-base-layer stream (profile 5,
+    /// or unknown profile) playing on an ffmpeg kernel, with an
+    /// AVPlayer candidate remaining once MPV + IJK are excluded.
+    /// Pure guard, no side effects — the player view keys the
+    /// switch button on this so it never renders a dead control:
+    /// an MKV whose Emby transcode failed has no AVPlayer
+    /// candidate, so the notice stands alone there.
+    func canSwitchToSystemPlayerForDolbyVision() -> Bool {
+        guard let url = currentURL,
+              let engine = currentEngine, engine != .avplayer,
+              let facts = currentURLFacts(), facts.hasNoHdr10BaseLayer else {
+            return false
+        }
+        return PlayerKernel.candidatesFor(
+            url: url,
+            hasAssSubtitles: facts.hasAssSubtitles,
+            hasMultipleAudioTracks: facts.hasMultipleAudioTracks,
+            hasExternalSubtitles: facts.hasExternalSubtitles,
+            dvDowngradeToHdr: dvP8Downgrade,
+            excluding: [.mpv, .ijk]).contains(.avplayer)
+    }
+
+    /// User-triggered escape from a Dolby Vision profile 5 stream
+    /// playing green/pink on an ffmpeg kernel (sweep-4 P1-16): P5
+    /// has no HDR10 base layer, so MPV/IJK cannot render it —
+    /// only AVPlayer decodes it correctly. Re-opens the same URL
+    /// at the current position with MPV + IJK excluded, so the
+    /// ladder lands on AVPlayer — the same mechanism as the
+    /// mid-play engine fallback above, but user-triggered instead
+    /// of failure-triggered (it does not consume
+    /// `midPlayFallbackUsed`: a later real failure still deserves
+    /// its automatic fallback). Returns false when nothing can
+    /// change; a failed switch reports through the open's own
+    /// failure path. ASS-subtitled P5 trades subtitles for correct
+    /// colours on the switch (only MPV renders ASS) — the user's
+    /// tap, not an automatic choice.
+    @discardableResult
+    func switchToSystemPlayerForDolbyVision() -> Bool {
+        guard let item = currentEpisode, let url = currentURL,
+              canSwitchToSystemPlayerForDolbyVision() else {
+            return false
+        }
+        startPosition = max(0, position)
+        open(item: item, url: url, excludingEngines: [.mpv, .ijk]) { [weak self] result in
+            guard let self = self else { return }
+            if case .failure(let error) = result {
+                self.recordFailure(error: error, hadURL: true)
+                self.onEpisodeFailed?(item, error)
+            }
+        }
+        return true
+    }
+
     /// Stop everything and clear the current episode. Saves the
     /// breakpoint first (a stop is never a lost resume). The
     /// coordinator clears `currentItem` alongside; this driver
@@ -1564,6 +1738,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             // (final progress + stopped) before the position is
             // cleared below.
             self.embyReporter.noteStopped(positionSeconds: self.position)
+            self.endOpenBackgroundTask()
             self.activeLadder = nil
             self.openTimeoutWork?.cancel()
             self.openTimeoutWork = nil
@@ -1623,6 +1798,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             // Emby (build 36, item 13): same session end as
             // stop() — the player page calls this on exit.
             self.embyReporter.noteStopped(positionSeconds: self.position)
+            self.endOpenBackgroundTask()
             self.activeLadder = nil
             self.openTimeoutWork?.cancel()
             self.openTimeoutWork = nil
@@ -1795,7 +1971,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         // model's poll-tick advance, while a natural end
         // (.finished) still advanced here regardless of the switch.
         let autoNextEnabled = defaults.object(forKey: SettingsStore.autoNextEpisodeKey) as? Bool ?? true
-        if autoAdvanceToNextEpisode, autoNextEnabled,
+        if autoNextEnabled,
            let line = currentLine,
            line.episode(at: currentEpisodeIndex + 1) != nil {
             _ = playEpisode(at: currentEpisodeIndex + 1)
@@ -1882,7 +2058,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         // advance would actually happen (auto-next on + a next
         // episode exists); with auto-next off, playback runs to
         // the real end and .finished / .atEnd owns the stop.
-        if isPlaying, autoAdvanceToNextEpisode,
+        if isPlaying,
            defaults.object(forKey: SettingsStore.autoNextEpisodeKey) as? Bool ?? true,
            duration > 0, position >= duration - 1.0, !didAutoAdvanceNearEnd,
            let line = currentLine,
