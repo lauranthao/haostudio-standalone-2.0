@@ -25,7 +25,10 @@ struct VideoFavsView: View {
                     VideoPosterGrid(items: items) { item in
                         selectedItem = item
                     }
-                    .padding(.horizontal, 16)
+                    // b49fix19 P2-10: was a literal 16 — every
+                    // other pushed page uses pushedPageMargin
+                    // (20) for this grid.
+                    .padding(.horizontal, HaoLayout.pushedPageMargin)
                     .padding(.top, 12)
                     Spacer(minLength: 16)
                 }

@@ -4,7 +4,7 @@
 // with per-key verification, corrupt snapshot skipped, bad type
 // skips only the bad key, write failure rolls back in full, repeat
 // migration is idempotent, backup JSON imports as a merge, and the
-// mapping table keeps its shape (112 named keys, 3 prefix families).
+// mapping table keeps its shape (117 named keys, 3 prefix families).
 // Keychain round-trip lives in KeychainStoreTests; the Emby token
 // split (file without the key, key in the Keychain) is covered there
 // too, because a CI runner without keychain access must skip it
@@ -270,8 +270,8 @@ final class MigrationStoreTests: XCTestCase {
     // MARK: - Mapping table shape
 
     func testMappingTableShape() {
-        XCTAssertEqual(MigrationStore.mappings.count, 112)
-        XCTAssertEqual(Set(MigrationStore.mappings.map { $0.key }).count, 112)
+        XCTAssertEqual(MigrationStore.mappings.count, 117)
+        XCTAssertEqual(Set(MigrationStore.mappings.map { $0.key }).count, 117)
         XCTAssertEqual(MigrationStore.prefixRules.count, 3)
         XCTAssertEqual(MigrationStore.ignoredPrefixes, ["hao_play_url_cache:"])
         XCTAssertNotNil(MigrationStore.mapping(for: "hao_emby_config"))
@@ -316,7 +316,7 @@ final class MigrationStoreTests: XCTestCase {
 
     func testRouteBResumeDictMergesAndListShapeSkips() {
         // Dict shape (the real Flutter shape,
-        // docs/storage-mapping.md:112): live + backup keys merge.
+        // docs/storage-mapping.md:105): live + backup keys merge.
         writeJSONFile("musicResume", ["live|wy": 30.0])
         writeSnapshot(["musicResume": jsonString(["backup|wy": 60.0])])
 
@@ -602,5 +602,243 @@ final class MigrationStoreTests: XCTestCase {
         let kept = readJSONFile("hao_fav") as? [[String: Any]]
         XCTAssertEqual(kept?.count, 1)
         XCTAssertEqual(kept?.first?["key"] as? String, "live-1")
+    }
+
+    // MARK: - b49fix19: history normalisation, key verify, fav key, rollback, warnings, recent budget, cache eviction, new mappings, live cap
+
+    private func videoHistoryEntry(itemId: String, title: String, updatedAt: Any) -> [String: Any] {
+        ["item": ["id": itemId, "title": title, "year": "2024"],
+         "episodeName": "第1集", "episodeIndex": 0, "lineName": "線路1",
+         "positionSeconds": 120, "durationSeconds": 3600, "updatedAt": updatedAt]
+    }
+
+    private func liveHistoryEntry(roomId: String, watchedAt: Any) -> [String: Any] {
+        ["platform": "bilibili", "roomId": roomId, "title": "測試直播",
+         "nick": "主播", "cover": "https://example.com/c.jpg", "watchedAt": watchedAt]
+    }
+
+    func testFix19HistoryEntriesNormaliseISODatesAndMsDatesAndDropBadRows() {
+        // P1-1: the live typed reader only accepts
+        // seconds-since-1970 numbers, but Flutter backups
+        // carry ISO strings and ms integers — both must
+        // normalise, and entries missing a required field must
+        // drop, never poison the whole file.
+        let iso = videoHistoryEntry(itemId: "v1", title: "測試影片", updatedAt: "2026-11-20T10:00:00.000Z")
+        let ms = videoHistoryEntry(itemId: "v2", title: "毫秒影片", updatedAt: 1795000000000)
+        let noItem: [String: Any] = ["episodeName": "第1集", "updatedAt": 1795168800]
+        let noTitle = videoHistoryEntry(itemId: "v3", title: "", updatedAt: 1795168800)
+        let video = MigrationStore.normalizedHistoryEntries([iso, ms, noItem, noTitle], file: "hao_video_hist")
+        XCTAssertEqual(video.kept.count, 2)
+        XCTAssertEqual(video.dropped, 2)
+        XCTAssertEqual((video.kept[0]["updatedAt"] as? NSNumber)?.intValue, 1795168800)
+        XCTAssertEqual((video.kept[1]["updatedAt"] as? NSNumber)?.intValue, 1795000000)
+
+        let liveISO = liveHistoryEntry(roomId: "1", watchedAt: "2026-11-20T10:00:00.000Z")
+        let liveMS = liveHistoryEntry(roomId: "2", watchedAt: 1795000000000)
+        let noRoom = liveHistoryEntry(roomId: "", watchedAt: 1795000000)
+        let live = MigrationStore.normalizedHistoryEntries([liveISO, liveMS, noRoom], file: "hao_live_hist")
+        XCTAssertEqual(live.kept.count, 2)
+        XCTAssertEqual(live.dropped, 1)
+        XCTAssertEqual((live.kept[0]["watchedAt"] as? NSNumber)?.intValue, 1795168800)
+        XCTAssertEqual((live.kept[1]["watchedAt"] as? NSNumber)?.intValue, 1795000000)
+    }
+
+    func testFix19RouteBVideoHistoryISODateImports() {
+        // P1-1 at the import level: an ISO-date entry used to
+        // fail the whole file's typed decode (quarantine, then
+        // the next live write overwrote the imported history).
+        let entry = videoHistoryEntry(itemId: "v1", title: "測試影片", updatedAt: "2026-11-20T10:00:00.000Z")
+        writeSnapshot(["hao_video_hist": jsonString([entry])])
+
+        let report = runMigration()
+
+        XCTAssertEqual(report.outcome, .migrated)
+        let file = readJSONFile("hao_video_hist") as? [[String: Any]]
+        XCTAssertEqual(file?.count, 1)
+        XCTAssertEqual((file?.first?["updatedAt"] as? NSNumber)?.intValue, 1795168800)
+    }
+
+    func testFix19ListKeysContainAllIgnoresTypedRewrite() {
+        // P1-2: a live writer round-trips the file through its
+        // typed struct (drops unknown fields, normalises the
+        // platform code) — the bytes change, the content does
+        // not, so the verify must compare identity keys.
+        let expectedListen: [[String: Any]] = [
+            ["platform": "lx:netease", "songId": "s1", "at": 1700000000000, "dur": 180, "extra": "x"],
+        ]
+        let actualListen: [[String: Any]] = [
+            ["platform": "wy", "songId": "s1", "at": 1700000000000, "dur": 180],
+        ]
+        XCTAssertTrue(MigrationStore.listKeysContainAll(actual: actualListen, expected: expectedListen, file: "hao_listen"))
+        XCTAssertFalse(MigrationStore.listKeysContainAll(actual: [], expected: expectedListen, file: "hao_listen"))
+
+        let expectedFav: [[String: Any]] = [
+            ["key": "lx:netease|s1", "song": ["platform": "lx:netease", "songId": "s1"]],
+        ]
+        let actualFav: [[String: Any]] = [
+            ["key": "wy|s1", "song": ["platform": "wy", "songId": "s1"]],
+        ]
+        XCTAssertTrue(MigrationStore.listKeysContainAll(actual: actualFav, expected: expectedFav, file: "hao_fav"))
+
+        let expectedDownloads: [[String: Any]] = [
+            ["song": ["platform": "lx:netease", "songId": "s1"], "quality": "hires"],
+        ]
+        let actualDownloads: [[String: Any]] = [
+            ["song": ["platform": "wy", "songId": "s1"], "quality": "hires"],
+        ]
+        XCTAssertTrue(MigrationStore.listKeysContainAll(actual: actualDownloads, expected: expectedDownloads, file: "musicDownloads"))
+    }
+
+    func testFix19FavMergeKeyDedupesLxAndWy() {
+        // P1-3: the same song favourited as lx:… in the backup
+        // and wy in live is one favourite, and the merged row
+        // carries the normalised key so toggleFav can remove it.
+        let lx: [String: Any] = ["key": "lx:netease|s1", "song": ["platform": "lx:netease", "songId": "s1"]]
+        let wy: [String: Any] = ["key": "wy|s1", "song": ["platform": "wy", "songId": "s1"]]
+        XCTAssertEqual(MigrationStore.favMergeKey(for: lx), MigrationStore.favMergeKey(for: wy))
+        XCTAssertEqual(MigrationStore.favMergeKey(for: lx), "wy|s1")
+
+        writeJSONFile("hao_fav", [wy])
+        writeSnapshot(["hao_fav": jsonString([lx])])
+
+        let report = runMigration()
+
+        XCTAssertEqual(report.outcome, .migrated)
+        let file = readJSONFile("hao_fav") as? [[String: Any]]
+        XCTAssertEqual(file?.count, 1)
+        XCTAssertEqual(file?.first?["key"] as? String, "wy|s1")
+    }
+
+    func testFix19RestoredPreservingLiveKeepsLiveIncrements() {
+        // P1-4: a rollback must not wipe live writes made
+        // during the import — merged files restore prior +
+        // live-added entries, whole files keep the live file
+        // when it replaced the import's write.
+        func data(_ value: Any) -> Data {
+            try! JSONSerialization.data(withJSONObject: value, options: [])
+        }
+        let prior = data([["id": "a"]])
+        let written = data([["id": "a"], ["id": "b"]])
+        let current = data([["id": "a"], ["id": "b"], ["id": "c"]])
+        let restored = MigrationStore.restoredPreservingLive(prior: prior, written: written, current: current, file: "hao_lists", kind: .mergeList)
+        guard case .data(let bytes) = restored else {
+            XCTFail("expected .data, got \(restored)")
+            return
+        }
+        let list = try! JSONSerialization.jsonObject(with: bytes, options: []) as? [[String: Any]]
+        XCTAssertEqual(list?.compactMap { $0["id"] as? String }, ["a", "c"])
+
+        // Whole file, live untouched since the write: prior bytes.
+        let whole = MigrationStore.restoredPreservingLive(prior: data(["a"]), written: data(["b"]), current: data(["b"]), file: "downloadTasks", kind: .wholeFile)
+        guard case .data(let oldBytes) = whole else {
+            XCTFail("expected .data, got \(whole)")
+            return
+        }
+        XCTAssertEqual(try! JSONSerialization.jsonObject(with: oldBytes, options: []) as? [String], ["a"])
+        // Whole file, live replaced the import's write: keep live.
+        let kept = MigrationStore.restoredPreservingLive(prior: data(["a"]), written: data(["b"]), current: data(["c"]), file: "downloadTasks", kind: .wholeFile)
+        guard case .keepCurrent = kept else {
+            XCTFail("expected .keepCurrent, got \(kept)")
+            return
+        }
+    }
+
+    func testFix19RouteBSuccessCarriesWarnings() {
+        // P1-5: a dropped history entry on a successful import
+        // must be visible in report.warnings (Route A prints
+        // them; Route B used to drop them).
+        let good = videoHistoryEntry(itemId: "v1", title: "測試影片", updatedAt: "2026-11-20T10:00:00.000Z")
+        let bad: [String: Any] = ["episodeName": "第1集", "updatedAt": 1795168800]
+        writeSnapshot(["hao_video_hist": jsonString([good, bad])])
+
+        let report = runMigration()
+
+        XCTAssertEqual(report.outcome, .migrated)
+        XCTAssertTrue(report.warnings.contains { $0.contains("影视历史") && $0.contains("1") },
+                      "warnings were \(report.warnings)")
+    }
+
+    func testFix19RecentContainsAllNoBudgetWhenListNotFull() {
+        // P1-6: the displacement budget only exists when the
+        // list is actually full — an unfull list loses nothing
+        // to new inserts, so a cleared-and-replayed list must
+        // fail, not pass inside the old tail budget.
+        let small = (0..<5).map { recentSong("k\($0)") }
+        let replayed = (0..<5).map { recentSong("new-\($0)") }
+        XCTAssertFalse(MigrationStore.recentContainsAll(actual: replayed, expected: small))
+        // The full-list case still passes with one displaced
+        // tail entry (the fix18 behaviour, unchanged).
+        let full = (0..<100).map { recentSong("k\($0)") }
+        let oneNew = [recentSong("new-1")] + Array(full.prefix(99))
+        XCTAssertTrue(MigrationStore.recentContainsAll(actual: oneNew, expected: full))
+    }
+
+    func testFix19LyricsCacheOrderKeepsImportedKeysNewest() {
+        // P1-7: imported lyrics keys are written into the order
+        // file as newest, so the next eviction takes an older
+        // key first instead of the imported one.
+        defaults.set(["a"], forKey: "hao.lyricsCacheOrder")
+        MigrationStore.reconcileLyricsCacheOrder(
+            mergedKeys: ["a", "b", "c"], importedKeys: ["b", "c"], defaults: defaults)
+        XCTAssertEqual(defaults.stringArray(forKey: "hao.lyricsCacheOrder"), ["a", "b", "c"])
+        // The eviction record excuses a key a live writer
+        // dropped between the merge and the verify.
+        MigrationStore.resetCacheEvictionRecord()
+        MigrationStore.noteCacheKeyEvicted(file: "hao_lyrics", key: "b")
+        XCTAssertTrue(MigrationStore.cacheEvictionRecord(for: "hao_lyrics").contains("b"))
+        MigrationStore.resetCacheEvictionRecord()
+        XCTAssertTrue(MigrationStore.cacheEvictionRecord(for: "hao_lyrics").isEmpty)
+    }
+
+    func testFix19RouteBFiveNewFilesInstall() {
+        // P2-1: the five files Route B used to drop into
+        // unknown now install like Route A does.
+        writeSnapshot([
+            "downloadTasks": jsonString([["id": "x"]]),
+            "hao_fav_playlists": jsonString(["pl1", "pl2"]),
+            "hao_fav_albums": jsonString([["id": "x"]]),
+            "hao_fav_artists": jsonString([["id": "x"]]),
+            "hao_daily_pool": jsonString(["a": 1]),
+        ])
+
+        let report = runMigration()
+
+        XCTAssertEqual(report.outcome, .migrated)
+        XCTAssertEqual(report.migratedKeys, 5)
+        XCTAssertEqual((readJSONFile("downloadTasks") as? [[String: Any]])?.count, 1)
+        XCTAssertEqual(readJSONFile("hao_fav_playlists") as? [String], ["pl1", "pl2"])
+        XCTAssertEqual((readJSONFile("hao_fav_albums") as? [[String: Any]])?.count, 1)
+        XCTAssertEqual((readJSONFile("hao_fav_artists") as? [[String: Any]])?.count, 1)
+        XCTAssertEqual(readJSONFile("hao_daily_pool") as? [String: Any], ["a": 1])
+    }
+
+    func testFix19LiveHistoryCapZeroMeansUnlimited() {
+        // P2-4: hao_live_hist_limit = 0 is unlimited, not 50.
+        XCTAssertEqual(MigrationStore.liveHistoryCap(defaults: defaults), 50)
+        defaults.set(0, forKey: "hao_live_hist_limit")
+        XCTAssertNil(MigrationStore.liveHistoryCap(defaults: defaults))
+        let entries = (0..<60).map { liveHistoryEntry(roomId: "r\($0)", watchedAt: 1795000000000) }
+        writeSnapshot(["hao_live_hist": jsonString(entries)])
+
+        let report = runMigration()
+
+        XCTAssertEqual(report.outcome, .migrated)
+        XCTAssertEqual((readJSONFile("hao_live_hist") as? [[String: Any]])?.count, 60)
+    }
+
+    func testFix19DailyPerSongMergeKeepsLiveSongs() {
+        // P2-7: a day's backup list merges song-by-song with
+        // the live day instead of replacing the whole day.
+        writeJSONFile("hao_daily", ["2026-11-22": [recentSong("live-1")]])
+        writeSnapshot(["hao_daily_2026-11-22": jsonString([recentSong("backup-1")])])
+
+        let report = runMigration()
+
+        XCTAssertEqual(report.outcome, .migrated)
+        let daily = readJSONFile("hao_daily") as? [String: Any]
+        let day = daily?["2026-11-22"] as? [[String: Any]]
+        XCTAssertEqual(day?.count, 2)
+        XCTAssertEqual(day?.first?["songId"] as? String, "live-1")
+        XCTAssertEqual(day?.last?["songId"] as? String, "backup-1")
     }
 }

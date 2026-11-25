@@ -1873,9 +1873,16 @@ final class MusicPlayerViewModel: ObservableObject {
             return
         }
         queue.insert(song, at: queue.index + 1)
-        // b36-item10: same serial background queue as the switch
-        // path, so this edit can never be overwritten by a switch's
-        // still-pending queue write.
+        // b36-item10 (b49fix19 P2-8a: corrected — the queues
+        // are NOT one queue any more): the queue write goes to
+        // musicQueueWriteQueue while the switch path's recent
+        // write goes to songSwitchIOQueue, so cross-file order
+        // between them is not guaranteed. Queue writes still
+        // serialise with each other — a switch's queue write
+        // also lands on musicQueueWriteQueue — so this edit
+        // can never be overwritten by a switch's still-pending
+        // queue write. No consumer depends on the recent-vs-
+        // queue order.
         MusicLibraryStore.saveQueueAsync(queue.toQueueData())
         // b47-playlogic: the player's flat queue is what
         // auto-advance reads — without a re-sync the inserted

@@ -65,8 +65,10 @@
 //
 // Coverage — what is backed up, from the real on-disk layout
 // (docs/storage-mapping.md + the stores themselves, not invented):
-// - S1's 136 keys + 4 key families (via MigrationStore.mappings,
-//   prefix rules, and the ignored play-URL-cache prefix).
+// - S1's 117 keys + 4 key families (via MigrationStore.mappings,
+//   prefix rules, and the ignored play-URL-cache prefix) — 75
+//   UserDefaults keys + 42 non-UserDefaults rows (41 collection
+//   files + 1 Emby config) after b49fix19 P2-1 added 5 rows.
 // - S5's new keys: `hao_glass_intensity`,
 //   `hao_video_player_key`, `hao_video_last_engine`, and the
 //   `settingsSectionExpanded_<id>` family.
@@ -883,7 +885,28 @@ extension BackupEngineCore {
                             continue
                         }
                     }
-                    planned.collections.append(PlannedCollection(name: base, bytes: bytes))
+                    // b49fix19 P1-1: history entries are
+                    // normalised at PLAN time — ISO/ms dates to
+                    // seconds, missing required fields filled,
+                    // unusable entries dropped with a warning.
+                    // A raw entry straight into the merge would
+                    // fail the live typed reader for the WHOLE
+                    // file (loadCollection quarantines it) and
+                    // the next live write would overwrite the
+                    // imported history.
+                    var installBytes = bytes
+                    if base == "hao_video_hist" || base == "hao_live_hist",
+                       let parsed = try? JSONSerialization.jsonObject(with: bytes, options: []),
+                       let list = parsed as? [[String: Any]] {
+                        let normalized = MigrationStore.normalizedHistoryEntries(list, file: base)
+                        if normalized.dropped > 0 {
+                            planned.warnings.append("\(base == "hao_video_hist" ? "影视" : "直播")历史有 \(normalized.dropped) 条记录格式不符，已跳过")
+                        }
+                        if let data = try? JSONSerialization.data(withJSONObject: normalized.kept, options: []) {
+                            installBytes = data
+                        }
+                    }
+                    planned.collections.append(PlannedCollection(name: base, bytes: installBytes))
                     // b49fix2 P2-13: a backup that restores custom
                     // LX scripts restores the scripts but never
                     // their Keychain keys — flag it so the commit
@@ -983,6 +1006,13 @@ extension BackupEngineCore {
         case skipped
         case serializationFailed
         case writeFailed
+        /// The write landed but the immediate re-read inside
+        /// the write's critical section did not match it
+        /// (b49fix19 P1-4): a live writer replaced the file
+        /// between the write and its verify. The caller fails
+        /// the import with a verification failure, not a write
+        /// failure — the write itself succeeded.
+        case verifyFailed
     }
 
     /// Collections a concurrent writer can change while an
@@ -1137,7 +1167,9 @@ extension BackupEngineCore {
     /// verified, and it destroyed healthy live files.
     private static func writeCollection(
         _ collection: PlannedCollection,
-        documentsURL: URL
+        documentsURL: URL,
+        defaults: UserDefaults,
+        liveHistLimit: Int? = 50
     ) -> CollectionWriteOutcome {
         switch collection.name {
         case "hao_listen":
@@ -1149,7 +1181,7 @@ extension BackupEngineCore {
             guard let parsed = try? JSONSerialization.jsonObject(with: collection.bytes, options: []),
                   let dict = parsed as? [String: Any]
             else { return fallbackForUnparseable(collection, documentsURL: documentsURL, queue: MigrationStore.dailyWriteQueue) }
-            return mergeDictEntries(dict, into: collection.name, documentsURL: documentsURL, queue: MigrationStore.dailyWriteQueue)
+            return mergeDictEntries(dict, into: collection.name, documentsURL: documentsURL, queue: MigrationStore.dailyWriteQueue, defaults: defaults)
         case "hao_recent":
             guard let parsed = try? JSONSerialization.jsonObject(with: collection.bytes, options: []),
                   let list = parsed as? [[String: Any]]
@@ -1169,7 +1201,14 @@ extension BackupEngineCore {
             guard let parsed = try? JSONSerialization.jsonObject(with: collection.bytes, options: []),
                   let list = parsed as? [[String: Any]]
             else { return fallbackForUnparseable(collection, documentsURL: documentsURL, queue: MigrationStore.collectionWriteQueue) }
-            return mergeListEntries(list, into: collection.name, documentsURL: documentsURL, keyFor: { ($0["key"] as? String) ?? "" }, cap: nil)
+            // b49fix19 P1-3: dedupe by the normalised fav key
+            // (not the raw stored "key") and rewrite each stored
+            // key to it — an lx favourite and a wy favourite are
+            // otherwise duplicate rows, and the lx row can never
+            // be unfavourited. b49fix19 P2-6: the secondary
+            // title+artist key dedupes a key-only legacy entry
+            // against the same song that later gained a songId.
+            return mergeListEntries(list, into: collection.name, documentsURL: documentsURL, keyFor: { MigrationStore.favMergeKey(for: $0) }, cap: nil, secondaryKeyFor: { guard let song = $0["song"] as? [String: Any] else { return "" }; return MigrationStore.songTitleArtistKey(for: song) }, mapEntry: { var entry = $0; let key = MigrationStore.favMergeKey(for: entry); if !key.isEmpty { entry["key"] = key }; return entry })
         case "hao_lists":
             guard let parsed = try? JSONSerialization.jsonObject(with: collection.bytes, options: []),
                   let list = parsed as? [[String: Any]]
@@ -1184,7 +1223,7 @@ extension BackupEngineCore {
             guard let parsed = try? JSONSerialization.jsonObject(with: collection.bytes, options: []),
                   let list = parsed as? [[String: Any]]
             else { return fallbackForUnparseable(collection, documentsURL: documentsURL, queue: MigrationStore.collectionWriteQueue) }
-            return mergeListEntries(list, into: collection.name, documentsURL: documentsURL, keyFor: { guard let song = $0["song"] as? [String: Any] else { return "" }; return MigrationStore.songIdentityKey(for: song) }, cap: nil)
+            return mergeListEntries(list, into: collection.name, documentsURL: documentsURL, keyFor: { guard let song = $0["song"] as? [String: Any] else { return "" }; return MigrationStore.songIdentityKey(for: song) }, cap: nil, secondaryKeyFor: { guard let song = $0["song"] as? [String: Any] else { return "" }; return MigrationStore.songTitleArtistKey(for: song) })
         case "hao_video_hist":
             guard let parsed = try? JSONSerialization.jsonObject(with: collection.bytes, options: []),
                   let list = parsed as? [[String: Any]]
@@ -1194,7 +1233,9 @@ extension BackupEngineCore {
             guard let parsed = try? JSONSerialization.jsonObject(with: collection.bytes, options: []),
                   let list = parsed as? [[String: Any]]
             else { return fallbackForUnparseable(collection, documentsURL: documentsURL, queue: MigrationStore.collectionWriteQueue) }
-            return mergeListEntries(list, into: collection.name, documentsURL: documentsURL, keyFor: { (($0["platform"] as? String) ?? "") + "|" + (($0["roomId"] as? String) ?? "") }, cap: 50)
+            // b49fix19 P2-4: the cap comes from the user's
+            // setting (nil = unlimited), not a hard-coded 50.
+            return mergeListEntries(list, into: collection.name, documentsURL: documentsURL, keyFor: { (($0["platform"] as? String) ?? "") + "|" + (($0["roomId"] as? String) ?? "") }, cap: liveHistLimit)
         case "hao_music_search_hist":
             guard let parsed = try? JSONSerialization.jsonObject(with: collection.bytes, options: []),
                   let list = parsed as? [String]
@@ -1209,7 +1250,7 @@ extension BackupEngineCore {
             guard let parsed = try? JSONSerialization.jsonObject(with: collection.bytes, options: []),
                   let dict = parsed as? [String: Any]
             else { return fallbackForUnparseable(collection, documentsURL: documentsURL, queue: MigrationStore.collectionWriteQueue) }
-            return mergeDictEntries(dict, into: collection.name, documentsURL: documentsURL, queue: MigrationStore.collectionWriteQueue)
+            return mergeDictEntries(dict, into: collection.name, documentsURL: documentsURL, queue: MigrationStore.collectionWriteQueue, defaults: defaults)
         default:
             return writeWholeCollection(collection, documentsURL: documentsURL)
         }
@@ -1303,6 +1344,19 @@ extension BackupEngineCore {
         } catch {
             return .writeFailed
         }
+        // b49fix19 P1-4: verify the write immediately, inside
+        // the caller's queue when there is one (writeWholeCollection
+        // and fallbackForUnparseable both hold it) — a queued
+        // writer (ResolverCooldown.save, DownloadEngine
+        // .persistLocked) writes from in-memory state without
+        // re-reading the file, so it cannot be tolerated by a
+        // key-subset verify the way merge files can; the
+        // immediate canonical re-read is what makes an
+        // interleave fail loud here instead of at a later
+        // end-of-apply verify.
+        guard let expected = try? JSONSerialization.jsonObject(with: collection.bytes, options: []),
+              MigrationStore.fileContentEquals(name: collection.name, expected: expected, documentsURL: documentsURL)
+        else { return .verifyFailed }
         return .written(collection.bytes)
     }
 
@@ -1408,14 +1462,16 @@ extension BackupEngineCore {
         into name: String,
         documentsURL: URL,
         keyFor: @escaping ([String: Any]) -> String,
-        cap: Int?
+        cap: Int?,
+        secondaryKeyFor: (([String: Any]) -> String)? = nil,
+        mapEntry: (([String: Any]) -> [String: Any])? = nil
     ) -> CollectionWriteOutcome {
         guard let queue = MigrationStore.writeQueue(forCollection: name) else {
             return .writeFailed
         }
         return queue.sync { () -> CollectionWriteOutcome in
             let existing = MigrationStore.readJSONList(name: name, documentsURL: documentsURL)
-            let merged = MigrationStore.mergedListEntries(live: existing, incoming: incoming, keyFor: keyFor, cap: cap)
+            let merged = MigrationStore.mergedListEntries(live: existing, incoming: incoming, keyFor: keyFor, cap: cap, secondaryKeyFor: secondaryKeyFor, mapEntry: mapEntry)
             guard let bytes = try? JSONSerialization.data(withJSONObject: merged, options: []) else {
                 return .serializationFailed
             }
@@ -1470,12 +1526,18 @@ extension BackupEngineCore {
     ) -> CollectionWriteOutcome {
         MigrationStore.listenLogWriteQueue.sync { () -> CollectionWriteOutcome in
             var existing = MigrationStore.readJSONList(name: "hao_listen", documentsURL: documentsURL)
+            // b49fix19 P2-6: the split point is known here (live
+            // entries first, incoming appended after), so the
+            // secondary title+artist key dedupes only incoming
+            // entries against live ones — the live log itself is
+            // never rewritten by a dedupe.
+            let liveCount = existing.count
             existing.append(contentsOf: incoming)
             // b49fix2 P2-11: a re-import of the same backup used
             // to double the history (append with no dedupe).
             // Same song at the same second is the same listen,
             // not two.
-            existing = MigrationStore.dedupedListenEntries(existing)
+            existing = MigrationStore.dedupedListenEntries(existing, liveCount: liveCount)
             if existing.count > 3000 {
                 existing = Array(existing.suffix(3000))
             }
@@ -1502,23 +1564,43 @@ extension BackupEngineCore {
     /// cap is deterministic (b49fix16 P2-6, b49fix17 P2-1:
     /// incoming keys always survive it). hao_daily and
     /// hao_daily_pool apply the same 7-day prune live writes
-    /// apply (b49fix17 P2-4).
+    /// apply (b49fix17 P2-4). b49fix19 P2-7: hao_daily merges
+    /// per song within each day (see MigrationStore
+    /// .mergedDailyDay), not per day — the old overlay replaced
+    /// the whole day's list with the backup's. b49fix19 P1-7:
+    /// a hao_lyrics merge writes the imported keys into the
+    /// lyrics order file so the next putLyrics does not evict
+    /// them first.
     private static func mergeDictEntries(
         _ incoming: [String: Any],
         into name: String,
         documentsURL: URL,
-        queue: DispatchQueue
+        queue: DispatchQueue,
+        defaults: UserDefaults = .standard
     ) -> CollectionWriteOutcome {
         queue.sync { () -> CollectionWriteOutcome in
             var existing = MigrationStore.readJSONDictionary(name: name, documentsURL: documentsURL)
             for (key, value) in incoming {
-                existing[key] = value
+                if name == "hao_daily",
+                   let liveDay = existing[key] as? [[String: Any]],
+                   let incomingDay = value as? [[String: Any]] {
+                    existing[key] = MigrationStore.mergedDailyDay(live: liveDay, incoming: incomingDay)
+                } else {
+                    existing[key] = value
+                }
             }
             if name == "hao_daily" || name == "hao_daily_pool" {
                 existing = MigrationStore.prunedDailyEntries(existing, keeping: nil)
             }
             if name == "haoVodProg" {
                 existing = MigrationStore.cappedVodProgEntries(existing, keeping: Set(incoming.keys))
+            }
+            if name == "hao_lyrics" {
+                MigrationStore.reconcileLyricsCacheOrder(
+                    mergedKeys: Set(existing.keys),
+                    importedKeys: Array(incoming.keys),
+                    defaults: defaults
+                )
             }
             guard let merged = try? JSONSerialization.data(withJSONObject: existing, options: []) else {
                 return .serializationFailed
@@ -1533,15 +1615,16 @@ extension BackupEngineCore {
     }
 
     /// Verifies one written collection (b49fix16 P1-2, b49fix17
-    /// P1-2/P1-3/P2-2): byte equality for ordinary collections;
-    /// subset for the concurrently-written set (see
+    /// P1-2/P1-3/P2-2, b49fix19 P1-2/P1-4/P2-9d): canonical
+    /// equality for ordinary collections; identity subset for
+    /// the concurrently-written set (see
     /// concurrentlyWrittenCollections) — a resume checkpoint, a
     /// song switch, a pool pin, a listen completion, a daily
     /// replace or a favourite toggle landing between the write
     /// and this check must not fail the whole import. An
     /// expected value that does not parse as a list/dict (the
-    /// unparseable-bytes fallback) falls back to byte equality:
-    /// subset has nothing to compare.
+    /// unparseable-bytes fallback) falls back to canonical
+    /// byte equality: subset has nothing to compare.
     private static func collectionVerifies(
         relativePath: String, expectedBytes: Data, documentsURL: URL
     ) -> Bool {
@@ -1565,8 +1648,18 @@ extension BackupEngineCore {
               let actual = try? JSONSerialization.jsonObject(with: actualData, options: [])
         else {
             // Ordinary collection, or unparseable expected bytes
-            // (the whole-file fallback): byte equality.
-            return actualData == expectedBytes
+            // (the whole-file fallback): canonical byte equality
+            // (b49fix19 P2-9d — raw byte equality failed the
+            // same live re-serialisation Route B passed, because
+            // the key order differs; canonical bytes compare
+            // content, not serialisation order). Unparseable
+            // bytes fall back to raw equality.
+            guard let expectedParsed = try? JSONSerialization.jsonObject(with: expectedBytes, options: []),
+                  let actualParsed = try? JSONSerialization.jsonObject(with: actualData, options: []),
+                  let expectedCanonical = MigrationStore.canonicalJSONData(expectedParsed),
+                  let actualCanonical = MigrationStore.canonicalJSONData(actualParsed)
+            else { return actualData == expectedBytes }
+            return actualCanonical == expectedCanonical
         }
         if let expectedList = expected as? [[String: Any]],
            let actualList = actual as? [[String: Any]] {
@@ -1576,40 +1669,49 @@ extension BackupEngineCore {
             // oldest merged entry out, and that must not fail
             // the import. hao_listen keeps the plain subset (its
             // 3000 cap edge is the accepted rarity, same as
-            // before).
+            // before). b49fix19 P1-2: the subset is by identity
+            // key, not canonical bytes — a live writer's typed
+            // round-trip rewrites the bytes (drops unknown
+            // fields, fills defaults, normalises platform
+            // codes) without changing the content.
             if base == "hao_recent" {
                 return MigrationStore.recentContainsAll(actual: actualList, expected: expectedList)
             }
-            return listContainsAll(actualList, expectedList)
+            return MigrationStore.listKeysContainAll(actual: actualList, expected: expectedList, file: base)
         }
         if let expectedDict = expected as? [String: Any],
            let actualDict = actual as? [String: Any] {
-            // musicResume and hao_daily_pool verify by key only:
-            // resume seconds are progress markers a checkpoint
-            // legitimately advances (a checkpoint firing for the
-            // currently playing song during a >10 s import would
-            // otherwise fail value-equality subset — the exact
-            // trigger P1-2 reports), and the pool is a pure
-            // derived cache whose value is recomputable, so key
-            // presence is enough. hao_daily and haoVodProg keep
-            // value equality: their values are user data, and a
-            // different value means the imported content was
-            // replaced.
-            let keyOnly = base == "musicResume" || base == "hao_daily_pool"
+            // b49fix19 P1-2: merged dicts verify by key only.
+            // A live writer round-trips values through its typed
+            // struct (saveDailyTracks rewrites the day's songs,
+            // saveCover filters to [String: String]) — the
+            // values change bytes without changing the merged
+            // content, so value equality false-failed whenever
+            // such a write landed in the window. Key presence is
+            // the content guarantee; a live writer replacing a
+            // value is newer intent, not import loss.
             // b49fix17 P2-2: a natural completion may delete an
             // imported resume key between the write and this
             // check — keys clearResume deleted during this
             // import are excused (deleting a key is a legitimate
             // concurrent event, same class as a checkpoint
-            // advancing).
+            // advancing). b49fix19 P1-7: the same excuse covers
+            // keys a live cache eviction removed during this
+            // import (hao_lyrics / hao_cover_cache).
             if base == "musicResume" {
                 return dictContainsAll(actualDict, expectedDict, keyOnly: true, toleratingDeleted: MigrationStore.resumeDeletionRecord())
             }
-            return dictContainsAll(actualDict, expectedDict, keyOnly: keyOnly)
+            return dictContainsAll(actualDict, expectedDict, keyOnly: true, toleratingDeleted: MigrationStore.cacheEvictionRecord(for: base))
         }
         // Expected parses but is neither a list nor a dict (a
-        // scalar): nothing to subset-compare — byte equality.
-        return actualData == expectedBytes
+        // scalar): nothing to subset-compare — canonical byte
+        // equality (b49fix19 P2-9d).
+        guard let expectedParsed = try? JSONSerialization.jsonObject(with: expectedBytes, options: []),
+              let actualParsed = try? JSONSerialization.jsonObject(with: actualData, options: []),
+              let expectedCanonical = MigrationStore.canonicalJSONData(expectedParsed),
+              let actualCanonical = MigrationStore.canonicalJSONData(actualParsed)
+        else { return actualData == expectedBytes }
+        return actualCanonical == expectedCanonical
     }
 
     /// Multiset subset: every expected entry must still be in
@@ -1619,10 +1721,13 @@ extension BackupEngineCore {
     /// entries a concurrent append can push the oldest imported
     /// entry out of the cap — extremely unlikely, and the
     /// failure mode is the same loud failure + rollback as
-    /// today, just far rarer. Internal, not private: Route B
-    /// (MigrationStore.importData) verifies its merged lists
-    /// with the same rule (b49fix18 D-1) — one subset rule for
-    /// both import routes.
+    /// today, just far rarer. b49fix19 P1-2: no verify path
+    /// uses this any more — the merged-list verifies compare
+    /// identity keys (MigrationStore.listKeysContainAll),
+    /// because a live writer's typed round-trip rewrites the
+    /// bytes a byte subset compares. Kept as the byte-level
+    /// subset utility (the harness's retained behaviour cases
+    /// cover it); internal, not private, so tests can use it.
     static func listContainsAll(
         _ actual: [[String: Any]], _ expected: [[String: Any]]
     ) -> Bool {
@@ -1648,10 +1753,12 @@ extension BackupEngineCore {
     /// so a bare Double (haoVodProg values) must never be
     /// serialised directly. `toleratingDeleted` excuses keys
     /// a legitimate concurrent deletion removed after the write
-    /// (b49fix17 P2-2: clearResume on natural completion).
-    /// Internal, not private: Route B (MigrationStore.importData)
-    /// verifies its merged dicts with the same rule (b49fix18
-    /// D-1) — one subset rule for both import routes.
+    /// (b49fix17 P2-2: clearResume on natural completion;
+    /// b49fix19 P1-7: live cache evictions). Internal, not
+    /// private: Route B (MigrationStore.importData) verifies
+    /// its merged dicts with the same rule (b49fix18 D-1) —
+    /// one subset rule for both import routes. Both routes now
+    /// pass keyOnly: true for merged dicts (b49fix19 P1-2).
     static func dictContainsAll(
         _ actual: [String: Any], _ expected: [String: Any], keyOnly: Bool, toleratingDeleted deletedKeys: Set<String> = []
     ) -> Bool {
@@ -1745,6 +1852,14 @@ extension BackupEngineCore {
         // verify below excuses exactly the keys clearResume
         // deletes during THIS import.
         MigrationStore.resetResumeDeletionRecord()
+        // b49fix19 P1-7: clear the cache-eviction record — the
+        // verify excuses exactly the keys a live eviction
+        // removes during THIS import.
+        MigrationStore.resetCacheEvictionRecord()
+        // b49fix19 P2-4: the live-history cap the merge uses —
+        // 0 in the setting means unlimited (nil), absent means
+        // the 50 default.
+        let liveHistLimit = MigrationStore.liveHistoryCap(defaults: defaults)
 
         // Defaults first, in sorted order (the plan already
         // sorted them via the data dict's sorted keys).
@@ -1755,6 +1870,14 @@ extension BackupEngineCore {
             }
             journal.recordDefault(key: write.key, defaults: defaults)
             defaults.set(write.value, forKey: write.key)
+            // b49fix19 P1-4: verify this default now — a
+            // settings write landing between the set and an
+            // end-of-apply verify used to fail the whole import
+            // the same way a file write did.
+            if !MigrationStore.verifyDefault(key: write.key, kind: write.kind, defaults: defaults) {
+                failureReason = "校验失败：\(write.key)"
+                break
+            }
             appliedKeys += 1
         }
 
@@ -1774,10 +1897,32 @@ extension BackupEngineCore {
                     failureReason = "写入失败：\(relativePath)"
                     break
                 }
-                switch writeCollection(collection, documentsURL: documentsURL) {
+                switch writeCollection(collection, documentsURL: documentsURL, defaults: defaults, liveHistLimit: liveHistLimit) {
                 case .written(let bytes):
                     expectedCollectionBytes[relativePath] = bytes
                     appliedCollections += 1
+                    // b49fix19 P1-4: verify this collection now,
+                    // not at the end of the apply — the gap used
+                    // to be "apply remaining time" (seconds on a
+                    // big backup), in which a live write could
+                    // land and fail the verify, rolling back an
+                    // import whose content was fine.
+                    if !collectionVerifies(relativePath: relativePath, expectedBytes: bytes, documentsURL: documentsURL) {
+                        failureReason = "校验失败：\(relativePath)"
+                        break
+                    }
+                    // b49fix18 D-5c: a passing recent verify that
+                    // still excused missing entries warns — the
+                    // displacement is observable instead of silent.
+                    if relativePath == "hao_recent.json",
+                       let expected = try? JSONSerialization.jsonObject(with: bytes, options: []) as? [[String: Any]],
+                       let actualData = try? Data(contentsOf: documentsURL.appendingPathComponent(relativePath)),
+                       let actual = try? JSONSerialization.jsonObject(with: actualData, options: []) as? [[String: Any]] {
+                        let missing = MigrationStore.recentMissingKeys(actual: actual, expected: expected).count
+                        if missing > 0 {
+                            verifyWarnings.append("最近播放有 \(missing) 条记录在导入期间被替换，已按容忍规则通过校验")
+                        }
+                    }
                 case .skipped:
                     applySkipped.append(collection.name)
                 case .serializationFailed:
@@ -1786,6 +1931,8 @@ extension BackupEngineCore {
                     failureReason = "序列化失败：\(relativePath)"
                 case .writeFailed:
                     failureReason = "写入失败：\(relativePath)"
+                case .verifyFailed:
+                    failureReason = "校验失败：\(relativePath)"
                 }
                 if failureReason != nil { break }
             }
@@ -1823,12 +1970,19 @@ extension BackupEngineCore {
                     outcome = mergeDictEntries(
                         planned.mergedDictInputs[name] ?? [:],
                         into: name, documentsURL: documentsURL,
-                        queue: MigrationStore.dailyWriteQueue)
+                        queue: MigrationStore.dailyWriteQueue,
+                        defaults: defaults)
                 }
                 switch outcome {
                 case .written(let bytes):
                     expectedCollectionBytes[relativePath] = bytes
                     appliedCollections += 1
+                    // b49fix19 P1-4: verify this file now (same
+                    // reason as the collections loop above).
+                    if !collectionVerifies(relativePath: relativePath, expectedBytes: bytes, documentsURL: documentsURL) {
+                        failureReason = "校验失败：\(relativePath)"
+                        break
+                    }
                 case .skipped:
                     // Unreachable: neither merge helper returns
                     // .skipped — recorded defensively so the
@@ -1838,6 +1992,8 @@ extension BackupEngineCore {
                     failureReason = "序列化失败：\(relativePath)"
                 case .writeFailed:
                     failureReason = "写入失败：\(relativePath)"
+                case .verifyFailed:
+                    failureReason = "校验失败：\(relativePath)"
                 }
                 if failureReason != nil { break }
             }
@@ -1858,6 +2014,11 @@ extension BackupEngineCore {
                     try bytes.write(to: url, options: [.atomic])
                     expectedCollectionBytes[relativePath] = bytes
                     appliedCollections += 1
+                    // b49fix19 P1-4: verify this file now (same
+                    // reason as the collections loop above).
+                    if !collectionVerifies(relativePath: relativePath, expectedBytes: bytes, documentsURL: documentsURL) {
+                        failureReason = "校验失败：\(relativePath)"
+                    }
                 } catch {
                     failureReason = "写入失败：\(relativePath)"
                 }
@@ -1888,69 +2049,41 @@ extension BackupEngineCore {
                     failureReason = "写入失败：\(file.relativePath)"
                     break
                 }
-                appliedFiles += 1
-            }
-        }
-
-        // Verify everything that was written, then either commit
-        // (notify) or roll back. Verification failure is treated
-        // exactly like a write failure.
-        if failureReason == nil {
-            for write in planned.defaultWrites {
-                if !MigrationStore.verifyDefault(key: write.key, kind: write.kind, defaults: defaults) {
-                    failureReason = "校验失败：\(write.key)"
-                    break
-                }
-            }
-        }
-        if failureReason == nil {
-            // b49fix16 P1-2 + O-3: subset verify for the
-            // concurrently-written files (see collectionVerifies),
-            // byte equality for the rest; sorted so the first
-            // reported file is deterministic — the old Dictionary
-            // iteration reported whichever file hashed first.
-            for entry in expectedCollectionBytes.sorted(by: { $0.key < $1.key }) {
-                guard collectionVerifies(
-                    relativePath: entry.key, expectedBytes: entry.value,
-                    documentsURL: documentsURL)
-                else {
-                    failureReason = "校验失败：\(entry.key)"
-                    break
-                }
-                // b49fix18 D-5c: a passing recent verify that
-                // still excused missing entries warns — the
-                // displacement is observable instead of silent.
-                if entry.key == "hao_recent.json",
-                   let expected = try? JSONSerialization.jsonObject(with: entry.value, options: []) as? [[String: Any]],
-                   let actualData = try? Data(contentsOf: documentsURL.appendingPathComponent(entry.key)),
-                   let actual = try? JSONSerialization.jsonObject(with: actualData, options: []) as? [[String: Any]] {
-                    let missing = MigrationStore.recentMissingKeys(actual: actual, expected: expected).count
-                    if missing > 0 {
-                        verifyWarnings.append("最近播放有 \(missing) 条记录在导入期间被替换，已按容忍规则通过校验")
-                    }
-                }
-            }
-        }
-        if failureReason == nil {
-            for file in planned.payloadFiles {
-                let url = documentsURL.appendingPathComponent(file.relativePath)
-                guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue,
+                // b49fix19 P1-4: verify this file's size now
+                // (same reason as the collections loop above).
+                guard let size = (try? FileManager.default.attributesOfItem(atPath: destination.path)[.size] as? NSNumber)?.intValue,
                       size == Int(file.entry.uncompressedSize)
                 else {
                     failureReason = "校验失败：\(file.relativePath)"
                     break
                 }
+                appliedFiles += 1
             }
         }
+
+        // b49fix19 P1-4: there is no end-of-apply verify any
+        // more — every default, collection, merged file,
+        // unknown-keys file and payload file was verified the
+        // moment its write landed (see the loops above). The
+        // old unified verify left a gap of "apply remaining
+        // time" in which a live write could land and fail the
+        // verify, rolling back an import whose content was
+        // fine — and the rollback then wiped the live writes
+        // made during the import too.
 
         // b49fix17 P1-1/P1-3: plan-time skips plus apply-time
         // skips, reported together.
         let allSkipped = (planned.skipped + applySkipped).sorted()
 
         if let reason = failureReason {
-            let rollbackFailures = rollback(
+            // b49fix19 P1-4: the rollback preserves live
+            // increments made during the import (see
+            // restoreFilesFromSnapshot) instead of writing the
+            // snapshot bytes back whole.
+            let (rollbackFailures, keptLive) = rollback(
                 journal: journal, snapshotDir: snapshotDir,
-                documentsURL: documentsURL, defaults: defaults
+                documentsURL: documentsURL, defaults: defaults,
+                writtenBytes: expectedCollectionBytes
             )
             // b49fix4 P2-36: "已全量回滚" is only true when the
             // rollback itself restored everything. When it did
@@ -1958,9 +2091,11 @@ extension BackupEngineCore {
             let detail: String
             if rollbackFailures.isEmpty {
                 detail = reason + "，已全量回滚"
+                    + (keptLive.isEmpty ? "" : "（导入期间被 live 改写的文件已保留 live 版本：" + keptLive.joined(separator: "、") + "）")
             } else {
                 detail = reason + "，回滚未完成，未恢复："
                     + rollbackFailures.joined(separator: "、")
+                    + (keptLive.isEmpty ? "" : "；导入期间被 live 改写的文件已保留 live 版本：" + keptLive.joined(separator: "、"))
             }
             return BackupImportDetail(
                 outcome: .failed, appliedKeys: 0, appliedCollections: 0,
@@ -2488,12 +2623,15 @@ extension BackupEngineCore {
         journal: BackupJournal,
         snapshotDir: URL,
         documentsURL: URL,
-        defaults: UserDefaults
-    ) -> [String] {
+        defaults: UserDefaults,
+        writtenBytes: [String: Data]? = nil
+    ) -> (failures: [String], keptLive: [String]) {
         journal.restore(defaults: defaults)
-        return restoreFilesFromSnapshot(
-            snapshotDir: snapshotDir, documentsURL: documentsURL
-        ).failures
+        let restored = restoreFilesFromSnapshot(
+            snapshotDir: snapshotDir, documentsURL: documentsURL,
+            writtenBytes: writtenBytes
+        )
+        return (restored.failures, restored.keptLive)
     }
 
     /// Restores the files captured in a snapshot folder, from
@@ -2509,16 +2647,29 @@ extension BackupEngineCore {
     /// that was never there needs no restoring, same rule as
     /// the keys side (b49fix5 P2-8). Shared by the in-import
     /// rollback and by the user-triggered snapshot restore.
+    ///
+    /// b49fix19 P1-4: `writtenBytes` is what the import wrote,
+    /// keyed by relative path — passed by the in-import
+    /// rollback only (nil = a user-triggered restore, which
+    /// restores EXACTLY the snapshot). With it, the restore
+    /// preserves live increments made during the import (see
+    /// MigrationStore.restoredPreservingLive) instead of
+    /// writing the snapshot bytes back whole, which used to
+    /// wipe every live write that landed during the import.
+    /// Files whose live version replaced the import's write
+    /// are kept and reported in `keptLive`.
     static func restoreFilesFromSnapshot(
         snapshotDir: URL,
-        documentsURL: URL
-    ) -> (failures: [String], deletedAbsent: Int) {
+        documentsURL: URL,
+        writtenBytes: [String: Data]? = nil
+    ) -> (failures: [String], deletedAbsent: Int, keptLive: [String]) {
         guard let manifestData = try? Data(contentsOf: snapshotDir.appendingPathComponent("snapshot-manifest.json")),
               let parsed = try? JSONSerialization.jsonObject(with: manifestData, options: []),
               let manifest = parsed as? [String: Any]
-        else { return (["快照清单（snapshot-manifest.json）无法读取"], 0) }
+        else { return (["快照清单（snapshot-manifest.json）无法读取"], 0, []) }
         var failures: [String] = []
         var deletedAbsent = 0
+        var keptLive: [String] = []
         for relativePath in (manifest["filesPresent"] as? [String] ?? []) {
             // b49fix17 P2-3: the restore takes the file's queue
             // when it has one — a queued writer landing between
@@ -2529,16 +2680,53 @@ extension BackupEngineCore {
             // taking it here cannot deadlock. Payload paths
             // (music_downloads/..., local_music/...) have no
             // queue and restore bare.
-            let restored: Bool
-            if let queue = restoreQueue(for: relativePath) {
-                restored = queue.sync {
-                    restorePresentFile(relativePath: relativePath, snapshotDir: snapshotDir, documentsURL: documentsURL)
+            let restoreOne = { () -> (restored: Bool, kept: Bool) in
+                if let writtenBytes = writtenBytes {
+                    // Preserving restore (in-import rollback):
+                    // prior + live-added entries, or keep the
+                    // live file when it replaced the import's
+                    // write after it landed.
+                    let target = documentsURL.appendingPathComponent(relativePath)
+                    let prior = try? Data(contentsOf: snapshotDir.appendingPathComponent(relativePath))
+                    let current = try? Data(contentsOf: target)
+                    let restored = MigrationStore.restoredPreservingLive(
+                        prior: prior, written: writtenBytes[relativePath], current: current,
+                        file: String(relativePath.dropLast(".json".count)),
+                        kind: restoreKind(for: relativePath)
+                    )
+                    switch restored {
+                    case .data(let bytes):
+                        do {
+                            try bytes.write(to: target, options: [.atomic])
+                            return (true, false)
+                        } catch {
+                            return (false, false)
+                        }
+                    case .keepCurrent:
+                        return (true, true)
+                    case .remove:
+                        if FileManager.default.fileExists(atPath: target.path) {
+                            do {
+                                try FileManager.default.removeItem(at: target)
+                            } catch {
+                                return (false, false)
+                            }
+                        }
+                        return (true, false)
+                    }
                 }
-            } else {
-                restored = restorePresentFile(relativePath: relativePath, snapshotDir: snapshotDir, documentsURL: documentsURL)
+                return (restorePresentFile(relativePath: relativePath, snapshotDir: snapshotDir, documentsURL: documentsURL), false)
             }
-            if !restored {
+            let outcome: (restored: Bool, kept: Bool)
+            if let queue = restoreQueue(for: relativePath) {
+                outcome = queue.sync(execute: restoreOne)
+            } else {
+                outcome = restoreOne()
+            }
+            if !outcome.restored {
                 failures.append(relativePath)
+            } else if outcome.kept {
+                keptLive.append(relativePath)
             }
         }
         for relativePath in (manifest["filesAbsent"] as? [String] ?? []) {
@@ -2548,6 +2736,54 @@ extension BackupEngineCore {
             // (same rule as the keys side, b49fix5 P2-8), and
             // a failed removal is a failure, not a restore.
             if FileManager.default.fileExists(atPath: target.path) {
+                if let writtenBytes = writtenBytes {
+                    // Preserving restore (in-import rollback):
+                    // the file did not exist before the import —
+                    // keep only the live entries added after the
+                    // import created it; delete it when there are
+                    // none.
+                    let current = try? Data(contentsOf: target)
+                    let restored = MigrationStore.restoredPreservingLive(
+                        prior: nil, written: writtenBytes[relativePath], current: current,
+                        file: String(relativePath.dropLast(".json".count)),
+                        kind: restoreKind(for: relativePath)
+                    )
+                    switch restored {
+                    case .data(let bytes):
+                        do {
+                            try bytes.write(to: target, options: [.atomic])
+                        } catch {
+                            failures.append(relativePath)
+                        }
+                    case .keepCurrent:
+                        keptLive.append(relativePath)
+                    case .remove:
+                        let removed: Bool
+                        if let queue = restoreQueue(for: relativePath) {
+                            removed = queue.sync {
+                                do {
+                                    try FileManager.default.removeItem(at: target)
+                                    return true
+                                } catch {
+                                    return false
+                                }
+                            }
+                        } else {
+                            do {
+                                try FileManager.default.removeItem(at: target)
+                                removed = true
+                            } catch {
+                                removed = false
+                            }
+                        }
+                        if removed {
+                            deletedAbsent += 1
+                        } else {
+                            failures.append(relativePath)
+                        }
+                    }
+                    continue
+                }
                 let removed: Bool
                 if let queue = restoreQueue(for: relativePath) {
                     removed = queue.sync {
@@ -2573,7 +2809,27 @@ extension BackupEngineCore {
                 }
             }
         }
-        return (failures, deletedAbsent)
+        return (failures, deletedAbsent, keptLive)
+    }
+
+    /// The restore kind of one relative path (b49fix19 P1-4):
+    /// merge files restore as prior + live-added entries,
+    /// whole-file files restore as prior bytes unless a live
+    /// writer replaced the import's write. musicQueue is a
+    /// whole-file file here (its live-wins rule makes a merge
+    /// restore meaningless — a switch after the write
+    /// legitimately replaced it, so it is kept, not merged).
+    private static func restoreKind(for relativePath: String) -> MigrationStore.RestoreKind {
+        let base = String(relativePath.dropLast(".json".count))
+        guard concurrentlyWrittenCollections.contains(base),
+              base != "musicQueue",
+              let shape = MigrationStore.expectedCollectionShape(for: base)
+        else { return .wholeFile }
+        switch shape {
+        case .list: return .mergeList
+        case .dict: return .mergeDict
+        case .stringList: return .mergeStringList
+        }
     }
 
     /// The serial queue a snapshot restore takes for one

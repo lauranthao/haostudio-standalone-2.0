@@ -30,12 +30,20 @@ struct MusicFavEntry {
     }
 
     init(json: [String: Any]) {
-        self.key = MusicDict.string(json, "key")
         if let songJSON = json["song"] as? [String: Any] {
             self.song = MusicSong(json: songJSON)
         } else {
             self.song = nil
         }
+        // b49fix19 P1-3: normalise the key on read — a backup
+        // entry whose stored key is "lx:xxx|id" is the same
+        // favourite as the live "wy|id" row; without this,
+        // toggleFav / isFav (which use the normalised
+        // identityKey) can never find or remove it, and the
+        // star goes out while the row stays. The merge rewrites
+        // the stored key the same way; this covers files that
+        // never go through an import.
+        self.key = MigrationStore.favMergeKey(for: json)
     }
 
     func toJSON() -> [String: Any] {
@@ -100,20 +108,43 @@ enum MusicLibraryStore {
     private static func readArray(named name: String) -> [[String: Any]] {
         let url = LocalStore.collectionURL(named: name)
         guard let data = try? Data(contentsOf: url) else { return [] }
-        return MusicDict.objectArray(from: data)
+        // b49fix19 P2-9c: a file that exists but does not decode
+        // is quarantined on the live read path too — the import
+        // path already did this (MigrationStore.readJSONList),
+        // but a live read that returned [] let the next live
+        // write overwrite the corrupt bytes with no preservation.
+        guard let parsed = try? JSONSerialization.jsonObject(with: data, options: []),
+              let array = parsed as? [[String: Any]]
+        else {
+            LocalStore.quarantineFile(at: url, name: name, reason: "decode failed")
+            return []
+        }
+        return array
     }
 
     private static func readObject(named name: String) -> [String: Any] {
         let url = LocalStore.collectionURL(named: name)
         guard let data = try? Data(contentsOf: url) else { return [:] }
-        return MusicDict.object(from: data)
+        // b49fix19 P2-9c: see readArray.
+        guard let parsed = try? JSONSerialization.jsonObject(with: data, options: []),
+              let dict = parsed as? [String: Any]
+        else {
+            LocalStore.quarantineFile(at: url, name: name, reason: "decode failed")
+            return [:]
+        }
+        return dict
     }
 
     private static func readStringArray(named name: String) -> [String] {
         let url = LocalStore.collectionURL(named: name)
-        guard let data = try? Data(contentsOf: url),
-              let parsed = try? JSONSerialization.jsonObject(with: data, options: []),
-              let array = parsed as? [String] else { return [] }
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        // b49fix19 P2-9c: see readArray.
+        guard let parsed = try? JSONSerialization.jsonObject(with: data, options: []),
+              let array = parsed as? [String]
+        else {
+            LocalStore.quarantineFile(at: url, name: name, reason: "decode failed")
+            return []
+        }
         return array
     }
 
@@ -801,7 +832,13 @@ enum MusicLibraryStore {
             var cache = coverCache()
             cache[key] = url
             while cache.count > maxCoverCache {
-                if let first = cache.keys.first { cache.removeValue(forKey: first) }
+                guard let first = cache.keys.first else { break }
+                cache.removeValue(forKey: first)
+                // b49fix19 P1-7: record the eviction — a key
+                // evicted between the import's merge and its
+                // verify is excused there instead of failing
+                // the whole import.
+                MigrationStore.noteCacheKeyEvicted(file: coverCacheCollection, key: first)
             }
             writeObject(named: coverCacheCollection, cache)
         }
@@ -849,6 +886,9 @@ enum MusicLibraryStore {
             guard dict.removeValue(forKey: identityKey) != nil else { return }
             writeObject(named: lyricsCacheCollection, dict)
             saveLyricsCacheOrder(lyricsCacheOrder().filter { $0 != identityKey })
+            // b49fix19 P1-7: record the drop — same excuse as
+            // an eviction (see saveCover).
+            MigrationStore.noteCacheKeyEvicted(file: lyricsCacheCollection, key: identityKey)
         }
     }
 
@@ -971,6 +1011,8 @@ enum MusicLibraryStore {
             guard let oldest = order.first(where: { $0 != identityKey }) else { break }
             order.removeAll(where: { $0 == oldest })
             cache.removeValue(forKey: oldest)
+            // b49fix19 P1-7: record the eviction — see saveCover.
+            MigrationStore.noteCacheKeyEvicted(file: lyricsCacheCollection, key: oldest)
         }
         writeObject(named: lyricsCacheCollection, cache)
         saveLyricsCacheOrder(order)
@@ -983,22 +1025,16 @@ enum MusicLibraryStore {
         return MusicQueueData(json: readObject(named: queueCollection))
     }
 
-    static func saveQueue(_ queue: MusicQueueData) {
-        // b49fix17 P1-3: the queue file write runs under
-        // MigrationStore.musicQueueWriteQueue, the same queue
-        // the backup import's queue merge takes — a switch
-        // landing between the import's re-read and write is
-        // serialised after it instead of silently replacing
-        // the queue being listened to.
-        MigrationStore.musicQueueWriteQueue.sync {
-            saveQueueLocked(queue)
-        }
-    }
-
     /// The queue write itself, assuming the caller's queue is
     /// held (b49fix18 D-3): saveQueueAsync dispatches here
     /// directly onto musicQueueWriteQueue, so the body must
     /// not sync on that queue again — that would deadlock.
+    ///
+    /// b49fix19 P2-8b: the sync `saveQueue` wrapper was deleted
+    /// here — it had zero callers in the app and in ios/Tests,
+    /// and the import's queue merge uses mergeMusicQueue, not
+    /// it, so the "import-alignment entry" justification was
+    /// false. saveQueueAsync + this function cover all paths.
     private static func saveQueueLocked(_ queue: MusicQueueData) {
         writeObject(named: queueCollection, queue.toJSON())
     }
@@ -1242,9 +1278,16 @@ enum MusicLibraryStore {
 
     static func fmDislikedIds() -> Set<String> {
         let url = LocalStore.collectionURL(named: "fmDislikedIds")
-        guard let data = try? Data(contentsOf: url),
-              let parsed = try? JSONSerialization.jsonObject(with: data, options: []),
-              let array = parsed as? [String] else { return [] }
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        guard let parsed = try? JSONSerialization.jsonObject(with: data, options: []),
+              let array = parsed as? [String]
+        else {
+            // b49fix19 P2-9c: see readArray — quarantine on the
+            // live read path instead of returning empty and
+            // letting the next write overwrite corrupt bytes.
+            LocalStore.quarantineFile(at: url, name: "fmDislikedIds", reason: "decode failed")
+            return []
+        }
         return Set(array)
     }
 

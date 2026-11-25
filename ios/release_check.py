@@ -65,8 +65,9 @@ FAILS, and the live shop IPA is downloaded and hashed against it.
 UserDefaults key catalogue census (2026-11-26, b49-sweep11
 release P2-1): the backup's key directory holds 98 distinct
 keys — 75 from MigrationStore.mappings rows whose destination
-is .userDefaults (112 mappings total, 75 distinct .userDefaults
-keys) + 23 more added in BackupEngine.userDefaultsKeyKinds()
+is .userDefaults (117 mappings total, 75 distinct .userDefaults
+keys; b49fix19 P2-1 added 5 collectionFile rows, so the
+UserDefaults count is unchanged) + 23 more added in BackupEngine.userDefaultsKeyKinds()
 (the S5 additions + b49fix2 P1-4 + b49fix4 P2-39 keys), zero
 overlap. The "116 keys" figure in the sweep-9/10 summaries
 was wrong (no source anywhere in the code) — do not reuse it;
