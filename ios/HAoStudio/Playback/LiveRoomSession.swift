@@ -49,12 +49,20 @@ final class LiveStallWatchdog {
     private var lastPosition: Double = 0
     private var progressSeen = false
     private var warned = false
+    /// Warns issued before the first position movement (slow
+    /// start, b49fix2 P2-46): the pre-progress warn is a
+    /// different episode from a genuine stall warn, so it gets
+    /// its own flag — sharing `warned` let a slow-starting room
+    /// warn once at 12 s and then never show the "加载缓慢…"
+    /// pill for a later genuine stall.
+    private var preProgressWarned = false
 
     func reset() {
         lastProgressAt = now()
         lastPosition = 0
         progressSeen = false
         warned = false
+        preProgressWarned = false
     }
 
     func noteBaseline() {
@@ -87,8 +95,8 @@ final class LiveStallWatchdog {
             // proves the stream can move at all. `progressSeen`
             // was set but never read before this fix.
             guard progressSeen else {
-                if !warned {
-                    warned = true
+                if !preProgressWarned {
+                    preProgressWarned = true
                     return .warn
                 }
                 return .none

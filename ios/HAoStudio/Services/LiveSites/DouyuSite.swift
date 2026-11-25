@@ -180,6 +180,16 @@ final class DouyuLiveSite: LiveSiteResolver {
         }
     }
 
+    /// Resolves that arrived while a line walk for the same room
+    /// + tier is still in flight (b49fix2 P1-24): a second resolve
+    /// used to start a second serial chain, whose early completion
+    /// returned the same dead first line — so the driver failed
+    /// the room before the first walk banked the other lines.
+    /// Joiners wait for the in-flight walk and get its FULL
+    /// resolution when it ends. Same join shape as Huya's
+    /// roomDetailInFlight.
+    private var lineWalkInFlight: [String: [(Result<LivePlayUrlResolution, Error>) -> Void]] = [:]
+
     init(fetcher: LiveDataFetcher? = nil, deviceId: String? = nil) {
         self.fetcher = fetcher ?? LiveHTTP.defaultFetcher
         self.deviceId = deviceId ?? DouyuUtils.generateDeviceId()
@@ -267,7 +277,20 @@ final class DouyuLiveSite: LiveSiteResolver {
                         completion(.success(cached))
                         return
                     }
-                    self.resolveLines(roomId: trimmed, qualities: qualities, requested: requested, requestedRate: requestedRate, cdns: cdns, completion: completion)
+                    // (b49fix2 P1-24) A line walk for this room +
+                    // tier is still in flight (its first line
+                    // already completed early): join it instead of
+                    // starting a second serial chain. The joiner
+                    // gets the FULL resolution when the walk ends,
+                    // so a dead first line no longer fails the
+                    // room before the other lines finish resolving.
+                    let walkKey = self.backgroundCacheKey(roomId: trimmed, qualityId: requested.id)
+                    if self.locked({ self.lineWalkInFlight[walkKey] != nil }) {
+                        self.locked { self.lineWalkInFlight[walkKey, default: []].append(completion) }
+                        return
+                    }
+                    self.locked { self.lineWalkInFlight[walkKey] = [] }
+                    self.resolveLines(roomId: trimmed, qualities: qualities, requested: requested, requestedRate: requestedRate, cdns: cdns, walkKey: walkKey, completion: completion)
                 case .failure(let error):
                     completion(.failure(error))
             }
@@ -286,11 +309,33 @@ final class DouyuLiveSite: LiveSiteResolver {
     /// `cachedBackgroundResolution`) so the next re-parse
     /// (recovery / quality switch / line fallback) returns every
     /// line without another serial chain.
-    private func resolveLines(roomId: String, qualities: [LiveQuality], requested: LiveQuality, requestedRate: Int, cdns: [String], completion: @escaping (Result<LivePlayUrlResolution, Error>) -> Void) {
+    private func resolveLines(roomId: String, qualities: [LiveQuality], requested: LiveQuality, requestedRate: Int, cdns: [String], walkKey: String, completion: @escaping (Result<LivePlayUrlResolution, Error>) -> Void) {
         var lines: [LiveLine] = []
         var remainingCdns = cdns
         var appliedRate: Int?
         var deliveredEarly = false
+        /// Drain one finished walk (b49fix2 P1-24): the entry is
+        /// removed BEFORE the completions run, so a completion
+        /// that re-enters resolve() registers a fresh walk
+        /// instead of joining a finished one. When the walk
+        /// delivered early, the original completion already fired
+        /// — bank the full resolution and answer the joiners
+        /// only; otherwise answer the original completion too.
+        func finishWalk(_ result: Result<LivePlayUrlResolution, Error>) {
+            let waiters = self.locked { self.lineWalkInFlight.removeValue(forKey: walkKey) ?? [] }
+            switch result {
+            case .success(let resolution):
+                if deliveredEarly {
+                    self.storeBackgroundResolution(resolution, roomId: roomId, qualityId: requested.id)
+                } else {
+                    completion(.success(resolution))
+                }
+                for waiter in waiters { waiter(.success(resolution)) }
+            case .failure(let error):
+                completion(.failure(error))
+                for waiter in waiters { waiter(.failure(error)) }
+            }
+        }
         func buildResolution() -> LivePlayUrlResolution {
             var filled = qualities
             // The lines belong to the tier the server confirmed
@@ -308,17 +353,10 @@ final class DouyuLiveSite: LiveSiteResolver {
         func next() {
             if remainingCdns.isEmpty {
                 if lines.isEmpty {
-                    completion(.failure(LiveError.transportFailed("斗鱼全部线路均不可用")))
+                    finishWalk(.failure(LiveError.transportFailed("斗鱼全部线路均不可用")))
                     return
                 }
-                if deliveredEarly {
-                    // The driver already opened the first line;
-                    // bank the full resolution for the next
-                    // re-parse instead of completing twice.
-                    self.storeBackgroundResolution(buildResolution(), roomId: roomId, qualityId: requested.id)
-                    return
-                }
-                completion(.success(buildResolution()))
+                finishWalk(.success(buildResolution()))
                 return
             }
             let cdn = remainingCdns.removeFirst()
@@ -692,48 +730,61 @@ extension DouyuLiveSite {
 
     /// Category names + ids (Dart `getCategories`): flat cate2
     /// list — this project's area model has no category tree.
-    func listCategories(completion: @escaping ([(id: String, name: String)]) -> Void) {
+    func listCategories(completion: @escaping (Result<[(id: String, name: String)], Error>) -> Void) {
         guard let url = URL(string: DouyuLiveSite.categoryListURL) else {
-            completion([])
+            completion(.failure(LiveError.emptyResponse))
             return
         }
         LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: DouyuUtils.requestHeaders(deviceId: deviceId), fetcher: fetcher) { json in
-            completion(DouyuLiveSite.parseCategories(json) ?? [])
+            if let areas = DouyuLiveSite.parseCategories(json) {
+                completion(.success(areas))
+            } else {
+                completion(.failure(LiveError.emptyResponse))
+            }
         }
     }
 
     /// Recommended rooms (Dart `getRecommendRooms`): the "全部"
     /// all-page feed, page 1-based here.
-    func recommendRooms(page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func recommendRooms(page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let currentPage = max(1, page)
         guard let url = URL(string: "https://www.douyu.com/japi/weblist/apinc/allpage/6/\(currentPage)") else {
-            completion([])
+            completion(.failure(LiveError.emptyResponse))
             return
         }
         LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: DouyuUtils.requestHeaders(deviceId: deviceId), fetcher: fetcher) { json in
-            completion(DouyuLiveSite.parseRoomList(json) ?? [])
+            if let rooms = DouyuLiveSite.parseRoomList(json) {
+                completion(.success(rooms))
+            } else {
+                completion(.failure(LiveError.emptyResponse))
+            }
         }
     }
 
     /// Rooms of one category (Dart `getCategoryRooms`): the
     /// mixList feed for `2_<cate2Id>`, same parser as recommend.
-    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let currentPage = max(1, page)
         guard let url = URL(string: "https://www.douyu.com/gapi/rkc/directory/mixList/2_\(areaId)/\(currentPage)") else {
-            completion([])
+            completion(.failure(LiveError.emptyResponse))
             return
         }
         LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: DouyuUtils.requestHeaders(deviceId: deviceId), fetcher: fetcher) { json in
-            completion(DouyuLiveSite.parseRoomList(json) ?? [])
+            if let rooms = DouyuLiveSite.parseRoomList(json) {
+                completion(.success(rooms))
+            } else {
+                completion(.failure(LiveError.emptyResponse))
+            }
         }
     }
 
     /// Room search (Dart `searchRooms`): `relateShow` entries.
-    /// A non-zero `error` is a failure, returned as [].
-    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    /// A non-zero `error` is a failure, answered as `.failure`
+    /// (b49fix2 P2-1) instead of an empty list.
+    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            completion([])
+            completion(.success([]))
             return
         }
         var headers = DouyuUtils.requestHeaders(deviceId: deviceId)
@@ -741,11 +792,15 @@ extension DouyuLiveSite {
         guard let url = LiveListURL.url(base: DouyuLiveSite.searchShowURL, params: [
             ("kw", trimmed), ("page", "\(max(1, page))"), ("pageSize", "\(min(50, max(1, pageSize)))")
         ]) else {
-            completion([])
+            completion(.failure(LiveError.emptyResponse))
             return
         }
         LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: fetcher) { json in
-            completion(DouyuLiveSite.parseSearchRooms(json) ?? [])
+            if let rooms = DouyuLiveSite.parseSearchRooms(json) {
+                completion(.success(rooms))
+            } else {
+                completion(.failure(LiveError.emptyResponse))
+            }
         }
     }
 
@@ -780,11 +835,18 @@ extension DouyuLiveSite {
             let roomId = LiveJSON.asString(item["rid"])
             guard !roomId.isEmpty else { continue }
             let avatarRaw = LiveJSON.asString(item["av"])
+            // (b49fix2 P1-19) The feed's `av` is already a full
+            // URL ending in `_middle.jpg` — prefixing it again
+            // built a garbage double-prefixed URL that 404s, so
+            // every recommend/category avatar was broken. Use it
+            // directly when it starts with http; the prefixed
+            // construction survives only for a bare avatar id.
+            let avatar = avatarRaw.isEmpty ? "" : (avatarRaw.hasPrefix("http") ? avatarRaw : "https://apic.douyucdn.cn/upload/\(avatarRaw)_middle.jpg")
             rooms.append(LiveRoom(
                 roomId: roomId, platform: .douyu,
                 title: LiveJSON.asString(item["rn"]),
                 streamer: LiveJSON.asString(item["nn"]),
-                avatar: avatarRaw.isEmpty ? "" : "https://apic.douyucdn.cn/upload/\(avatarRaw)_middle.jpg",
+                avatar: avatar,
                 cover: LiveJSON.asString(item["rs16"]),
                 onlineCount: LiveJSON.asInt(item["ol"]),
                 isLive: true,

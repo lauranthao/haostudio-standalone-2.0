@@ -247,10 +247,10 @@ final class DeferredLiveGateway: LiveDataGateway {
         pendingRecommended[index].completion(LiveRoomPage(rooms: rooms, hasMore: hasMore))
     }
 
-    func fetchCategories(platform: String, completion: @escaping ([String]) -> Void) {}
+    func fetchCategories(platform: String, completion: @escaping (Result<[String], Error>) -> Void) {}
 
-    func searchRooms(query: String, platform: String, completion: @escaping ([LiveRoom]) -> Void) {
-        completion([])
+    func searchRooms(query: String, platform: String, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
+        completion(.success([]))
     }
 
     func fetchRoomDetail(room: LiveRoom, completion: @escaping (LiveRoom?) -> Void) {

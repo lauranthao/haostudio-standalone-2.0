@@ -179,6 +179,13 @@ class LiveDanmakuTransportBase: LiveDanmakuTransport {
     var _injectedSocket: LiveDanmakuSocket?
     var _heartbeatTimer: DispatchSourceTimer?
     var _reconnect: (() -> Void)?
+    /// Consecutive reconnect attempts in this generation (b49fix2
+    /// P2-60): the disconnect handler used to reschedule forever
+    /// with no counter — a dead room polled every 2 s for the
+    /// whole visit. Capped like KuaishouDanmaku (8); a successful
+    /// (re)connect resets the count.
+    var _reconnectAttempts = 0
+    static let maxReconnectAttempts = 8
 
     /// Seconds between a dropped socket and the reconnect attempt.
     static let reconnectDelaySeconds: Double = 2
@@ -214,6 +221,7 @@ class LiveDanmakuTransportBase: LiveDanmakuTransport {
         _generation += 1
         _stopped = false
         _connected = false
+        _reconnectAttempts = 0
         cancelHeartbeat()
         _socket?.close()
         _socket = nil
@@ -243,6 +251,10 @@ class LiveDanmakuTransportBase: LiveDanmakuTransport {
             guard let self = self, generation == self._generation else {
                 return
             }
+            // A successful (re)connect resets the cap (b49fix2
+            // P2-60, mirroring Kuaishou's reset on a successful
+            // poll): only CONSECUTIVE failures count toward the cap.
+            self._reconnectAttempts = 0
             onSocketReady()
         }
         socket.onDisconnected = { [weak self] in
@@ -251,7 +263,17 @@ class LiveDanmakuTransportBase: LiveDanmakuTransport {
             }
             self._connected = false
             self.cancelHeartbeat()
-            self.onReconnect?()
+            // (b49fix2 P2-60) Cap the reconnect loop like
+            // Kuaishou: past the cap the transport gives up
+            // (onClose) instead of polling a dead room forever.
+            self._reconnectAttempts += 1
+            if self._reconnectAttempts > LiveDanmakuTransportBase.maxReconnectAttempts {
+                self.onClose?()
+                return
+            }
+            if self._reconnectAttempts == 1 {
+                self.onReconnect?()
+            }
             let reconnect = self._reconnect
             LiveHTTP.after(seconds: LiveDanmakuTransportBase.reconnectDelaySeconds) { [weak self] in
                 guard let self = self, generation == self._generation, !self._stopped else {

@@ -166,23 +166,40 @@ final class DouyuSiteTests: XCTestCase {
 
     // MARK: - Resolve end to end (stub fetcher)
 
+    /// New contract (b49fix2 T2 — first-line early delivery,
+    /// deliberate sweep-1 fix, NOT reverted): the first
+    /// completion carries only the first playable line, so the
+    /// driver opens it at once; the walk banks the full
+    /// resolution, and a re-resolve (recovery / line fallback)
+    /// returns every line, scdn last, without another chain.
     func testResolveSortsScdnLastAndEchoesConfirmedRate() {
         let fetcher = routingFetcher([
             ("getEncryption", jsonData("{\"code\":0,\"data\":{\"key\":\"testkey123\",\"rand_str\":\"RANDSTR9\",\"enc_time\":2,\"enc_data\":\"enc\",\"expire_at\":9999999999}}"), 200),
             ("getH5PlayV1", jsonData("{\"error\":0,\"data\":{\"rtmp_live\":\"https://cdn.douyucdn.cn/live/123456.flv?wsSecret=x\",\"cdnsWithName\":[{\"cdn\":\"tx\"},{\"cdn\":\"scdn-tx\"},{\"cdn\":\"ws\"}],\"rtmp_cdn\":\"tx\",\"multirates\":[{\"rate\":0,\"name\":\"原画\"},{\"rate\":1,\"name\":\"超清\"}],\"rate\":0}}"), 200)
         ])
         let site = DouyuLiveSite(fetcher: fetcher)
-        let expectation = self.expectation(description: "resolve")
+        let firstLine = self.expectation(description: "resolve first line")
         site.resolve(roomId: "123456", quality: nil) { result in
             if case.success(let resolution) = result {
                 XCTAssertEqual(resolution.quality?.id, "0")
                 XCTAssertEqual(resolution.quality?.name, "原画")
+                XCTAssertEqual(resolution.quality?.lines.map { $0.name}, ["tx"])
+                XCTAssertEqual(resolution.appliedUrls, ["https://cdn.douyucdn.cn/live/123456.flv?wsSecret=x"])
+            } else {
+                XCTFail("expected success, got \(result)")
+            }
+            firstLine.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+        let bankedFull = self.expectation(description: "resolve banked full")
+        site.resolve(roomId: "123456", quality: nil) { result in
+            if case .success(let resolution) = result {
                 XCTAssertEqual(resolution.quality?.lines.map { $0.name}, ["tx", "ws", "scdn-tx"])
                 XCTAssertEqual(resolution.appliedUrls, ["https://cdn.douyucdn.cn/live/123456.flv?wsSecret=x"])
             } else {
                 XCTFail("expected success, got \(result)")
             }
-            expectation.fulfill()
+            bankedFull.fulfill()
         }
         waitForExpectations(timeout: 5)
     }

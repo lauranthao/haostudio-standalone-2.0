@@ -129,7 +129,12 @@ final class LiveGatewayAdapterTests: XCTestCase {
     func testAdapterSearchBilibiliViaStub() {
         let adapter = LiveDataGatewayAdapter(fetcher: routingFetcher([("search/type", jsonData(bilibiliSearchJSON), 200)]))
         let expectation = self.expectation(description: "adapter search")
-        adapter.searchRooms(query: "测试", platform: "bili") { rooms in
+        adapter.searchRooms(query: "测试", platform: "bili") { result in
+            guard case .success(let rooms) = result else {
+                XCTFail("expected success, got \(result)")
+                expectation.fulfill()
+                return
+            }
             XCTAssertEqual(rooms.count, 2)
             XCTAssertEqual(rooms[0].title, "测试直播")
             XCTAssertTrue(rooms[0].isLive)
@@ -156,7 +161,12 @@ final class LiveGatewayAdapterTests: XCTestCase {
     func testAdapterSearchDedupsRepeatedRooms() {
         let adapter = LiveDataGatewayAdapter(fetcher: routingFetcher([("search/type", jsonData(bilibiliSearchWithDuplicateJSON), 200)]))
         let expectation = self.expectation(description: "adapter search dedup")
-        adapter.searchRooms(query: "测试", platform: "bili") { rooms in
+        adapter.searchRooms(query: "测试", platform: "bili") { result in
+            guard case .success(let rooms) = result else {
+                XCTFail("expected success, got \(result)")
+                expectation.fulfill()
+                return
+            }
             XCTAssertEqual(rooms.count, 1)
             XCTAssertEqual(rooms[0].roomId, "21")
             expectation.fulfill()
@@ -178,7 +188,12 @@ final class LiveGatewayAdapterTests: XCTestCase {
     func testAdapterCategoriesDouyuViaStub() {
         let adapter = LiveDataGatewayAdapter(fetcher: routingFetcher([("cate/list", jsonData(douyuCategoriesJSON), 200)]))
         let expectation = self.expectation(description: "adapter categories")
-        adapter.fetchCategories(platform: "douyu") { names in
+        adapter.fetchCategories(platform: "douyu") { result in
+            guard case .success(let names) = result else {
+                XCTFail("expected success, got \(result)")
+                expectation.fulfill()
+                return
+            }
             XCTAssertEqual(names, ["英雄联盟", "户外"])
             expectation.fulfill()
         }
@@ -280,7 +295,12 @@ final class LiveGatewayAdapterTests: XCTestCase {
         }
         waitForExpectations(timeout: 5)
         let search = self.expectation(description: "adapter unknown search")
-        adapter.searchRooms(query: "x", platform: "nope") { rooms in
+        adapter.searchRooms(query: "x", platform: "nope") { result in
+            guard case .success(let rooms) = result else {
+                XCTFail("expected success, got \(result)")
+                search.fulfill()
+                return
+            }
             XCTAssertEqual(rooms.count, 0)
             search.fulfill()
         }

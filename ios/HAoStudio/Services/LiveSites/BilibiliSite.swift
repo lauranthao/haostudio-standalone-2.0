@@ -16,10 +16,10 @@
 // http_stream/flv first; lines are identified by URL, never by
 // index.
 //
-// Carousel rooms (live_status 2) are NOT resolved here: the
-// round-play video needs a start offset the resolution model has
-// no field for, so they report offline (the Flutter port starts
-// them at 0; the A leg can add carousel support later).
+// Carousel rooms (live_status 2) resolve like the Flutter
+// port: a watchable looping video, started at the loop start
+// (the resolution model has no start-offset field, so playback
+// begins at 0 — b49fix2 P2-19).
 //
 // Swift 5.0: completion handlers only, no async/await, no `any`.
 
@@ -52,6 +52,14 @@ final class BilibiliLiveSite: LiveSiteResolver {
     /// In-flight room-detail loads, keyed by trimmed room id
     /// (build 36 item 10 leg 4 — see `loadRoomInfo`).
     private var roomDetailInFlight: [String: [(Result<LiveRoom, Error>) -> Void]] = [:]
+    /// In-flight raw room_info fetches, keyed by trimmed room id
+    /// (b49fix2 P1-21): the playback resolve and the danmaku
+    /// roomInfo both need the same room_info response. A second
+    /// caller joins the fetch in flight instead of starting
+    /// another; every joiner gets its own completion with the
+    /// same result. The entry is dropped when the fetch finishes,
+    /// so a later fetch always goes to the network.
+    private var roomInfoFetchInFlight: [String: [(Result<RoomInfoResult, Error>) -> Void]] = [:]
     /// sub-area id -> parent area id, filled by listCategories.
     /// second/getList returns -400 without parent_area_id, so a
     /// category room list is only attempted when the parent is known.
@@ -128,7 +136,7 @@ final class BilibiliLiveSite: LiveSiteResolver {
         if alreadyInFlight {
             return
         }
-        fetchRoomInfo(roomId: roomId, attempt: 0) { result in
+        fetchRoomInfoShared(roomId: roomId) { result in
             switch result {
             case .success(let roomInfo):
                 self.discoverDanmaku(realRoomId: roomInfo.realRoomId) { danmakuData in
@@ -136,6 +144,30 @@ final class BilibiliLiveSite: LiveSiteResolver {
                 }
             case .failure(let error):
                 self.finishRoomDetail(roomId: roomId, result: .failure(error))
+            }
+        }
+    }
+
+    /// Shared room_info fetch (b49fix2 P1-21): join-or-start, so
+    /// the playback resolve and the danmaku roomInfo issue one
+    /// room_info request between them instead of two. The lock is
+    /// only held for the state touch, never across a completion.
+    private func fetchRoomInfoShared(roomId: String, completion: @escaping (Result<RoomInfoResult, Error>) -> Void) {
+        let alreadyInFlight = locked {
+            var list = roomInfoFetchInFlight[roomId] ?? []
+            list.append(completion)
+            roomInfoFetchInFlight[roomId] = list
+            return list.count > 1
+        }
+        if alreadyInFlight {
+            return
+        }
+        fetchRoomInfo(roomId: roomId, attempt: 0) { result in
+            let completions = self.locked {
+                self.roomInfoFetchInFlight.removeValue(forKey: roomId) ?? []
+            }
+            for item in completions {
+                item(result)
             }
         }
     }
@@ -254,14 +286,23 @@ final class BilibiliLiveSite: LiveSiteResolver {
             completion(.failure(LiveError.invalidRoomId))
             return
         }
-        loadRoomInfo(roomId: trimmed) { result in
+        // (b49fix2 P1-21) Playback does not wait for danmaku:
+        // the room_info fetch is shared with the danmaku path
+        // (one request, both join it), but the danmaku discovery
+        // runs only on the roomInfo path — resolve needs just the
+        // live status + the real room id, then fires playInfo at
+        // once. Five sequential hops become two parallel ones
+        // (room_info + playInfo) and the first frame no longer
+        // waits on a WBI-signed danmaku round trip.
+        fetchRoomInfoShared(roomId: trimmed) { result in
             switch result {
-            case .success(let room):
-                if !room.isLive {
+            case .success(let roomInfo):
+                let info = LiveJSON.asMap(roomInfo.data["room_info"]) ?? [:]
+                guard BilibiliLiveSite.isPlayableLiveStatus(info["live_status"]) else {
                     completion(.failure(LiveError.offline))
                     return
                 }
-                let realRoomId = LiveJSON.asString(room.data?["realRoomId"])
+                let realRoomId = roomInfo.realRoomId
                 self.requestPlayInfo(roomId: realRoomId.isEmpty ? trimmed : realRoomId, qualityId: quality?.id) { playResult in
                     switch playResult {
                     case .success(let json):
@@ -418,7 +459,7 @@ final class BilibiliLiveSite: LiveSiteResolver {
         let info = LiveJSON.asMap(roomInfo["room_info"]) ?? [:]
         let anchor = LiveJSON.asMap(roomInfo["anchor_info"]) ?? [:]
         let baseInfo = LiveJSON.asMap(anchor["base_info"]) ?? [:]
-        let live = liveStatus(info["live_status"]) == 1
+        let live = BilibiliLiveSite.isPlayableLiveStatus(info["live_status"])
         let face = LiveJSON.asString(baseInfo["face"])
         return LiveRoom(
             roomId: roomId,
@@ -438,6 +479,15 @@ final class BilibiliLiveSite: LiveSiteResolver {
     /// 1 = live, 2 = carousel, anything else = offline.
     static func liveStatus(_ value: Any?) -> Int {
         LiveJSON.asInt(value)
+    }
+
+    /// A status that plays (b49fix2 P2-19): live (1) and carousel
+    /// (2, a watchable looping video — the Flutter port starts it
+    /// at the loop start, which the resolution model has no field
+    /// for, so playback begins at 0).
+    static func isPlayableLiveStatus(_ value: Any?) -> Bool {
+        let status = liveStatus(value)
+        return status == 1 || status == 2
     }
 
     /// token + host_list -> transport args. The generic gateway has
@@ -717,7 +767,7 @@ extension BilibiliLiveSite {
     /// the ranked endpoint first (sort=online), the
     /// recommendation feed only as a bounded fallback. Page is
     /// 1-based here; the adapter converts the tab's 0-based page.
-    func recommendRooms(page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func recommendRooms(page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let size = min(30, max(1, pageSize))
         let currentPage = max(1, page)
         headers { [weak self] headers in
@@ -725,7 +775,7 @@ extension BilibiliLiveSite {
             self.requestRankedRecommend(page: currentPage, pageSize: size, headers: headers, attempt: 0) { [weak self] rooms in
                 guard let self = self else { return }
                 if let rooms = rooms {
-                    completion(rooms)
+                    completion(.success(rooms))
                     return
                 }
                 self.requestRecommendFallback(page: currentPage, headers: headers, completion: completion)
@@ -758,40 +808,44 @@ extension BilibiliLiveSite {
         }
     }
 
-    private func requestRecommendFallback(page: Int, headers: [String: String], completion: @escaping ([LiveRoom]) -> Void) {
+    private func requestRecommendFallback(page: Int, headers: [String: String], completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         guard let url = LiveListURL.url(base: BilibiliLiveSite.fallbackRecommendURL, params: [
             ("platform", "web"), ("page", "\(page)")
         ]) else {
-            completion([])
+            completion(.failure(LiveError.emptyResponse))
             return
         }
         LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: fetcher) { json in
-            completion(BilibiliLiveSite.parseRecommendRooms(json) ?? [])
+            if let rooms = BilibiliLiveSite.parseRecommendRooms(json) {
+                completion(.success(rooms))
+            } else {
+                completion(.failure(LiveError.emptyResponse))
+            }
         }
     }
 
     /// Category names + ids (Dart `getCategories`): the parent ->
     /// sub-area tree flattened to sub-areas. The parent id of each
     /// sub-area is recorded for `categoryRooms`.
-    func listCategories(completion: @escaping ([(id: String, name: String)]) -> Void) {
+    func listCategories(completion: @escaping (Result<[(id: String, name: String)], Error>) -> Void) {
         headers { [weak self] headers in
             guard let self = self else { return }
             guard let url = LiveListURL.url(base: BilibiliLiveSite.areaListURL, params: [
                 ("need_entrance", "1"), ("parent_id", "0")
             ]) else {
-                completion([])
+                completion(.failure(LiveError.emptyResponse))
                 return
             }
             LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { [weak self] json in
                 guard let self = self else { return }
                 guard let triples = BilibiliLiveSite.parseCategories(json) else {
-                    completion([])
+                    completion(.failure(LiveError.emptyResponse))
                     return
                 }
                 for triple in triples {
                     self.locked { self.categoryParentIds[triple.id] = triple.parentId }
                 }
-                completion(triples.map { (id: $0.id, name: $0.name) })
+                completion(.success(triples.map { (id: $0.id, name: $0.name) }))
             }
         }
     }
@@ -801,7 +855,7 @@ extension BilibiliLiveSite {
     /// parent map is empty the categories are fetched first; an
     /// unknown parent yields an empty list rather than a request
     /// the server rejects (-400).
-    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         if locked({ categoryParentIds.isEmpty }) {
             listCategories { [weak self] _ in
                 guard let self = self else { return }
@@ -812,9 +866,9 @@ extension BilibiliLiveSite {
         requestCategoryRooms(areaId: areaId, page: page, completion: completion)
     }
 
-    private func requestCategoryRooms(areaId: String, page: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    private func requestCategoryRooms(areaId: String, page: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         guard let parentId = locked({ categoryParentIds[areaId] }) else {
-            completion([])
+            completion(.success([]))
             return
         }
         let currentPage = max(1, page)
@@ -824,13 +878,28 @@ extension BilibiliLiveSite {
             self.signedJSON(raw: raw, forceRefresh: false) { [weak self] json in
                 guard let self = self else { return }
                 if let rooms = BilibiliLiveSite.parseCategoryRooms(json) {
-                    completion(rooms)
+                    completion(.success(rooms))
                     return
                 }
                 LiveHTTP.after(milliseconds: 180) { [weak self] in
                     guard let self = self else { return }
-                    self.signedJSON(raw: raw, forceRefresh: true) { json in
-                        completion(BilibiliLiveSite.parseCategoryRooms(json) ?? [])
+                    // (b49fix2 P2-21) An empty w_webid answers
+                    // -352: re-signing the same empty param cannot
+                    // fix it. Retry once without the w_webid param
+                    // at all (the WBI signature still covers the
+                    // remaining params) before giving up.
+                    let retryRaw: String
+                    if accessId.isEmpty {
+                        retryRaw = "\(BilibiliLiveSite.categoryRoomsBaseURL)?platform=web&parent_area_id=\(parentId)&area_id=\(areaId)&sort_type=online&page=\(currentPage)"
+                    } else {
+                        retryRaw = raw
+                    }
+                    self.signedJSON(raw: retryRaw, forceRefresh: true) { json in
+                        if let rooms = BilibiliLiveSite.parseCategoryRooms(json) {
+                            completion(.success(rooms))
+                        } else {
+                            completion(.failure(LiveError.emptyResponse))
+                        }
                     }
                 }
             }
@@ -839,10 +908,10 @@ extension BilibiliLiveSite {
 
     /// Room search (Dart `searchRooms`, search_type 'live').
     /// Matches title AND anchor nick on the server side.
-    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            completion([])
+            completion(.success([]))
             return
         }
         let size = min(50, max(1, pageSize))
@@ -854,11 +923,15 @@ extension BilibiliLiveSite {
                 ("__refresh__", ""), ("_extra", ""), ("highlight", "0"),
                 ("single_column", "0"), ("page", "\(max(1, page))"), ("page_size", "\(size)")
             ]) else {
-                completion([])
+                completion(.failure(LiveError.emptyResponse))
                 return
             }
             LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: self.fetcher) { json in
-                completion(BilibiliLiveSite.parseSearchRooms(json) ?? [])
+                if let rooms = BilibiliLiveSite.parseSearchRooms(json) {
+                    completion(.success(rooms))
+                } else {
+                    completion(.failure(LiveError.emptyResponse))
+                }
             }
         }
     }
@@ -975,7 +1048,7 @@ extension BilibiliLiveSite {
                 title: LiveJSON.asString(item["title"]),
                 streamer: LiveJSON.asString(item["uname"]),
                 avatar: BilibiliLiveSite.normalizeImageURL(LiveJSON.asString(item["face"])),
-                cover: cover.isEmpty ? "" : "\(cover)@400w.jpg",
+                cover: BilibiliLiveSite.sizedCover(cover),
                 onlineCount: LiveJSON.asInt(item["online"]),
                 isLive: true,
                 link: LivePlatform.bilibili.roomLink(roomId: roomId)))
@@ -1027,7 +1100,7 @@ extension BilibiliLiveSite {
                 title: LiveJSON.asString(item["title"]),
                 streamer: LiveJSON.asString(item["uname"]),
                 avatar: BilibiliLiveSite.normalizeImageURL(LiveJSON.asString(item["face"])),
-                cover: cover.isEmpty ? "" : "\(cover)@400w.jpg",
+                cover: BilibiliLiveSite.sizedCover(cover),
                 onlineCount: LiveJSON.asInt(item["online"]),
                 isLive: true,
                 link: LivePlatform.bilibili.roomLink(roomId: roomId)))
@@ -1052,7 +1125,7 @@ extension BilibiliLiveSite {
                 avatar: BilibiliLiveSite.searchCover(item["uface"]),
                 cover: BilibiliLiveSite.searchCover(item["cover"]),
                 onlineCount: LiveJSON.asInt(item["online"]),
-                isLive: LiveJSON.asInt(item["live_status"]) == 1,
+                isLive: BilibiliLiveSite.isPlayableLiveStatus(item["live_status"]),
                 link: LivePlatform.bilibili.roomLink(roomId: roomId)))
         }
         return rooms
@@ -1090,11 +1163,22 @@ extension BilibiliLiveSite {
     }
 
     /// Search cover/uface: protocol-relative ('//i0.hdslb.com/…') ->
-    /// https, served at 400w.
+    /// https, served at 400w (suffix only when the URL carries no
+    /// suffix or query yet — b49fix2 P2-20).
     static func searchCover(_ raw: Any?) -> String {
         let value = LiveJSON.asString(raw).trimmingCharacters(in: .whitespaces)
         guard !value.isEmpty else { return "" }
         let withScheme = value.hasPrefix("//") ? "https:\(value)" : value
-        return "\(withScheme)@400w.jpg"
+        return BilibiliLiveSite.sizedCover(withScheme)
+    }
+
+    /// 400w cover suffix (b49fix2 P2-20): appending `@400w.jpg`
+    /// unconditionally broke cover URLs that already carry a
+    /// suffix or query params — append only when neither is
+    /// present.
+    static func sizedCover(_ cover: String) -> String {
+        guard !cover.isEmpty else { return "" }
+        if cover.contains("@") || cover.contains("?") { return cover }
+        return "\(cover)@400w.jpg"
     }
 }

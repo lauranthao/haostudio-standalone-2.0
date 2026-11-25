@@ -195,9 +195,27 @@ final class HuyaSiteTests: XCTestCase {
 
     // MARK: - Resolve end to end
 
+    /// New contract (b49fix2 T2 — first-line early delivery,
+    /// deliberate sweep-1 fix, NOT reverted): the first
+    /// completion carries only the first line (FLV), so the
+    /// driver opens it at once; the walk banks the full
+    /// resolution, and a re-resolve returns both lines.
     func testResolveReturnsSourceQualityWithBothLines() {
         let site = HuyaLiveSite(fetcher: stubFetcher(data: jsonData(roomPageHTML), status: 200))
-        let expectation = self.expectation(description: "resolve")
+        let firstLine = self.expectation(description: "resolve first line")
+        site.resolve(roomId: "123456", quality: nil) { result in
+            if case .success(let resolution) = result {
+                XCTAssertEqual(resolution.quality?.id, "0")
+                XCTAssertEqual(resolution.quality?.name, "原画")
+                XCTAssertEqual(resolution.appliedUrls.count, 1)
+                XCTAssertTrue(resolution.appliedUrls[0].contains(".flv?"))
+            } else {
+                XCTFail("expected success, got \(result)")
+            }
+            firstLine.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+        let bankedFull = self.expectation(description: "resolve banked full")
         site.resolve(roomId: "123456", quality: nil) { result in
             if case .success(let resolution) = result {
                 XCTAssertEqual(resolution.quality?.id, "0")
@@ -211,7 +229,7 @@ final class HuyaSiteTests: XCTestCase {
             } else {
                 XCTFail("expected success, got \(result)")
             }
-            expectation.fulfill()
+            bankedFull.fulfill()
         }
         waitForExpectations(timeout: 5)
     }

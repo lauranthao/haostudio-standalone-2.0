@@ -102,7 +102,12 @@ final class LiveListsTests: XCTestCase {
         let fetcher = routingFetcher([("getListByAreaID", jsonData(bilibiliRecommendJSON), 200)])
         let site = BilibiliLiveSite(fetcher: fetcher)
         let expectation = self.expectation(description: "bilibili recommend")
-        site.recommendRooms(page: 1, pageSize: 30) { rooms in
+        site.recommendRooms(page: 1, pageSize: 30) { result in
+            guard case .success(let rooms) = result else {
+                XCTFail("expected success, got \(result)")
+                expectation.fulfill()
+                return
+            }
             XCTAssertEqual(rooms.count, 2)
             XCTAssertEqual(rooms[0].roomId, "7")
             expectation.fulfill()
@@ -175,7 +180,12 @@ final class LiveListsTests: XCTestCase {
         let fetcher = routingFetcher([("allpage", jsonData(douyuRoomListJSON), 200)])
         let site = DouyuLiveSite(fetcher: fetcher)
         let expectation = self.expectation(description: "douyu recommend")
-        site.recommendRooms(page: 1, pageSize: 30) { rooms in
+        site.recommendRooms(page: 1, pageSize: 30) { result in
+            guard case .success(let rooms) = result else {
+                XCTFail("expected success, got \(result)")
+                expectation.fulfill()
+                return
+            }
             XCTAssertEqual(rooms.count, 2)
             XCTAssertEqual(rooms[0].roomId, "100")
             expectation.fulfill()
@@ -253,7 +263,12 @@ final class LiveListsTests: XCTestCase {
         let fetcher = routingFetcher([("cache.php", jsonData(huyaCacheJSON), 200)])
         let site = HuyaLiveSite(fetcher: fetcher)
         let expectation = self.expectation(description: "huya recommend")
-        site.recommendRooms(page: 1, pageSize: 30) { rooms in
+        site.recommendRooms(page: 1, pageSize: 30) { result in
+            guard case .success(let rooms) = result else {
+                XCTFail("expected success, got \(result)")
+                expectation.fulfill()
+                return
+            }
             XCTAssertEqual(rooms.count, 2)
             XCTAssertEqual(rooms[0].roomId, "300")
             expectation.fulfill()
@@ -412,7 +427,12 @@ final class LiveListsTests: XCTestCase {
         let fetcher = routingFetcher([("home/list", jsonData(kuaishouRecommendJSON), 200)])
         let site = KuaishouLiveSite(fetcher: fetcher)
         let expectation = self.expectation(description: "kuaishou page 1")
-        site.recommendRooms(page: 1, pageSize: 1) { rooms in
+        site.recommendRooms(page: 1, pageSize: 1) { result in
+            guard case .success(let rooms) = result else {
+                XCTFail("expected success, got \(result)")
+                expectation.fulfill()
+                return
+            }
             XCTAssertEqual(rooms.count, 1)
             XCTAssertEqual(rooms[0].roomId, "u1")
             expectation.fulfill()
@@ -424,7 +444,12 @@ final class LiveListsTests: XCTestCase {
         let fetcher = routingFetcher([("home/list", jsonData(kuaishouRecommendJSON), 200)])
         let site = KuaishouLiveSite(fetcher: fetcher)
         let expectation = self.expectation(description: "kuaishou page 2")
-        site.recommendRooms(page: 2, pageSize: 1) { rooms in
+        site.recommendRooms(page: 2, pageSize: 1) { result in
+            guard case .success(let rooms) = result else {
+                XCTFail("expected success, got \(result)")
+                expectation.fulfill()
+                return
+            }
             XCTAssertEqual(rooms.count, 1)
             XCTAssertEqual(rooms[0].roomId, "u2")
             expectation.fulfill()
@@ -442,7 +467,12 @@ final class LiveListsTests: XCTestCase {
         let fetcher = routingFetcher([("category/data", jsonData(fixture), 200)])
         let site = KuaishouLiveSite(fetcher: fetcher)
         let expectation = self.expectation(description: "kuaishou categories")
-        site.listCategories { areas in
+        site.listCategories { result in
+            guard case .success(let areas) = result else {
+                XCTFail("expected success, got \(result)")
+                expectation.fulfill()
+                return
+            }
             XCTAssertEqual(areas.count, 16)
             XCTAssertEqual(areas[0].id, "1001")
             expectation.fulfill()

@@ -587,7 +587,20 @@ final class PlaybackCoordinator: ObservableObject {
     func requestVodPlay(_ item: PlaybackItem) {
         guard let driver = vodDriver else { return }
         if let current = driver.currentEpisode, current.id == item.id {
+            // (b49fix2 P1-2) M3, mirrored from requestPlay: the
+            // same-episode resume used to bypass mutual exclusion
+            // — a song / live room kept sounding under the resumed
+            // episode. Stop the other domains first, exactly like
+            // the new-request path below and requestPlay's
+            // same-track branch.
+            musicDriver?.stop()
+            liveDriver?.stop()
             if driver.isPlaying { return }
+            // Clear first (like requestPlay): if the resume fails,
+            // nothing is playing and a stale item must not stay in
+            // the mini player; a successful resume records the
+            // episode below.
+            currentItem = nil
             driver.resume()
             // #8: only record the item when the resume actually
             // started — resume() is a guarded no-op when the
@@ -614,7 +627,20 @@ final class PlaybackCoordinator: ObservableObject {
     func requestLivePlay(_ item: PlaybackItem) {
         guard let driver = liveDriver else { return }
         if let current = driver.currentRoom, current.id == item.id {
+            // (b49fix2 P1-2) M3, mirrored from requestPlay: the
+            // same-room resume used to bypass mutual exclusion —
+            // a song / VOD episode kept sounding under the resumed
+            // room. Stop the other domains first, exactly like
+            // the new-request path below and requestPlay's
+            // same-track branch.
+            musicDriver?.stop()
+            vodDriver?.stop()
             if driver.isPlaying { return }
+            // Clear first (like requestPlay): if the resume fails,
+            // nothing is playing and a stale item must not stay in
+            // the mini player; a successful resume records the
+            // room below.
+            currentItem = nil
             driver.resume()
             // #8: only record the item when the resume actually
             // started — resume() is a guarded no-op when the

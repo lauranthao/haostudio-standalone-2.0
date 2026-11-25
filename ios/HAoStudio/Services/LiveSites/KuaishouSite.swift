@@ -14,8 +14,9 @@
 //
 // ROOMID RULE: the room identifier is `author.id`, NEVER
 // `liveStream.id`. The live-stream id is only the danmaku/feed
-// credential (`danmakuData['liveStreamId']`) and the `link` value
-// for the native kwai:// deep link.
+// credential (`danmakuData['liveStreamId']`). `link` is the watch
+// URL `live.kuaishou.com/u/<authorId>` (b49fix2 P2-27 — a bare
+// live-stream id is not a URL).
 //
 // Qualities: `playUrls` descriptors, each with
 // `adaptationSet.representation[]` (one entry per quality, each
@@ -122,11 +123,75 @@ extension KuaishouLiveSite {
 
     private static func decodeStateJson(_ text: String) -> [String: Any]? {
         // The state embeds bare `undefined` values; JSON needs `null`.
-        let replaced = text.replacingOccurrences(of: "undefined", with: "null")
+        // Only bare tokens are replaced (b49fix2 P2-25): a blanket
+        // `replacingOccurrences(of: "undefined")` also rewrote the
+        // word inside string values ("some undefined text" became
+        // "some null text"). The scan tracks string state, so a
+        // token inside quotes is left alone; a `\b` regex would
+        // still hit those.
+        let replaced = KuaishouLiveSite.replaceBareUndefined(text)
         guard let data = replaced.data(using: .utf8) else {
             return nil
         }
         return LiveJSON.decodeObject(data)
+    }
+
+    /// Replaces bare `undefined` tokens with `null`, leaving the
+    /// word inside string values and inside longer identifiers
+    /// untouched (b49fix2 P2-25). The scan tracks string state
+    /// like `matchingBraceEnd` below; a token counts as bare when
+    /// neither neighbour is an identifier character.
+    static func replaceBareUndefined(_ text: String) -> String {
+        var result = ""
+        result.reserveCapacity(text.count)
+        var index = text.startIndex
+        var inString = false
+        var escaped = false
+        while index < text.endIndex {
+            let ch = text[index]
+            if inString {
+                result.append(ch)
+                if escaped {
+                    escaped = false
+                } else if ch == "\\" {
+                    escaped = true
+                } else if ch == "\"" {
+                    inString = false
+                }
+                index = text.index(after: index)
+                continue
+            }
+            if ch == "\"" {
+                inString = true
+                result.append(ch)
+                index = text.index(after: index)
+                continue
+            }
+            if text[index...].hasPrefix("undefined"),
+               KuaishouLiveSite.isUndefinedBoundary(before: index, in: text),
+               KuaishouLiveSite.isUndefinedBoundary(after: text.index(index, offsetBy: 9), in: text) {
+                result.append("null")
+                index = text.index(index, offsetBy: 9)
+                continue
+            }
+            result.append(ch)
+            index = text.index(after: index)
+        }
+        return result
+    }
+
+    private static func isUndefinedBoundary(before index: String.Index, in text: String) -> Bool {
+        guard index > text.startIndex else { return true }
+        return !isUndefinedIdentifierChar(text[text.index(before: index)])
+    }
+
+    private static func isUndefinedBoundary(after index: String.Index, in text: String) -> Bool {
+        guard index < text.endIndex else { return true }
+        return !isUndefinedIdentifierChar(text[index])
+    }
+
+    private static func isUndefinedIdentifierChar(_ ch: Character) -> Bool {
+        ch.isLetter || ch.isNumber || ch == "_" || ch == "$"
     }
 
     /// Index just past the `}` matching the `{` at `start`, or nil
@@ -166,7 +231,8 @@ extension KuaishouLiveSite {
     /// Reads `liveroom.playList[0]` (current shape), falling back to
     /// a top-level `room` object (older shape). The room id is
     /// `author.id`; the live-stream id goes to
-    /// `danmakuData['liveStreamId']` and `link` only. An offline room
+    /// `danmakuData['liveStreamId']` only, and `link` is the watch
+    /// URL `live.kuaishou.com/u/<authorId>` (b49fix2 P2-27). An offline room
     /// (empty `liveStream`, `isLiving: false`, no `errorType` card)
     /// parses as `isLive: false` with whatever author info the page
     /// carried — never throws for a reachable page. A page carrying
@@ -207,8 +273,10 @@ extension KuaishouLiveSite {
         let liveStreamId = LiveJSON.asString(liveStream["id"])
         let poster = LiveJSON.asString(liveStream["poster"])
         let playUrls = liveStream["playUrls"]
+        let authorId = LiveJSON.asString(author["id"])
+        let resolvedRoomId = authorId.isEmpty ? roomId : authorId
         return LiveRoom(
-            roomId: LiveJSON.asString(author["id"]).isEmpty ? roomId : LiveJSON.asString(author["id"]),
+            roomId: resolvedRoomId,
             platform: .kuaishou,
             title: description.replacingOccurrences(of: "\n", with: " "),
             streamer: LiveJSON.asString(author["name"]),
@@ -216,7 +284,10 @@ extension KuaishouLiveSite {
             cover: posterUrl(poster),
             onlineCount: live ? (LiveJSON.asIntOrNil(gameInfo["watchingCount"]) ?? 0) : 0,
             isLive: live,
-            link: liveStreamId,
+            // (b49fix2 P2-27) The watch URL, not the bare
+            // live-stream id — a bare id is not a URL, and the
+            // follow list already builds this same URL.
+            link: "\(KuaishouLiveSite.roomBaseUrl)/\(resolvedRoomId)",
             data: playUrls == nil ? nil : ["playUrls": playUrls!],
             danmakuData: liveStreamId.isEmpty ? nil : ["liveStreamId": liveStreamId]
         )
@@ -346,12 +417,24 @@ extension KuaishouLiveSite {
     }
 
     /// Appends `.jpg` when a poster URL carries no image extension;
-    /// an empty poster stays empty (never `null.jpg`).
+    /// an empty poster stays empty (never `null.jpg`). The extension
+    /// goes on the path component, before any query string or
+    /// fragment (b49fix2 P2-26): gluing ".jpg" after "?..." made it
+    /// part of the query, so the CDN never saw an image extension.
     static func posterUrl(_ poster: String) -> String {
         if poster.isEmpty {
             return ""
         }
-        return isImage(poster) ? poster : "\(poster).jpg"
+        if isImage(poster) {
+            return poster
+        }
+        if let queryStart = poster.firstIndex(of: "?") {
+            return "\(poster[..<queryStart]).jpg\(poster[queryStart...])"
+        }
+        if let fragmentStart = poster.firstIndex(of: "#") {
+            return "\(poster[..<fragmentStart]).jpg\(poster[fragmentStart...])"
+        }
+        return "\(poster).jpg"
     }
 
     private static func isImage(_ url: String) -> Bool {
@@ -362,7 +445,12 @@ extension KuaishouLiveSite {
         if url.isEmpty {
             return false
         }
-        let ext = url.components(separatedBy: ".").last?.lowercased().components(separatedBy: "?").first ?? ""
+        // Only the path carries the extension (b49fix2 P2-26): a
+        // query string containing ".jpg" used to fool this check,
+        // and the check itself used to read the query as the
+        // extension.
+        let path = url.components(separatedBy: "?").first?.components(separatedBy: "#").first ?? ""
+        let ext = path.components(separatedBy: ".").last?.lowercased() ?? ""
         return imageExtensions.contains(ext)
     }
 }
@@ -563,8 +651,9 @@ final class KuaishouLiveSite: LiveSiteResolver {
 //
 // ROOMID RULE (same as room detail): the room identifier is
 // `author.id`, NEVER `liveStream.id`. The live-stream id is
-// only the danmaku/feed credential (`danmakuData['liveStreamId']`)
-// and the `link` value.
+// only the danmaku/feed credential (`danmakuData['liveStreamId']`).
+// `link` is the watch URL `live.kuaishou.com/u/<authorId>`
+// (b49fix2 P2-27 — a bare live-stream id is not a URL).
 
 extension KuaishouLiveSite {
     private static let recommendURL = "https://live.kuaishou.com/live_api/home/list"
@@ -577,24 +666,26 @@ extension KuaishouLiveSite {
     /// Home hot list via `live_api/home/list` (Dart
     /// `getRecommendRooms`): no pagination server-side; the page
     /// slice is taken client-side.
-    func recommendRooms(page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func recommendRooms(page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let size = min(100, max(1, pageSize))
         let currentPage = max(1, page)
         guard let url = URL(string: KuaishouLiveSite.recommendURL) else {
-            completion([])
+            completion(.failure(LiveError.emptyResponse))
             return
         }
         LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: KuaishouLiveSite.headers, fetcher: fetcher) { json in
             guard let rooms = KuaishouLiveSite.parseRecommendRooms(json) else {
-                completion([])
+                completion(.failure(LiveError.emptyResponse))
                 return
             }
             let start = (currentPage - 1) * size
             guard start < rooms.count else {
-                completion([])
+                // Page past the end of the list: a genuine empty
+                // page, not a failure (b49fix2 P2-1).
+                completion(.success([]))
                 return
             }
-            completion(Array(rooms[start..<min(start + size, rooms.count)]))
+            completion(.success(Array(rooms[start..<min(start + size, rooms.count)])))
         }
     }
 
@@ -605,8 +696,10 @@ extension KuaishouLiveSite {
     /// fetch in parallel; a full first page pulls one more page,
     /// capped at two. One dead type never kills the others; when
     /// every fetch fails, the verified-popular fallback below is
-    /// returned so the tab never shows a blank category row.
-    func listCategories(completion: @escaping ([(id: String, name: String)]) -> Void) {
+    /// returned so the tab never shows a blank category row. The
+    /// fallback is the error handling here, so this method
+    /// answers `.success` in both cases (b49fix2 P2-3).
+    func listCategories(completion: @escaping (Result<[(id: String, name: String)], Error>) -> Void) {
         let types = ["1", "2", "3", "4", "5", "6", "7", "8"]
         var first: [[(id: String, name: String)]] = Array(repeating: [], count: types.count)
         let group = DispatchGroup()
@@ -628,7 +721,7 @@ extension KuaishouLiveSite {
                 fullTypes.append(type)
             }
             if fullTypes.isEmpty {
-                completion(areas.isEmpty ? KuaishouLiveSite.fallbackCategories : areas)
+                completion(.success(areas.isEmpty ? KuaishouLiveSite.fallbackCategories : areas))
                 return
             }
             var second: [[(id: String, name: String)]] = Array(repeating: [], count: fullTypes.count)
@@ -644,7 +737,7 @@ extension KuaishouLiveSite {
             }
             secondGroup.notify(queue: DispatchQueue.global(qos: .utility)) {
                 areas.append(contentsOf: second.flatMap { $0 })
-                completion(areas.isEmpty ? KuaishouLiveSite.fallbackCategories : areas)
+                completion(.success(areas.isEmpty ? KuaishouLiveSite.fallbackCategories : areas))
             }
         }
     }
@@ -681,16 +774,20 @@ extension KuaishouLiveSite {
     /// 3.x): game boards (`gameboard/list`, short numeric ids) vs
     /// non-game boards (`non-gameboard/list`, long 10000xx ids),
     /// split on id length < 7.
-    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func categoryRooms(areaId: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let base = areaId.count < 7 ? KuaishouLiveSite.gameboardURL : KuaishouLiveSite.nonGameboardURL
         guard let url = LiveListURL.url(base: base, params: [
             ("filterType", "0"), ("pageSize", "20"), ("gameId", areaId), ("page", "\(max(1, page))")
         ]) else {
-            completion([])
+            completion(.failure(LiveError.emptyResponse))
             return
         }
         LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: KuaishouLiveSite.headers, fetcher: fetcher) { json in
-            completion(KuaishouLiveSite.parseCategoryRooms(json) ?? [])
+            if let rooms = KuaishouLiveSite.parseCategoryRooms(json) {
+                completion(.success(rooms))
+            } else {
+                completion(.failure(LiveError.emptyResponse))
+            }
         }
     }
 
@@ -698,10 +795,10 @@ extension KuaishouLiveSite {
     /// rooms (no viewer count, only a `living` flag). The web
     /// search page never lists rooms, so finding the anchor and
     /// opening their room is the whole flow.
-    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping ([LiveRoom]) -> Void) {
+    func searchRooms(query: String, page: Int, pageSize: Int, completion: @escaping (Result<[LiveRoom], Error>) -> Void) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            completion([])
+            completion(.success([]))
             return
         }
         var headers = KuaishouLiveSite.headers
@@ -709,12 +806,15 @@ extension KuaishouLiveSite {
         guard let url = LiveListURL.url(base: KuaishouLiveSite.authorSearchURL, params: [
             ("keyword", trimmed), ("page", "\(max(1, page))"), ("lssid", "")
         ]) else {
-            completion([])
+            completion(.failure(LiveError.emptyResponse))
             return
         }
         LiveHTTP.fetchJSON(url: url, timeoutSeconds: LiveHTTP.defaultTimeoutSeconds, headers: headers, fetcher: fetcher) { json in
-            let rooms = KuaishouLiveSite.parseAuthorSearch(json) ?? []
-            completion(Array(rooms.prefix(min(100, max(1, pageSize)))))
+            if let rooms = KuaishouLiveSite.parseAuthorSearch(json) {
+                completion(.success(Array(rooms.prefix(min(100, max(1, pageSize))))))
+            } else {
+                completion(.failure(LiveError.emptyResponse))
+            }
         }
     }
 
@@ -730,7 +830,13 @@ extension KuaishouLiveSite {
         for section in LiveJSON.asList(data["list"]) {
             for group in LiveJSON.asList(section["gameLiveInfo"]) {
                 for item in LiveJSON.asList(group["liveInfo"]) {
-                    if let room = KuaishouLiveSite.roomFromFeedItem(item, title: nil) {
+                    // (b49fix2 P1-20) The feed items carry a real
+                    // caption; passing nil fell back to the author
+                    // description, so recommend titles showed the
+                    // author's bio. The category path already
+                    // passes its caption — same here.
+                    let caption = LiveJSON.asString(item["caption"])
+                    if let room = KuaishouLiveSite.roomFromFeedItem(item, title: caption.isEmpty ? nil : caption) {
                         rooms.append(room)
                     }
                 }
@@ -805,7 +911,9 @@ extension KuaishouLiveSite {
             cover: KuaishouLiveSite.posterUrl(cover),
             onlineCount: LiveJSON.asInt(item["watchingCount"]),
             isLive: live,
-            link: liveStreamId,
+            // (b49fix2 P2-27) The watch URL, not the bare
+            // live-stream id — same as the follow list.
+            link: "\(KuaishouLiveSite.roomBaseUrl)/\(authorId)",
             data: playUrls == nil ? nil : ["playUrls": playUrls as Any],
             danmakuData: liveStreamId.isEmpty ? nil : ["liveStreamId": liveStreamId])
     }
