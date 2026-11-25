@@ -216,6 +216,14 @@ final class LivePlayerViewModel: ObservableObject {
     /// for the SAME room still starts from a clean list — the
     /// messages showing are from the previous visit, minutes old.
     private var danmakuWasStopped = false
+    /// Room + resolver of the current danmaku session, kept so a
+    /// background suspend can resume it on foreground (b49fix2
+    /// P2-60). Set by `startDanmaku`, cleared by `stopDanmaku`.
+    private var lastDanmakuRoom: LiveRoom?
+    private var lastDanmakuResolver: LiveSiteResolver?
+    /// True after a background suspend until the foreground resume
+    /// (b49fix2 P2-60).
+    private var danmakuSuspendedForBackground = false
 
     func startDanmaku(room: LiveRoom, resolver: LiveSiteResolver) {
         // Build 35 sweep S1: the list belonged to the previous
@@ -234,6 +242,13 @@ final class LivePlayerViewModel: ObservableObject {
         danmakuRoomKey = key
         stopDanmaku()
         danmakuWasStopped = false
+        // (b49fix2 P2-60) Remember this session: a background
+        // suspend resumes it on foreground without clearing the
+        // visible chat (stopDanmaku above just cleared the
+        // previous session's memory).
+        lastDanmakuRoom = room
+        lastDanmakuResolver = resolver
+        danmakuSuspendedForBackground = false
         if isNewRoom || resumeAfterExit {
             messages = []
             roomIsLive = nil
@@ -268,14 +283,45 @@ final class LivePlayerViewModel: ObservableObject {
     }
 
     func stopDanmaku() {
-        // Invalidate any in-flight roomInfo callback: a late
-        // answer must not start a transport after the room closed.
-        danmakuGeneration += 1
+        tearDownDanmakuTransport()
         // Build 35 sweep S1: record the stop, so the next start
         // knows the room was exited in between and clears the
         // list (a restart without an intervening stop keeps it).
         // `startDanmaku` resets this right after its own stop.
         danmakuWasStopped = true
+        lastDanmakuRoom = nil
+        lastDanmakuResolver = nil
+        danmakuSuspendedForBackground = false
+    }
+
+    /// Background suspend (b49fix2 P2-60): stops the transport
+    /// like `stopDanmaku` but keeps the visible messages and
+    /// remembers the session, so the foreground resume restarts
+    /// danmaku for the SAME room without clearing the chat. A late
+    /// roomInfo answer cannot restart the transport while
+    /// backgrounded: the generation bump invalidates it.
+    private func suspendDanmakuForBackground() {
+        guard lastDanmakuRoom != nil else { return }
+        tearDownDanmakuTransport()
+        danmakuSuspendedForBackground = true
+    }
+
+    private func resumeDanmakuFromBackground() {
+        guard danmakuSuspendedForBackground,
+              let room = lastDanmakuRoom,
+              let resolver = lastDanmakuResolver else { return }
+        danmakuSuspendedForBackground = false
+        startDanmaku(room: room, resolver: resolver)
+    }
+
+    /// Shared teardown: invalidate any in-flight roomInfo callback
+    /// (a late answer must not start a transport after the room
+    /// closed), stop + drop the transport, drop any batch still
+    /// inside its 0.15 s window and cancel its flush.
+    private func tearDownDanmakuTransport() {
+        // Invalidate any in-flight roomInfo callback: a late
+        // answer must not start a transport after the room closed.
+        danmakuGeneration += 1
         danmakuTransport?.stop()
         danmakuTransport = nil
         // Drop any batch still inside its 0.15 s window and
@@ -388,6 +434,13 @@ final class LivePlayerViewModel: ObservableObject {
         }.store(in: &cancellables)
         driver.$openFailure.sink { [weak self] value in
             self?.openFailure = value
+            // (b49fix2 P2-60) The room failed: a danmaku transport
+            // started unconditionally by openCurrentRoom must not
+            // keep polling a dead room. The retry re-starts it via
+            // startDanmaku.
+            if value != nil {
+                self?.stopDanmaku()
+            }
         }.store(in: &cancellables)
     }
 
@@ -506,17 +559,22 @@ final class LivePlayerViewModel: ObservableObject {
 
     /// App backgrounded: stop accepting brightness writes (the
     /// system value is left as the user left it — no restore),
-    /// then let the driver drop to audio-only (live only — VOD
-    /// never takes this path).
+    /// stop the danmaku transport (b49fix2 P2-60 — the socket
+    /// kept polling a room nobody watches), then let the driver
+    /// drop to audio-only (live only — VOD never takes this path).
     func handleBackground() {
         disarmBrightness()
+        suspendDanmakuForBackground()
         _ = driver.enterBackground()
     }
 
-    /// App foregrounded: restore the video track. Deliberately
-    /// does NOT re-apply any brightness (see `disarmBrightness`).
+    /// App foregrounded: restore the video track and the danmaku
+    /// transport suspended on background (b49fix2 P2-60).
+    /// Deliberately does NOT re-apply any brightness (see
+    /// `disarmBrightness`).
     func handleForeground() {
         _ = driver.enterForeground()
+        resumeDanmakuFromBackground()
     }
 
     func clearToast() {

@@ -249,7 +249,11 @@ final class LiveDataGatewayAdapter: LiveDataGateway {
             // mean the id went stale (renamed category): drop it,
             // re-list once, and retry with the fresh id. One retry
             // only — a genuinely empty category must not loop.
-            if rooms.isEmpty, allowStaleIdRetry, let self = self {
+            // (b49fix2 P2-51) Only on the FIRST page (page 1):
+            // on page N an empty answer simply means the list
+            // ended, and re-listing + retrying there wasted a
+            // round trip and could resurrect a stale page.
+            if rooms.isEmpty, allowStaleIdRetry, page == 1, let self = self {
                 self.areaIds[platform.rawValue]?.removeValue(forKey: areaName)
                 site.listCategories { [weak self] areas in
                     DispatchQueue.main.async {
