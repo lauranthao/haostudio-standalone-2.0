@@ -97,7 +97,7 @@ python3 ios/preflight_check.py   # 工程引用、资产、版本对齐等；不
 
 **填 `version.json` 的 `sha256` 前，必须从发版 commit 重建、以下载验证过的包重算**：包内没有 commit 字段，线上文件的实测哈希无法证明它出自哪个 commit，所以绝不能直接抄线上哈希填入（线上 build 48 的实测哈希 `0207b137…` 就是例子——不要抄）。正确流程：发版 commit → Bitrise 构建 → 下载 IPA 验证包内版本/build → `sha256sum` 取哈希与大小 → 填进 `version.json`（`sha256` + `size`）→ 重部署商店 manifest → `python3 ios/release_check.py --release --shop-manifest-url … --ipa <文件>` 全绿再发链接。详见 `ios/release_check.py` 头注释（b49-sweep8 P2-24）。
 
-**发版 commit 必须能证明它出自哪次构建（b49-sweep9 P2-28，落点 b49-sweep10 P2-15）：** 把 Bitrise 构建号 + 触发构建的 commit 写进发版 commit 信息，并在 README 版本表的新版本行里也写上构建号（例如 `0.0.3 | 49 | 2026-11-26 | Bitrise #N（commit <触发构建的升版 commit 完整 40 位哈希>）`；N 以 Bitrise 仪表板的实际构建号为准——仓库最后有记录的是 #30（release 2.1.9 讯息）与 #31（测试注释），#32–#34 皆未记录，不要照抄示例号（b49-sweep12 P2-1）。触发 commit 是 Bitrise 构建的那个升版 commit，不是记录构建号的发版 commit 自身——发版 commit 的哈希在写讯息时尚未存在（b49-sweep12 P2-2）。commit 写完整 40 位哈希，不用短 hash——短 hash 在不同仓库可能撞，下一遍扫查要能只凭仓库验证来源（b49-sweep11 P2-2）。
+**发版 commit 必须能证明它出自哪次构建（b49-sweep9 P2-28，落点 b49-sweep10 P2-15）：** 把 Bitrise 构建号 + 触发构建的 commit 写进发版 commit 信息，并在 README 版本表的新版本行里也写上构建号（例如 `0.0.3 | 49 | 2026-11-26 | Bitrise #N（commit <触发构建的升版 commit 完整 40 位哈希>）`；N 以 Bitrise 仪表板的实际构建号为准——仓库最后有记录的是 #30（release 2.1.9 讯息）与 #31（测试注释），#32–#34 作为发版构建号皆未记录（b49fix14，b49-sweep16 发行 P2-1：#32–#34 只出现在开发期失败构建的修复 commit 讯息里，不是发版构建号），不要照抄示例号（b49-sweep12 P2-1）。触发 commit 是 Bitrise 构建的那个升版 commit，不是记录构建号的发版 commit 自身——发版 commit 的哈希在写讯息时尚未存在（b49-sweep12 P2-2）。commit 写完整 40 位哈希，不用短 hash——短 hash 在不同仓库可能撞，下一遍扫查要能只凭仓库验证来源（b49-sweep11 P2-2）。
 
 ## 工程结构
 
