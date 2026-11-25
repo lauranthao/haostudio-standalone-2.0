@@ -16,6 +16,14 @@ out — the chain preflight does NOT guard (2026-11-25, b49fix2 P2-67):
     and do NOT expect this gate to check them: it only verifies the
     iOS fields listed above. If an apk* field ever goes stale live,
     that is a shop/Android-side problem, not a failure of this gate.
+    NOTE: a missing "sha256" key and "" are the same state here
+    (both mean "not yet filled"), so before release this check
+    passes even though the live shop manifest carries NO sha256
+    key at all. After filling sha256 at ship time, re-run with
+    --release --shop-manifest-url ... : a filled repo value
+    against an empty/missing shop value FAILS, which is the
+    confirmation that the shop manifest actually carries the key
+    (2026-11-26, b49-sweep11 release lane).
   repo version.json  <->  built IPA file (--ipa: size + md5 vs README)
 
 Usage:
@@ -47,6 +55,16 @@ Before release the field is "" and plain runs SKIP the hash
 comparisons (preflight check 4i-e likewise passes on empty). Pass
 --release at ship time: an empty, missing or malformed sha256 then
 FAILS, and the live shop IPA is downloaded and hashed against it.
+
+UserDefaults key catalogue census (2026-11-26, b49-sweep11
+release P2-1): the backup's key directory holds 98 distinct
+keys — 75 from MigrationStore.mappings rows whose destination
+is .userDefaults (112 mappings total, 75 distinct .userDefaults
+keys) + 23 more added in BackupEngine.userDefaultsKeyKinds()
+(the S5 additions + b49fix2 P1-4 + b49fix4 P2-39 keys), zero
+overlap. The "116 keys" figure in the sweep-9/10 summaries
+was wrong (no source anywhere in the code) — do not reuse it;
+re-count from these two sources if the catalogue ever changes.
 """
 import argparse
 import hashlib
