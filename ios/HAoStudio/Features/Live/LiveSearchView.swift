@@ -181,8 +181,11 @@ struct LiveSearchView: View {
     var body: some View {
         VStack(spacing: 0) {
             searchField
-                .padding(.horizontal, 24)
-                .padding(.top, 12)
+                // (sweep-6 P2-1/P2-3) Pushed page: 20pt side
+                // margin (pushedPageMargin, not the tab root's
+                // 24) and 8pt top, matching the other searches.
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
+                .padding(.top, 8)
             // Results scroll (fix 2026-11-24, build 35): the body
             // used to be a plain VStack, so a result list taller
             // than the screen had no way to reach its bottom rows
@@ -265,7 +268,11 @@ struct LiveSearchView: View {
     private var platformRow: some View {
         LivePlatformTextTabs(
             platforms: viewModel.enabledPlatforms,
-            selected: viewModel.platform) { platform in
+            selected: viewModel.platform,
+            // (sweep-6 P2-1) The strip's own padding IS this
+            // page's side margin: 20 on the pushed search
+            // page, 24 on the tab root (the default).
+            edgePadding: HaoLayout.pushedPageMargin) { platform in
             viewModel.selectPlatform(platform, query: query)
         }
     }
@@ -286,7 +293,7 @@ struct LiveSearchView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, HaoLayout.pushedPageMargin)
             .confirmationDialog("清除搜索历史？", isPresented: $showClearHistoryConfirm, titleVisibility: .visible) {
                 Button("清除", role: .destructive) { viewModel.clearSearchHistory() }
                 Button("取消", role: .cancel) {}
@@ -295,7 +302,7 @@ struct LiveSearchView: View {
                 Text("还没有搜索记录")
                     .font(.haoRowSubtitle)
                     .foregroundStyle(theme.textMuted)
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, HaoLayout.pushedPageMargin)
             } else {
                 FlowChips(
                     items: viewModel.searchHistory,
@@ -307,7 +314,7 @@ struct LiveSearchView: View {
                         viewModel.removeHistoryItem(term)
                     }
                 )
-                .padding(.horizontal, 24)
+                .padding(.horizontal, HaoLayout.pushedPageMargin)
             }
         }
     }
@@ -328,12 +335,15 @@ struct LiveSearchView: View {
                             title: "搜索失败",
                             note: "直播源没有返回数据，换个网络或稍后再试。"
                         )
-                        .padding(.horizontal, 24)
+                        .padding(.horizontal, HaoLayout.pushedPageMargin)
+                        // (sweep-6 P2-6) Standard retry capsule:
+                        // 15 semibold, 24/12 — same as the video
+                        // search retry, not the old 14/20/10.
                         Button("重试") { viewModel.retrySearch() }
-                            .font(.haoDenseTitle)
+                            .font(.haoSubheadStrong)
                             .foregroundStyle(theme.onAccent)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 10)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 12)
                             .background(theme.accent, in: Capsule())
                             .buttonStyle(.plain)
                             .frame(maxWidth: .infinity)
@@ -345,7 +355,7 @@ struct LiveSearchView: View {
                                 ? "换个关键词或平台再试试。"
                                 : "搜索由直播源提供，接入后在这里显示。"
                         )
-                        .padding(.horizontal, 24)
+                        .padding(.horizontal, HaoLayout.pushedPageMargin)
                     }
                 } else {
                     LazyVGrid(
@@ -360,7 +370,13 @@ struct LiveSearchView: View {
                             }
                         }
                     }
-                    .padding(.horizontal, LiveGridLayout.gridEdgePadding)
+                    // (sweep-6 P2-1) The search grid sits in
+                    // the pushed-page margin (20), not the
+                    // tab-root grid edge (24): the shared
+                    // `gridEdgePadding` var stays 24 because
+                    // HomeView's hot-live grid reads it too,
+                    // so this page passes the margin explicitly.
+                    .padding(.horizontal, HaoLayout.pushedPageMargin)
                 }
             }
         }
