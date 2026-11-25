@@ -310,7 +310,14 @@ struct VideoSearchView: View {
                                         .foregroundStyle(theme.accentText)
                                 }
                                 .foregroundStyle(theme.textSecondary)
+                                // b49fix5 P2-17: the banner carries
+                                // its own top 12 (same as the Emby
+                                // banner below) — it is the first
+                                // element of the results branch, so
+                                // without it the banner sticks to the
+                                // search field.
                                 .padding(.horizontal, HaoLayout.pushedPageMargin)
+                                .padding(.top, 12)
                             }
                             if !viewModel.results.isEmpty {
                                 resultSection(

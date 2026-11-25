@@ -45,6 +45,15 @@ struct EmbyConfigView: View {
                     // Shown only for non-https addresses.
                     if isPlainHttpAddress {
                         Text("注意：该地址使用 http，同一局域网内可能被窃听；仅用于局域网服务器。")
+                        // b49fix5 P2-19: ATS allows local networking
+                        // only — a remote http address is blocked
+                        // outright, and testConnection can only
+                        // report a generic failure. Say so, so the
+                        // user knows the fix is the address form,
+                        // not the network.
+                        if isRemoteHttpAddress {
+                            Text("远程 http 地址会被系统拦截，请用 https 地址。")
+                        }
                     }
                 }
             }
@@ -134,6 +143,39 @@ struct EmbyConfigView: View {
         let address = viewModel.baseUrl.trimmingCharacters(in: .whitespaces).lowercased()
         guard !address.isEmpty else { return false }
         return !address.hasPrefix("https://")
+    }
+
+    /// Plain-http address pointing at a remote named host
+    /// (b49fix5 P2-19). LAN names (bare hostnames, .local,
+    /// localhost) and IP literals keep the local-network wording
+    /// above: a remote http address is the one ATS blocks, and
+    /// only that case needs the "请用 https 地址" hint.
+    private var isRemoteHttpAddress: Bool {
+        guard isPlainHttpAddress else { return false }
+        let host = Self.hostOf(viewModel.baseUrl)
+        if host.isEmpty || host == "localhost" || host.hasSuffix(".local") { return false }
+        if !host.contains(".") { return false } // bare LAN hostname
+        let parts = host.split(separator: ".")
+        if parts.count == 4, parts.allSatisfy({ Int($0) != nil }) { return false } // IPv4 literal
+        if host.contains(":") { return false } // IPv6 literal
+        return true
+    }
+
+    /// Host part of a typed server address: scheme, path and port
+    /// stripped, lowercased. "http://host:8096/x" -> "host";
+    /// "host:8096" -> "host"; "[::1]:8096" -> "::1".
+    private static func hostOf(_ address: String) -> String {
+        var text = address.trimmingCharacters(in: .whitespaces).lowercased()
+        if let range = text.range(of: "://") { text = String(text[range.upperBound...]) }
+        if let slash = text.firstIndex(of: "/") { text = String(text[..<slash]) }
+        if text.hasPrefix("[") {
+            if let close = text.firstIndex(of: "]") {
+                return String(text[text.index(after: text.startIndex)..<close])
+            }
+            return text
+        }
+        if let colon = text.firstIndex(of: ":") { text = String(text[..<colon]) }
+        return text
     }
 
     private var statusText: String {

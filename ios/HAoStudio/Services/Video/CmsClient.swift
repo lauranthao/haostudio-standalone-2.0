@@ -822,7 +822,13 @@ final class CmsClient: VideoPlayURLResolver {
     }
 
     /// Parse a CMS detail document (`?ac=videolist&ids=`) into a
-    /// VideoDetail. Nil when there is no usable item/lines.
+    /// VideoDetail. Nil only when the document has no usable item
+    /// (the fetch succeeded but the title is absent) — a title
+    /// whose play URL yields no lines is NOT nil: it returns a
+    /// detail with empty lines (b49fix5 P2-1), so the VM shows
+    /// "暂无可播剧集" instead of pinning a retry that can never
+    /// succeed. The fetch itself still returns nil on network /
+    /// JSON failure (see detail(source:vodId:completion:)).
     static func parseCmsDetail(source: VideoSource, vodId: String, json: [String: Any]) -> VideoDetail? {
         let list = VideoJSON.asList(json["list"])
         guard let d = list.first else { return nil }
@@ -831,7 +837,12 @@ final class CmsClient: VideoPlayURLResolver {
             playFrom: VideoJSON.asString(d["vod_play_from"]),
             content: VideoJSON.asString(d["vod_content"])
         )
-        guard !lines.isEmpty else { return nil }
+        // (b49fix5 P2-1) No `guard !lines.isEmpty` here on
+        // purpose: empty lines mean the source answered but has
+        // nothing playable for this title — a successful empty
+        // load, not a failure. Returning nil would make the VM
+        // pin a retry that re-fetches the same empty answer
+        // forever.
         let yearRaw = VideoJSON.asString(d["vod_year"])
         let item = VideoItem(
             id: vodId,
@@ -1069,8 +1080,10 @@ final class CmsClient: VideoPlayURLResolver {
 
     // MARK: - Detail
 
-    /// Detail for one vod id (8 s timeout). Nil when absent or
-    /// when no lines parse.
+    /// Detail for one vod id (8 s timeout). Nil when the fetch
+    /// fails or the title is absent; a title with no playable
+    /// lines returns a detail with empty lines (success-empty,
+    /// see parseCmsDetail).
     func detail(sourceId: Int, vodId: String, completion: @escaping (VideoDetail?) -> Void) {
         guard let source = sourceById(sourceId) else {
             completion(nil)

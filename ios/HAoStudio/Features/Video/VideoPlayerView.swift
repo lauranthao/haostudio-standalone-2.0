@@ -1414,7 +1414,11 @@ struct VideoPlayerView: View {
                                 .font(.haoSubheadStrong)
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 24)
-                                .padding(.vertical, 10)
+                                // b49fix5 P2-25: 10 -> 12, the
+                                // standard capsule's vertical 12
+                                // (same as the music player error
+                                // retry).
+                                .padding(.vertical, 12)
                                 .background(.white.opacity(0.18), in: Capsule())
                                 .buttonStyle(.plain)
                         }
@@ -1422,7 +1426,7 @@ struct VideoPlayerView: View {
                             .font(.haoSubheadStrong)
                             .foregroundStyle(haoOnAccentFor(theme.accentOnVideo))
                             .padding(.horizontal, 24)
-                            .padding(.vertical, 10)
+                            .padding(.vertical, 12)
                             .background(theme.accentOnVideo, in: Capsule())
                             .buttonStyle(.plain)
                     }

@@ -603,7 +603,9 @@ struct VideoBrowseView: View {
                                 viewModel.reload()
                             }
                         }
-                            .font(.haoFootnote)
+                            // b49fix5 P2-23: inline text retries are
+                            // 13 medium (.haoFootnoteMedium) site-wide.
+                            .font(.haoFootnoteMedium)
                             .foregroundStyle(theme.accentText)
                     }
                     .foregroundStyle(theme.textSecondary)

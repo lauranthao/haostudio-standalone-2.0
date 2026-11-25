@@ -363,7 +363,9 @@ struct VideoTabView: View {
                             }
                             .padding(.top, 6)
                         }
-                        .padding(.horizontal, 24)
+                        // b49fix5 P2-35: literal 24 -> pageMargin
+                        // token (same value).
+                        .padding(.horizontal, HaoLayout.pageMargin)
                     } else {
                         // b49 sweep #18: a failed refresh kept
                         // stale rows — show their age + retry
