@@ -734,11 +734,19 @@ struct MusicSearchView: View {
             // A fresh first page re-opens the kind; the footer
             // is only rendered on the single-kind grids, which
             // is where the guard can close a kind.
-            Text("没有更多")
-                .font(.haoFootnote)
-                .foregroundStyle(theme.textSecondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.top, 12)
+            // b49fix8 P2-6: the end state is also the way back
+            // in — it is a light retry, not a dead label. Tapping
+            // re-issues a first page under the current tab's
+            // limit (reopenClosedKind). Same inline-text-retry
+            // treatment as the error retry above (13 medium,
+            // accent text, top 12).
+            Button("没有更多，点击重试") {
+                searchVM.reopenClosedKind(kind)
+            }
+            .font(.haoFootnoteMedium)
+            .foregroundStyle(theme.accentText)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.top, 12)
         }
     }
 

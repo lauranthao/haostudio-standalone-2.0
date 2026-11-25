@@ -107,7 +107,10 @@ struct MusicHomeView: View {
                             .padding(.top, HaoLayout.sectionTopSpacing)
                         recentSection
                             .padding(.top, HaoLayout.sectionTopSpacing)
-                        Spacer(minLength: 12)
+                        // b49fix8 P2-14: page-bottom spacer is 16
+                        // site-wide (was 12 here; the other
+                        // fourteen scroll pages already use 16).
+                        Spacer(minLength: 16)
                     }
                     .padding(.horizontal, HaoLayout.pageMargin)
                     .haoBottomChromeContentPadding()
@@ -450,7 +453,9 @@ struct MusicRecommendView: View {
                         .padding(.top, HaoLayout.discoverySectionTopSpacing)
                     recommendedArtistsSection
                         .padding(.top, HaoLayout.discoverySectionTopSpacing)
-                    Spacer(minLength: 12)
+                    // b49fix8 P2-14: page-bottom spacer is 16
+                    // site-wide (was 12 here).
+                    Spacer(minLength: 16)
                 }
                 .padding(.horizontal, HaoLayout.pushedPageMargin)
                 .haoBottomChromeContentPadding()
