@@ -41,6 +41,7 @@
 
 import Foundation
 import AVFoundation
+import MediaPlayer
 import SwiftUI
 import UIKit
 
@@ -1185,6 +1186,7 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             if let rate = self.currentRate { self.backend?.playbackRate = rate }
             self.watchdog.noteBaseline()
             self.recomputePlayingState()
+            self.updateNowPlayingInfo()
         }
     }
 
@@ -1200,7 +1202,102 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             // even when the user pauses and walks away.
             self.embyReporter.noteProgress(
                 positionSeconds: self.position, durationSeconds: self.duration, isPaused: true)
+            self.updateNowPlayingInfo()
         }
+    }
+
+    // MARK: - Now Playing and remote commands (b45 M2)
+
+    /// Whether this driver currently owns the single Now Playing
+    /// slot (registered commands + info). The coordinator switches
+    /// the slot between domains — music / VOD / live — so only
+    /// one driver is registered at a time.
+    private var nowPlayingActive = false
+
+    /// Publish this driver's Now Playing registration + info.
+    /// Called by the coordinator when an episode really starts
+    /// (onEpisodeStarted), after clearing the other domains.
+    /// Registers play/pause/toggle + seek + previous/next
+    /// episode — never the ±10s skip commands (b42 lesson: the
+    /// skip layout hides the track buttons).
+    func publishNowPlaying() {
+        ensureMain {
+            guard self.currentEpisode != nil else { return }
+            if self.nowPlayingActive {
+                self.updateNowPlayingInfo()
+                return
+            }
+            self.nowPlayingActive = true
+            let center = MPRemoteCommandCenter.shared()
+            center.playCommand.addTarget(self, action: #selector(remotePlay))
+            center.pauseCommand.addTarget(self, action: #selector(remotePause))
+            center.togglePlayPauseCommand.addTarget(self, action: #selector(remoteToggle))
+            center.changePlaybackPositionCommand.addTarget(self, action: #selector(remoteSeek(_:)))
+            center.nextTrackCommand.addTarget(self, action: #selector(remoteNext))
+            center.previousTrackCommand.addTarget(self, action: #selector(remotePrevious))
+            self.updateNowPlayingInfo()
+        }
+    }
+
+    /// Clear this driver's Now Playing registration + info.
+    /// Called by stop() / release() and by the coordinator when
+    /// another domain takes the slot. Idempotent.
+    func clearNowPlaying() {
+        ensureMain {
+            guard self.nowPlayingActive else { return }
+            self.nowPlayingActive = false
+            let center = MPRemoteCommandCenter.shared()
+            center.playCommand.removeTarget(self)
+            center.pauseCommand.removeTarget(self)
+            center.togglePlayPauseCommand.removeTarget(self)
+            center.changePlaybackPositionCommand.removeTarget(self)
+            center.nextTrackCommand.removeTarget(self)
+            center.previousTrackCommand.removeTarget(self)
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        }
+    }
+
+    private func updateNowPlayingInfo() {
+        ensureMain {
+            guard self.nowPlayingActive, let episode = self.currentEpisode else { return }
+            var info: [String: Any] = [:]
+            info[MPMediaItemPropertyTitle] = episode.title
+            info[MPMediaItemPropertyArtist] = episode.artist ?? ""
+            if self.duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = self.duration }
+            if self.position >= 0 { info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = self.position }
+            info[MPNowPlayingInfoPropertyPlaybackRate] = self.isPlaying ? (self.currentRate ?? 1.0) : 0.0
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        }
+    }
+
+    @objc private func remotePlay() -> MPRemoteCommandHandlerStatus {
+        resume()
+        return .success
+    }
+
+    @objc private func remotePause() -> MPRemoteCommandHandlerStatus {
+        pause()
+        return .success
+    }
+
+    @objc private func remoteToggle() -> MPRemoteCommandHandlerStatus {
+        if isPlaying { pause() } else { resume() }
+        return .success
+    }
+
+    @objc private func remoteSeek(_ event: MPChangePlaybackPositionCommandEvent) -> MPRemoteCommandHandlerStatus {
+        seek(to: event.positionTime) { _ in }
+        return .success
+    }
+
+    @objc private func remoteNext() -> MPRemoteCommandHandlerStatus {
+        // Next episode on the same line; at the last episode
+        // there is nowhere to go.
+        playEpisode(at: currentEpisodeIndex + 1) ? .success : .commandFailed
+    }
+
+    @objc private func remotePrevious() -> MPRemoteCommandHandlerStatus {
+        playEpisode(at: currentEpisodeIndex - 1) ? .success : .commandFailed
     }
 
     /// Set playback speed (VOD only — live is real-time and cannot
@@ -1477,6 +1574,8 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             self.lastDroppedFrames = 0
             self.diagnostics = .empty
             self.recomputePlayingState()
+            // b45 M2: a stopped episode owns no Now Playing slot.
+            self.clearNowPlaying()
         }
     }
 
@@ -1525,6 +1624,8 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             self.subtitleTracks = []
             self.diagnostics = .empty
             self.recomputePlayingState()
+            // b45 M2: exiting releases the Now Playing slot.
+            self.clearNowPlaying()
             completion()
         }
     }

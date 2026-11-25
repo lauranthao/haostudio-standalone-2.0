@@ -35,6 +35,7 @@ private final class StubMusicDriver: MusicPlaybackDriver {
     func pause() { pauseCalled = true }
     func stop() {}
     func resume() {}
+    func clearNowPlaying() {}
 }
 
 final class MiniPlayerB35Tests: XCTestCase {

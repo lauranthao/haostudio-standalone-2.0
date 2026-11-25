@@ -539,7 +539,15 @@ final class MusicPlayerViewModel: ObservableObject {
         if queue.isCurrentTrack(song),
            let track = player.currentTrack,
            track.id == song.identityKey || track.id == song.songId {
-            if !isPlaying { player.play() }
+            // M3b (b45): the old shortcut resumed the player
+            // directly, bypassing the coordinator — a live room /
+            // VOD episode kept sounding under the resumed song.
+            // Route through requestPlay: its same-track branch
+            // stops vod/live first, then resumes (or no-ops when
+            // already playing). No re-seek either way: a paused
+            // track resumes where it stopped, which is the
+            // checkpoint itself (pause writes it).
+            coordinator.requestPlay(song.toPlaybackItem())
             return
         }
         if let tracks = tracks {

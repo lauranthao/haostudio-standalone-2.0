@@ -238,6 +238,14 @@ protocol MusicPlaybackDriver: AnyObject {
     func pause()
     func stop()
     func resume()
+    /// Clear this driver's Now Playing registration + info
+    /// (b45 M2: the coordinator switches the single Now Playing
+    /// slot between domains — music / VOD / live — so a stale
+    /// music card must not survive a switch to VOD/live).
+    /// The music driver's stop() already tears down; this is the
+    /// handle the coordinator uses when another domain starts
+    /// without going through a music stop.
+    func clearNowPlaying()
 }
 
 /// What PlaybackCoordinator needs from the VOD player (S3). The
@@ -264,6 +272,18 @@ protocol VideoPlaybackDriver: AnyObject {
     func stop()
     func resume()
     func seek(to seconds: Double, completion: @escaping (Bool) -> Void)
+    /// Publish this driver's Now Playing registration + info
+    /// (b45 M2: VOD owns the single Now Playing slot while an
+    /// episode plays — play/pause + seek + previous/next episode;
+    /// never the ±10s skip commands, which would hide the
+    /// episode buttons, same b42 lesson as music). The
+    /// coordinator calls this when an episode really starts, and
+    /// clears the other domains first.
+    func publishNowPlaying()
+    /// Clear this driver's Now Playing registration + info.
+    /// Called by stop() / release() and by the coordinator when
+    /// another domain takes the slot. Idempotent.
+    func clearNowPlaying()
 }
 
 /// What PlaybackCoordinator needs from the live player (S4). The
@@ -293,6 +313,17 @@ protocol LivePlaybackDriver: AnyObject {
     func stop()
     func resume()
     func seek(to seconds: Double, completion: @escaping (Bool) -> Void)
+    /// Publish this driver's Now Playing registration + info
+    /// (b45 M2: live owns the single Now Playing slot while a
+    /// room plays — play/pause ONLY, no next/previous (live has
+    /// no tracks) and no seek (live is real-time). The
+    /// coordinator calls this when a room really starts, and
+    /// clears the other domains first).
+    func publishNowPlaying()
+    /// Clear this driver's Now Playing registration + info.
+    /// Called by stop() / release() and by the coordinator when
+    /// another domain takes the slot. Idempotent.
+    func clearNowPlaying()
 }
 
 /// Single-audio coordinator. One instance for the whole app
@@ -364,11 +395,26 @@ final class PlaybackCoordinator: ObservableObject {
                 }
             }
             musicDriver?.onTrackStarted = { [weak self] item in
-                DispatchQueue.main.async { self?.currentItem = item }
+                DispatchQueue.main.async {
+                    self?.currentItem = item
+                    // b45 M2: the music card takes the single Now
+                    // Playing slot — a stale VOD/live registration
+                    // must not survive the switch (their stop()
+                    // already clears, but paths that bypass the
+                    // coordinator's requestPlay can leave one).
+                    self?.vodDriver?.clearNowPlaying()
+                    self?.liveDriver?.clearNowPlaying()
+                }
             }
             musicDriver?.onTrackFailed = { [weak self] item, _ in
                 DispatchQueue.main.async {
-                    if self?.currentItem?.id == item.id { self?.currentItem = nil }
+                    if self?.currentItem?.id == item.id {
+                        self?.currentItem = nil
+                        // Same id guard as the currentItem clear:
+                        // a stale failure for an old track must
+                        // not kill the current track's card.
+                        self?.musicDriver?.clearNowPlaying()
+                    }
                 }
             }
         }
@@ -381,11 +427,22 @@ final class PlaybackCoordinator: ObservableObject {
     var vodDriver: VideoPlaybackDriver? {
         didSet {
             vodDriver?.onEpisodeStarted = { [weak self] item in
-                DispatchQueue.main.async { self?.currentItem = item }
+                DispatchQueue.main.async {
+                    self?.currentItem = item
+                    // b45 M2: the VOD card takes the single Now
+                    // Playing slot — clear the other domains
+                    // first, then publish this episode.
+                    self?.musicDriver?.clearNowPlaying()
+                    self?.liveDriver?.clearNowPlaying()
+                    self?.vodDriver?.publishNowPlaying()
+                }
             }
             vodDriver?.onEpisodeFailed = { [weak self] item, _ in
                 DispatchQueue.main.async {
-                    if self?.currentItem?.id == item.id { self?.currentItem = nil }
+                    if self?.currentItem?.id == item.id {
+                        self?.currentItem = nil
+                        self?.vodDriver?.clearNowPlaying()
+                    }
                 }
             }
         }
@@ -401,11 +458,22 @@ final class PlaybackCoordinator: ObservableObject {
     var liveDriver: LivePlaybackDriver? {
         didSet {
             liveDriver?.onRoomStarted = { [weak self] item in
-                DispatchQueue.main.async { self?.currentItem = item }
+                DispatchQueue.main.async {
+                    self?.currentItem = item
+                    // b45 M2: the live card takes the single Now
+                    // Playing slot — clear the other domains
+                    // first, then publish this room.
+                    self?.musicDriver?.clearNowPlaying()
+                    self?.vodDriver?.clearNowPlaying()
+                    self?.liveDriver?.publishNowPlaying()
+                }
             }
             liveDriver?.onRoomFailed = { [weak self] item, _ in
                 DispatchQueue.main.async {
-                    if self?.currentItem?.id == item.id { self?.currentItem = nil }
+                    if self?.currentItem?.id == item.id {
+                        self?.currentItem = nil
+                        self?.liveDriver?.clearNowPlaying()
+                    }
                 }
             }
         }
@@ -438,7 +506,19 @@ final class PlaybackCoordinator: ObservableObject {
             return
         }
         if let current = driver.currentTrack, current.id == item.id {
+            // M3 (b45, chen 2026-11-25: 切歌和直播/影视混起来):
+            // the same-track resume used to bypass mutual
+            // exclusion — a live room / VOD episode kept sounding
+            // under the resumed song. Stop the other domains
+            // first, exactly like the new-request path below.
+            vodDriver?.stop()
+            liveDriver?.stop()
             if driver.isPlaying { return }
+            // Clear first (like the siblings): if the resume
+            // fails, nothing is playing and the stale live/VOD
+            // item must not stay in the mini player; a
+            // successful resume records the song below.
+            currentItem = nil
             driver.resume()
             // #8: only record the item when the resume actually
             // started — resume() is a guarded no-op when the engine
@@ -454,6 +534,15 @@ final class PlaybackCoordinator: ObservableObject {
         vodDriver?.stop()
         liveDriver?.stop()
         driver.stop()
+        // M1 (b45): clear the mini player BEFORE the resolve —
+        // the siblings (requestVodPlay / requestLivePlay) both do
+        // this, requestPlay did not. Resolving takes seconds and
+        // only onTrackStarted re-records; until then the mini
+        // kept the dead live room / VOD episode, and tapping it
+        // re-opened the room/episode and killed the switch.
+        // Never optimistically record the song here: a failed
+        // song must not enter the mini player.
+        currentItem = nil
         driver.play(item: item)
     }
 
@@ -563,6 +652,11 @@ final class PlaybackCoordinator: ObservableObject {
         musicDriver?.stop()
         vodDriver?.stop()
         liveDriver?.stop()
+        // b45 M2: the music stop tears its own Now Playing down;
+        // VOD/live do the same in their stop() — clear here too
+        // so no domain's card survives a full stop.
+        vodDriver?.clearNowPlaying()
+        liveDriver?.clearNowPlaying()
         currentItem = nil
     }
 }

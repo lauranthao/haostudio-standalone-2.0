@@ -2324,6 +2324,14 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
+    /// `MusicPlaybackDriver` witness (b45 M2): the coordinator
+    /// clears the music card when VOD/live takes the single Now
+    /// Playing slot. stop() already tears down; this is the
+    /// handle for switches that bypass a music stop.
+    func clearNowPlaying() {
+        teardownNowPlaying()
+    }
+
     private func updateNowPlayingInfo() {
         guard nowPlayingActive, let track = currentTrack else { return }
         var info: [String: Any] = [:]

@@ -41,6 +41,7 @@
 
 import Foundation
 import AVFoundation
+import MediaPlayer
 import SwiftUI
 import UIKit
 
@@ -1089,6 +1090,7 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             self.session.stallWatchdog.noteBaseline()
             self.session.noteResumed()
             self.recomputePlayingState()
+            self.updateNowPlayingInfo()
         }
     }
 
@@ -1101,7 +1103,79 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             self.backend?.pause()
             self.session.notePlaybackPaused()
             self.recomputePlayingState()
+            self.updateNowPlayingInfo()
         }
+    }
+
+    // MARK: - Now Playing and remote commands (b45 M2)
+
+    /// Whether this driver currently owns the single Now Playing
+    /// slot (registered commands + info). The coordinator switches
+    /// the slot between domains — music / VOD / live — so only
+    /// one driver is registered at a time.
+    private var nowPlayingActive = false
+
+    /// Publish this driver's Now Playing registration + info.
+    /// Called by the coordinator when a room really starts
+    /// (onRoomStarted), after clearing the other domains.
+    /// Registers play/pause/toggle ONLY — live has no tracks
+    /// (no next/previous) and is real-time (no seek).
+    func publishNowPlaying() {
+        ensureMain {
+            guard self.currentRoom != nil else { return }
+            if self.nowPlayingActive {
+                self.updateNowPlayingInfo()
+                return
+            }
+            self.nowPlayingActive = true
+            let center = MPRemoteCommandCenter.shared()
+            center.playCommand.addTarget(self, action: #selector(remotePlay))
+            center.pauseCommand.addTarget(self, action: #selector(remotePause))
+            center.togglePlayPauseCommand.addTarget(self, action: #selector(remoteToggle))
+            self.updateNowPlayingInfo()
+        }
+    }
+
+    /// Clear this driver's Now Playing registration + info.
+    /// Called by stop() / release() and by the coordinator when
+    /// another domain takes the slot. Idempotent.
+    func clearNowPlaying() {
+        ensureMain {
+            guard self.nowPlayingActive else { return }
+            self.nowPlayingActive = false
+            let center = MPRemoteCommandCenter.shared()
+            center.playCommand.removeTarget(self)
+            center.pauseCommand.removeTarget(self)
+            center.togglePlayPauseCommand.removeTarget(self)
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        }
+    }
+
+    private func updateNowPlayingInfo() {
+        ensureMain {
+            guard self.nowPlayingActive, let room = self.currentRoom else { return }
+            var info: [String: Any] = [:]
+            info[MPMediaItemPropertyTitle] = room.title
+            info[MPMediaItemPropertyArtist] = room.streamer
+            // Live is real-time: no duration, no elapsed time.
+            info[MPNowPlayingInfoPropertyPlaybackRate] = self.isPlaying ? 1.0 : 0.0
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        }
+    }
+
+    @objc private func remotePlay() -> MPRemoteCommandHandlerStatus {
+        resume()
+        return .success
+    }
+
+    @objc private func remotePause() -> MPRemoteCommandHandlerStatus {
+        pause()
+        return .success
+    }
+
+    @objc private func remoteToggle() -> MPRemoteCommandHandlerStatus {
+        if isPlaying { pause() } else { resume() }
+        return .success
     }
 
     /// Set picture fit (适应 / 裁剪 / 拉伸), applied live to the
@@ -1159,6 +1233,8 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             self.lastDroppedFrames = 0
             self.diagnostics = .empty
             self.recomputePlayingState()
+            // b45 M2: a stopped room owns no Now Playing slot.
+            self.clearNowPlaying()
         }
     }
 
@@ -1211,6 +1287,8 @@ final class LiveDriver: NSObject, ObservableObject, LivePlaybackDriver {
             self.openFailure = nil
             self.lastFailedItem = nil
             self.recomputePlayingState()
+            // b45 M2: exiting releases the Now Playing slot.
+            self.clearNowPlaying()
             completion()
         }
     }
