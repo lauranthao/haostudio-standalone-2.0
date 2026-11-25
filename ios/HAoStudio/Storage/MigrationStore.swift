@@ -3066,7 +3066,30 @@ enum MigrationStore {
             }
             let liveAdded = currentList.filter { entry in
                 let key = mergeIdentityKey(for: entry, in: file)
-                return !priorKeys.contains(key) && !writtenKeys.contains(key)
+                guard !priorKeys.contains(key) else { return false }
+                guard !writtenKeys.contains(key) else {
+                    // b49fix23 D25-1: a non-prior entry the import
+                    // ALSO installed is not "live-added" by the
+                    // old rule — but the merge is live-first, so
+                    // when live had it at merge time the written
+                    // value IS the live value, and when current
+                    // differs from written live changed it after
+                    // the merge read. Either way current proves
+                    // live intent: keep it. When live had it at
+                    // neither time and current still equals
+                    // written, it is the import's install alone —
+                    // drop it. That last case is indistinguishable
+                    // from a live re-add of the identical value,
+                    // so it stays the D24-6 residual, not a fix:
+                    // D25-1 is "distinguishable, keep it", D24-6
+                    // is "indistinguishable, documented".
+                    guard liveAtMerge != nil else { return false }
+                    if liveByKey[key] != nil { return true }
+                    guard let writtenEntry = writtenByKey[key],
+                          let currentEntry = currentByKey[key] else { return false }
+                    return !jsonValuesEqual(currentEntry, writtenEntry)
+                }
+                return true
             }
             restored += liveAdded
             if prior == nil && liveAdded.isEmpty { return .remove }
@@ -3144,6 +3167,35 @@ enum MigrationStore {
                     }
                 }
             }
+            // b49fix23 D25-1: a key the import installed that live
+            // ALSO added (absent from prior, present in written
+            // and current) is not covered by the final loop below,
+            // which only keeps keys the import never wrote — so a
+            // live resume position written during the import was
+            // dropped even though the distinguishing signal
+            // exists. current != written proves live changed it
+            // after the merge read (the dict merge is
+            // incoming-wins, so the written value is the backup's,
+            // not live's). A merge-time live value proves live
+            // added it in the snapshot -> merge-read window: the
+            // import's overlay overwrote it, so restore the live
+            // value, not the import's. When live had it at
+            // neither time and current still equals written, it is
+            // the import's install alone — drop it. That last case
+            // is indistinguishable from a live re-add of the
+            // identical value, so it stays the D24-6 residual, not
+            // a fix: D25-1 is "distinguishable, keep it", D24-6
+            // is "indistinguishable, documented".
+            if liveAtMerge != nil {
+                for (key, writtenValue) in writtenDict where priorDict[key] == nil {
+                    guard let currentValue = currentDict[key] else { continue }
+                    if !jsonValuesEqual(currentValue, writtenValue) {
+                        restored[key] = currentValue
+                    } else if let liveValue = liveDict[key] {
+                        restored[key] = liveValue
+                    }
+                }
+            }
             for (key, value) in currentDict where priorDict[key] == nil && writtenDict[key] == nil {
                 restored[key] = value
             }
@@ -3201,7 +3253,22 @@ enum MigrationStore {
                 }
                 return true
             }
-                + currentList.filter { !priorSet.contains($0) && !writtenSet.contains($0) }
+                + currentList.filter { string in
+                    guard !priorSet.contains(string) else { return false }
+                    guard writtenSet.contains(string) else { return true }
+                    // b49fix23 D25-1: a non-prior string the import
+                    // ALSO installed — the merge is live-first, so
+                    // when live had it at merge time the written
+                    // presence IS the live presence: keep it. When
+                    // live never had it, presence in current is the
+                    // import's install alone — drop it (a live
+                    // re-add of the identical string after the
+                    // merge is indistinguishable, the D24-6
+                    // residual). D25-1 is "distinguishable, keep
+                    // it", D24-6 is "indistinguishable,
+                    // documented".
+                    return liveAtMerge != nil && liveSet.contains(string)
+                }
             if prior == nil && restored.isEmpty { return .remove }
             guard let bytes = try? JSONSerialization.data(withJSONObject: restored, options: []) else {
                 if let prior = prior { return .data(prior) }
@@ -3490,7 +3557,7 @@ enum MigrationStore {
     /// their live writes are rare setting actions, but the
     /// subset is the correct check for them too, not an
     /// exception. A scalar expected value still falls back to
-    /// canonical byte equality — there is nothing to subset.
+    /// jsonValuesEqual — there is nothing to subset.
     /// Dicts verify key-only ON PURPOSE (b49fix22 D24-1): a
     /// dict value may legitimately be superseded by a NEWER
     /// live recording after the import — ResolverSpeedRecord

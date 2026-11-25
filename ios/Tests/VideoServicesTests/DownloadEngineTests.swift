@@ -424,4 +424,67 @@ final class DownloadEngineTests: XCTestCase {
         // Deleting again is a no-op success, not a failure.
         XCTAssertTrue(engine.delete(key: key))
     }
+
+    /// b49fix23 D25-2 (option b): when the catalog save fails,
+    /// persistLocked posts .haoStoreSaveFailed once per launch —
+    /// the shell's storage notice surfaces it even though
+    /// delete()'s Bool has no product caller. The catalog path
+    /// is blocked by a directory here so the atomic write
+    /// fails; the original catalog is restored afterwards so no
+    /// other test sees the sabotage. (The once-per-launch flag
+    /// is process-wide: this test must not run twice in one
+    /// process, and no other test may trigger a catalog failure
+    /// first.)
+    func testCatalogSaveFailurePostsSaveFailedSignalOncePerLaunch() {
+        let catalogURL = DownloadCatalogStore.catalogURL()
+        let savedCatalog = try? Data(contentsOf: catalogURL)
+        // Two completed tasks, so two separate persists can be
+        // driven after the catalog is blocked.
+        let done = expectation(description: "downloads complete")
+        done.expectedFulfillmentCount = 2
+        var keys: [String] = []
+        for i in 0..<2 {
+            let key = "t-d25-2-\(i)-\(UUID().uuidString)"
+            keys.append(key)
+            let source = makeSourceFile(size: 1024)
+            engine.enqueue(request: request(key: key, source: source, fileName: "d25-2-\(i).bin")) { _ in
+                done.fulfill()
+            }
+        }
+        wait(for: [done], timeout: 10)
+        XCTAssertEqual(engine.taskInfo(for: keys[0])?.state, .completed)
+        XCTAssertEqual(engine.taskInfo(for: keys[1])?.state, .completed)
+        // Block the catalog path with a directory: the atomic
+        // write fails, the mirror save still succeeds.
+        try? FileManager.default.removeItem(at: catalogURL)
+        try! FileManager.default.createDirectory(at: catalogURL, withIntermediateDirectories: false)
+        defer {
+            try? FileManager.default.removeItem(at: catalogURL)
+            if let savedCatalog = savedCatalog { try? savedCatalog.write(to: catalogURL) }
+        }
+        var postedCount = 0
+        let countLock = NSLock()
+        let token = NotificationCenter.default.addObserver(
+            forName: .haoStoreSaveFailed, object: nil, queue: nil) { note in
+            guard (note.object as? String) == DownloadCatalogStore.fileName else { return }
+            countLock.lock()
+            postedCount += 1
+            countLock.unlock()
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+        // First failing persist posts; delete() still returns
+        // false so its Bool keeps reporting too.
+        XCTAssertFalse(engine.delete(key: keys[0]))
+        countLock.lock()
+        let afterFirst = postedCount
+        countLock.unlock()
+        XCTAssertEqual(afterFirst, 1)
+        // A second failing persist in the same launch does not
+        // post again.
+        XCTAssertFalse(engine.delete(key: keys[1]))
+        countLock.lock()
+        let afterSecond = postedCount
+        countLock.unlock()
+        XCTAssertEqual(afterSecond, 1)
+    }
 }

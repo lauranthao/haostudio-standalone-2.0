@@ -1167,6 +1167,92 @@ final class MigrationStoreTests: XCTestCase {
         XCTAssertEqual(fallbackList?.first { ($0["id"] as? String) == "x" }?["v"] as? Int, 1)
     }
 
+    func testFix23RestoredPreservingLiveKeepsLiveAdditionAlsoInstalled() {
+        // D25-1: rollback keeps a live addition the import ALSO
+        // installed — the three merge branches can tell it apart
+        // from the import's install alone (current != written,
+        // or live had it at merge time). The D24-6 residual
+        // (current == written, live never had it) still drops.
+        func data(_ value: Any) -> Data {
+            try! JSONSerialization.data(withJSONObject: value, options: [])
+        }
+        func ids(_ result: MigrationStore.RestoredFile) -> [String]? {
+            guard case .data(let bytes) = result else { return nil }
+            let list = try! JSONSerialization.jsonObject(with: bytes, options: []) as? [[String: Any]]
+            return list?.compactMap { $0["id"] as? String }
+        }
+        func dict(_ result: MigrationStore.RestoredFile) -> [String: Any]? {
+            guard case .data(let bytes) = result else { return nil }
+            return try! JSONSerialization.jsonObject(with: bytes, options: []) as? [String: Any]
+        }
+        func strings(_ result: MigrationStore.RestoredFile) -> [String]? {
+            guard case .data(let bytes) = result else { return nil }
+            return try! JSONSerialization.jsonObject(with: bytes, options: []) as? [String]
+        }
+        // LIST — live had the new entry at merge time (written
+        // IS the live value): kept.
+        XCTAssertEqual(ids(MigrationStore.restoredPreservingLive(
+            prior: data([["id": "a"]]),
+            written: data([["id": "a"], ["id": "c"]]),
+            current: data([["id": "a"], ["id": "c"]]),
+            file: "hao_lists", kind: .mergeList,
+            liveAtMerge: data([["id": "a"], ["id": "c"]]))), ["a", "c"])
+        // LIST — live changed it after the merge read: the
+        // current value is kept.
+        let changed = MigrationStore.restoredPreservingLive(
+            prior: data([["id": "a"]]),
+            written: data([["id": "a"], ["id": "c", "v": 1]]),
+            current: data([["id": "a"], ["id": "c", "v": 9]]),
+            file: "hao_lists", kind: .mergeList,
+            liveAtMerge: data([["id": "a"]]))
+        guard case .data(let changedBytes) = changed else {
+            XCTFail("expected .data, got \(changed)")
+            return
+        }
+        let changedList = try! JSONSerialization.jsonObject(with: changedBytes, options: []) as? [[String: Any]]
+        XCTAssertEqual(changedList?.first { ($0["id"] as? String) == "c" }?["v"] as? Int, 9)
+        // LIST — D24-6 boundary: live never had it, current
+        // still equals written: dropped.
+        XCTAssertEqual(ids(MigrationStore.restoredPreservingLive(
+            prior: data([["id": "a"]]),
+            written: data([["id": "a"], ["id": "c"]]),
+            current: data([["id": "a"], ["id": "c"]]),
+            file: "hao_lists", kind: .mergeList,
+            liveAtMerge: data([["id": "a"]]))), ["a"])
+        // DICT — the dict merge is incoming-wins, so written is
+        // the backup's value; the merge-time live value is
+        // restored.
+        XCTAssertEqual(dict(MigrationStore.restoredPreservingLive(
+            prior: data(["a": 1]),
+            written: data(["a": 1, "b": 9]),
+            current: data(["a": 1, "b": 9]),
+            file: "musicResume", kind: .mergeDict,
+            liveAtMerge: data(["a": 1, "b": 7])))?["b"] as? Int, 7)
+        // DICT — D24-6 boundary: live never had it, current
+        // still equals written: dropped.
+        XCTAssertNil(dict(MigrationStore.restoredPreservingLive(
+            prior: data(["a": 1]),
+            written: data(["a": 1, "b": 9]),
+            current: data(["a": 1, "b": 9]),
+            file: "musicResume", kind: .mergeDict,
+            liveAtMerge: data(["a": 1])))?["b"])
+        // STRING LIST — live had it at merge time: kept.
+        XCTAssertEqual(strings(MigrationStore.restoredPreservingLive(
+            prior: data(["a"]),
+            written: data(["a", "c"]),
+            current: data(["a", "c"]),
+            file: "hao_fav_playlists", kind: .mergeStringList,
+            liveAtMerge: data(["a", "c"]))), ["a", "c"])
+        // STRING LIST — D24-6 boundary: live never had it:
+        // dropped.
+        XCTAssertEqual(strings(MigrationStore.restoredPreservingLive(
+            prior: data(["a"]),
+            written: data(["a", "c"]),
+            current: data(["a", "c"]),
+            file: "hao_fav_playlists", kind: .mergeStringList,
+            liveAtMerge: data(["a"]))), ["a"])
+    }
+
     func testFix21UnknownKeysSweepKeepsUninstalledKeys() {
         // D23-5: the unknown-keys sweep only clears keys THIS
         // import installed. A backup without downloadTasks
