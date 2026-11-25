@@ -409,6 +409,11 @@ struct VideoDetailContentView: View {
     /// persisted — the next visit hides again (Flutter parity).
     @State private var spoilerSynopsisRevealed = false
     @State private var spoilerCoverRevealed = false
+    /// Width of the episode grid's container, measured on layout
+    /// (sweep-4 B13): 4 columns on phones, 6 once the content is
+    /// 600pt or wider, so iPad episode buttons stay tappable
+    /// instead of stretching to ~180pt. 0 until the first pass —
+    /// 4 columns, the phone layout.
 
     /// Spoiler blur for this title's cover (Flutter detail-page
     /// parity: unwatched + switch on + not yet tapped).
@@ -870,13 +875,20 @@ struct VideoDetailContentView: View {
         }
     }
 
+    /// Episode columns (sweep-4 B13): 4 on phones, 6 once the
+    /// content is 600pt or wider (iPad). See gridWidth above.
+    private var episodeColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 10),
+              count: gridWidth >= 600 ? 6 : 4)
+    }
+
     private var episodeGrid: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("选集")
                 .font(.haoSectionTitle)
                 .foregroundStyle(theme.textPrimary)
             LazyVGrid(
-                columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
+                columns: episodeColumns,
                 spacing: 10
             ) {
                 ForEach(Array((viewModel.selectedLine?.episodes ?? []).enumerated()), id: \.element.id) { index, episode in
@@ -901,6 +913,15 @@ struct VideoDetailContentView: View {
                     .buttonStyle(.plain)
                 }
             }
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { gridWidth = geo.size.width }
+                        .onChange(of: geo.size.width) { _, width in
+                            gridWidth = width
+                        }
+                }
+            )
         }
     }
 }

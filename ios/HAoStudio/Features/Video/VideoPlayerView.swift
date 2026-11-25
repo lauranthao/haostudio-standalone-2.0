@@ -1036,6 +1036,14 @@ struct VideoPlayerView: View {
     @EnvironmentObject private var settingsStore: SettingsStore
     @Environment(\.haoTheme) private var theme
     @Environment(\.dismiss) private var dismiss
+    /// Dynamic Type is capped at .accessibility1 on this fixed
+    /// chrome (sweep-4 B11): the landscape player has no room for
+    /// larger text — top/bottom bars, pills and the seek bar are
+    /// fixed-size, and beyond accessibility1 the titles, times and
+    /// pills would overlap or clip. The cap rides the root ZStack
+    /// below, so the settings sheet presented from here inherits
+    /// it too (its rows are fixed chrome as well).
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @State private var controlsVisible = true
     @State private var showingMore = false
@@ -1415,6 +1423,9 @@ struct VideoPlayerView: View {
                 }
             }
         }
+        // sweep-4 B11: cap Dynamic Type at .accessibility1 on the
+        // fixed player chrome (see dynamicTypeSize above).
+        .environment(\.dynamicTypeSize, min(dynamicTypeSize, .accessibility1))
         .onAppear {
             VideoOrientation.lockLandscape()
             isLandscape = true
