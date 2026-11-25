@@ -37,7 +37,9 @@ final class MusicPlayerLayoutTests: XCTestCase {
             XCTAssertLessThanOrEqual(size, w - 48, "\(w)x\(h)")
         }
         XCTAssertEqual(MusicPlayerLayout.coverSize(screenWidth: 393, screenHeight: 852), 340)
-        XCTAssertEqual(MusicPlayerLayout.coverSize(screenWidth: 375, screenHeight: 667), 279)
+        // b46-player: the badge row adds 30pt of chrome (budget
+        // 388 → 418), so the shortest phone's cover shrinks 279 → 249.
+        XCTAssertEqual(MusicPlayerLayout.coverSize(screenWidth: 375, screenHeight: 667), 249)
     }
 
     func testWholePlayerFitsOneScreen() {

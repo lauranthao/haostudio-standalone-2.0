@@ -31,8 +31,12 @@
 // - bottom row: 3 pure icons only (lyrics / AirPlay / queue).
 // - lyrics live BEHIND the cover: tap cover -> lyrics in the
 //   cover area; tap a lyric line -> seek to that line; tap lyric
-//   blank -> cover back. Current line 22 bold. No word-level
-//   karaoke: no source returns word timing.
+//   blank -> cover back. Current line 28 bold, neighbours 20 and
+//   readable (opacity floor 0.45, blur capped at 1.0, no row ever
+//   cut); lyrics are left-aligned under a compact header (64pt
+//   cover + title/artist + the title row's three actions). No
+//   word-level karaoke: no source returns word timing — the
+//   per-character wipe is pseudo-syllable timing.
 // - title / artist are tappable (Apple Music: tap the artist
 //   below the title to go to the artist, tap the title for the
 //   album) — the same sheets the … menu already opened.
@@ -55,7 +59,11 @@
 //   the presenting binding false (Beans closePlayer()), with
 //   dismiss() only as fallback, AND a downward swipe anywhere on
 //   the player closes it (lyrics mode: swipe must start on the
-//   top bar, so the list keeps its vertical drags).
+//   top bar, so the list keeps its vertical drags). b46-player:
+//   a 60×5 drag handle sits centred on the top bar as the visual
+//   affordance for that swipe — fullScreenCover has no system
+//   swipe dismiss, so the drag stays custom (see
+//   handleDismissDrag).
 // - WIDTH PIN (chen 2026-11-24, build 35): build 34 on his phone
 //   rendered the player ~2x wider than the screen — prev/next
 //   triangles at the screen edges, close button / title row /
@@ -390,6 +398,8 @@ struct MusicPlayerView: View {
     // MARK: - Portrait body (Apple Music Now Playing, top to bottom)
 
     private func portraitBody(geo: GeometryProxy) -> some View {
+        let slotSize = MusicPlayerLayout.coverSize(
+            screenWidth: geo.size.width, screenHeight: geo.size.height)
         // b38, item 1: the slack is shared across the column
         // (one Spacer per gap, minLength 0) instead of a single
         // Spacer above the bottom row — the old layout left one
@@ -397,25 +407,33 @@ struct MusicPlayerView: View {
         // chen's phone while the top sat tight. The spacers
         // collapse to 0 on short phones, so the minimum height
         // (and fitsOneScreen) is unchanged.
-        VStack(spacing: 0) {
+        return VStack(spacing: 0) {
             topBar
                 .frame(maxWidth: .infinity)
                 .chromeFade(hidden: chromeHidden)
             Spacer(minLength: 0)
-            coverOrLyrics(size: MusicPlayerLayout.coverSize(
-                screenWidth: geo.size.width, screenHeight: geo.size.height))
-                .padding(.top, 8)
-            Spacer(minLength: 0)
-            titleRow
-                .padding(.top, 10)
-                .frame(maxWidth: .infinity)
-                .chromeFade(hidden: chromeHidden)
+            if playerVM.showLyrics {
+                // b46-player (Coda lyrics): compact header + lyrics
+                // in one column — the same total height as the cover
+                // slot + title row it replaces (lyricsModeColumn).
+                lyricsModeColumn(size: slotSize)
+                    .padding(.top, 8)
+                    .chromeFade(hidden: chromeHidden)
+            } else {
+                coverOrLyrics(size: slotSize)
+                    .padding(.top, 8)
+                Spacer(minLength: 0)
+                titleRow
+                    .padding(.top, 10)
+                    .frame(maxWidth: .infinity)
+                    .chromeFade(hidden: chromeHidden)
+            }
             if playerVM.loadFailed {
                 loadFailedBanner
                     .padding(.top, 10)
             }
             Spacer(minLength: 0)
-            progressSection
+            progressSection(isLandscape: false)
                 .padding(.top, 14)
                 .frame(maxWidth: .infinity)
                 .chromeFade(hidden: chromeHidden)
@@ -501,7 +519,7 @@ struct MusicPlayerView: View {
                     loadFailedBanner
                         .padding(.top, 8)
                 }
-                progressSection
+                progressSection(isLandscape: true)
                     .padding(.top, 8)
                     .frame(maxWidth: .infinity)
                     .chromeFade(hidden: chromeHidden)
@@ -633,6 +651,17 @@ struct MusicPlayerView: View {
                 startPoint: .top, endPoint: .bottom
             )
         )
+        // b46-player: drag handle (Coda grabber 60×5, white 0.5),
+        // centred on the top edge — the visual affordance for the
+        // swipe-down dismiss (handleDismissDrag; fullScreenCover
+        // has no system swipe dismiss, so the drag is custom).
+        // An overlay, so it costs no layout height.
+        .overlay(alignment: .top) {
+            Capsule()
+                .fill(.white.opacity(0.5))
+                .frame(width: 60, height: 5)
+                .padding(.top, 2)
+        }
     }
 
     // MARK: - Cover / lyrics
@@ -782,7 +811,7 @@ struct MusicPlayerView: View {
                                 // A11: the translation (when one was
                                 // matched and the switch is on) rides
                                 // under its line, smaller and dimmer.
-                                VStack(spacing: 2) {
+                                VStack(alignment: .leading, spacing: 2) {
                                     if isActive {
                                         // b45-h: per-character karaoke
                                         // wipe (P8 #1) — each char is
@@ -798,11 +827,11 @@ struct MusicPlayerView: View {
                                             lineStart: line.time,
                                             lineDuration: (index + 1 < playerVM.lyrics.count ? playerVM.lyrics[index + 1].time : line.time + 4) - line.time,
                                             position: playerVM.position,
-                                            fontSize: 22
+                                            fontSize: 28
                                         )
                                     } else {
                                         Text(line.text.isEmpty ? " " : line.text)
-                                            .font(.system(size: 16, weight: .regular))
+                                            .font(.system(size: 20, weight: .regular))
                                             .foregroundStyle(.white.opacity(
                                                 MusicLyrics.lineOpacity(
                                                     distance: distance,
@@ -821,8 +850,8 @@ struct MusicPlayerView: View {
                                             ))
                                     }
                                 }
-                                .multilineTextAlignment(.center)
-                                .frame(maxWidth: .infinity)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.vertical, 10)
                                 // b45-a: the seek-confirm state — the
                                 // tapped row stays highlighted until
@@ -835,14 +864,14 @@ struct MusicPlayerView: View {
                                 )
                             }
                             .buttonStyle(LyricRowPressStyle())
-                            // b45-a (Coda §2.8): non-active rows sit
-                            // at 0.98 scale with distance blur; rows
-                            // more than 6 away from the active line
-                            // are cut (kept in layout at opacity 0
-                            // so the scroll geometry never jumps).
+                            // b46-player (Coda §2.8): non-active rows
+                            // sit at 0.98 scale with a faint distance
+                            // blur (cap 1.0, floor opacity 0.45) — no
+                            // row is ever cut: the old "> 6 away =
+                            // opacity 0" left the bottom of the slot
+                            // empty on chen's phone.
                             .scaleEffect(isActive ? 1.0 : 0.98)
                             .blur(radius: isActive ? 0 : MusicLyrics.lineBlur(distance: distance))
-                            .opacity(abs(distance) > 6 ? 0 : 1)
                             // b45-a: row-by-row stagger — 0.05 s
                             // forward / 0.025 s reverse, capped at
                             // 0.4 s (Coda §8.3).
@@ -946,12 +975,14 @@ struct MusicPlayerView: View {
         }
     }
 
-    // MARK: - Quality badge (overlaid on the progress bar)
+    // MARK: - Quality badge (below the progress bar)
 
-    /// Quality badge overlaid on the progress bar (b45-a, Coda
-    /// §2.4): 148×24 slot, badge 21pt, 10.5pt medium, white 0.70,
-    /// capsule stroke white 0.28 / 0.75pt. Hit-testing is off — the
-    /// badge floats over the bar but never blocks scrubbing.
+    /// Quality badge (b46-player, Coda §2.4): 148×24 slot, badge
+    /// 21pt, 10.5pt medium, white 0.70, capsule stroke white 0.28
+    /// / 0.75pt. It sits BELOW the progress bar, centred, in its
+    /// own row — never over the bar. Hit-testing is off. No label
+    /// (no song / unknown tier) collapses to zero height, so the
+    /// row leaves no dead gap.
     private var qualityBadgeOverlay: some View {
         Group {
             if let label = playerVM.qualityBadgeLabel {
@@ -964,9 +995,9 @@ struct MusicPlayerView: View {
                         Capsule()
                             .strokeBorder(.white.opacity(0.28), lineWidth: 0.75)
                     }
+                    .frame(width: 148, height: 24)
             }
         }
-        .frame(width: 148, height: 24)
         .allowsHitTesting(false)
     }
 
@@ -994,56 +1025,70 @@ struct MusicPlayerView: View {
 
     private var titleRow: some View {
         HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                // Apple Music: the title opens the album, the
-                // artist opens the artist — the same sheets the …
-                // menu already opened, so no new destination is
-                // invented. Empty title / artist is not tappable.
-                Button(action: {
-                    noteInteraction()
-                    showAlbum = true
-                }) {
-                    Text(playerVM.currentSong?.title ?? "未在播放")
-                        .font(.haoSectionTitle)
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                }
-                .buttonStyle(.plain)
-                .disabled((playerVM.currentSong?.album ?? "").isEmpty)
-                .accessibilityLabel("专辑：\(playerVM.currentSong?.album ?? "")")
-                // b45-a (Coda §2.3): title and artist share the
-                // title3 size; the artist is white 0.62, and each
-                // artist in a multi-artist " / " list is its own
-                // tappable link.
-                HStack(spacing: 0) {
-                    ForEach(Array(artistNames.enumerated()), id: \.offset) { offset, name in
-                        if offset > 0 {
-                            Text(" / ")
-                                .font(.haoSectionTitle)
-                                .foregroundStyle(.white.opacity(0.62))
-                        }
-                        Button(action: {
-                            noteInteraction()
-                            selectedArtistName = name
-                            showArtist = true
-                        }) {
-                            Text(name)
-                                .font(.haoSectionTitle)
-                                .foregroundStyle(.white.opacity(0.62))
-                                .lineLimit(1)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("歌手：\(name)")
+            titleTextBlock
+            Spacer()
+            titleActionButtons
+        }
+    }
+
+    /// Title + tappable artist links (b45-a, Coda §2.3): shared
+    /// by the cover-mode title row and the lyrics-mode compact
+    /// header (b46-player), so the two never drift apart.
+    private var titleTextBlock: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            // Apple Music: the title opens the album, the
+            // artist opens the artist — the same sheets the …
+            // menu already opened, so no new destination is
+            // invented. Empty title / artist is not tappable.
+            Button(action: {
+                noteInteraction()
+                showAlbum = true
+            }) {
+                Text(playerVM.currentSong?.title ?? "未在播放")
+                    .font(.haoSectionTitle)
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+            .disabled((playerVM.currentSong?.album ?? "").isEmpty)
+            .accessibilityLabel("专辑：\(playerVM.currentSong?.album ?? "")")
+            // b45-a (Coda §2.3): title and artist share the
+            // title3 size; the artist is white 0.62, and each
+            // artist in a multi-artist " / " list is its own
+            // tappable link.
+            HStack(spacing: 0) {
+                ForEach(Array(artistNames.enumerated()), id: \.offset) { offset, name in
+                    if offset > 0 {
+                        Text(" / ")
+                            .font(.haoSectionTitle)
+                            .foregroundStyle(.white.opacity(0.62))
                     }
+                    Button(action: {
+                        noteInteraction()
+                        selectedArtistName = name
+                        showArtist = true
+                    }) {
+                        Text(name)
+                            .font(.haoSectionTitle)
+                            .foregroundStyle(.white.opacity(0.62))
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("歌手：\(name)")
                 }
             }
-            Spacer()
-            // b45-a (Coda §2.3): add-to-playlist + favourite heart,
-            // 22pt glyphs on 44×44 hit targets. The heart is the
-            // meaningful red #FF3B30 when liked, fading in over
-            // 0.18 s with a 1.3-speed bounce; the … stays here (it
-            // opens the sheet with sleep / EQ / quality — the
-            // toolbar's three icons are comment / queue / lyrics).
+        }
+    }
+
+    /// Add-to-playlist + favourite + … (b45-a, Coda §2.3): 22pt
+    /// glyphs on 44×44 hit targets. The heart is the meaningful
+    /// red #FF3B30 when liked, fading in over 0.18 s with a
+    /// 1.3-speed bounce; the … opens the sheet with sleep / EQ /
+    /// quality (the toolbar's three icons are comment / queue /
+    /// lyrics). Shared by the cover-mode title row and the
+    /// lyrics-mode compact header (b46-player).
+    private var titleActionButtons: some View {
+        HStack(spacing: 12) {
             Button(action: {
                 noteInteraction()
                 if let song = playerVM.currentSong {
@@ -1091,11 +1136,50 @@ struct MusicPlayerView: View {
         }
     }
 
+    /// Compact lyrics header (b46-player, Coda lyrics top row):
+    /// 64pt cover top-left + title/artist + the title row's three
+    /// actions on the right. Same content as titleRow, one row.
+    private var lyricsHeader: some View {
+        HStack(alignment: .center, spacing: 12) {
+            MusicCoverView(
+                urlString: playerVM.currentSong?.cover ?? "",
+                size: 64,
+                cornerRadius: 10
+            )
+            titleTextBlock
+            Spacer()
+            titleActionButtons
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// Lyrics-mode middle column (b46-player): compact header over
+    /// the lyrics, the same total height as the cover slot + title
+    /// row it replaces — 64 header + 8 gap + lyrics (size − 12) =
+    /// size + 60 — so the column fits exactly like cover mode and
+    /// the lyrics fill the middle instead of leaving the title
+    /// row's band below them.
+    private func lyricsModeColumn(size: CGFloat) -> some View {
+        VStack(spacing: 8) {
+            lyricsHeader
+            lyricsArea(height: size - 12)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     // MARK: - Progress
 
-    private var progressSection: some View {
+    /// Progress (b46-player): bar → quality badge → time row in
+    /// portrait (Coda §2.4: the badge sits BELOW the bar, centred,
+    /// never over it). In landscape the right column has no room
+    /// for a badge row (5pt of slack on the shortest landscape
+    /// phone), so the badge stays overlaid on the bar there.
+    private func progressSection(isLandscape: Bool) -> some View {
         VStack(spacing: 6) {
-            thinProgressBar
+            thinProgressBar(badgeOverlay: isLandscape)
+            if !isLandscape {
+                qualityBadgeOverlay
+            }
             HStack {
                 Text(musicDurationText(seconds: Int(playerVM.scrubSeconds ?? playerVM.position)))
                     .font(.haoCaption)
@@ -1113,14 +1197,15 @@ struct MusicPlayerView: View {
     /// Thin progress bar (fix 2026-11-24, build 35; b45-a Coda
     /// §2.4/§8.7): a 5pt track (unplayed white 0.25, played solid
     /// white), the thumb hidden until dragged — 13pt while dragging
-    /// (spring 0.24/0.72), shadow black 0.3 / radius 2 / y 1. The
-    /// quality badge floats over the bar (hit-testing off). Drag
+    /// (spring 0.24/0.72), shadow black 0.3 / radius 2 / y 1. Drag
     /// scrubs locally; seek fires once on release and the VM rolls
     /// back on failure — the same semantics the Slider had (see
     /// seek(to:)). The HIT area stays 28pt (the old 4pt frame was
     /// nearly untappable — the drag only fired when the finger
-    /// landed exactly on the line).
-    private var thinProgressBar: some View {
+    /// landed exactly on the line). b46-player: the quality badge
+    /// overlay lives here ONLY in landscape (portrait shows the
+    /// badge in its own row below the bar, see progressSection).
+    private func thinProgressBar(badgeOverlay: Bool) -> some View {
         GeometryReader { geo in
             let width = geo.size.width
             let duration = max(playerVM.duration, 0)
@@ -1149,7 +1234,9 @@ struct MusicPlayerView: View {
             .frame(height: 28)
             .contentShape(Rectangle())
             .overlay(alignment: .center) {
-                qualityBadgeOverlay
+                if badgeOverlay {
+                    qualityBadgeOverlay
+                }
             }
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -1701,17 +1788,18 @@ private extension View {
 enum MusicPlayerLayout {
     /// Horizontal side padding of the player stack (24pt each side).
     static let sidePadding: CGFloat = 24
-    /// Fixed chrome below the cover slot. b45-a: the composition
-    /// changed — transport is now 82pt (5-part) and the bottom row
-    /// is the 50pt toolbar, while the quality badge moved onto the
-    /// progress bar (its old 23pt row is gone). The 284 budget is
-    /// KEPT so MusicPlayerLayoutTests stays green (it pins
-    /// coverSize(375, 667) == 279 and fitsOneScreen); the honest
-    /// re-budget (~300) plus the test update is a follow-up — the
-    /// test file is outside this package's file list. Tall screens
-    /// absorb the difference in the column spacers; the shortest
-    /// (667pt) screens carry ~15pt of slack risk until then.
-    static let fixedChromeHeight: CGFloat = 284
+    /// Fixed chrome below the cover slot. b46-player: the quality
+    /// badge moved off the progress bar into its own row below it
+    /// (bar → badge 24 + 6 gap → time row), so the honest budget
+    /// grows 284 → 314 and the cover's height term 388 → 418.
+    /// MusicPlayerLayoutTests pins coverSize(375, 667) == 249 on
+    /// the new budget. The lyrics-mode compact header is
+    /// height-neutral by construction (lyricsModeColumn: 64 header
+    /// + 8 gap + lyrics size − 12 = size + 60, the cover slot +
+    /// title row it replaces), so it needs no budget term. The
+    /// pre-existing ~15pt slack risk on the shortest (667pt)
+    /// screens that the old comment carried is unchanged.
+    static let fixedChromeHeight: CGFloat = 314
 
     static func contentWidth(screenWidth: CGFloat) -> CGFloat {
         screenWidth - sidePadding * 2
@@ -1722,7 +1810,7 @@ enum MusicPlayerLayout {
     /// screen with no scrolling on any phone height. Tall phones
     /// still get the 340 cap.
     static func coverSize(screenWidth: CGFloat, screenHeight: CGFloat) -> CGFloat {
-        min(screenWidth - sidePadding * 2, 340, max(180, screenHeight - 388))
+        min(screenWidth - sidePadding * 2, 340, max(180, screenHeight - 418))
     }
 
     /// The whole player fits on one screen iff cover + chrome +
