@@ -75,13 +75,11 @@ struct LiveRoomView: View {
     @State private var autoHideWork: DispatchWorkItem?
     @State private var toastWork: DispatchWorkItem?
     /// Live picture gestures (build 37, L3 — Pure Live parity):
-    /// tap disambiguator (single = play/pause in portrait,
-    /// controls toggle in landscape; double = fullscreen) and
-    /// the vertical-drag brightness/volume state. The drag pill
-    /// shows while `liveDragKind` is set and hides 1 s after
-    /// the last update.
-    @State private var liveTapDisambiguator = VodTapDisambiguator()
-    @State private var pendingLiveSingleTapWork: DispatchWorkItem?
+    /// tap state (single tap = play/pause in portrait,
+    /// controls toggle in landscape; there is no double-tap
+    /// meaning on live — b49fix2 A5) and the vertical-drag
+    /// brightness/volume state. The drag pill shows while
+    /// `liveDragKind` is set and hides 1 s after the last update.
     @State private var liveDragKind: LiveDragKind?
     @State private var liveDragLevel: Double = 0
     @State private var liveDragBaseline: Double = 0
@@ -135,6 +133,12 @@ struct LiveRoomView: View {
                 portraitBody
             }
         }
+        // (b49fix2 B11) Fixed chrome (bottom bar, landscape
+        // bars, sheets) is laid out at fixed heights: cap
+        // Dynamic Type at accessibility1 so the chrome cannot
+        // blow out at larger sizes. Sheets inherit the cap from
+        // the presenting view's environment.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         .background(
             // Hidden volume driver (build 37, L3): the room page
             // wires the view model's volumeApplier through the
@@ -423,51 +427,26 @@ struct LiveRoomView: View {
             }
     }
 
-    /// Single tap (via the disambiguator) / double-tap on the
-    /// picture. The first tap waits 0.28 s for a second tap —
-    /// the same lag chen accepted on VOD in build 36, and the
-    /// strip play/pause buttons stay instant (direct Buttons).
-    /// Single tap: portrait toggles play/pause, landscape
-    /// toggles the chrome. Double-tap anywhere: fullscreen
-    /// toggle (Pure Live) — portrait enters landscape,
-    /// landscape returns to the portrait room (never the lobby).
+    /// Single tap on the picture. There is NO double-tap
+    /// meaning on live (b49fix2 A5): VOD double-tap seeks /
+    /// pauses and live double-tap used to toggle fullscreen —
+    /// one gesture, opposite meanings. Fullscreen on live is
+    /// only the [] button now, so every tap acts at once:
+    /// portrait toggles play/pause, landscape toggles the
+    /// chrome. Dropping the disambiguator also drops the 0.28 s
+    /// single-tap lag it imposed.
     private func handleLiveTap(at location: CGPoint) {
-        let size = liveVideoSize(isLandscape: isFullscreen)
-        let outcome = liveTapDisambiguator.tap(
-            at: Date().timeIntervalSinceReferenceDate,
-            x: location.x,
-            width: size.width
-        )
-        switch outcome {
-        case .wait:
-            pendingLiveSingleTapWork?.cancel()
-            let work = DispatchWorkItem { [self] in
-                guard self.liveTapDisambiguator.expirePending(
-                    at: Date().timeIntervalSinceReferenceDate
-                ) == .singleTap else { return }
-                if self.isFullscreen {
-                    if self.controlsVisible {
-                        withAnimation(.easeOut(duration: 0.3)) {
-                            self.controlsVisible = false
-                        }
-                        self.autoHideWork?.cancel()
-                    } else {
-                        self.showControlsTemporarily()
-                    }
-                } else {
-                    self.livePlayer.togglePlayPause()
+        if isFullscreen {
+            if controlsVisible {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    controlsVisible = false
                 }
+                autoHideWork?.cancel()
+            } else {
+                showControlsTemporarily()
             }
-            pendingLiveSingleTapWork = work
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + VodGestureConfig.doubleTapWindowSeconds,
-                execute: work
-            )
-        case .singleTap:
-            break
-        case .doubleTap:
-            pendingLiveSingleTapWork?.cancel()
-            isFullscreen.toggle()
+        } else {
+            livePlayer.togglePlayPause()
         }
     }
 
@@ -1103,7 +1082,7 @@ struct LiveRoomView: View {
             }
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity)
-            Button(action: { openCurrentRoom() }) {
+            Button(action: { livePlayer.refreshCurrentRoom() }) {
                 Label("刷新", systemImage: "arrow.clockwise")
                     .font(.haoDenseTitle)
                     .foregroundStyle(theme.accentText)

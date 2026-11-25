@@ -281,6 +281,21 @@ extension LiveGridLayout {
         )
     }
 
+    /// Adaptive columns for a grid inside a container of the
+    /// given width (b49fix2 B13): phones stay at 2, a landscape
+    /// phone / portrait iPad gets 3, a wide container 4 — the
+    /// fixed 2-column grid left an iPad grid using a third of
+    /// the width. Same AppCore math as HomeView's
+    /// homeLiveGridColumns; the GridItem array lives here
+    /// because LiveDataGateway is Foundation-only (AppCore)
+    /// and cannot build SwiftUI items.
+    static func gridColumns(forWidth width: CGFloat) -> [GridItem] {
+        Array(
+            repeating: GridItem(.flexible(minimum: 0), spacing: CGFloat(interItemSpacing)),
+            count: columns(forWidth: Double(width))
+        )
+    }
+
     /// Row spacing between grid rows, in points.
     static var gridRowSpacing: CGFloat { CGFloat(rowSpacing) }
 

@@ -184,6 +184,10 @@ struct LiveSearchView: View {
             .haoBottomChromePadding()
         }
         .background(theme.scaffoldBackground)
+        // (b49fix2 B11) Same cap as the tab (fixed-height search
+        // field, chips, 140pt cards); harmless if the page was
+        // pushed from the tab and already inherits it.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         .navigationTitle("搜索直播")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -303,7 +307,7 @@ struct LiveSearchView: View {
                     }
                 } else {
                     LazyVGrid(
-                        columns: LiveGridLayout.gridColumns,
+                        columns: LiveGridLayout.gridColumns(forWidth: UIScreen.main.bounds.width),
                         spacing: LiveGridLayout.gridRowSpacing
                     ) {
                         // Identity is the room itself (platform +

@@ -409,6 +409,12 @@ struct LiveTabView: View {
                 .refreshable { viewModel.reload() }
                 .haoBackdropLayer()
                 .haoTabBackground()
+                // (b49fix2 B11) Fixed chrome (header, tabs, chips,
+                // search field, 140pt cards) is laid out at fixed
+                // sizes: cap Dynamic Type at accessibility1 so the
+                // chrome cannot blow out at larger sizes. Pushed
+                // pages inherit the cap through the stack.
+                .dynamicTypeSize(...DynamicTypeSize.accessibility1)
                 // b42: no system nav bar on this root (see
                 // liveHeader above — the system large title and
                 // toolbar pill overlap the content on chen's
@@ -669,7 +675,7 @@ struct LiveTabView: View {
                 }
             } else {
                 LazyVGrid(
-                    columns: LiveGridLayout.gridColumns,
+                    columns: LiveGridLayout.gridColumns(forWidth: UIScreen.main.bounds.width),
                     spacing: LiveGridLayout.gridRowSpacing
                 ) {
                     // Identity is the room itself: LiveRoom's
