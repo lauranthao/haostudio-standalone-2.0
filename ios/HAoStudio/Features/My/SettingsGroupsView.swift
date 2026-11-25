@@ -2021,7 +2021,7 @@ struct DisclaimerView: View {
             // single step (disclaimer only, no login step), so a
             // "第 1 步，共 1 步" progress indicator says nothing.
             ScrollView {
-                VStack(spacing: 18) {
+                VStack(spacing: HaoLayout.sheetStackSpacing) {
                     VStack(spacing: 8) {
                         // b49fix6 P2-20: 34pt disclaimer icon — an
                         // icon, not a text title, so it does not

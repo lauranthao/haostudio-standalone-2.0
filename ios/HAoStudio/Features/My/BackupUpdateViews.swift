@@ -784,7 +784,7 @@ struct ImportPreviewSheet: View {
     @ObservedObject private var flow = BackupUpdateFlow.shared
 
     var body: some View {
-        VStack(spacing: 22) {
+        VStack(spacing: HaoLayout.sheetStackSpacing) {
             Text("导入备份")
                 .font(.haoDetailTitle)
                 .foregroundStyle(theme.textPrimary)
@@ -851,7 +851,7 @@ struct UpdateStatusSheet: View {
     @ObservedObject private var flow = BackupUpdateFlow.shared
 
     var body: some View {
-        VStack(spacing: 22) {
+        VStack(spacing: HaoLayout.sheetStackSpacing) {
             statusIcon
             Text(title)
                 .font(.haoDetailTitle)
@@ -963,7 +963,7 @@ struct UpdatePromptSheet: View {
     }
 
     var body: some View {
-        VStack(spacing: 22) {
+        VStack(spacing: HaoLayout.sheetStackSpacing) {
             phaseIcon
             titleSection
             if flow.updatePhase == .downloading {

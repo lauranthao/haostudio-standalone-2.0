@@ -203,6 +203,12 @@ enum HaoLayout {
     static let sheetHorizontalPadding: CGFloat = 24
     /// Sheet top padding.
     static let sheetTopPadding: CGFloat = 16
+    /// Sheet content main-stack spacing (b49-sweep13 alignment
+    /// P2-1): the root VStack of sheet content — ImportPreview /
+    /// UpdateStatus / UpdatePrompt sheets used 22, DisclaimerView
+    /// used 18, same role, both unregistered. Unified on 22 (the
+    /// majority value); all four sheet root stacks wire here.
+    static let sheetStackSpacing: CGFloat = 22
 
     // Retry-button variants (sweep 7 P2-24 / P2-27, sweep 8
     // P2-16): deliberate exceptions to the standard retry
