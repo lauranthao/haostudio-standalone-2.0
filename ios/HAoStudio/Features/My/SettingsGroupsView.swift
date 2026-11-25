@@ -56,6 +56,10 @@ struct SettingsSectionHeader: View {
                     .foregroundStyle(theme.textMuted)
                     .animation(HaoLayout.settleSpring, value: settings.sectionExpanded(section.rawValue))
             }
+            // b47: the whole header row is the hit target — in a
+            // List section header the tap area is only the label's
+            // drawn content unless the shape is stated.
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -1319,12 +1323,15 @@ struct SettingsGroupsView: View {
         }
     }
 
+    /// b47 (chen 2026-11-25 build 46: "设置里面的官网也没改"):
+    /// this still pointed at the shop (Railway). The official site
+    /// is the GitHub Pages site since b46-site.
     private var aboutWebsiteRow: some View {
         AboutLinkRow(
             title: "官网",
             icon: "globe",
-            url: URL(string: "https://chen-hao-shop-production.up.railway.app")!,
-            detail: "chen-hao-shop-production.up.railway.app"
+            url: URL(string: "https://lauranthao.github.io/haostudio-standalone-2.0/")!,
+            detail: "lauranthao.github.io/haostudio-standalone-2.0"
         )
     }
 
@@ -1337,11 +1344,20 @@ struct SettingsGroupsView: View {
         )
     }
 
+    /// b47 (chen 2026-11-25 build 46: "问题反馈的网站你也没给我
+    /// 设置好"): this pointed at the issues LIST (empty, no way to
+    /// file without hunting for "New issue"). It now lands directly
+    /// on the new-issue chooser, where the two templates
+    /// (问题反馈 / 功能建议, .github/ISSUE_TEMPLATE/) are offered.
+    /// GitHub sign-in is still required to submit — Issues needs an
+    /// account; the chooser itself is not publicly viewable (live
+    /// check 2026-11-25: /issues/new/choose redirects to sign-in
+    /// when logged out, while the templates are live on main).
     private var aboutIssuesRow: some View {
         AboutLinkRow(
             title: "问题反馈",
             icon: "exclamationmark.bubble",
-            url: URL(string: "https://github.com/lauranthao/haostudio-standalone-2.0/issues")!,
+            url: URL(string: "https://github.com/lauranthao/haostudio-standalone-2.0/issues/new/choose")!,
             detail: nil
         )
     }
