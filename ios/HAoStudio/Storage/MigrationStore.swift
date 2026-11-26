@@ -1203,10 +1203,29 @@ enum MigrationStore {
                     // by identityKey); any other shape (the
                     // fixture's {"picks": […]} dict, a corrupt
                     // day) keeps the overlay.
-                    if name == "hao_daily",
-                       let liveDay = existing[entry.key] as? [[String: Any]],
-                       let incomingDay = entry.value as? [[String: Any]] {
-                        merged[entry.key] = mergedDailyDay(live: liveDay, incoming: incomingDay)
+                    // b49fix33: the day key is the bare date.
+                    // The snapshot shard key carries the
+                    // "hao_daily_" prefix, but the live file is
+                    // keyed by date ({ "YYYY-MM-DD": [Song JSON] },
+                    // MusicLibraryStore.dailyCollection) — looking
+                    // the live day up by the full shard key always
+                    // missed, so the merge never ran and the
+                    // incoming songs landed under a dead
+                    // "hao_daily_YYYY-MM-DD" key no reader ever
+                    // looks up (testFix19/20: merged day held
+                    // live songs only, cap warning never fired).
+                    // haoVodProg keeps the full key — its file
+                    // IS keyed by the full snapshot key.
+                    if name == "hao_daily" {
+                        let dayKey = entry.key.hasPrefix("hao_daily_")
+                            ? String(entry.key.dropFirst("hao_daily_".count))
+                            : entry.key
+                        if let liveDay = existing[dayKey] as? [[String: Any]],
+                           let incomingDay = entry.value as? [[String: Any]] {
+                            merged[dayKey] = mergedDailyDay(live: liveDay, incoming: incomingDay)
+                        } else {
+                            merged[dayKey] = entry.value
+                        }
                     } else {
                         merged[entry.key] = entry.value
                     }
@@ -2994,6 +3013,20 @@ enum MigrationStore {
     ) -> RestoredFile {
         switch kind {
         case .mergeList:
+            // b49fix33: a prior that does not parse as a list
+            // (wrong shape, corrupt JSON) is NOT an empty prior
+            // — the old rollback restored it byte-identical, and
+            // the merge-aware restore must too. Without this the
+            // restore serialised an empty list over it
+            // (testWriteFailureRollsBackEverything: a dict prior
+            // for a list file came back as `[]`, 2 bytes). The
+            // doc above promises this fallback ("A value that
+            // cannot be parsed falls back to the plain prior
+            // restore"); only the wholeFile branch implemented it.
+            if let prior = prior,
+               ((try? JSONSerialization.jsonObject(with: prior, options: [])) as? [[String: Any]]) == nil {
+                return .data(prior)
+            }
             let priorList = parsedList(prior)
             let writtenList = parsedList(written)
             let currentList = parsedList(current)
@@ -3123,6 +3156,13 @@ enum MigrationStore {
             }
             return .data(bytes)
         case .mergeDict:
+            // b49fix33: same unparseable-prior fallback as the
+            // list branch above — a prior that is not a dict
+            // restores byte-identical, never as `{}`.
+            if let prior = prior,
+               ((try? JSONSerialization.jsonObject(with: prior, options: [])) as? [String: Any]) == nil {
+                return .data(prior)
+            }
             let priorDict = parsedDict(prior)
             let writtenDict = parsedDict(written)
             let currentDict = parsedDict(current)
@@ -3235,6 +3275,13 @@ enum MigrationStore {
             }
             return .data(bytes)
         case .mergeStringList:
+            // b49fix33: same unparseable-prior fallback as the
+            // list branch above — a prior that is not a string
+            // list restores byte-identical, never as `[]`.
+            if let prior = prior,
+               ((try? JSONSerialization.jsonObject(with: prior, options: [])) as? [String]) == nil {
+                return .data(prior)
+            }
             let priorList = parsedStringList(prior)
             let writtenList = parsedStringList(written)
             let currentList = parsedStringList(current)
@@ -3598,8 +3645,13 @@ enum MigrationStore {
     /// live write superseded a value.
     static func wholeFileSubsetVerifies(name: String, expected: Any, documentsURL: URL) -> Bool {
         let url = documentsURL.appendingPathComponent("\(name).json")
+        // b49fix33: .allowFragments — a bare scalar file (e.g. `5`)
+        // is valid JSON but jsonObject without this option throws
+        // ("did not start with array or object"), so the scalar
+        // fallback below was unreachable and every scalar verify
+        // returned false (testFix21: `5` vs 5 failed).
         guard let rawData = try? Data(contentsOf: url),
-              let actual = try? JSONSerialization.jsonObject(with: rawData, options: [])
+              let actual = try? JSONSerialization.jsonObject(with: rawData, options: [.allowFragments])
         else { return false }
         if let expectedList = expected as? [[String: Any]],
            let actualList = actual as? [[String: Any]] {

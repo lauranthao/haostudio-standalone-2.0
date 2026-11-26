@@ -73,31 +73,41 @@ SAMPLES = {
 }
 JSON_LIST_KEYS = {
     "hao_lists", "hao_fav", "hao_recent", "hao_listen",
-    "hao_music_search_hist", "hao_cover_cache", "hao_lyrics",
-    "musicQueue", "musicDownloads", "fmDislikedIds",
+    "musicDownloads",
     # b49fix17 P1-4: musicResume is NOT a list key — it is a dict
     # {identityKey: seconds} (docs/storage-mapping.md:105;
     # 2.0's resumeMap() only reads a dict). It used to sit here
     # only because the generator sampled [{"id":"x"}] for every
     # .json key, not a real Flutter shape.
     "hao_feature_cover_plaza", "hao_feature_cover_charts",
-    "hao_music_bookmarks", "hao_music_loudness_cache",
+    "hao_music_bookmarks",
     "hao_music_sources", "hao_local_music", "hao_music_queue_memory",
-    "hao_resolver_speed", "hao_vod_metadata_overrides",
-    "hao_video_category_prefs", "hao_vod_skip_intro_durations",
+    "hao_vod_metadata_overrides",
     "hao_video_home", "hao_video_hist", "hao_video_fav",
-    "hao_video_search_hist", "hao_douban_detail", "hao_douban_idmap",
-    "hao_sa_video", "hao_emby_home", "hao_live_sources",
-    "hao_live_hist", "hao_live_follows", "hao_live_search_hist",
-    "hao_live_hidden_platforms", "hao_danmaku_enabled", "hao_dm_block",
-    "hao_lx_disabled", "hao_lx_explicit_enabled", "hao_lx_custom",
-    "hao_lx_deleted_bundled", "hao_lx_order", "hao_eq_custom_presets",
+    "hao_sa_video", "hao_emby_home",
+    "hao_live_hist", "hao_live_follows",
+    "hao_live_hidden_platforms", "hao_dm_block",
+    "hao_lx_custom",
+    "hao_eq_custom_presets",
     "hao_wallpaper_paths",
     # b49fix19 P2-1: the five new mappings are list-shaped
     # (downloadTasks and the two fav collections); a dict
     # sample would fail the plan shape check in the Swift
     # fixture, so they belong here.
     "hao_fav_albums", "hao_fav_artists", "downloadTasks",
+}
+# b49fix33: keys whose JSON value is a list of strings, not a
+# list of dicts — the Swift fixture samples ["x"] for these
+# (CrossGenerationMigrationTests.jsonStringListKeys). The ten
+# .dict keys that used to sit in JSON_LIST_KEYS above now sample
+# the generic {"a": 1} dict, matching the Swift fixture; the
+# b49fix18 D-8 plan shape check skips a wrong-shaped value.
+JSON_STRING_LIST_KEYS = {
+    "hao_music_search_hist", "hao_video_search_hist",
+    "hao_live_search_hist", "fmDislikedIds",
+    "hao_live_sources",
+    "hao_lx_deleted_bundled", "hao_lx_disabled",
+    "hao_lx_explicit_enabled", "hao_lx_order",
 }
 
 data = {}
@@ -138,7 +148,12 @@ for key, (kind, dest, arg) in mapping.items():
         # generic .json dict sample fails its shape check.
         data[key] = json.dumps(["pl1", "pl2"])
     elif kind == "json":
-        data[key] = json.dumps([{"id": "x"}]) if key in JSON_LIST_KEYS else json.dumps({"a": 1})
+        if key in JSON_LIST_KEYS:
+            data[key] = json.dumps([{"id": "x"}])
+        elif key in JSON_STRING_LIST_KEYS:
+            data[key] = json.dumps(["x"])
+        else:
+            data[key] = json.dumps({"a": 1})
     else:
         data[key] = SAMPLES[kind]
 

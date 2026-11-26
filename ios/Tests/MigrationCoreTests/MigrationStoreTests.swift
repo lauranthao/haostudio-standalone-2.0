@@ -81,6 +81,11 @@ final class MigrationStoreTests: XCTestCase {
             "musicSpeed": 1.5,
             "hapticsEnabled": false,
             "lastUpdateCheckAt": 1700000000000,
+            // b49fix33: the tab-bar accent presets mapping was
+            // deleted by b49fix2 (25 dead keys) — the snapshot
+            // still carries the old key, and the migration must
+            // isolate it as unknown, never drop it and never
+            // install it as a default.
             "hao_tabbar_accent_presets": [4294967295, 4278190335],
             "hao_eq_band_gains": [0.5, -1.0, 0, 0, 0, 0, 0, 0, 0, 0],
             "hao_lists": "[{\"id\":\"pl1\",\"name\":\"收藏\"}]",
@@ -96,10 +101,10 @@ final class MigrationStoreTests: XCTestCase {
 
         XCTAssertEqual(report.outcome, .migrated)
         XCTAssertEqual(report.totalKeys, 13)
-        XCTAssertEqual(report.unknownKeys, 1)
+        XCTAssertEqual(report.unknownKeys, 2)
         XCTAssertEqual(report.skippedKeys, 0)
         XCTAssertEqual(report.failedKeys, 0)
-        XCTAssertEqual(report.unknownKeyNames, ["some_future_key_xyz"])
+        XCTAssertEqual(report.unknownKeyNames, ["hao_tabbar_accent_presets", "some_future_key_xyz"])
         XCTAssertTrue(MigrationStore.isMigrationDone(defaults: defaults))
         XCTAssertFalse(MigrationStore.migrationNoticeNeeded(defaults: defaults))
 
@@ -108,16 +113,21 @@ final class MigrationStoreTests: XCTestCase {
         XCTAssertEqual(defaults.bool(forKey: "hapticsEnabled"), false)
         XCTAssertEqual(defaults.integer(forKey: "lastUpdateCheckAt"), 1700000000000)
         XCTAssertEqual(defaults.integer(forKey: "hao_live_hist_limit"), 25)
-        XCTAssertEqual((defaults.array(forKey: "hao_tabbar_accent_presets") as? [Int])?.count, 2)
+        XCTAssertNil(defaults.object(forKey: "hao_tabbar_accent_presets"), "a deleted mapping installs nothing")
         XCTAssertEqual((defaults.array(forKey: "hao_eq_band_gains") as? [Double])?.count, 10)
         XCTAssertEqual((defaults.array(forKey: "hao_eq_band_gains") as? [Double])?.first, 0.5)
 
         XCTAssertEqual((readJSONFile("hao_lists") as? [[String: Any]])?.count, 1)
         XCTAssertEqual((readJSONFile("hao_fav") as? [[String: Any]])?.count, 1)
         XCTAssertEqual((readJSONFile("haoVodProg") as? [String: Any])?["haoVodProg:cms:vod42"] as? Double, 1234.5)
-        XCTAssertNotNil((readJSONFile("hao_daily") as? [String: Any])?["hao_daily_2026-11-23"])
+        XCTAssertNotNil((readJSONFile("hao_daily") as? [String: Any])?["2026-11-23"])
         XCTAssertEqual((readJSONFile("hao_listen") as? [[String: Any]])?.count, 1)
-        XCTAssertEqual((readJSONFile("migration_unknown_keys") as? [String: Any])?["some_future_key_xyz"] as? String, "keep me")
+        let unknownFile = readJSONFile("migration_unknown_keys") as? [String: Any]
+        XCTAssertEqual(unknownFile?["some_future_key_xyz"] as? String, "keep me")
+        // b49fix33: the deleted mapping's old data is isolated,
+        // never dropped — the preset list survives in the
+        // unknown-keys file.
+        XCTAssertEqual((unknownFile?["hao_tabbar_accent_presets"] as? [Int])?.count, 2)
 
         // The pre-write backup holds a copy of the snapshot file.
         let backupRoot = docs.appendingPathComponent("migration_backup")
@@ -134,8 +144,14 @@ final class MigrationStoreTests: XCTestCase {
     func testMissingSnapshotSkipped() {
         let report = runMigration()
         XCTAssertEqual(report.outcome, .noSnapshot)
-        XCTAssertFalse(MigrationStore.isMigrationDone(defaults: defaults))
-        XCTAssertTrue(MigrationStore.migrationNoticeNeeded(defaults: defaults))
+        // b49fix33: no snapshot is a fresh install (b49 sweep P1,
+        // 14db7ca) — the migration IS complete, so the done flag
+        // is set and the My page stops showing the "旧版数据"
+        // notice on every launch. The outcome/state stay
+        // noSnapshot (the truthful outcome); only the flag the
+        // notice checks changed.
+        XCTAssertTrue(MigrationStore.isMigrationDone(defaults: defaults))
+        XCTAssertFalse(MigrationStore.migrationNoticeNeeded(defaults: defaults))
         XCTAssertEqual(MigrationStore.migrationState(defaults: defaults), MigrationStore.stateNoSnapshot)
     }
 
@@ -489,13 +505,15 @@ final class MigrationStoreTests: XCTestCase {
         reAdded.insert(merged[50], at: 0)
         reAdded.removeLast() // the tail entry is gone
         XCTAssertFalse(MigrationStore.recentContainsAll(actual: reAdded, expected: merged))
-        XCTAssertEqual(MigrationStore.recentMissingKeys(actual: reAdded, expected: merged), ["k99"])
+        // b49fix33: recentMissingKeys returns normalised identity
+        // keys (platform|songId — b49fix18 D-5c), not bare song ids.
+        XCTAssertEqual(MigrationStore.recentMissingKeys(actual: reAdded, expected: merged), ["wy|k99"])
 
         // One genuinely new song still excuses one displaced
         // tail entry, and the missing entry is observable.
         var oneNew = [recentSong("new-1")] + Array(merged.prefix(99))
         XCTAssertTrue(MigrationStore.recentContainsAll(actual: oneNew, expected: merged))
-        XCTAssertEqual(MigrationStore.recentMissingKeys(actual: oneNew, expected: merged), ["k99"])
+        XCTAssertEqual(MigrationStore.recentMissingKeys(actual: oneNew, expected: merged), ["wy|k99"])
         oneNew = merged
         XCTAssertTrue(MigrationStore.recentMissingKeys(actual: oneNew, expected: merged).isEmpty)
 
