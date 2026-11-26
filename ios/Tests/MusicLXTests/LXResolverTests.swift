@@ -206,6 +206,98 @@ final class LXResolverTests: XCTestCase {
         XCTAssertTrue(cooldown.isCoolingDown("flaky"))
     }
 
+    func testClearWhileResolveWaitsUncoolsTheSourceForSorting() {
+        // D26-2: the generation check covers the cooldown sort
+        // too. Job "a" is cooled AND failed for this song in an
+        // earlier resolve; job "b" answers at once. A resolve
+        // already queued when the user taps the song must ask
+        // "a" first once the clear bumps the generation — the
+        // stale cooldown must not sort it last, where the dying
+        // budget leaves it unasked this pass. The queue is
+        // parked deterministically: a blocker job waits on a
+        // gate, so the s1 resolve is provably still queued when
+        // the clear is requested (no timing luck).
+        let cooldown = ResolverCooldown(documentsDirectory: docs)
+        for _ in 0..<3 { cooldown.record("a", outcome: .error, milliseconds: 100) }
+        XCTAssertTrue(cooldown.isCoolingDown("a"))
+        // Phase 0: the setup resolve for s1 runs only job "a",
+        // which errors — the failure memory records ("a", s1)
+        // and the cooldown re-cools "a". Phase 1: s1 resolves
+        // with [a, b], both answering at once.
+        var phase = 0
+        var ran: [String] = []
+        let gate = DispatchSemaphore(value: 0)
+        let blockerStarted = expectation(description: "blocker started")
+        let engine = LXEngine(
+            fileStore: LXScriptFileStore(documentsDirectory: docs),
+            scriptStore: LXScriptStore(documentsDirectory: docs),
+            bundleLoader: { _ in nil })
+        let resolver = LXSourceResolver(
+            engine: engine,
+            cooldown: cooldown,
+            cache: PlayURLCache(),
+            scriptStore: LXScriptStore(documentsDirectory: docs),
+            documentsDirectory: docs,
+            perJobTimeout: 0.3,
+            totalBudget: 1.5,
+            firstPassCap: 0.8,
+            laterPassCap: 0.4,
+            jobListProvider: { _, _, songId, _, _ in
+                if songId == "block" {
+                    return [self.job(key: "blocker") { _, done in
+                        blockerStarted.fulfill()
+                        // Park the work queue: the next resolve
+                        // enqueued behind this one is still
+                        // waiting when the clear is requested.
+                        _ = gate.wait(timeout: .now() + 4)
+                        done(.empty)
+                    }]
+                }
+                if phase == 0 {
+                    return [self.job(key: "a") { _, done in
+                        ran.append("a")
+                        done(.error)
+                    }]
+                }
+                return [
+                    self.job(key: "a") { _, done in
+                        ran.append("a")
+                        done(.url("https://example.com/a.mp3", nil))
+                    },
+                    self.job(key: "b") { _, done in
+                        ran.append("b")
+                        done(.url("https://example.com/b.mp3", nil))
+                    },
+                ]
+            })
+        // Setup: "a" fails for s1.
+        XCTAssertNil(resolve(resolver, quality: .standard128, songId: "s1"))
+        XCTAssertTrue(cooldown.isCoolingDown("a"))
+        phase = 1
+        ran.removeAll()
+        // Park a resolve in the queue behind the blocker.
+        let blockDone = expectation(description: "block resolve")
+        resolver.resolve(songId: "block", platform: .tx, title: "Block", artist: "", quality: .standard128) { _ in
+            blockDone.fulfill()
+        }
+        wait(for: [blockerStarted], timeout: 5)
+        // Enqueue the s1 resolve BEHIND the parked one, then
+        // tap the song: the clear bumps the generation
+        // synchronously, but its async dict clear sits behind
+        // the queued resolve.
+        var second: PlayUrlResult?
+        let s1Done = expectation(description: "s1 resolve")
+        resolver.resolve(songId: "s1", platform: .tx, title: "Song", artist: "Singer", quality: .standard128) { result in
+            second = result
+            s1Done.fulfill()
+        }
+        resolver.clearFailureMemory(forSongId: "s1")
+        gate.signal()
+        wait(for: [blockDone, s1Done], timeout: 5)
+        XCTAssertEqual(second?.url, "https://example.com/a.mp3")
+        XCTAssertEqual(ran, ["a"])
+    }
+
     func testSecondResolveReAsksSourcesBecausePlayURLsAreNotCached() {
         var invocations = 0
         let cache = PlayURLCache()
