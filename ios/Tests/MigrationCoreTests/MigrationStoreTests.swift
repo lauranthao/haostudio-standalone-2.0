@@ -393,7 +393,10 @@ final class MigrationStoreTests: XCTestCase {
         let live = [["id": "a", "name": "old"]]
         let incoming = [["id": "a", "name": "new"], ["id": "b", "name": "x"]]
 
-        let merged = MigrationStore.mergedListEntries(live: live, incoming: incoming) { $0["id"] as? String }
+        // b49fix32: keyFor is ([String: Any]) -> String — the
+        // `?? ""` matches production's own call sites (hao_lists)
+        // and mergedListEntries' empty-key fallback (bytes key).
+        let merged = MigrationStore.mergedListEntries(live: live, incoming: incoming) { ($0["id"] as? String) ?? "" }
 
         XCTAssertEqual(merged.count, 2)
         XCTAssertEqual(merged[0]["name"] as? String, "old")
@@ -809,7 +812,11 @@ final class MigrationStoreTests: XCTestCase {
         XCTAssertEqual(readJSONFile("hao_fav_playlists") as? [String], ["pl1", "pl2"])
         XCTAssertEqual((readJSONFile("hao_fav_albums") as? [[String: Any]])?.count, 1)
         XCTAssertEqual((readJSONFile("hao_fav_artists") as? [[String: Any]])?.count, 1)
-        XCTAssertEqual(readJSONFile("hao_daily_pool") as? [String: Any], ["a": 1])
+        // b49fix32: [String: Any] cannot be XCTAssertEqual'd (Any
+        // is not Equatable — proven by a local swiftc probe), so
+        // compare the installed file as NSDictionary; the
+        // whole-dict equality assertion is unchanged.
+        XCTAssertEqual(readJSONFile("hao_daily_pool") as? NSDictionary, ["a": 1] as NSDictionary)
     }
 
     func testFix19LiveHistoryCapZeroMeansUnlimited() {

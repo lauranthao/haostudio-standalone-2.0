@@ -101,6 +101,12 @@ final class BackupEngineTests: XCTestCase {
             return [0.5, -1.0]
         case .json:
             return ["a", "b"]
+        case .data:
+            // b49fix32: UserDefaults stores Data directly for a
+            // .data key (coerce / isValidValue). No key in
+            // userDefaultsKeyKinds() is .data yet, but seed a real
+            // Data value so the arm is real if one is added.
+            return Data("sample".utf8)
         }
     }
 
@@ -149,6 +155,10 @@ final class BackupEngineTests: XCTestCase {
             }
         case .json:
             XCTFail("unexpected json-kind defaults key: \(key)", file: file, line: line)
+        case .data:
+            // b49fix32: mirrors sampleValue — a .data key stores
+            // Data in UserDefaults; compare it directly.
+            XCTAssertEqual(actual as? Data, expected as? Data, file: file, line: line)
         }
     }
 
