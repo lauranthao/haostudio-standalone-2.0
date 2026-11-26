@@ -499,7 +499,7 @@ struct MusicFMView: View {
                 Spacer()
                 if let song = fmSong {
                     MusicCoverView(urlString: song.cover, size: coverSize, cornerRadius: HaoLayout.cornerLarge)
-                        .shadow(color: .black.opacity(0.35), radius: 28, y: 14)
+                        .shadow(color: .black.opacity(0.35), radius: 28, y: 14) // deliberate (b49phase1 P3): hero-cover shadow, larger than the card scale.
                         .scaleEffect(playerVM.isPlaying ? 1.0 : 0.94)
                         .animation(.spring(response: 0.4, dampingFraction: 0.6), value: playerVM.isPlaying)
                     Text(song.title.isEmpty ? "未知歌曲" : song.title)
@@ -580,7 +580,7 @@ struct MusicFMView: View {
                         ),
                         in: Capsule()
                     )
-                    .shadow(color: theme.accent.opacity(0.35), radius: 10, y: 3)
+                    .shadow(color: theme.accent.opacity(0.35), radius: 10, y: 3) // deliberate (b49phase1 P3): accent glow on the capsule button, not a neutral shadow.
             }
             .buttonStyle(MusicPressScaleStyle())
         }
@@ -633,7 +633,7 @@ struct MusicFMView: View {
                         ),
                         in: Circle()
                     )
-                    .shadow(color: theme.accent.opacity(0.4), radius: 12, y: 4)
+                    .shadow(color: theme.accent.opacity(0.4), radius: 12, y: 4) // deliberate (b49phase1 P3): accent glow on the round play button.
             }
             .buttonStyle(MusicPressScaleStyle())
             .accessibilityLabel(playerVM.isPlaying ? "暂停" : "播放")

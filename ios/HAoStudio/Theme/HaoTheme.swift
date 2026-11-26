@@ -74,8 +74,17 @@ struct HaoThemePalette {
     let textMuted: Color
     /// The ONLY red in the app: LIVE badge + recording dot.
     let liveRed: Color
-    /// Backdrop blur sigma for frosted glass.
-    let glassBlurSigma: CGFloat
+    /// The resolved glass intensity (0.3...1.0) this palette was
+    /// built with — b49phase1 P1: the glass modifiers read it
+    /// from the environment palette (`theme.glassIntensity`) so
+    /// the Settings slider genuinely drives the glass pills.
+    /// 1.0 = today's full glass; the base palettes below are
+    /// always built at 1.0 and `applying(glassIntensity:)`
+    /// stamps the user's value in. (The palette used to carry
+    /// a blur sigma, 24, for a custom blur that no longer
+    /// exists — the glass is native `.glassEffect` now and the
+    /// system owns the blur, so the value is deleted, not wired.)
+    let glassIntensity: Double
     let scaffoldBackground: Color
     let colorScheme: ColorScheme
     /// Tab-bar selected-item colour. Chen's rule: selected is BLACK, not
@@ -106,11 +115,29 @@ struct HaoThemePalette {
             backgrounds: [scaffoldBackground, surfaceSolid])
     }
 
+    /// The white tint the glass modifiers apply on iOS 26+
+    /// (b49phase1 P1): `.regular.tint(glassTint)` — white 0 at
+    /// intensity 1.0 (today's glass, unchanged) rising to 0.35
+    /// at 0.3, where the liquid-glass refraction washes toward
+    /// a flat frosted wash and the glass character reads
+    /// faintest. One formula for all three light-glass modifiers
+    /// (capsule / rounded-rect / circle) so they can never drift
+    /// apart. iOS 17–25 keeps the material fallback and the
+    /// slider there moves surface / surfaceStrong only.
+    var glassTint: Color {
+        .white.opacity((1.0 - glassIntensity) * 0.5)
+    }
+
     /// S5-A: apply the settings-owned overrides on top of a resolved
     /// base palette, without touching the base values:
     /// - glassIntensity scales the glass: `surface` / `surfaceStrong`
-    ///   alpha (Color.opacity multiplies the existing alpha) and
-    ///   `glassBlurSigma`. 1.0 = today's full glass.
+    ///   alpha (Color.opacity multiplies the existing alpha) and is
+    ///   stamped onto the palette as `glassIntensity`, which the
+    ///   glass modifiers read (b49phase1 P1 — the slider now drives
+    ///   the pills, not just the cards). 1.0 = today's full glass.
+    ///   The veil (HaoBackdropLayer) does NOT follow intensity:
+    ///   readability first, the veil stays at its WCAG-verified
+    ///   values in both modes.
     /// - accentOverride replaces `accent` (both modes); `accentSoft`
     ///   is the override at 0.14 alpha and `onAccent` follows the
     ///   Flutter `_onAccentFor` rule (white on dark accents,
@@ -133,7 +160,7 @@ struct HaoThemePalette {
             textSecondary: textSecondary,
             textMuted: textMuted,
             liveRed: liveRed,
-            glassBlurSigma: glassBlurSigma * CGFloat(intensity),
+            glassIntensity: intensity,
             scaffoldBackground: scaffoldBackground,
             colorScheme: colorScheme,
             tabSelected: tabSelected
@@ -158,7 +185,7 @@ struct HaoThemePalette {
                 hairline: Color.black.opacity(0.08),
                 textPrimary: Color(hex: 0x1C1C1E), textSecondary: Color(hex: 0x3A3A3C),
                 textMuted: Color(hex: 0x6B6B70),
-                liveRed: liveRed, glassBlurSigma: 24,
+                liveRed: liveRed, glassIntensity: 1.0,
                 scaffoldBackground: Color(hex: 0xF2F2F7),
                 colorScheme: .light, tabSelected: .black)
         case (.appleGlass, .dark):
@@ -171,7 +198,7 @@ struct HaoThemePalette {
                 hairline: Color.white.opacity(0.12),
                 textPrimary: Color(hex: 0xF5F5F7), textSecondary: Color(hex: 0xD1D1D6),
                 textMuted: Color(hex: 0x98989D),
-                liveRed: liveRed, glassBlurSigma: 24,
+                liveRed: liveRed, glassIntensity: 1.0,
                 scaffoldBackground: .black,
                 colorScheme: .dark, tabSelected: .white)
         case (.darkGold, .light):
@@ -184,7 +211,7 @@ struct HaoThemePalette {
                 hairline: Color(hex: 0x9A7B1E).opacity(0.18),
                 textPrimary: Color(hex: 0x2A2113), textSecondary: Color(hex: 0x5C4F33),
                 textMuted: Color(hex: 0x7A6C4E),
-                liveRed: liveRed, glassBlurSigma: 24,
+                liveRed: liveRed, glassIntensity: 1.0,
                 scaffoldBackground: Color(hex: 0xFAF6EC),
                 colorScheme: .light, tabSelected: .black)
         case (.darkGold, .dark):
@@ -197,7 +224,7 @@ struct HaoThemePalette {
                 hairline: Color(hex: 0xD4AF37).opacity(0.22),
                 textPrimary: Color(hex: 0xF5EDD6), textSecondary: Color(hex: 0xD8C9A3),
                 textMuted: Color(hex: 0x9A8B6B),
-                liveRed: liveRed, glassBlurSigma: 24,
+                liveRed: liveRed, glassIntensity: 1.0,
                 scaffoldBackground: Color(hex: 0x0D0B08),
                 colorScheme: .dark, tabSelected: .white)
         case (.freshMint, .light):
@@ -210,7 +237,7 @@ struct HaoThemePalette {
                 hairline: Color(hex: 0x00897B).opacity(0.14),
                 textPrimary: Color(hex: 0x122E29), textSecondary: Color(hex: 0x3D5A54),
                 textMuted: Color(hex: 0x58746D),
-                liveRed: liveRed, glassBlurSigma: 24,
+                liveRed: liveRed, glassIntensity: 1.0,
                 scaffoldBackground: Color(hex: 0xEFFAF6),
                 colorScheme: .light, tabSelected: .black)
         case (.freshMint, .dark):
@@ -223,7 +250,7 @@ struct HaoThemePalette {
                 hairline: Color.white.opacity(0.12),
                 textPrimary: Color(hex: 0xE6F7F3), textSecondary: Color(hex: 0xB9D9D2),
                 textMuted: Color(hex: 0x7FA39B),
-                liveRed: liveRed, glassBlurSigma: 24,
+                liveRed: liveRed, glassIntensity: 1.0,
                 scaffoldBackground: Color(hex: 0x07110F),
                 colorScheme: .dark, tabSelected: .white)
         case (.polarIce, .light):
@@ -236,7 +263,7 @@ struct HaoThemePalette {
                 hairline: Color.black.opacity(0.14),
                 textPrimary: Color(hex: 0x0F2436), textSecondary: Color(hex: 0x3A5568),
                 textMuted: Color(hex: 0x4F6E84),
-                liveRed: liveRed, glassBlurSigma: 24,
+                liveRed: liveRed, glassIntensity: 1.0,
                 scaffoldBackground: Color(hex: 0xEEF6FB),
                 colorScheme: .light, tabSelected: .black)
         case (.polarIce, .dark):
@@ -249,7 +276,7 @@ struct HaoThemePalette {
                 hairline: Color.white.opacity(0.20),
                 textPrimary: Color(hex: 0xE8F4FC), textSecondary: Color(hex: 0xB4D2E6),
                 textMuted: Color(hex: 0x7D9BB0),
-                liveRed: liveRed, glassBlurSigma: 24,
+                liveRed: liveRed, glassIntensity: 1.0,
                 scaffoldBackground: Color(hex: 0x050B12),
                 colorScheme: .dark, tabSelected: .white)
         default:
@@ -265,7 +292,7 @@ struct HaoThemePalette {
                 hairline: Color.black.opacity(0.08),
                 textPrimary: Color(hex: 0x1C1C1E), textSecondary: Color(hex: 0x3A3A3C),
                 textMuted: Color(hex: 0x6B6B70),
-                liveRed: liveRed, glassBlurSigma: 24,
+                liveRed: liveRed, glassIntensity: 1.0,
                 scaffoldBackground: Color(hex: 0xF2F2F7),
                 colorScheme: .light, tabSelected: .black)
         }
@@ -648,6 +675,16 @@ extension EnvironmentValues {
 // palette's `accent`, user-selectable in Settings). The one literal
 // red kept is the favourite heart #FF3B30 — a "meaningful red"
 // (a liked song), same as Coda's PlayerBar.
+//
+// b49phase1 P2 — the animation split: this enum owns GENERAL UI
+// motion (quick / standard / smooth / spring / bouncy / snappy /
+// stagger). PLAYER-specific motion (playerOpen / playerClose /
+// lyricsFollow / controlFade / coverBounceBack / pressAnimation)
+// lives in HaoPlayerMotion (HaoPlayerMotion.swift), because the
+// player and the lyrics share one set of numbers instead of each
+// inventing its own. No value moved in either system — the split
+// is documented here, not re-cut; `settleSpring` stays in
+// HaoLayout (chrome transitions: full-player fade, sidebar, rows).
 enum HaoDesignTokens {
     // b49fix4 P2-28: the spacing + corner members are deleted —
     // they duplicated HaoLayout (pageMargin / pushedPageMargin /

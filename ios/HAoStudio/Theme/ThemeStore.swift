@@ -89,6 +89,11 @@ final class ThemeStore: ObservableObject {
     /// Liquid-glass intensity (chen 2026-11-21, Settings → 外观):
     /// 1.0 = today's full glass, 0.3 = faintest glass allowed.
     /// Clamped to 0.3...1.0 on every write and on load.
+    /// b49phase1: the legibility veil (HaoBackdropLayer) does
+    /// NOT follow this value — readability first, the veil stays
+    /// at its WCAG-verified strengths (0.72 / 0.58 light,
+    /// 0.92 / 0.90 dark) whatever the slider says. No switch for
+    /// it exists; if one is ever added it defaults OFF.
     @Published var glassIntensity: Double {
         didSet {
             let clamped = min(1.0, max(0.3, glassIntensity))

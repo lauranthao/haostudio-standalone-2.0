@@ -508,7 +508,7 @@ struct MusicDetailHero: View {
                 // the literal 12 hid from the number grep.
                 cornerRadius: isCircular ? coverSize / 2 : HaoLayout.cornerMedium
             )
-            .shadow(color: .black.opacity(0.18), radius: 18, y: 10)
+            .shadow(color: .black.opacity(0.18), radius: 18, y: 10) // deliberate (b49phase1 P3): large-cover shadow, deeper than the card scale.
             Text(title.isEmpty ? "未知" : title)
                 .font(.haoDetailTitle)
                 .foregroundStyle(theme.textPrimary)

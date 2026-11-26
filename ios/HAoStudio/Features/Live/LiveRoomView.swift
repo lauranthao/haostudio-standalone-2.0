@@ -280,7 +280,7 @@ struct LiveRoomView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 9)
                     .haoDarkGlassRoundedRect(cornerRadius: HaoLayout.chipCornerRadius, darkness: 0.7)
-                    .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+                    .haoShadow(.card)
                     .padding(.bottom, HaoLayout.toastBottomOffset)
                     .allowsHitTesting(false)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -766,7 +766,7 @@ struct LiveRoomView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 9)
             .haoDarkGlassRoundedRect(cornerRadius: HaoLayout.chipCornerRadius, darkness: 0.7)
-            .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+            .haoShadow(.card)
     }
 
     /// The video background alone: black + native surface (or
