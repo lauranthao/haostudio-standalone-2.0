@@ -183,7 +183,7 @@ final class BackupEngineTests: XCTestCase {
             "hao_fav": "[{\"platform\":\"wy\",\"songId\":\"1\"}]",
             "hao_lists": "[{\"id\":\"l1\",\"name\":\"list one\"}]",
             "hao_recent": "[{\"songId\":\"2\"}]",
-            "hao_video_hist": "[{\"vodId\":\"v1\"}]",
+            "hao_video_hist": "[{\"item\":{\"id\":\"v1\",\"title\":\"Film One\",\"year\":\"2024\"},\"episodeName\":\"EP1\",\"episodeIndex\":1,\"lineName\":\"Line 1\",\"positionSeconds\":120.5,\"durationSeconds\":3600,\"updatedAt\":1750000000}]",
             "hao_live_follows": "[{\"roomId\":\"r1\"}]",
         ]
         var out: [String: Data] = [:]
@@ -196,6 +196,30 @@ final class BackupEngineTests: XCTestCase {
             out[name] = data
         }
         return out
+    }
+
+    /// Expected hao_video_hist content after import (b49fix34):
+    /// the seed entry through the b49fix19 P1-1 normaliser. The
+    /// seed is complete (item + title + position + a seconds
+    /// date), so the normaliser keeps every field and fills
+    /// nothing — this is the literal normalised form, not a call
+    /// into the normaliser, so the assertion stays independent
+    /// of the code under test. Compared with
+    /// MigrationStore.jsonValuesEqual (canonical, key-order
+    /// insensitive), never byte equality: the normaliser rebuilds
+    /// every entry and writeJSONFile serialises without
+    /// .sortedKeys, so the imported bytes never match the seed
+    /// bytes. The old seed (a bare {"vodId":"v1"}) had no item
+    /// dict and no title — the normaliser drops exactly that
+    /// class by design (see
+    /// testFix19HistoryEntriesNormaliseISODatesAndMsDatesAndDropBadRows),
+    /// which is why the byte assertion read back [] (2 bytes).
+    private var expectedVideoHistAfterImport: [[String: Any]] {
+        [[
+            "item": ["id": "v1", "title": "Film One", "year": "2024"],
+            "episodeName": "EP1", "episodeIndex": 1, "lineName": "Line 1",
+            "positionSeconds": 120.5, "durationSeconds": 3600, "updatedAt": 1750000000,
+        ]]
     }
 
     /// Removes every defaults key and every file under a docs dir.
@@ -329,6 +353,21 @@ final class BackupEngineTests: XCTestCase {
         for (name, bytes) in seededCollections {
             guard let actual = readFile(name + ".json", from: docs) else {
                 XCTFail("collection \(name) missing after import")
+                continue
+            }
+            if name == "hao_video_hist" {
+                // b49fix34: history entries are normalised at plan
+                // time (b49fix19 P1-1) — byte equality cannot hold
+                // for this file (see expectedVideoHistAfterImport).
+                // Compare the parsed content canonically instead.
+                guard let parsed = try? JSONSerialization.jsonObject(with: actual, options: []) else {
+                    XCTFail("collection hao_video_hist is not valid JSON after import")
+                    continue
+                }
+                XCTAssertTrue(
+                    MigrationStore.jsonValuesEqual(parsed, expectedVideoHistAfterImport),
+                    "collection hao_video_hist mismatch"
+                )
                 continue
             }
             XCTAssertEqual(actual, bytes, "collection \(name) mismatch")
