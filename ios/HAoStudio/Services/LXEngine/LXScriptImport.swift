@@ -95,12 +95,20 @@ enum LXScriptImportValidator {
             || code.contains("globalThis[\"lx\"]") else {
             return .failure(.missingLXMarker)
         }
-        // b49fix26: `JSContext()` is non-optional (the ObjC
-        // `instancetype` init imports as JSContext, or as an
-        // IUO that auto-unwraps on a plain call) — optional
-        // chaining on it is a type error. `JSContext()` never
-        // returns nil in practice; the `?.` was defensive only.
-        let probe = JSContext()
+        // b49fix31 (corrects b49fix26): `JSContext()` imports
+        // as IUO (`JSContext!`) in Xcode 26.2 / Swift 6.2 — an
+        // unannotated `let probe = JSContext()` infers
+        // `JSContext?`, and member access then fails to compile
+        // (Bitrise #37: three errors at :104-106). A declared
+        // `: JSContext` type unwraps the IUO — the same construct
+        // as LXEngine.swift:133 (`let context: JSContext`),
+        // which compiled clean in #37. Never write a bare
+        // `let x = JSContext()` again; `JSContext()` never
+        // returns nil in practice, so no `guard let` is needed.
+        // Do NOT revert to `probe?.` — optional chaining would
+        // silently skip the prelude/script evaluation if the
+        // context were nil and wrongly report success.
+        let probe: JSContext = JSContext()
         probe.evaluateScript(LXPrelude.source)
         probe.evaluateScript(code)
         if let exception = probe.exception {
