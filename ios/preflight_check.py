@@ -599,6 +599,23 @@ for _p in _swift_files:
 check("11b. Swift side: no cleartext http:// request URL (ATS — literals only)",
       not _swift_ats, str(_swift_ats[:5]) if _swift_ats else f"{len(_swift_files)} Swift files clean")
 
+# b49fix31: `JSContext()` imports as IUO (`JSContext!`) — an
+# unannotated `let probe = JSContext()` infers `JSContext?` and
+# member access fails to compile (Bitrise #37, three errors in
+# LXScriptImport.swift:104-106). The local typecheck stub cannot
+# express an IUO init, so this grep is the durable gate: any bare
+# `let`/`var` binding of `JSContext()` without an explicit type
+# annotation fails. Annotated bindings (`let x: JSContext =
+# JSContext()`) and property assignments (`self.context =
+# JSContext()`, declared type elsewhere) pass.
+_bare_jscontext = []
+for _p in _swift_files:
+    for _i, _line in enumerate(_p.read_text().splitlines(), 1):
+        if re.search(r"^\s*(let|var)\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*JSContext\(\)", _line):
+            _bare_jscontext.append(f"{_p.relative_to(APP_DIR)}:{_i}: bare JSContext() binding without type annotation")
+check("11c. no bare let/var = JSContext() without a : JSContext annotation (IUO inference — Bitrise #37)",
+      not _bare_jscontext, str(_bare_jscontext[:5]) if _bare_jscontext else f"{len(_swift_files)} Swift files clean")
+
 print()
 if failures:
     print(f"FAILED: {len(failures)} check(s): {failures}")
