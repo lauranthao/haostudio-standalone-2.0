@@ -1928,9 +1928,9 @@ extension BackupEngineCore {
     /// round-26's hoisted-`let` refactor miscopied the success
     /// branch's closing "）" into these two suffixes, leaving
     /// orphan right parens whenever either list is non-empty.
-    /// The success branch (`（…）` wrapping) is built inline
-    /// in `applyPlannedImport` and is byte-identical to the
-    /// pre-round-26 text.
+    /// The success branch (`（…）` wrapping) lives in the
+    /// sibling helper `rollbackSuccessDetail` (b49fix29 D30-1)
+    /// and is likewise byte-identical to the pre-round-26 text.
     static func rollbackFailureDetail(
         reason: String, rollbackFailures: [String],
         keptLive: [String], keptLiveDefaults: [String],
@@ -1942,6 +1942,25 @@ extension BackupEngineCore {
             + rollbackFailures.joined(separator: "、")
             + keptLiveSuffixSemi + keptLiveDefaultsSuffixSemi
             + droppedSuffix
+    }
+
+    /// The rollback-success detail string (b49fix29 D30-1):
+    /// factored out of `applyPlannedImport` so tests can assert
+    /// it directly, like its failure sibling above. The success
+    /// branch wraps each kept-live note in full-width parens
+    /// (`（…）`) — the mirror image of the failure branch,
+    /// which prefixes "；" and closes nothing. It had zero test
+    /// coverage, so deleting a closing "）" (the reverse of
+    /// D28-1) would have stayed green. The helper is
+    /// byte-identical to the pre-round-26 text.
+    static func rollbackSuccessDetail(
+        reason: String,
+        keptLive: [String], keptLiveDefaults: [String],
+        droppedSuffix: String
+    ) -> String {
+        let keptLiveSuffix = keptLive.isEmpty ? "" : "（导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：" + keptLive.joined(separator: "、") + "）"
+        let keptLiveDefaultsSuffix = keptLiveDefaults.isEmpty ? "" : "（导入期间被改写的设置已保留 live 值：" + keptLiveDefaults.joined(separator: "、") + "）"
+        return reason + "，已全量回滚" + keptLiveSuffix + keptLiveDefaultsSuffix + droppedSuffix
     }
 
     /// Applies a planned import. Snapshot first — when the
@@ -2349,15 +2368,19 @@ extension BackupEngineCore {
             // its own statement, and the detail assignments are
             // plain linear concatenations. The success branch is
             // byte-identical to the old text (each note wrapped in
-            // full-width parens); the failure branch prefixes each
-            // note with "；" and closes nothing (b49fix27 D28-1:
-            // round-26 had miscopied the success branch's closing
-            // "）" into the two failure suffixes).
-            let keptLiveSuffix = keptLive.isEmpty ? "" : "（导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：" + keptLive.joined(separator: "、") + "）"
-            let keptLiveDefaultsSuffix = keptLiveDefaults.isEmpty ? "" : "（导入期间被改写的设置已保留 live 值：" + keptLiveDefaults.joined(separator: "、") + "）"
+            // full-width parens) and now lives in the
+            // `rollbackSuccessDetail` helper (b49fix29 D30-1); the
+            // failure branch prefixes each note with "；" and
+            // closes nothing (b49fix27 D28-1: round-26 had
+            // miscopied the success branch's closing "）" into
+            // the two failure suffixes).
             let detail: String
             if rollbackFailures.isEmpty {
-                detail = reason + "，已全量回滚" + keptLiveSuffix + keptLiveDefaultsSuffix + droppedSuffix
+                detail = rollbackSuccessDetail(
+                    reason: reason,
+                    keptLive: keptLive, keptLiveDefaults: keptLiveDefaults,
+                    droppedSuffix: droppedSuffix
+                )
             } else {
                 detail = rollbackFailureDetail(
                     reason: reason, rollbackFailures: rollbackFailures,

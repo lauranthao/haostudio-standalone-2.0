@@ -1421,8 +1421,8 @@ final class MigrationStoreTests: XCTestCase {
         XCTAssertEqual(both, "导入失败，回滚未完成，未恢复：f0；导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：f1、f2；导入期间被改写的设置已保留 live 值：s1")
         XCTAssertEqual(both.filter { $0 == "（" }.count, both.filter { $0 == "）" }.count)
         // D29-1 (1): a non-empty droppedSuffix must land last,
-        // after both live suffixes — all four calls above pass
-        // droppedSuffix: "", so a moved "+ droppedSuffix"
+        // after both live suffixes — all four calls in this test
+        // pass droppedSuffix: "", so a moved "+ droppedSuffix"
         // would stay green. Expected string evaluated from the
         // pre-round-26 branch (12cb513), byte-identical.
         let bothDropped = BackupEngineCore.rollbackFailureDetail(
@@ -1466,5 +1466,53 @@ final class MigrationStoreTests: XCTestCase {
             droppedSuffix: ""
         )
         XCTAssertEqual(neither, "导入失败，回滚未完成，未恢复：f0")
+    }
+
+    func testFix29RollbackSuccessDetailParensBalanced() {
+        // D30-1: the success branch's detail had zero test
+        // coverage — deleting a closing "）" (the reverse of
+        // D28-1) would have stayed green. The helper wraps each
+        // kept-live note in full-width parens ("（…）"), the
+        // mirror image of the failure branch, which prefixes
+        // "；" and closes nothing. Expected strings evaluated
+        // from the pre-round-26 branch (12cb513), byte-identical.
+        let reason = "导入失败"
+        let both = BackupEngineCore.rollbackSuccessDetail(
+            reason: reason,
+            keptLive: ["f1", "f2"], keptLiveDefaults: ["s1"],
+            droppedSuffix: ""
+        )
+        XCTAssertEqual(both, "导入失败，已全量回滚（导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：f1、f2）（导入期间被改写的设置已保留 live 值：s1）")
+        XCTAssertEqual(both.filter { $0 == "（" }.count, both.filter { $0 == "）" }.count)
+        // A non-empty droppedSuffix lands last, after both
+        // paren-wrapped suffixes.
+        let bothDropped = BackupEngineCore.rollbackSuccessDetail(
+            reason: reason,
+            keptLive: ["f1", "f2"], keptLiveDefaults: ["s1"],
+            droppedSuffix: "；歷史A；歷史B"
+        )
+        XCTAssertEqual(bothDropped, "导入失败，已全量回滚（导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：f1、f2）（导入期间被改写的设置已保留 live 值：s1）；歷史A；歷史B")
+        // One list only: still wrapped, still balanced.
+        let liveOnly = BackupEngineCore.rollbackSuccessDetail(
+            reason: reason,
+            keptLive: ["f1"], keptLiveDefaults: [],
+            droppedSuffix: ""
+        )
+        XCTAssertEqual(liveOnly, "导入失败，已全量回滚（导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：f1）")
+        XCTAssertEqual(liveOnly.filter { $0 == "（" }.count, liveOnly.filter { $0 == "）" }.count)
+        let defaultsOnly = BackupEngineCore.rollbackSuccessDetail(
+            reason: reason,
+            keptLive: [], keptLiveDefaults: ["s1"],
+            droppedSuffix: ""
+        )
+        XCTAssertEqual(defaultsOnly, "导入失败，已全量回滚（导入期间被改写的设置已保留 live 值：s1）")
+        XCTAssertEqual(defaultsOnly.filter { $0 == "（" }.count, defaultsOnly.filter { $0 == "）" }.count)
+        // Neither list: no suffixes at all.
+        let neither = BackupEngineCore.rollbackSuccessDetail(
+            reason: reason,
+            keptLive: [], keptLiveDefaults: [],
+            droppedSuffix: ""
+        )
+        XCTAssertEqual(neither, "导入失败，已全量回滚")
     }
 }
