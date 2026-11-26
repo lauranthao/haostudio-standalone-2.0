@@ -256,6 +256,16 @@ enum UpdateCheckLogic {
         return lines.joined(separator: "\n")
     }
 
+    /// Route B legacy-import success message (b49fix30 D31-4):
+    /// "已从旧版备份导入 N 项设置（合并导入：…）。" plus the
+    /// report's warnings, one per line. Route B used to drop
+    /// the warnings (b49fix19 P1-5) — extracted from
+    /// BackupUpdateFlow.importFlutterJSON so the wording is
+    /// directly unit-testable.
+    static func legacyImportSuccessMessage(report: MigrationReport) -> String {
+        "已从旧版备份导入 \(report.migratedKeys) 项设置（合并导入：备份里没有的项会保留现在的值；跳过 \(report.skippedKeys) 项，未识别 \(report.unknownKeys) 项）。" + (report.warnings.isEmpty ? "" : "\n" + report.warnings.joined(separator: "\n"))
+    }
+
     /// Sheet content for a check result. The flow only presents
     /// the sheet when a latest version exists, so a nil latest
     /// version here is a defensive fallback (no update button),

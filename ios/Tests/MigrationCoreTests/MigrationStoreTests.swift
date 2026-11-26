@@ -1012,6 +1012,49 @@ final class MigrationStoreTests: XCTestCase {
         XCTAssertEqual(report.warnings, ["影视历史有 1 条记录格式不符，已跳过"])
     }
 
+    func testFix30FailReportRollbackSuffixesLiteral() {
+        // D31-1: Route B's failReport rollback segments had zero
+        // assertions — the only failReport test never passed a
+        // rollback. Literal equality on report.detail, so a
+        // dropped segment, a swapped order, or a missing "；"
+        // prefix all fail.
+        let both = MigrationStore.failReport(
+            total: 5, migrated: 1, skipped: [], unknown: [],
+            detail: "write failed",
+            rollback: (failures: ["f0"], keptLive: ["f1"], keptLiveDefaults: ["s1"]))
+        XCTAssertEqual(both.detail, "write failed，回滚未完成，未恢复：f0；以下文件在导入期间被 live 改写（新增／删除／改值），已保留 live 版本未回滚：f1；以下设置在导入期间被改写，已保留 live 值未回滚：s1")
+        let failuresOnly = MigrationStore.failReport(
+            total: 5, migrated: 1, skipped: [], unknown: [],
+            detail: "write failed",
+            rollback: (failures: ["f0"], keptLive: [], keptLiveDefaults: []))
+        XCTAssertEqual(failuresOnly.detail, "write failed，回滚未完成，未恢复：f0")
+        let liveOnly = MigrationStore.failReport(
+            total: 5, migrated: 1, skipped: [], unknown: [],
+            detail: "write failed",
+            rollback: (failures: [], keptLive: ["f1"], keptLiveDefaults: []))
+        XCTAssertEqual(liveOnly.detail, "write failed；以下文件在导入期间被 live 改写（新增／删除／改值），已保留 live 版本未回滚：f1")
+        let defaultsOnly = MigrationStore.failReport(
+            total: 5, migrated: 1, skipped: [], unknown: [],
+            detail: "write failed",
+            rollback: (failures: [], keptLive: [], keptLiveDefaults: ["s1"]))
+        XCTAssertEqual(defaultsOnly.detail, "write failed；以下设置在导入期间被改写，已保留 live 值未回滚：s1")
+        // Multi-element failures join with "、".
+        let multi = MigrationStore.failReport(
+            total: 5, migrated: 1, skipped: [], unknown: [],
+            detail: "write failed",
+            rollback: (failures: ["f0", "f1"], keptLive: ["f1"], keptLiveDefaults: ["s1"]))
+        XCTAssertEqual(multi.detail, "write failed，回滚未完成，未恢复：f0、f1；以下文件在导入期间被 live 改写（新增／删除／改值），已保留 live 版本未回滚：f1；以下设置在导入期间被改写，已保留 live 值未回滚：s1")
+        // No rollback: detail untouched.
+        let neither = MigrationStore.failReport(
+            total: 5, migrated: 1, skipped: [], unknown: [],
+            detail: "write failed")
+        XCTAssertEqual(neither.detail, "write failed")
+        // The helper itself: the files segment precedes the
+        // defaults segment, and an empty rollback adds nothing.
+        XCTAssertEqual(MigrationStore.failReportRollbackSuffixes(rollback: (failures: [], keptLive: ["f1"], keptLiveDefaults: ["s1"])), "；以下文件在导入期间被 live 改写（新增／删除／改值），已保留 live 版本未回滚：f1；以下设置在导入期间被改写，已保留 live 值未回滚：s1")
+        XCTAssertEqual(MigrationStore.failReportRollbackSuffixes(rollback: (failures: [], keptLive: [], keptLiveDefaults: [])), "")
+    }
+
     func testFix21WholeFileSubsetVerifies() {
         // D23-1: the final sweep subsets whole-file files by
         // shape — a live writer that merged-preserved the
