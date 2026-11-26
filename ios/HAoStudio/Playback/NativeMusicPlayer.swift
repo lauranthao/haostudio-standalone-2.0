@@ -2674,12 +2674,20 @@ final class NativeMusicPlayer: NSObject, ObservableObject, MusicPlaybackDriver {
     /// no coordinator-side flag is needed.
     private func resolveItemSkippingExcludedLocal(_ item: PlaybackItem, excluding: [URL]) -> PlaybackItem {
         guard let local = item.localFileURL, excluding.contains(local) else { return item }
+        // b49fix37: rewritten to the current PlaybackItem shape
+        // (b46-switch 7a976ea, already the shape at 0.0.2) — the
+        // b49sweep call this replaced used the pre-b46 members
+        // (songId/previewURL/isLocal/audioQuality/playSource/
+        // isDownloaded), none of which exist on the model. Mapping:
+        // songId -> id (the resolver's eviction key, kept); the
+        // rest have no current-model equivalent — locality is the
+        // localFileURL itself (stripped here), quality/source are
+        // per-play resolver concerns, not stored on the item.
+        // kind and trialOnly carry over unchanged.
         return PlaybackItem(
-            id: item.id, songId: item.songId, title: item.title, artist: item.artist,
-            album: item.album, coverURL: item.coverURL, previewURL: item.previewURL,
-            localFileURL: nil, duration: item.duration, isLocal: item.isLocal,
-            audioQuality: item.audioQuality, playSource: item.playSource,
-            isDownloaded: item.isDownloaded)
+            id: item.id, kind: item.kind, title: item.title, artist: item.artist,
+            coverURL: item.coverURL, localFileURL: nil, album: item.album,
+            duration: item.duration, trialOnly: item.trialOnly)
     }
 
     /// Count one unplayable track toward the 5-in-a-row stop

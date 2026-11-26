@@ -116,6 +116,11 @@ struct MusicPlayerView: View {
 
     @EnvironmentObject private var playerVM: MusicPlayerViewModel
     @EnvironmentObject private var coordinator: PlaybackCoordinator
+    // b49fix37: the theme binding the b49fix4/b49fix5 `theme.*`
+    // uses assume (same `@Environment(\.haoTheme)` pattern as
+    // VideoDetailView) — the file never had one, so every
+    // `theme.` use below failed to compile on the app target.
+    @Environment(\.haoTheme) private var theme
 
     /// Dominant cover colour for the background gradient (b38,
     /// item 1): the average cover colour, saturation-boosted, so
@@ -2155,6 +2160,12 @@ struct MusicOutputDeviceButton: View {
     @State private var showPicker = false
     @State private var outputName = "iPhone"
     @State private var outputIcon = "speaker.wave.2.fill"
+    // b49fix37: the theme binding the b49fix5 `theme.*` uses
+    // assume (same `@Environment(\.haoTheme)` pattern as
+    // VideoDetailView) — this struct never had one, so the
+    // sheet's `theme.textSecondary` uses failed to compile
+    // on the app target.
+    @Environment(\.haoTheme) private var theme
 
     var body: some View {
         Button(action: { showPicker = true }) {
