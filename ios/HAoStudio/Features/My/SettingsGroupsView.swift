@@ -1766,7 +1766,12 @@ struct BackupSnapshotView: View {
         }
     }
 
-    private static func restoreMessage(for result: BackupEngineCore.SnapshotRestoreResult, safetyNetTaken: Bool) -> String {
+    /// b49fix30 D31-3: internal (not private) so the
+    /// SettingsUITests can pin every branch with literal
+    /// equality — the safety-net line is a promise the user
+    /// relies on, and a swapped ternary arm would otherwise
+    /// stay green.
+    static func restoreMessage(for result: BackupEngineCore.SnapshotRestoreResult, safetyNetTaken: Bool) -> String {
         // b49fix6 P2-3: the failure branches used to drop
         // safetyNetTaken — a partial restore with a safety net
         // left the user not knowing the restore could be undone,

@@ -301,7 +301,9 @@ final class BackupUpdateFlow: ObservableObject {
                 // report.warnings (Route A prints them; Route B
                 // used to drop them, so the D-5c/D-6 warnings
                 // were unobservable on a successful import).
-                let successMessage = "已从旧版备份导入 \(report.migratedKeys) 项设置（合并导入：备份里没有的项会保留现在的值；跳过 \(report.skippedKeys) 项，未识别 \(report.unknownKeys) 项）。" + (report.warnings.isEmpty ? "" : "\n" + report.warnings.joined(separator: "\n"))
+                // The wording lives in UpdateCheckLogic
+                // (b49fix30 D31-4) so tests can pin it.
+                let successMessage = UpdateCheckLogic.legacyImportSuccessMessage(report: report)
                 self.alert = BackupUpdateAlert(
                     title: succeeded ? "导入完成" : "导入失败",
                     message: succeeded

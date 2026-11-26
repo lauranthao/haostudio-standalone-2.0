@@ -109,6 +109,24 @@ final class BackupUpdateLogicTests: XCTestCase {
         XCTAssertTrue(UpdateCheckLogic.importResultMessage(report: report).contains("已全部回滚，现有数据未动。"))
     }
 
+    func testFix30ImportResultFailureBranchesLiteral() {
+        // D31-2: the two failure branches of importResultTitle /
+        // importResultMessage had zero coverage — no test ever
+        // built a BackupImportReport with a non-default
+        // rollbackFailures / nothingWritten. Literal equality,
+        // so a swapped title or a dropped "请检查这些项目。"
+        // fails.
+        let nothingWritten = BackupImportReport(importedCount: 0, skippedKeys: [], rolledBack: true, embyCredentialsMissing: false, rollbackFailures: [], nothingWritten: true)
+        XCTAssertEqual(UpdateCheckLogic.importResultTitle(report: nothingWritten), "导入失败")
+        XCTAssertEqual(UpdateCheckLogic.importResultMessage(report: nothingWritten), "导入失败，未写入任何内容，现有数据未动。")
+        let incomplete = BackupImportReport(importedCount: 0, skippedKeys: [], rolledBack: true, embyCredentialsMissing: false, rollbackFailures: ["f0"])
+        XCTAssertEqual(UpdateCheckLogic.importResultTitle(report: incomplete), "导入失败，回滚未完成")
+        XCTAssertEqual(UpdateCheckLogic.importResultMessage(report: incomplete), "导入中途失败，回滚未完成，未恢复：f0。请检查这些项目。")
+        // Multi-element failures join with "、".
+        let multi = BackupImportReport(importedCount: 0, skippedKeys: [], rolledBack: true, embyCredentialsMissing: false, rollbackFailures: ["f0", "f1"])
+        XCTAssertEqual(UpdateCheckLogic.importResultMessage(report: multi), "导入中途失败，回滚未完成，未恢复：f0、f1。请检查这些项目。")
+    }
+
     func testImportMessageIncludesWarnings() {
         // b35-sweep-settings: engine warnings (e.g. ignored zip
         // entries) must reach the result alert, not be dropped.
@@ -119,6 +137,18 @@ final class BackupUpdateLogicTests: XCTestCase {
         let message = UpdateCheckLogic.importResultMessage(report: report)
         XCTAssertTrue(message.contains("成功导入 5 项。"))
         XCTAssertTrue(message.contains("忽略了无法识别的备份条目：strange.txt"))
+    }
+
+    func testFix30LegacyImportSuccessMessageLiteral() {
+        // D31-4: Route B's legacy success message had zero
+        // coverage — "已从旧版备份导入" had 0 hits in Tests.
+        // Literal equality, so a dropped warnings suffix
+        // (the b49fix19 P1-5 regression) fails.
+        let plain = MigrationReport(outcome: .migrated, totalKeys: 8, migratedKeys: 5, skippedKeys: 2, unknownKeys: 1, failedKeys: 0, skippedKeyNames: [], unknownKeyNames: [], detail: "")
+        XCTAssertEqual(UpdateCheckLogic.legacyImportSuccessMessage(report: plain), "已从旧版备份导入 5 项设置（合并导入：备份里没有的项会保留现在的值；跳过 2 项，未识别 1 项）。")
+        var warned = plain
+        warned.warnings = ["影视历史有 1 条记录格式不符，已跳过", "跳过了 1 个键"]
+        XCTAssertEqual(UpdateCheckLogic.legacyImportSuccessMessage(report: warned), "已从旧版备份导入 5 项设置（合并导入：备份里没有的项会保留现在的值；跳过 2 项，未识别 1 项）。\n影视历史有 1 条记录格式不符，已跳过\n跳过了 1 个键")
     }
 
     // MARK: - Update prompt content

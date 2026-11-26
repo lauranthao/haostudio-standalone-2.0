@@ -3870,6 +3870,35 @@ enum MigrationStore {
     /// the failure report can say so — Route B used to report
     /// only "verification failed" and let the user believe a
     /// full rollback had happened.
+    /// b49fix30 D31-1: the three `detail +=` segments of
+    /// failReport, extracted so the failure detail is directly
+    /// unit-testable — the same reason BackupEngineCore has
+    /// rollbackFailureDetail / rollbackSuccessDetail helpers.
+    /// Returns "" when the rollback has nothing to report.
+    static func failReportRollbackSuffixes(
+        rollback: (failures: [String], keptLive: [String], keptLiveDefaults: [String])
+    ) -> String {
+        var suffix = ""
+        if !rollback.failures.isEmpty {
+            suffix += "，回滚未完成，未恢复：" + rollback.failures.joined(separator: "、")
+        }
+        if !rollback.keptLive.isEmpty {
+            // b49fix20 D22-4: the kept-live files may hold
+            // live deletions and live value changes, not
+            // just additions — say so, instead of letting
+            // the user believe only additions were kept.
+            suffix += "；以下文件在导入期间被 live 改写（新增／删除／改值），已保留 live 版本未回滚：" + rollback.keptLive.joined(separator: "、")
+        }
+        if !rollback.keptLiveDefaults.isEmpty {
+            // b49fix21 D23-9: same rule as files, for
+            // defaults — a setting the user changed during
+            // the import keeps its live value instead of
+            // being rolled back to prior.
+            suffix += "；以下设置在导入期间被改写，已保留 live 值未回滚：" + rollback.keptLiveDefaults.joined(separator: "、")
+        }
+        return suffix
+    }
+
     static func failReport(
         total: Int, migrated: Int, skipped: [String],
         unknown: [String], detail: String,
@@ -3878,23 +3907,7 @@ enum MigrationStore {
     ) -> MigrationReport {
         var detail = detail
         if let rollback = rollback {
-            if !rollback.failures.isEmpty {
-                detail += "，回滚未完成，未恢复：" + rollback.failures.joined(separator: "、")
-            }
-            if !rollback.keptLive.isEmpty {
-                // b49fix20 D22-4: the kept-live files may hold
-                // live deletions and live value changes, not
-                // just additions — say so, instead of letting
-                // the user believe only additions were kept.
-                detail += "；以下文件在导入期间被 live 改写（新增／删除／改值），已保留 live 版本未回滚：" + rollback.keptLive.joined(separator: "、")
-            }
-            if !rollback.keptLiveDefaults.isEmpty {
-                // b49fix21 D23-9: same rule as files, for
-                // defaults — a setting the user changed during
-                // the import keeps its live value instead of
-                // being rolled back to prior.
-                detail += "；以下设置在导入期间被改写，已保留 live 值未回滚：" + rollback.keptLiveDefaults.joined(separator: "、")
-            }
+            detail += failReportRollbackSuffixes(rollback: rollback)
         }
         return MigrationReport(
             outcome: .failed, totalKeys: total, migratedKeys: migrated,
