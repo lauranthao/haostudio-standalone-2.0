@@ -650,6 +650,45 @@ else:
 check("11d. shared HAoStudio.xcscheme exists and references the HAoStudio app target (Bitrise #42)",
       not _app_scheme_problems, str(_app_scheme_problems[:5]) if _app_scheme_problems else "HAoStudio.xcscheme OK")
 
+# b49fix38: Bitrise #44 failed at "Xcode test target compiles" with
+# `error: Unable to find module dependency: 'IJKMediaFramework'`
+# (in target 'HAoStudioTests') — the step built with `-project`,
+# so the Pods project was not in the build graph and the framework
+# was never built (step 6 builds the app via the workspace and
+# succeeds for the same reason). The test-target step must build
+# workspace-first on all three CI routes, keeping -project only as
+# the else-branch fallback for a no-Podfile tree (no IJK at all).
+# The block is sliced from the step title to the next step
+# ("Package IPA"); the workspace invocation must precede any
+# -project one, and the step must still build scheme
+# HAoStudioTests with build-for-testing (purpose unchanged).
+_ci_test_step_problems = []
+for _ci in (REPO / "bitrise.yml", REPO / "codemagic.yaml",
+            REPO / ".github/workflows/ios-unsigned.yml"):
+    _name = str(_ci.relative_to(REPO))
+    if not _ci.exists():
+        _ci_test_step_problems.append(f"{_name} missing")
+        continue
+    _text = _ci.read_text()
+    _start = _text.find("Xcode test target compiles (device build-for-testing)")
+    _end = _text.find("Package IPA", _start)
+    if _start < 0 or _end < 0:
+        _ci_test_step_problems.append(f"{_name}: test-target step or Package IPA step not found")
+        continue
+    _block = _text[_start:_end]
+    _ws = _block.find("xcodebuild -workspace HAoStudio.xcworkspace")
+    _pj = _block.find("xcodebuild -project HAoStudio.xcodeproj")
+    if _ws < 0:
+        _ci_test_step_problems.append(f"{_name}: test-target step builds with -project only (no -workspace)")
+    elif _pj >= 0 and _pj < _ws:
+        _ci_test_step_problems.append(f"{_name}: -project invocation precedes the -workspace one (not workspace-first)")
+    if "-scheme HAoStudioTests" not in _block:
+        _ci_test_step_problems.append(f"{_name}: test-target step does not build scheme HAoStudioTests")
+    if "build-for-testing" not in _block:
+        _ci_test_step_problems.append(f"{_name}: test-target step lost build-for-testing")
+check("11e. test-target build-for-testing step builds via the workspace first on all three CI routes (Bitrise #44 IJK)",
+      not _ci_test_step_problems, str(_ci_test_step_problems[:5]) if _ci_test_step_problems else "all three CI routes workspace-first")
+
 print()
 if failures:
     print(f"FAILED: {len(failures)} check(s): {failures}")

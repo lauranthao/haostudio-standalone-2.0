@@ -114,15 +114,36 @@ workflows:
           # `xcodebuild test` run needs an IJK simulator slice
           # first. Do not add a simulator test step that cannot link
           # and call it a fix.
-          xcodebuild -project HAoStudio.xcodeproj \
-            -scheme HAoStudioTests \
-            -configuration Debug \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            build-for-testing \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO
+          # (2026-11-26, b49fix38): build via the WORKSPACE, not
+          # -project — Bitrise #44 proved -project cannot resolve
+          # the HAoStudio module's IJKMediaFramework dependency:
+          # the Pods project is only in the build graph via the
+          # workspace, so with -project the framework is never
+          # built and SwiftDriver reports "Unable to find module
+          # dependency: 'IJKMediaFramework'". Same workspace-first
+          # form as the app build step above; the -project
+          # fallback is for a no-Podfile tree (no IJK at all).
+          if [ -d HAoStudio.xcworkspace ]; then
+            xcodebuild -workspace HAoStudio.xcworkspace \
+              -scheme HAoStudioTests \
+              -configuration Debug \
+              -sdk iphoneos \
+              -derivedDataPath build \
+              build-for-testing \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO
+          else
+            xcodebuild -project HAoStudio.xcodeproj \
+              -scheme HAoStudioTests \
+              -configuration Debug \
+              -sdk iphoneos \
+              -derivedDataPath build \
+              build-for-testing \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO
+          fi
       - name: Package IPA
         script: |
           cd ios
