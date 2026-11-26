@@ -334,7 +334,20 @@ final class ResolverCooldown {
         let nowMs = Int(now().timeIntervalSince1970 * 1000)
         let coolUntilCapMs = nowMs + Int(Self.coolFor * 1000)
         var map: [String: ResolverSpeedRecord] = [:]
-        for key in Set(averages.keys).union(fails.keys).union(cooledUntil.keys) {
+        // b49fix25 D27-1: updatedAt.keys is in the union — a
+        // key carrying only a stamp (a clear() that dropped
+        // fails / cooledUntil and never measured an avg) is
+        // written as a `{updated: <ms>}` stub. Without it the
+        // stamp lived only in memory: after a restart it was
+        // gone, and an import of an older fails record for
+        // that key was taken wholesale by the disk-only
+        // branch below, resurrecting the clear. Stubs are
+        // bounded by the number of distinct sources (tens),
+        // and a stub's stamp still participates in
+        // newest-wins — the both-sides branch compares it
+        // like any other stamp, and load() reads a stub back
+        // as stamp-only.
+        for key in Set(averages.keys).union(fails.keys).union(cooledUntil.keys).union(updatedAt.keys) {
             map[key] = ResolverSpeedRecord(
                 avg: averages[key],
                 fails: fails[key],
@@ -351,39 +364,28 @@ final class ResolverCooldown {
             for (key, record) in disk {
                 let record = clampedDiskRecord(record, nowMs: nowMs)
                 if map[key] == nil {
-                    // Disk-only key (an imported speed): take it
-                    // and backfill memory (b49fix21 D23-3).
-                    // b49fix24 D26-4: but memory may hold a
-                    // NEWER updatedAt for this key even though it
-                    // has no avg / fails / cooledUntil — clear()
-                    // stamps the key and drops fails /
-                    // cooledUntil, so the key is absent from the
-                    // map's union. Taking the disk record
-                    // wholesale would resurrect the cleared fails
-                    // / cooldown (and overwrite the newer stamp)
-                    // in the same call stack that cleared them.
-                    // When memory's stamp is newer (a tie counts
-                    // as memory — same rule as the both-sides
-                    // branch), keep only the disk avg, an
-                    // append-only measurement memory never had;
-                    // the disk fails / cooledUntil / updatedAt
-                    // are stale and skipped.
-                    let memoryMs = updatedAt[key].map { Int($0.timeIntervalSince1970 * 1000) }
-                    if let memoryMs, memoryMs >= (record.updatedAtMs ?? 0) {
-                        let merged = ResolverSpeedRecord(
-                            avg: record.avg,
-                            fails: nil,
-                            cooledUntilMs: nil,
-                            updatedAtMs: min(memoryMs, nowMs))
-                        map[key] = merged
-                        backfill(key: key, record: merged)
-                    } else {
-                        map[key] = record
-                        backfill(key: key, record: record)
-                    }
+                    // Disk-only key (an imported speed): memory
+                    // knows nothing about it at all — no avg /
+                    // fails / cooledUntil and no updatedAt stamp
+                    // (b49fix25 D27-1: updatedAt.keys is in the
+                    // map's union, so a memory stamp alone puts
+                    // the key in the map and routes it to the
+                    // both-sides branch, where the stamp
+                    // comparison — and the D26-4 avg rule — now
+                    // lives; the D26-4 check that used to sit
+                    // here is gone because it can no longer
+                    // trigger). Take it wholesale and backfill
+                    // memory (b49fix21 D23-3).
+                    map[key] = record
+                    backfill(key: key, record: record)
                 } else {
-                    // Both sides know the key: the newer record
-                    // wins. An unstamped side counts as epoch.
+                    // Both sides know the key: the newer record wins. An unstamped side counts as epoch.
+                    // (b49fix25 D27-1: a stamp alone counts as
+                    // knowing the key — the map union now
+                    // includes updatedAt.keys, so a clear()
+                    // stamp with no avg / fails / cooledUntil
+                    // reaches this branch instead of the
+                    // disk-only one.)
                     let diskMs = record.updatedAtMs ?? 0
                     let memoryMs = updatedAt[key].map { Int($0.timeIntervalSince1970 * 1000) } ?? 0
                     if diskMs > memoryMs {
@@ -401,9 +403,25 @@ final class ResolverCooldown {
                             updatedAtMs: record.updatedAtMs)
                         map[key] = merged
                         backfill(key: key, record: merged)
+                    } else {
+                        // Else memory wins — the live recording is
+                        // fresher than the backup's, or a tie.
+                        // avg is the one exception (b49fix23
+                        // D25-5, b49fix24 D26-4): it is an
+                        // append-only measurement, so a disk avg
+                        // memory never measured is still taken,
+                        // in the file and in memory, even though
+                        // memory's stamp wins on fails / cooldown
+                        // / updatedAt. Without this, the union
+                        // change would drop the disk avg the
+                        // D26-4 branch used to keep for a
+                        // stamp-only memory key.
+                        if var entry = map[key], entry.avg == nil, let diskAvg = record.avg {
+                            entry.avg = diskAvg
+                            map[key] = entry
+                            averages[key] = diskAvg
+                        }
                     }
-                    // Else memory wins — the live recording is
-                    // fresher than the backup's, or a tie.
                 }
             }
         }
