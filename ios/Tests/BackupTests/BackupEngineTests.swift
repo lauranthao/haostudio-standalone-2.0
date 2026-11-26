@@ -222,6 +222,40 @@ final class BackupEngineTests: XCTestCase {
         ]]
     }
 
+    /// Expected contents of the other four seeded collections
+    /// after import (b49fix35). Every seeded collection is
+    /// re-serialised on import — the merge branches AND the
+    /// whole-file branch both write through writeJSONFile,
+    /// which serialises with JSONSerialization options: []
+    /// (hash-order keys, no .sortedKeys) — so the imported
+    /// bytes depend on the process's hash seed and byte
+    /// equality is a coin flip for any multi-key entry
+    /// (Bitrise #41: hao_lists came back as
+    /// [{"name":"list one","id":"l1"}] — same 31 bytes,
+    /// different order; a local probe serialised the same
+    /// entry across 40 processes and saw both orders, 18/22,
+    /// and hao_fav flipped 15/25). Production itself verifies
+    /// canonically (fileContentEquals / canonicalJSONData /
+    /// mergeIdentityKey), so the test does the same: parse the
+    /// imported file and compare with
+    /// MigrationStore.jsonValuesEqual. The literals are written
+    /// out by hand from the seeds, not computed by the code
+    /// under test, and the merge leaves these four entries
+    /// unchanged — hao_fav's mapEntry only stamps a "key"
+    /// when favMergeKey is non-empty (it is "" for a key-less,
+    /// song-less entry), hao_lists has no mapEntry, and the
+    /// single-key hao_recent / hao_live_follows entries cannot
+    /// flip. hao_video_hist keeps its own literal above: its
+    /// entries are normalised at plan time (b49fix34).
+    private var expectedCollectionsAfterImport: [String: [[String: Any]]] {
+        [
+            "hao_fav": [["platform": "wy", "songId": "1"]],
+            "hao_lists": [["id": "l1", "name": "list one"]],
+            "hao_recent": [["songId": "2"]],
+            "hao_live_follows": [["roomId": "r1"]],
+        ]
+    }
+
     /// Removes every defaults key and every file under a docs dir.
     private func wipe(docs targetDocs: URL, defaults targetDefaults: UserDefaults) {
         for key in targetDefaults.dictionaryRepresentation().keys {
@@ -350,7 +384,7 @@ final class BackupEngineTests: XCTestCase {
         for seeded in seededKeys {
             verifySampleValue(defaults.object(forKey: seeded.key), kind: seeded.kind, key: seeded.key, expected: seeded.value)
         }
-        for (name, bytes) in seededCollections {
+        for (name, _) in seededCollections {
             guard let actual = readFile(name + ".json", from: docs) else {
                 XCTFail("collection \(name) missing after import")
                 continue
@@ -370,7 +404,23 @@ final class BackupEngineTests: XCTestCase {
                 )
                 continue
             }
-            XCTAssertEqual(actual, bytes, "collection \(name) mismatch")
+            // b49fix35: every other collection is re-serialised
+            // on import too (see expectedCollectionsAfterImport)
+            // — byte equality is a coin flip for multi-key
+            // entries, so compare the parsed content
+            // canonically as well.
+            guard let expected = expectedCollectionsAfterImport[name] else {
+                XCTFail("collection \(name) has no expected content")
+                continue
+            }
+            guard let parsed = try? JSONSerialization.jsonObject(with: actual, options: []) else {
+                XCTFail("collection \(name) is not valid JSON after import")
+                continue
+            }
+            XCTAssertTrue(
+                MigrationStore.jsonValuesEqual(parsed, expected),
+                "collection \(name) mismatch"
+            )
         }
     }
 
