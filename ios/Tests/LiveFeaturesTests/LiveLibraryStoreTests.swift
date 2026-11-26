@@ -31,11 +31,13 @@ final class LiveLibraryStoreTests: XCTestCase {
     private func entry(
         platform: String = "bilibili",
         roomId: String = "1",
-        watchedAt: Date = Date()
+        watchedAt: Date = Date(),
+        playUrlsJSON: String? = nil
     ) -> LiveHistoryEntry {
         LiveHistoryEntry(
             platform: platform, roomId: roomId, title: "标题",
-            nick: "主播", cover: "", watchedAt: watchedAt)
+            nick: "主播", cover: "", watchedAt: watchedAt,
+            playUrlsJSON: playUrlsJSON)
     }
 
     // MARK: - Resume key (Flutter identityKey)
@@ -89,6 +91,36 @@ final class LiveLibraryStoreTests: XCTestCase {
         XCTAssertEqual(merged.count, 2)
         XCTAssertEqual(merged[0].roomId, "1")
         XCTAssertEqual(merged[0].watchedAt, Date(timeIntervalSince1970: 2000))
+    }
+
+    /// A record WITHOUT playUrls never wipes the stored URLs for
+    /// the same room (b49fix44 S33-P1-3): the Home / My entry
+    /// points record before the room page carries `data`, and the
+    /// nil write used to replace the stored row for good.
+    func testNilPlayUrlsRecordKeepsStoredUrls() {
+        let urls = "[{\"url\":\"https://example.com/ks.m3u8\"}]"
+        let stored = entry(roomId: "1", playUrlsJSON: urls)
+        let fresh = entry(roomId: "1", watchedAt: Date(timeIntervalSince1970: 3000))
+        XCTAssertNil(fresh.playUrlsJSON)
+        let merged = LiveLibraryStore.mergedHistory(
+            [entry(roomId: "2"), stored], with: fresh, limit: 50)
+        XCTAssertEqual(merged.count, 2)
+        XCTAssertEqual(merged[0].roomId, "1")
+        XCTAssertEqual(merged[0].playUrlsJSON, urls)
+        XCTAssertEqual(merged[0].watchedAt, Date(timeIntervalSince1970: 3000))
+    }
+
+    /// A record WITH playUrls still replaces the stored ones —
+    /// the inheritance above only fills in a missing value, it
+    /// never freezes the URLs.
+    func testPlayUrlsRecordReplacesStoredUrls() {
+        let old = entry(roomId: "1", playUrlsJSON: "[{\"url\":\"https://example.com/old.m3u8\"}]")
+        let fresh = entry(
+            roomId: "1", watchedAt: Date(timeIntervalSince1970: 3000),
+            playUrlsJSON: "[{\"url\":\"https://example.com/new.m3u8\"}]")
+        let merged = LiveLibraryStore.mergedHistory([old], with: fresh, limit: 50)
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged[0].playUrlsJSON, "[{\"url\":\"https://example.com/new.m3u8\"}]")
     }
 
     func testHistoryCapTrimsOldest() {

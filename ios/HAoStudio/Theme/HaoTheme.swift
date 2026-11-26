@@ -57,8 +57,6 @@ enum HaoThemeID: String, CaseIterable, Identifiable {
 struct HaoThemePalette {
     /// Sophisticated theme accent for buttons / active states (never red).
     let accent: Color
-    /// Foreground on a filled accent surface.
-    let onAccent: Color
     /// Low-alpha accent wash (selected rows, progress fill background).
     let accentSoft: Color
     /// Frosted-glass surface: LOW alpha + strong blur.
@@ -98,6 +96,13 @@ struct HaoThemePalette {
     /// when the accent is black / near-black (invisible on video).
     /// On-video buttons use this; on-scaffold controls use `accent`.
     var accentOnVideo: Color { haoAccentOnBlack(accent) }
+
+    /// Foreground on a filled accent surface (b49fix44 S33-P1-4):
+    /// the Flutter pole verified at WCAG 4.5:1 — see
+    /// `haoOnAccentCorrected`. Computed from `accent`, like
+    /// `accentText`: a custom pick flows through automatically,
+    /// and the fill itself never moves.
+    var onAccent: Color { haoOnAccentCorrected(for: accent) }
 
     /// Accent as TEXT on scaffold / solid surfaces (build 36
     /// follow-up D3): the accent itself, unless its WCAG contrast
@@ -140,17 +145,16 @@ struct HaoThemePalette {
     ///   values in both modes.
     /// - accentOverride replaces `accent` (both modes); `accentSoft`
     ///   is the override at 0.14 alpha and `onAccent` follows the
-    ///   Flutter `_onAccentFor` rule (white on dark accents,
-    ///   near-black on light ones). liveRed, text colours and
+    ///   Flutter `_onAccentFor` rule, verified at WCAG 4.5:1
+    ///   (b49fix44 S33-P1-4 — a failing pole falls through to the
+    ///   other pole; the fill never moves). liveRed, text colours and
     ///   surfaces never move — only accent-role usages do (same
     ///   rule as Flutter `HaoThemes.of(accentOverride:)`).
     func applying(glassIntensity: Double, accentOverride: Color?) -> HaoThemePalette {
         let intensity = min(1.0, max(0.3, glassIntensity))
         let accent = accentOverride ?? self.accent
-        let onAccent = accentOverride == nil ? self.onAccent : haoOnAccentFor(accent)
         return HaoThemePalette(
             accent: accent,
-            onAccent: onAccent,
             accentSoft: accent.opacity(0.14),
             surface: surface.opacity(intensity),
             surfaceStrong: surfaceStrong.opacity(intensity),
@@ -177,7 +181,7 @@ struct HaoThemePalette {
         switch (id, scheme) {
         case (.appleGlass, .light):
             return HaoThemePalette(
-                accent: .black, onAccent: .white,
+                accent: .black,
                 accentSoft: Color.black.opacity(0.14),
                 surface: Color.white.opacity(0.55),
                 surfaceStrong: Color.white.opacity(0.68),
@@ -190,7 +194,7 @@ struct HaoThemePalette {
                 colorScheme: .light, tabSelected: .black)
         case (.appleGlass, .dark):
             return HaoThemePalette(
-                accent: Color(hex: 0x76767A), onAccent: .white,
+                accent: Color(hex: 0x76767A),
                 accentSoft: Color(hex: 0x76767A).opacity(0.14),
                 surface: Color.white.opacity(0.10),
                 surfaceStrong: Color.white.opacity(0.16),
@@ -203,7 +207,7 @@ struct HaoThemePalette {
                 colorScheme: .dark, tabSelected: .white)
         case (.darkGold, .light):
             return HaoThemePalette(
-                accent: Color(hex: 0x9A7B1E), onAccent: .white,
+                accent: Color(hex: 0x9A7B1E),
                 accentSoft: Color(hex: 0x9A7B1E).opacity(0.14),
                 surface: Color.white.opacity(0.55),
                 surfaceStrong: Color.white.opacity(0.68),
@@ -216,7 +220,7 @@ struct HaoThemePalette {
                 colorScheme: .light, tabSelected: .black)
         case (.darkGold, .dark):
             return HaoThemePalette(
-                accent: Color(hex: 0xD4AF37), onAccent: Color(hex: 0x0B0B0F),
+                accent: Color(hex: 0xD4AF37),
                 accentSoft: Color(hex: 0xD4AF37).opacity(0.14),
                 surface: Color.white.opacity(0.08),
                 surfaceStrong: Color.white.opacity(0.14),
@@ -229,7 +233,7 @@ struct HaoThemePalette {
                 colorScheme: .dark, tabSelected: .white)
         case (.freshMint, .light):
             return HaoThemePalette(
-                accent: Color(hex: 0x00897B), onAccent: .white,
+                accent: Color(hex: 0x00897B),
                 accentSoft: Color(hex: 0x00897B).opacity(0.14),
                 surface: Color.white.opacity(0.55),
                 surfaceStrong: Color.white.opacity(0.68),
@@ -242,7 +246,7 @@ struct HaoThemePalette {
                 colorScheme: .light, tabSelected: .black)
         case (.freshMint, .dark):
             return HaoThemePalette(
-                accent: Color(hex: 0x4DD0C4), onAccent: Color(hex: 0x0B0B0F),
+                accent: Color(hex: 0x4DD0C4),
                 accentSoft: Color(hex: 0x4DD0C4).opacity(0.14),
                 surface: Color.white.opacity(0.09),
                 surfaceStrong: Color.white.opacity(0.15),
@@ -255,7 +259,7 @@ struct HaoThemePalette {
                 colorScheme: .dark, tabSelected: .white)
         case (.polarIce, .light):
             return HaoThemePalette(
-                accent: .black, onAccent: .white,
+                accent: .black,
                 accentSoft: Color.black.opacity(0.14),
                 surface: Color.white.opacity(0.55),
                 surfaceStrong: Color.white.opacity(0.68),
@@ -268,7 +272,7 @@ struct HaoThemePalette {
                 colorScheme: .light, tabSelected: .black)
         case (.polarIce, .dark):
             return HaoThemePalette(
-                accent: Color(hex: 0x76767A), onAccent: .white,
+                accent: Color(hex: 0x76767A),
                 accentSoft: Color(hex: 0x76767A).opacity(0.14),
                 surface: Color.white.opacity(0.08),
                 surfaceStrong: Color.white.opacity(0.14),
@@ -284,7 +288,7 @@ struct HaoThemePalette {
             // compiler cannot prove the 8 cases exhaustive. Fall back to
             // the appleGlass light palette.
             return HaoThemePalette(
-                accent: .black, onAccent: .white,
+                accent: .black,
                 accentSoft: Color.black.opacity(0.14),
                 surface: Color.white.opacity(0.55),
                 surfaceStrong: Color.white.opacity(0.68),
@@ -461,6 +465,37 @@ func haoOnAccentFor(_ accent: Color) -> Color {
     guard let luminance = accentLuminance(accent) else { return .white }
     let light = (luminance + 0.05) * (luminance + 0.05) > 0.15
     return light ? Color(hex: 0x0B0B0F) : .white
+}
+
+/// Text on an accent fill (b49fix44 S33-P1-4): the Flutter pole
+/// (`haoOnAccentFor` — white on dark accents, near-black on light
+/// ones), verified against the fill at WCAG AA 4.5:1. The pole
+/// alone fails on two of the eight palettes — white on
+/// darkGold-light #9A7B1E (4.02:1) and on freshMint-light #00897B
+/// (4.32:1) — so a failing pole falls through to the other pole
+/// (near-black: 4.88 / 4.55). When neither pole clears (an accent
+/// luminance in the narrow gap where both fail), the better pole
+/// is kept: no text colour can clear it, only moving the fill
+/// could, and the fill never moves. The 4.5 bar is exact, not the
+/// 4.6 internal target `haoTextRGB` uses: the poles are exact
+/// colours, so no 1/255 rounding margin is needed. A custom pick
+/// flows through the same computed `onAccent`, so the two custom
+/// presets that pair white below 4.5:1 (blue #0A84FF 3.65, pink
+/// #FF375F 3.52) get near-black text too — the preset colours
+/// themselves are untouched (S33-P2-5, user-chosen).
+func haoOnAccentCorrected(for accent: Color) -> Color {
+    guard let luminance = accentLuminance(accent) else { return .white }
+    let pole = haoOnAccentFor(accent)
+    func contrast(_ text: Color) -> Double {
+        guard let textLuminance = accentLuminance(text) else { return 0 }
+        return haoContrastRatio(luminanceA: textLuminance, luminanceB: luminance)
+    }
+    if contrast(pole) >= 4.5 { return pole }
+    // The other pole: the Flutter choice is white exactly when the
+    // accent is dark, so a white pole's other is near-black.
+    let other: Color = (accentLuminance(pole) ?? 0) > 0.5 ? Color(hex: 0x0B0B0F) : .white
+    if contrast(other) >= 4.5 { return other }
+    return contrast(pole) >= contrast(other) ? pole : other
 }
 
 /// On-video accent (build 36, item 15): the theme accent, unless

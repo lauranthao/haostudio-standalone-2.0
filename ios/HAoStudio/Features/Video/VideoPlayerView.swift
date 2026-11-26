@@ -1245,7 +1245,7 @@ struct VideoPlayerView: View {
             if videoPlayer.isDoubleSpeed {
                 Text("2x")
                     .font(.haoSubheadStrong)
-                    .foregroundStyle(haoOnAccentFor(theme.accentOnVideo))
+                    .foregroundStyle(haoOnAccentCorrected(for: theme.accentOnVideo))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(theme.accentOnVideo, in: Capsule())
@@ -1271,7 +1271,7 @@ struct VideoPlayerView: View {
             if let target = dragSeekTarget {
                 Text("\(videoTimeText(seconds: dragSeekAnchor)) → \(videoTimeText(seconds: target))")
                     .font(.haoSubheadStrong)
-                    .foregroundStyle(haoOnAccentFor(theme.accentOnVideo))
+                    .foregroundStyle(haoOnAccentCorrected(for: theme.accentOnVideo))
                     .monospacedDigit()
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
@@ -1379,7 +1379,7 @@ struct VideoPlayerView: View {
                         if let pill = videoPlayer.skipIntroPill {
                             Button(pill) { videoPlayer.skipIntroNow() }
                                 .font(.haoDenseTitle)
-                                .foregroundStyle(haoOnAccentFor(theme.accentOnVideo))
+                                .foregroundStyle(haoOnAccentCorrected(for: theme.accentOnVideo))
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 10)
                                 .background(theme.accentOnVideo, in: Capsule())
@@ -1388,7 +1388,7 @@ struct VideoPlayerView: View {
                         if videoPlayer.skipCreditsPill {
                             Button("跳过片尾") { videoPlayer.skipCreditsNow() }
                                 .font(.haoDenseTitle)
-                                .foregroundStyle(haoOnAccentFor(theme.accentOnVideo))
+                                .foregroundStyle(haoOnAccentCorrected(for: theme.accentOnVideo))
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 10)
                                 .background(theme.accentOnVideo, in: Capsule())
@@ -1436,7 +1436,7 @@ struct VideoPlayerView: View {
                         }
                         Button("重试") { videoPlayer.retry() }
                             .font(.haoSubheadStrong)
-                            .foregroundStyle(haoOnAccentFor(theme.accentOnVideo))
+                            .foregroundStyle(haoOnAccentCorrected(for: theme.accentOnVideo))
                             .padding(.horizontal, 24)
                             .padding(.vertical, 12)
                             .background(theme.accentOnVideo, in: Capsule())

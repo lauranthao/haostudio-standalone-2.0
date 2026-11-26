@@ -662,7 +662,8 @@ struct MyView: View {
     private func openLiveRoom(_ room: LiveRoom) {
         LiveLibraryStore.recordHistory(
             platform: room.platform.rawValue, roomId: room.roomId,
-            title: room.title, nick: room.streamer, cover: room.cover)
+            title: room.title, nick: room.streamer, cover: room.cover,
+            playUrlsJSON: LiveLibraryStore.playUrlsJSON(from: room.data))
         counts = MyEntryCounts.reload()
         selectedLiveRoom = room
     }

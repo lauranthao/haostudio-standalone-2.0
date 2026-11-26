@@ -602,6 +602,18 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         return EmbyClient.episodeIdFromEmbyPlaybackUrl(url.absoluteString)
     }
 
+    /// Whether this VOD URL plays under the CMS 1080p ceiling
+    /// (b49fix44 S33-P1-2): every non-Emby VOD URL is CMS (the two
+    /// VOD sources are CMS + Emby), and the Emby check matches BOTH
+    /// the direct stream and the HLS transcode master playlist
+    /// (`episodeIdFromEmbyPlaybackUrl` matches `/Videos/<id>/stream`
+    /// and `/Videos/<id>/master.m3u8`), so the last-resort transcode
+    /// stays uncapped too. Same URL-sniffing as `currentEmbyItemId`
+    /// above — no source flag travels through the player.
+    private func shouldCapResolution(for url: URL) -> Bool {
+        EmbyClient.episodeIdFromEmbyPlaybackUrl(url.absoluteString) == nil
+    }
+
     /// The video surface for the player page to embed. Nil until
     /// the first backend opens.
     var videoView: UIView? { backend?.view }
@@ -1043,6 +1055,16 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
             return
         }
         let backend = makeBackend(engine)
+        // (b49fix44 S33-P1-2) CMS 1080p ceiling: a single master
+        // .m3u8 bypasses the discrete-URL reorder, so cap the
+        // AVPlayer adaptive ladder itself. Set on every attempt
+        // (nil for Emby) so a reused backend can never carry a
+        // stale cap; backends that cannot cap simply do not
+        // conform and the cast no-ops.
+        if let capable = backend as? AdaptiveResolutionCapable {
+            capable.preferredMaximumResolution = shouldCapResolution(for: url)
+                ? cmsCappedMaximumResolution : nil
+        }
         // #4: a stale backend's event must not act on the current
         // episode — AVPlayer/MPV emit to main async, so an event
         // queued before a shutdown/switch can land after the new
@@ -1137,6 +1159,13 @@ final class VideoDriver: NSObject, ObservableObject, VideoPlaybackDriver {
         backend?.shutdown()
         backend = nil
         let avBackend = makeBackend(.avplayer)
+        // (b49fix44 S33-P1-2) same cap as openOnEngine above — the
+        // AVPlayer fallback reopens the same URL, so the same
+        // CMS / Emby decision applies.
+        if let capable = avBackend as? AdaptiveResolutionCapable {
+            capable.preferredMaximumResolution = shouldCapResolution(for: url)
+                ? cmsCappedMaximumResolution : nil
+        }
         // #4: same identity check as openOnEngine above — a stale
         // AVPlayer backend's event must not stop/fail the episode
         // that replaced it.

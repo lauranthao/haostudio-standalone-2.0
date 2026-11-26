@@ -469,11 +469,13 @@ struct SettingsGroupsView: View {
     private var glassIntensityRow: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                // Chrome O3: the slider only tunes card / sheet
-                // surfaces — the tab bar and mini player keep the
-                // system glass strength, so the label must not
-                // promise whole-app glass.
-                Text("卡片玻璃强度")
+                // b49fix44 S33-P2-4: since phase 1 the slider
+                // drives the pills too on iOS 26+ (glassTint on
+                // the glass modifiers) — it only stays
+                // surfaces-only on iOS 17–25. The footnote below
+                // says so per OS range; the label must not promise
+                // cards-only any more.
+                Text("玻璃强度")
                     .font(.haoBody)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
@@ -493,7 +495,7 @@ struct SettingsGroupsView: View {
                 in: 0.3...1.0
             )
             .tint(theme.accent)
-            Text("仅调整卡片、浮层等表面的玻璃效果；底栏与迷你播放器保持系统玻璃强度不变。")
+            Text("iOS 26 及以上同时调整底栏与迷你播放器的玻璃强度；iOS 17–25 仅调整卡片、浮层等表面。")
                 .font(.haoFootnote)
                 .foregroundStyle(theme.textSecondary)
         }

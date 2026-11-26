@@ -21,10 +21,14 @@
 //   numbers — instead an URL that fails at playback is evicted
 //   explicitly (`evictPlayUrl`), and the cache is in-memory only
 //   (the `hao_play_url_cache:` family is NOT migrated, per S1).
-// - Budgets (P0-16 rework): a whole resolve is capped at 8 s; the
-//   FIRST tier pass is capped at 5 s and 3 s are reserved for the
-//   lower tiers (each later pass at most 2 s); a single job is
-//   capped at 3 s. The first tier can never eat the whole budget.
+// - Budgets (P0-16 rework, b49fix44 S33-P2-2): a whole resolve is
+//   capped at 8 s; EVERY tier pass is capped at 2 s; a single job is
+//   capped at 3 s. The target tier decides the ORDER sources are
+//   tried (higher-tier first, serial fastest-first) — it never
+//   delays a playable URL: the old first-pass cap of 5 s held a
+//   lower-tier playable URL for up to 5 s while the target tier was
+//   still resolving, against "first playable plays immediately".
+//   Once ANY source yields a playable URL, playback starts.
 
 import Foundation
 
@@ -33,18 +37,15 @@ import Foundation
 enum ResolverBudget {
     /// Whole-resolve deadline.
     static let total: TimeInterval = 8
-    /// First tier pass cap — 3 s stay reserved for lower tiers.
-    static let firstPassCap: TimeInterval = 5
-    /// Later tier pass cap.
-    static let laterPassCap: TimeInterval = 2
+    /// Every tier pass cap — one cap for all passes (b49fix44
+    /// S33-P2-2; the old 5 s first-pass cap is deleted).
+    static let passCap: TimeInterval = 2
     /// Single job cap.
     static let perJob: TimeInterval = 3
 
-    /// Pass budget for pass `index` (0 = first tier), bounded by
-    /// the time remaining in the whole resolve.
-    static func passBudget(passIndex: Int, remaining: TimeInterval) -> TimeInterval {
-        let cap = passIndex == 0 ? firstPassCap : laterPassCap
-        return min(cap, remaining)
+    /// Pass budget, bounded by the time remaining in the whole resolve.
+    static func passBudget(remaining: TimeInterval) -> TimeInterval {
+        return min(passCap, remaining)
     }
 }
 

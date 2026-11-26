@@ -86,11 +86,14 @@ final class LXKeyRegressionTests: XCTestCase {
             // installed, no network): a broken script must fail here,
             // not on device. The prelude is required: every bundled
             // script destructures `globalThis.lx` at load time.
-            let context = JSContext()
-            context?.evaluateScript(LXPrelude.source)
-            XCTAssertNil(context?.exception, "prelude must install cleanly")
-            context?.evaluateScript(code)
-            XCTAssertNil(context?.exception, "\(id): script must parse cleanly")
+            // b49fix44 (S33 R31 note): annotated like round 31 —
+            // a bare `let context = JSContext()` infers `JSContext?`
+            // (IUO import) and member access fails to compile.
+            let context: JSContext = JSContext()
+            context.evaluateScript(LXPrelude.source)
+            XCTAssertNil(context.exception, "prelude must install cleanly")
+            context.evaluateScript(code)
+            XCTAssertNil(context.exception, "\(id): script must parse cleanly")
         }
     }
 

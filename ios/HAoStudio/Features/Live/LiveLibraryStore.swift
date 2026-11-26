@@ -147,12 +147,25 @@ enum LiveLibraryStore {
 
     /// Merge a history row into the stored list: same room
     /// replaces its old row, newest first, capped at `limit`
-    /// (0 = unlimited).
+    /// (0 = unlimited). A record WITHOUT playUrls never wipes
+    /// the stored URLs for the same room (b49fix44 S33-P1-3):
+    /// the Home / My entry points record before the room page
+    /// carries `data`, and the nil write used to replace the
+    /// stored row — then `openCurrentRoom` re-recorded nil too
+    /// and the fallback URLs were gone for good. The incoming
+    /// row inherits the stored URLs when it has none; a record
+    /// WITH URLs still replaces them.
     static func mergedHistory(
         _ stored: [LiveHistoryEntry],
         with entry: LiveHistoryEntry,
         limit: Int
     ) -> [LiveHistoryEntry] {
+        var entry = entry
+        if entry.playUrlsJSON == nil,
+           let storedEntry = stored.first(where: { $0.id == entry.id }),
+           let storedJSON = storedEntry.playUrlsJSON {
+            entry.playUrlsJSON = storedJSON
+        }
         var list = stored.filter { $0.id != entry.id }
         list.insert(entry, at: 0)
         return applyHistoryLimit(list, limit: limit)

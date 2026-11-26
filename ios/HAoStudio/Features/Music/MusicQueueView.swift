@@ -1,9 +1,9 @@
 // HAo Studio 2.0 — playback queue sheet (S2-C leg; b45-a Coda §2.9).
 //
 // The current queue: current track highlighted, tap a row to play
-// from there, swipe to remove, clear-all button. "不喜欢" marks the
-// song as disliked for private FM (fmDislikedIds) and removes it
-// from the queue.
+// from there, swipe to remove, clear-all button. Drag to reorder;
+// the player advances through this queue, so a reorder of
+// upcoming songs needs no player re-sync.
 //
 // b45-a (Coda IOSPlaybackQueueView): rows are 48×48 r5 covers,
 // title body medium white 0.95, artist secondary white 0.55, row

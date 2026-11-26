@@ -1034,11 +1034,15 @@ struct LiveRoomView: View {
                     // message-area 设置 tab, same place).
                     Button(action: { showDanmakuSettings = true }) {
                         Image(systemName: "gearshape")
-                            .font(.system(size: 18, weight: .semibold))  // icon size, not text
+                            .font(.system(size: 20, weight: .semibold))  // icon size, not text
                             .foregroundStyle(theme.accentText)
                             .frame(width: 40, height: 40)
                     }
                     .buttonStyle(.plain)
+                    // 44pt hit target, visual stays 40pt (same class as
+                    // the top-bar buttons above).
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
                     .accessibilityLabel("弹幕设置")
                 }
             }
@@ -1426,7 +1430,7 @@ struct LiveRoomView: View {
             }
             Button(action: { isFullscreen = false }) {
                 Image(systemName: "arrow.down.right.and.arrow.up.left")
-                    .font(.system(size: 18, weight: .semibold))  // icon size, not text
+                    .font(.system(size: 20, weight: .semibold))  // icon size, not text
                     .foregroundStyle(theme.accentOnVideo)
                     .frame(width: 40, height: 40)
             }

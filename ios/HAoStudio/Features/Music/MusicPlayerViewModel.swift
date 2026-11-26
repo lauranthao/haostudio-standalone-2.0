@@ -1888,6 +1888,9 @@ final class MusicPlayerViewModel: ObservableObject {
         // queue write. No consumer depends on the recent-vs-
         // queue order.
         MusicLibraryStore.saveQueueAsync(queue.toQueueData())
+        // b49fix44 S33-P1-1: the context is the queue's mirror — an
+        // insert it never sees is dropped by the next rebuild.
+        syncPlayContextToQueue()
         // b47-playlogic: the player's flat queue is what
         // auto-advance reads — without a re-sync the inserted
         // song is invisible to it (Coda consumes its play-next
@@ -2015,6 +2018,25 @@ final class MusicPlayerViewModel: ObservableObject {
         persistPlayContext()
     }
 
+    /// Keep the play context in step with the queue after a user edit
+    /// (b49fix44 S33-P1-1): a remove / move / insert / clear that leaves
+    /// the context stale is undone by the next rebuild — the removed
+    /// song comes back, the insert is dropped, the reorder is reverted.
+    /// Same three writes as `extendFMQueueIfNeeded` (keys + snapshot +
+    /// persisted context); `recordPlayContext` is NOT used here — it
+    /// resets the FM/heartbeat refill counter, which an edit must not
+    /// do. No-op when there is no context (a one-off play never
+    /// creates one).
+    private func syncPlayContextToQueue() {
+        guard var updated = currentPlayContext else { return }
+        updated.songKeys = queue.tracks.map { $0.identityKey }
+        updated.lastPlayedAt = Date().timeIntervalSince1970
+        currentPlayContext = updated
+        PlaylistSnapshotStore.save(PlaylistSnapshot(
+            source: updated.source, displayName: updated.displayName, songs: queue.tracks))
+        persistPlayContext()
+    }
+
     /// The current context's songs, re-read from wherever that
     /// place lives now. Local lists read the live store (a rename
     /// or an edit is picked up); everything else reads the
@@ -2067,6 +2089,28 @@ final class MusicPlayerViewModel: ObservableObject {
         // b49: same entry dedupe as play() — a reloaded list can
         // carry the same song twice (merged results / playlist).
         songs = MusicQueue.deduped(songs)
+        // b49fix44 S33-P1-1: the context's keys are the queue's
+        // mirror — every user edit (remove / move / insert / clear)
+        // syncs them (see syncPlayContextToQueue) — so filter +
+        // order the reloaded songs by the keys. Without this, a
+        // live-store source (playlist / recent / favourites /
+        // local / downloads) reloads the whole list and a removed
+        // song comes back on the next 切歌; a play-next insert (in
+        // the keys + snapshot, not in the list) is dropped the same
+        // way. The snapshot is the lookup for keyed songs the live
+        // list no longer has (the live list wins on conflict — it
+        // carries fresher info). Songs the keys name but no source
+        // has any more fall out; songs added to the list
+        // mid-playback do not join the queue — the queue is the
+        // source of truth once playback starts, same as the
+        // snapshot kinds already froze it at play time.
+        if let context = currentPlayContext {
+            let snapshotSongs = PlaylistSnapshotStore.load(source: context.source)?.musicSongs ?? []
+            var byKey: [String: MusicSong] = [:]
+            for song in snapshotSongs + songs { byKey[song.identityKey] = song }
+            songs = context.songKeys.compactMap { byKey[$0] }
+            guard !songs.isEmpty else { return false }
+        }
         guard let index = songs.firstIndex(where: { $0.identityKey == song.identityKey })
         else { return false }
         queue = MusicQueue(tracks: songs, index: index)
@@ -2134,6 +2178,9 @@ final class MusicPlayerViewModel: ObservableObject {
         } ?? queue.index
         queue = MusicQueue(tracks: tracks, index: min(newIndex, max(0, tracks.count - 1)))
         MusicLibraryStore.saveQueueAsync(queue.toQueueData())
+        // b49fix44 S33-P1-1: the context is the queue's mirror — a
+        // reorder it never sees is reverted by the next rebuild.
+        syncPlayContextToQueue()
         // b47-playlogic: same re-sync as playNext — a reorder
         // the player never sees leaves auto-advance following
         // the old order.
@@ -2144,6 +2191,10 @@ final class MusicPlayerViewModel: ObservableObject {
         let wasCurrent = index == queue.index
         queue.remove(at: index)
         MusicLibraryStore.saveQueueAsync(queue.toQueueData())
+        // b49fix44 S33-P1-1: the context is the queue's mirror — a
+        // removal it never sees is undone by the next rebuild and
+        // the deleted song comes back on the next 切歌.
+        syncPlayContextToQueue()
         if wasCurrent {
             // L1 (build 36, item 8): deleting the playing song
             // used to stop playback and only DISPLAY the next song
@@ -2175,6 +2226,11 @@ final class MusicPlayerViewModel: ObservableObject {
     func clearQueue() {
         queue.clear()
         MusicLibraryStore.saveQueueAsync(queue.toQueueData())
+        // b49fix44 S33-P1-1: the context is the queue's mirror — a
+        // clear it never sees is undone by the next rebuild (and by
+        // the relaunch restore). Empty keys persist; the restore
+        // ignores them, so the cleared list stays cleared.
+        syncPlayContextToQueue()
         player.pause()
         coordinator.stop()
         // A7: same as above — clearing the queue must also clear

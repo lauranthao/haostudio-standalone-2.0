@@ -1896,3 +1896,26 @@ final class VideoDriverItem14Tests: XCTestCase {
         waitForExpectations(timeout: 2)
     }
 }
+
+// MARK: - CMS 1080p adaptive cap (b49fix44 S33-P1-2)
+
+/// The cap the driver hands an AVPlayer backend for CMS playback:
+/// the ceiling's own 1920×1080 (same threshold as
+/// `videoURLExceeds1080p`'s 1080p rule and the MPV render cap).
+/// This pins the seam the driver sets; the item itself is applied
+/// in `AVPlayerBackend.open`, which needs a real player and is
+/// verified by the harness + the next Bitrise build, not here.
+final class AdaptiveResolutionCapTests: XCTestCase {
+    func testCappedMaximumResolutionIs1080p() {
+        XCTAssertEqual(cmsCappedMaximumResolution, CGSize(width: 1920, height: 1080))
+    }
+
+    func testAVPlayerBackendCarriesTheCapSeam() {
+        let backend = AVPlayerBackend()
+        XCTAssertNil(backend.preferredMaximumResolution)
+        backend.preferredMaximumResolution = cmsCappedMaximumResolution
+        XCTAssertEqual(backend.preferredMaximumResolution, CGSize(width: 1920, height: 1080))
+        backend.preferredMaximumResolution = nil
+        XCTAssertNil(backend.preferredMaximumResolution)
+    }
+}

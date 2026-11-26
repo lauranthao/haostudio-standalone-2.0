@@ -33,17 +33,15 @@ final class LXResolverPolicyTests: XCTestCase {
 
     func testBudgetCaps() {
         XCTAssertEqual(ResolverBudget.total, 8)
-        XCTAssertEqual(ResolverBudget.firstPassCap, 5)
-        XCTAssertEqual(ResolverBudget.laterPassCap, 2)
+        XCTAssertEqual(ResolverBudget.passCap, 2)
         XCTAssertEqual(ResolverBudget.perJob, 3)
-        // First tier pass never eats the whole budget: 3 s stay
-        // reserved for lower tiers.
-        XCTAssertEqual(ResolverBudget.passBudget(passIndex: 0, remaining: 8), 5)
-        XCTAssertEqual(ResolverBudget.passBudget(passIndex: 1, remaining: 8), 2)
-        XCTAssertEqual(ResolverBudget.passBudget(passIndex: 2, remaining: 8), 2)
+        // b49fix44 S33-P2-2: one cap for every pass — the old
+        // 5 s first-pass cap is deleted (it held a lower-tier
+        // playable URL while the target tier was still resolving).
+        XCTAssertEqual(ResolverBudget.passBudget(remaining: 8), 2)
         // Bounded by the time actually left.
-        XCTAssertEqual(ResolverBudget.passBudget(passIndex: 0, remaining: 1), 1)
-        XCTAssertEqual(ResolverBudget.passBudget(passIndex: 1, remaining: 0.5), 0.5)
+        XCTAssertEqual(ResolverBudget.passBudget(remaining: 1), 1)
+        XCTAssertEqual(ResolverBudget.passBudget(remaining: 0.5), 0.5)
     }
 
     // MARK: - Cooldown
