@@ -43,11 +43,17 @@ final class BilibiliSiteTests: XCTestCase {
         XCTAssertEqual(room.link, "https://live.bilibili.com/6")
         }
 
-        func testCarouselRoomIsNotLive() throws {
+        func testCarouselRoomCountsAsPlayable() throws {
+        // b49fix2 P2-19 (c1e18cf): live_status 2 (carousel, a
+        // watchable looping video) counts as playable, like the
+        // Flutter port (started at the loop start) — it no longer
+        // reports offline. The old testCarouselRoomIsNotLive
+        // encoded the pre-fix "report offline" decision and was
+        // never updated with it.
         let json = jsonObject(roomInfoJSON.replacingOccurrences(of: "\"live_status\":1", with: "\"live_status\":2"))
         let data = try BilibiliLiveSite.parseRoomInfoResponse(json)
         let room = BilibiliLiveSite.buildRoom(roomInfo: data, roomId: "6", realRoomId: "6", danmakuData: nil)
-        XCTAssertFalse(room.isLive)
+        XCTAssertTrue(room.isLive)
         }
 
         func testParseRoomInfoRejectsNonZeroCode() {

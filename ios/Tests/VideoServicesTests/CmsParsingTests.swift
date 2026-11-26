@@ -113,7 +113,14 @@ final class CmsParsingTests: XCTestCase {
         XCTAssertEqual(detail.meta?.synopsis, "京海市的刑警安欣。")
     }
 
-    func testParseCmsDetailNilWhenNoLines() {
+    func testParseCmsDetailEmptyLinesWhenNoLines() {
+        // b49fix5 P2-1 (e58a77b): a title whose play URL yields
+        // no lines is NOT nil — it returns a detail with empty
+        // lines, so the VM shows "暂无可播剧集" instead of
+        // pinning a retry that can never succeed. The old
+        // testParseCmsDetailNilWhenNoLines encoded the pre-fix
+        // contract (guard !lines.isEmpty -> nil) and was never
+        // updated with it.
         let json: [String: Any] = [
             "list": [[
                 "vod_id": "123",
@@ -123,15 +130,29 @@ final class CmsParsingTests: XCTestCase {
                 "vod_content": "",
             ]],
         ]
-        XCTAssertNil(CmsClient.parseCmsDetail(source: source(), vodId: "123", json: json))
+        guard let detail = CmsClient.parseCmsDetail(source: source(), vodId: "123", json: json) else {
+            XCTFail("detail should parse (empty lines, not nil)")
+            return
+        }
+        XCTAssertEqual(detail.item.title, "无源片")
+        XCTAssertTrue(detail.lines.isEmpty)
     }
 
     // MARK: - Probe / dedupe
 
     func testIsProbeOk() {
-        XCTAssertTrue(CmsClient.isProbeOk(["code": 0]))
-        XCTAssertTrue(CmsClient.isProbeOk(["list": []]))
-        XCTAssertTrue(CmsClient.isProbeOk(["class": []]))
+        // b49fix2 sweep-4 P2-17 (ae57752): only a NON-EMPTY
+        // list[] or class[] counts — a source answering "ok,
+        // nothing" (code 0 with an empty list) used to count as
+        // healthy and ranked above dead sources. The old
+        // assertions below encoded the pre-fix contract
+        // (code 0 -> true, empty list/class -> true) and were
+        // never updated with it.
+        XCTAssertFalse(CmsClient.isProbeOk(["code": 0]))
+        XCTAssertFalse(CmsClient.isProbeOk(["list": []]))
+        XCTAssertFalse(CmsClient.isProbeOk(["class": []]))
+        XCTAssertTrue(CmsClient.isProbeOk(["list": [["vod_id": "1"]]]))
+        XCTAssertTrue(CmsClient.isProbeOk(["class": [["type_id": 1]]]))
         XCTAssertFalse(CmsClient.isProbeOk([:]))
         XCTAssertFalse(CmsClient.isProbeOk(["code": 1]))
     }

@@ -47,7 +47,11 @@ final class KuaishouSiteTests: XCTestCase {
         XCTAssertEqual(room.cover, "https://a/cover.jpg")
         XCTAssertEqual(room.onlineCount, 555)
         XCTAssertTrue(room.isLive)
-        XCTAssertEqual(room.link, "LS123")
+        // b49fix2 P2-27 (994de46): link is the watch URL, not
+        // the bare live-stream id — a bare id is not a URL, and
+        // the follow list already builds this same URL. The
+        // live-stream id stays in danmakuData['liveStreamId'].
+        XCTAssertEqual(room.link, "https://live.kuaishou.com/u/ks123")
         XCTAssertEqual(room.danmakuData?["liveStreamId"] as? String, "LS123")
         XCTAssertNotNil(room.data?["playUrls"])
         }

@@ -1,7 +1,8 @@
 // HAo Studio 2.0 — resolver policy tests (S2-B).
 //
 // Covers the P0-16 budget table, the cooldown rules (3 failures ->
-// 5 min, timeout -> 2 min immediately, empty is not a failure,
+// 5 min, timeout feeds the EMA only and never cools (b49sweep
+// P2-10: slow is not dead), empty is not a failure,
 // success clears the streak), the speed EMA, and the 1 h /
 // 200-entry play-URL cache. No network, no real waiting: the
 // cooldown/cache clocks are injected.
@@ -68,13 +69,26 @@ final class LXResolverPolicyTests: XCTestCase {
         XCTAssertFalse(cooldown.isCoolingDown("tang"))
     }
 
-    func testTimeoutCoolsImmediatelyForTwoMinutes() {
+    func testTimeoutFeedsEmaOnlyNeverCools() {
+        // b49sweep P2-10 (e7d2984): a timeout is "slow", not
+        // "dead" — it feeds the latency EMA only, never the
+        // failure streak and never a cooldown (hard errors only,
+        // never timeouts). The old testTimeoutCoolsImmediately-
+        // ForTwoMinutes encoded the pre-sweep "cool immediately
+        // for 2 min" behaviour and was never updated with it.
         let (cooldown, clock) = makeCooldown(now: Date())
         cooldown.record("lzm", outcome: .timeout, milliseconds: 3000)
-        XCTAssertTrue(cooldown.isCoolingDown("lzm"))
+        XCTAssertFalse(cooldown.isCoolingDown("lzm"))
+        XCTAssertEqual(cooldown.averageMs("lzm"), 3000)
+        XCTAssertNil(cooldown.fails["lzm"])
         clock.now = clock.now.addingTimeInterval(119)
-        XCTAssertTrue(cooldown.isCoolingDown("lzm"))
-        clock.now = clock.now.addingTimeInterval(2)
+        XCTAssertFalse(cooldown.isCoolingDown("lzm"))
+        // A second timeout blends into the EMA like a success
+        // sample (3000 * 0.7 + 1000 * 0.3 = 2400), still no
+        // streak and no cooldown.
+        cooldown.record("lzm", outcome: .timeout, milliseconds: 1000)
+        XCTAssertEqual(cooldown.averageMs("lzm"), 2400)
+        XCTAssertNil(cooldown.fails["lzm"])
         XCTAssertFalse(cooldown.isCoolingDown("lzm"))
     }
 
@@ -128,12 +142,21 @@ final class LXResolverPolicyTests: XCTestCase {
 
     func testNewerImportedSpeedSurvivesSave() {
         let t0 = Date(timeIntervalSince1970: 1_790_000_000)
-        let (cooldown, _) = makeCooldown(now: t0)
+        let (cooldown, clock) = makeCooldown(now: t0)
         cooldown.record("qq", outcome: .success, milliseconds: 300)
         // The backup's record is one minute newer than the live
         // recording — newest-wins keeps it, and the backfill
         // makes averageMs() see it at once, no restart.
         plantDiskSpeeds(["qq": ResolverSpeedRecord(avg: 120, updatedAtMs: Int(t0.addingTimeInterval(60).timeIntervalSince1970 * 1000))])
+        // b49fix33: the disk stamp must be newer than the live
+        // stamp but NOT in the future — a future stamp is a
+        // clock-ahead stamp, and the b49fix23 D25-4 clamp cuts
+        // it back to now, where it ties with the live recording
+        // and memory wins (verified by probe: the old setup
+        // returned 300, advancing the clock returns 120).
+        // Advance the clock past the disk stamp so this test
+        // exercises newest-wins, not the clamp.
+        clock.now = t0.addingTimeInterval(120)
         cooldown.saveNow()
         XCTAssertEqual(cooldown.averageMs("qq"), 120)
     }
@@ -185,7 +208,7 @@ final class LXResolverPolicyTests: XCTestCase {
 
     func testNewerImportedRecordWithNilAvgKeepsMemoryAvg() {
         let t0 = Date(timeIntervalSince1970: 1_790_000_000)
-        let (cooldown, _) = makeCooldown(now: t0)
+        let (cooldown, clock) = makeCooldown(now: t0)
         cooldown.record("qq", outcome: .success, milliseconds: 300)
         cooldown.record("qq", outcome: .error, milliseconds: 0)
         // The backup's record is newer and cleared the failure
@@ -193,6 +216,12 @@ final class LXResolverPolicyTests: XCTestCase {
         // nil) — the live measured avg survives; fails is still
         // cleared wholesale.
         plantDiskSpeeds(["qq": ResolverSpeedRecord(avg: nil, fails: nil, updatedAtMs: Int(t0.addingTimeInterval(60).timeIntervalSince1970 * 1000))])
+        // b49fix33: same as testNewerImportedSpeedSurvivesSave —
+        // advance the clock past the disk stamp so the merge sees
+        // a genuinely newer record, not a future stamp the D25-4
+        // clamp would cut back to now (probe: old setup left
+        // fails at 1; advanced clock clears it to nil).
+        clock.now = t0.addingTimeInterval(120)
         cooldown.saveNow()
         XCTAssertEqual(cooldown.averageMs("qq"), 300)
         XCTAssertNil(cooldown.fails["qq"])
@@ -221,7 +250,13 @@ final class LXResolverPolicyTests: XCTestCase {
         let stamped = cooldown.updatedAt["qq"]
         XCTAssertNotNil(stamped)
         XCTAssertTrue(stamped! <= Date())
-        XCTAssertTrue(stamped! >= beforeLoad)
+        // b49fix33: compare in milliseconds — stamps are stored
+        // as Int ms, so the clamped stamp is floored to the ms
+        // and can sit up to 1 ms before a full-precision
+        // beforeLoad taken in the same millisecond (probe:
+        // stamped < beforeLoad in 162/200 runs). The sibling
+        // test below already compares ms.
+        XCTAssertTrue(Int(stamped!.timeIntervalSince1970 * 1000) >= Int(beforeLoad.timeIntervalSince1970 * 1000))
         let cooled = cooldown.cooledUntil["qq"]
         XCTAssertNotNil(cooled)
         XCTAssertTrue(cooled! <= Date().addingTimeInterval(301))

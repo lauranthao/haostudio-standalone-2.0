@@ -80,13 +80,31 @@ final class MusicQualityTests: XCTestCase {
         XCTAssertEqual(MusicQualityGate.declaredTier(resolverKey: "tang", requested: .flac), .flac)
     }
 
-    func testReportedTierForKeepsMasterOnlyOnLiteralMaster() {
+    func testReportedTierForMapsReportToServedTier() {
+        // b49sweep2 P1-15 (6a677ae): the report maps to the tier
+        // actually served, for EVERY request — not just master.
+        // The old version only handled master requests (anything
+        // else fell through to nil, and the caller labelled the
+        // result with the REQUESTED tier), so a script that
+        // served 128k at a flac request showed a FLAC badge. The
+        // old testReportedTierForKeepsMasterOnlyOnLiteralMaster
+        // encoded the pre-fix collapse (non-master report at a
+        // master request -> hiRes; any report at a non-master
+        // request -> nil) and was never updated with it. A
+        // literal 'master' report is still the only way to keep
+        // the Master label (see the declaredTier gate above).
         XCTAssertEqual(MusicQualityGate.reportedTierFor(reported: "master", requested: .master), .master)
-        // Any other report at a master request is hires, never master.
+        // A non-master report at a master request is the tier
+        // actually served, not a hiRes collapse.
         XCTAssertEqual(MusicQualityGate.reportedTierFor(reported: "hires", requested: .master), .hiRes)
-        XCTAssertEqual(MusicQualityGate.reportedTierFor(reported: "flac", requested: .master), .hiRes)
+        XCTAssertEqual(MusicQualityGate.reportedTierFor(reported: "flac", requested: .master), .flac)
+        XCTAssertEqual(MusicQualityGate.reportedTierFor(reported: "flac24bit", requested: .master), .hiRes)
+        XCTAssertEqual(MusicQualityGate.reportedTierFor(reported: "320k", requested: .flac), .high320)
+        XCTAssertEqual(MusicQualityGate.reportedTierFor(reported: "128k", requested: .flac), .standard128)
+        XCTAssertEqual(MusicQualityGate.reportedTierFor(reported: "master", requested: .hiRes), .master)
         XCTAssertNil(MusicQualityGate.reportedTierFor(reported: nil, requested: .master))
-        XCTAssertNil(MusicQualityGate.reportedTierFor(reported: "master", requested: .hiRes))
+        XCTAssertNil(MusicQualityGate.reportedTierFor(reported: "unknown-xyz", requested: .master))
+        XCTAssertEqual(MusicQualityGate.reportedTierFor(reported: "  FLAC  ", requested: .master), .flac)
     }
 
     func testLxApiServedTierNeedsMasterWithoutFallback() {
