@@ -20,4 +20,22 @@ target 'HAoStudio' do
   use_frameworks! :linkage => :static
 
   pod 'IJKMediaFramework', :git => 'https://github.com/lauranthao/IJKMediaFramework.git', :tag => '0.1.5'
+
+  # b49fix40: the HAoStudioTests target @testable-imports the app module,
+  # whose interface depends on the IJK Clang module (IJKPlayerBackend
+  # imports IJKMediaFramework). Without this, the test target's
+  # SwiftDriver has no -F for the vendored IJK framework and Bitrise
+  # #44/#45 fail with "Unable to find module dependency:
+  # 'IJKMediaFramework'" (in target 'HAoStudioTests'). inherit!
+  # :search_paths gives the test target the parent's search paths only
+  # — no second copy of the static framework is linked (that would
+  # risk duplicate symbols). pod install generates
+  # Pods-HAoStudioTests.{debug,release}.xcconfig and assigns them as
+  # this target's base configurations on every run, so the Podfile
+  # change alone takes effect on CI. (The Mpv module path is NOT a
+  # Pods path — see the test target's FRAMEWORK_SEARCH_PATHS in
+  # project.pbxproj.)
+  target 'HAoStudioTests' do
+    inherit! :search_paths
+  end
 end

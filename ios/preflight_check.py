@@ -689,6 +689,51 @@ for _ci in (REPO / "bitrise.yml", REPO / "codemagic.yaml",
 check("11e. test-target build-for-testing step builds via the workspace first on all three CI routes (Bitrise #44 IJK)",
       not _ci_test_step_problems, str(_ci_test_step_problems[:5]) if _ci_test_step_problems else "all three CI routes workspace-first")
 
+# b49fix40: Bitrise #44/#45 failed at "Xcode test target compiles" with
+# `error: Unable to find module dependency: 'IJKMediaFramework'`
+# (in target 'HAoStudioTests') — the workspace-first fix (11e) was
+# NOT enough. The A/B comparison of the #45 log's SwiftDriver flags
+# proves it: the app target's driver has
+# `-F .../Pods/IJKMediaFramework/IJKMediaFramework/Classes` and
+# `-F .../Vendor/libmpv`, the test target's driver has neither, so
+# the explicit-module-build cannot resolve the HAoStudio module's
+# Clang dependencies (IJKPlayerBackend imports IJKMediaFramework,
+# MpvPlayerBackend imports Mpv — TWO module dependencies, not one).
+# The fix has two halves, and BOTH must hold:
+# (a) the Podfile nests `target 'HAoStudioTests' do inherit!
+#     :search_paths end` inside the HAoStudio target, so pod install
+#     generates Pods-HAoStudioTests xcconfigs (with the IJK vendored
+#     framework path) and assigns them as the test target's base
+#     configurations — search paths only, no second copy of the
+#     static framework is linked;
+# (b) the test target's own FRAMEWORK_SEARCH_PATHS in the pbxproj
+#     carries `$(PROJECT_DIR)/Vendor/libmpv` (the Mpv module path is
+#     NOT a Pods path — inherit! cannot provide it), exactly mirroring
+#     the app target's own setting.
+_test_search_path_problems = []
+_podfile = REPO / "ios/Podfile"
+_pod_text = _podfile.read_text() if _podfile.exists() else ""
+_app_at = _pod_text.find("target 'HAoStudio' do")
+_tests_at = _pod_text.find("target 'HAoStudioTests' do")
+if _app_at < 0 or _tests_at < 0 or _tests_at < _app_at:
+    _test_search_path_problems.append("Podfile: no nested target 'HAoStudioTests' block inside target 'HAoStudio'")
+else:
+    _tests_end = _pod_text.find("\nend", _tests_at)
+    _tests_block = _pod_text[_tests_at:_tests_end] if _tests_end > 0 else ""
+    if "inherit! :search_paths" not in _tests_block:
+        _test_search_path_problems.append("Podfile: HAoStudioTests block lacks inherit! :search_paths")
+    if re.search(r"^\s*pod\s", _tests_block, re.M):
+        _test_search_path_problems.append("Podfile: HAoStudioTests block links a pod (must be search_paths only)")
+_pbx = (REPO / "ios/HAoStudio.xcodeproj/project.pbxproj").read_text()
+_test_cfgs = re.findall(r"XCBuildConfiguration; buildSettings = \{[^}]*TEST_HOST[^}]*\}", _pbx)
+if len(_test_cfgs) != 2:
+    _test_search_path_problems.append(f"pbxproj: expected 2 HAoStudioTests build configurations (TEST_HOST), found {len(_test_cfgs)}")
+for _cfg in _test_cfgs:
+    if "FRAMEWORK_SEARCH_PATHS" not in _cfg or "$(PROJECT_DIR)/Vendor/libmpv" not in _cfg:
+        _test_search_path_problems.append("pbxproj: an HAoStudioTests configuration lacks FRAMEWORK_SEARCH_PATHS with $(PROJECT_DIR)/Vendor/libmpv")
+check("11f. test target has the app module's framework search paths: Podfile inherit! :search_paths (IJK) + pbxproj Vendor/libmpv (Mpv) (Bitrise #45)",
+      not _test_search_path_problems, str(_test_search_path_problems[:5]) if _test_search_path_problems else "Podfile inherit! :search_paths + both test configs carry Vendor/libmpv")
+
 print()
 if failures:
     print(f"FAILED: {len(failures)} check(s): {failures}")
