@@ -1921,6 +1921,29 @@ extension BackupEngineCore {
         return true
     }
 
+    /// The rollback-failure detail string (b49fix27 D28-1):
+    /// factored out of `applyPlannedImport` so tests can assert
+    /// its paren balance directly. The failure branch prefixes
+    /// each note with "；" and does NOT close it with "）" —
+    /// round-26's hoisted-`let` refactor miscopied the success
+    /// branch's closing "）" into these two suffixes, leaving
+    /// orphan right parens whenever either list is non-empty.
+    /// The success branch (`（…）` wrapping) is built inline
+    /// in `applyPlannedImport` and is byte-identical to the
+    /// pre-round-26 text.
+    static func rollbackFailureDetail(
+        reason: String, rollbackFailures: [String],
+        keptLive: [String], keptLiveDefaults: [String],
+        droppedSuffix: String
+    ) -> String {
+        let keptLiveSuffixSemi = keptLive.isEmpty ? "" : "；导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：" + keptLive.joined(separator: "、")
+        let keptLiveDefaultsSuffixSemi = keptLiveDefaults.isEmpty ? "" : "；导入期间被改写的设置已保留 live 值：" + keptLiveDefaults.joined(separator: "、")
+        return reason + "，回滚未完成，未恢复："
+            + rollbackFailures.joined(separator: "、")
+            + keptLiveSuffixSemi + keptLiveDefaultsSuffixSemi
+            + droppedSuffix
+    }
+
     /// Applies a planned import. Snapshot first — when the
     /// snapshot cannot be created, nothing is written at all.
     /// Every write is synchronous and finishes before this
@@ -2324,22 +2347,23 @@ extension BackupEngineCore {
             // the compiler could not type-check them in reasonable
             // time (Bitrise #36). Each suffix is now built once, as
             // its own statement, and the detail assignments are
-            // plain linear concatenations. Byte content is
-            // unchanged: the success branch wraps each note in
-            // full-width parens, the failure branch prefixes it
-            // with "；".
+            // plain linear concatenations. The success branch is
+            // byte-identical to the old text (each note wrapped in
+            // full-width parens); the failure branch prefixes each
+            // note with "；" and closes nothing (b49fix27 D28-1:
+            // round-26 had miscopied the success branch's closing
+            // "）" into the two failure suffixes).
             let keptLiveSuffix = keptLive.isEmpty ? "" : "（导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：" + keptLive.joined(separator: "、") + "）"
             let keptLiveDefaultsSuffix = keptLiveDefaults.isEmpty ? "" : "（导入期间被改写的设置已保留 live 值：" + keptLiveDefaults.joined(separator: "、") + "）"
-            let keptLiveSuffixSemi = keptLive.isEmpty ? "" : "；导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：" + keptLive.joined(separator: "、") + "）"
-            let keptLiveDefaultsSuffixSemi = keptLiveDefaults.isEmpty ? "" : "；导入期间被改写的设置已保留 live 值：" + keptLiveDefaults.joined(separator: "、") + "）"
             let detail: String
             if rollbackFailures.isEmpty {
                 detail = reason + "，已全量回滚" + keptLiveSuffix + keptLiveDefaultsSuffix + droppedSuffix
             } else {
-                detail = reason + "，回滚未完成，未恢复："
-                    + rollbackFailures.joined(separator: "、")
-                    + keptLiveSuffixSemi + keptLiveDefaultsSuffixSemi
-                    + droppedSuffix
+                detail = rollbackFailureDetail(
+                    reason: reason, rollbackFailures: rollbackFailures,
+                    keptLive: keptLive, keptLiveDefaults: keptLiveDefaults,
+                    droppedSuffix: droppedSuffix
+                )
             }
             return BackupImportDetail(
                 outcome: .failed, appliedKeys: 0, appliedCollections: 0,

@@ -1402,4 +1402,45 @@ final class MigrationStoreTests: XCTestCase {
         cooldown.saveNow()
         XCTAssertEqual(cooldown.averageMs("lx"), 200)
     }
+
+    func testFix27RollbackFailureDetailParensBalanced() {
+        // D28-1: round-26's hoisted-`let` refactor miscopied the
+        // success branch's closing "）" into the two failure
+        // suffixes — the failure detail gained two orphan right
+        // parens whenever either kept-live list was non-empty.
+        // The pre-round-26 text has exactly one "（" (from
+        // "（新增／删除／改值）") and one matching "）"; the
+        // fixed text must be byte-identical to it.
+        let reason = "导入失败"
+        let failures = ["f0"]
+        let both = BackupEngineCore.rollbackFailureDetail(
+            reason: reason, rollbackFailures: failures,
+            keptLive: ["f1", "f2"], keptLiveDefaults: ["s1"],
+            droppedSuffix: ""
+        )
+        XCTAssertEqual(both, "导入失败，回滚未完成，未恢复：f0；导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：f1、f2；导入期间被改写的设置已保留 live 值：s1")
+        XCTAssertEqual(both.filter { $0 == "（" }.count, both.filter { $0 == "）" }.count)
+        // One list only: still balanced, still no orphan "）".
+        let liveOnly = BackupEngineCore.rollbackFailureDetail(
+            reason: reason, rollbackFailures: failures,
+            keptLive: ["f1"], keptLiveDefaults: [],
+            droppedSuffix: ""
+        )
+        XCTAssertEqual(liveOnly.filter { $0 == "（" }.count, liveOnly.filter { $0 == "）" }.count)
+        XCTAssertFalse(liveOnly.hasSuffix("）"))
+        let defaultsOnly = BackupEngineCore.rollbackFailureDetail(
+            reason: reason, rollbackFailures: failures,
+            keptLive: [], keptLiveDefaults: ["s1"],
+            droppedSuffix: ""
+        )
+        XCTAssertEqual(defaultsOnly.filter { $0 == "（" }.count, defaultsOnly.filter { $0 == "）" }.count)
+        XCTAssertFalse(defaultsOnly.hasSuffix("）"))
+        // Neither list: no suffixes at all.
+        let neither = BackupEngineCore.rollbackFailureDetail(
+            reason: reason, rollbackFailures: failures,
+            keptLive: [], keptLiveDefaults: [],
+            droppedSuffix: ""
+        )
+        XCTAssertEqual(neither, "导入失败，回滚未完成，未恢复：f0")
+    }
 }
