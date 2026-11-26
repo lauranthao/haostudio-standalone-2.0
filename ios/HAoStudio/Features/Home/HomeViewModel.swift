@@ -75,6 +75,11 @@ struct HomeLiveItem: Equatable, Identifiable {
     /// across rebuilds with the badge (see carryLiveInfo), never
     /// invented: only a room-info answer writes it.
     var onlineCount: Int
+    /// List-feed play-URL payload, encoded as JSON (b49fix44
+    /// S33-P1-3): Kuaishou rooms resolve from it when the network
+    /// has no URL — same field LiveFollowedRoom / LiveHistoryEntry
+    /// carry. Nil when the feed / stored row has none.
+    var playUrlsJSON: String?
 
     init(
         platform: String,
@@ -83,7 +88,8 @@ struct HomeLiveItem: Equatable, Identifiable {
         nick: String,
         cover: String,
         isLive: Bool = false,
-        onlineCount: Int = 0
+        onlineCount: Int = 0,
+        playUrlsJSON: String? = nil
     ) {
         self.id = LiveResumeKey.key(platform: platform, roomId: roomId)
         self.platform = platform
@@ -93,18 +99,21 @@ struct HomeLiveItem: Equatable, Identifiable {
         self.cover = cover
         self.isLive = isLive
         self.onlineCount = onlineCount
+        self.playUrlsJSON = playUrlsJSON
     }
 
     init(follow: LiveFollowedRoom) {
         self.init(
             platform: follow.platform, roomId: follow.roomId,
-            title: follow.title, nick: follow.nick, cover: follow.cover)
+            title: follow.title, nick: follow.nick, cover: follow.cover,
+            playUrlsJSON: follow.playUrlsJSON)
     }
 
     init(history: LiveHistoryEntry) {
         self.init(
             platform: history.platform, roomId: history.roomId,
-            title: history.title, nick: history.nick, cover: history.cover)
+            title: history.title, nick: history.nick, cover: history.cover,
+            playUrlsJSON: history.playUrlsJSON)
     }
 }
 

@@ -589,7 +589,8 @@ struct HomeView: View {
     private func openRoom(_ room: LiveRoom, playlist: [LiveRoom]) {
         LiveLibraryStore.recordHistory(
             platform: room.platform.rawValue, roomId: room.roomId,
-            title: room.title, nick: room.streamer, cover: room.cover)
+            title: room.title, nick: room.streamer, cover: room.cover,
+            playUrlsJSON: LiveLibraryStore.playUrlsJSON(from: room.data))
         path.append(.room(room, playlist))
     }
 }
@@ -612,7 +613,8 @@ fileprivate func homeLiveRoom(from item: HomeLiveItem) -> LiveRoom {
         streamer: item.nick,
         cover: item.cover,
         onlineCount: item.onlineCount,
-        isLive: item.isLive
+        isLive: item.isLive,
+        data: LiveLibraryStore.playUrlsData(from: item.playUrlsJSON)
     )
 }
 

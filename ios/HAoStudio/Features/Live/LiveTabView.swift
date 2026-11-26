@@ -646,9 +646,17 @@ struct LiveTabView: View {
                 .font(.haoSectionTitle)
                 .foregroundStyle(theme.textPrimary)
             Spacer()
-            Button("全部", action: onAll)
-                .font(.haoDenseBody)
-                .foregroundStyle(theme.accentText)
+            Button(action: onAll) {
+                Text("全部")
+                    .font(.haoDenseBody)
+                    // The bare text was a ~20pt-tall hit target;
+                    // the padding makes it a 44pt HIG target (14pt
+                    // text + 12pt above and below) — same fix as
+                    // HomeView's section header (b49fix2 B10).
+                    .padding(.vertical, 12)
+                    .contentShape(Rectangle())
+            }
+            .foregroundStyle(theme.accentText)
         }
         .padding(.horizontal, HaoLayout.pageMargin)
     }

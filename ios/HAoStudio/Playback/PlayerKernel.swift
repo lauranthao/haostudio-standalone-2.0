@@ -141,6 +141,29 @@ protocol VodSubtitleAppearanceCapable: AnyObject {
     func setSubtitleAppearance(fontSize: Int, color: String, position: Double)
 }
 
+// MARK: - Adaptive resolution cap (b49fix44 S33-P1-2)
+
+/// The CMS 1080p ceiling as a size: the same 1920×1080 the
+/// ceiling's filename-token rule (`videoURLExceeds1080p` — anything
+/// above 1080p) and the MPV render cap use. An adaptive
+/// (master-playlist) stream has no filename token to reorder, so the
+/// player caps the ladder itself. Lives here, not in
+/// VideoCapability.swift: that file is Foundation-only (it is
+/// compiled by the SwiftPM VideoServices target), and CGSize needs
+/// CoreGraphics.
+let cmsCappedMaximumResolution = CGSize(width: 1920, height: 1080)
+
+/// Backends that can cap adaptive rendition selection. Same shape as
+/// `VodSubtitleAppearanceCapable` above: a backend that cannot cap
+/// (MPV renders at native size capped at 1080p already, IJK has no
+/// such API) simply does not conform, and the driver no-ops through
+/// the `as?` cast. The driver sets this before open() for CMS
+/// playback; Emby is uncapped, live never reaches this driver.
+protocol AdaptiveResolutionCapable: AnyObject {
+    /// Maximum resolution the adaptive ladder may select. Nil = no cap.
+    var preferredMaximumResolution: CGSize? { get set }
+}
+
 /// Runtime VOD enhancement branch (MPV only). The driver applies
 /// the resolved trio branch (see `resolveVodEnhancement`); a
 /// backend that cannot do it does not conform. The super-resolution

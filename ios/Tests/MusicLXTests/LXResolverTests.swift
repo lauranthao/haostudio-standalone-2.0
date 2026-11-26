@@ -49,8 +49,7 @@ final class LXResolverTests: XCTestCase {
             documentsDirectory: docs,
             perJobTimeout: 0.3,
             totalBudget: 1.5,
-            firstPassCap: 0.8,
-            laterPassCap: 0.4,
+            passCap: 0.4,
             jobListProvider: { _, _, _, _, _ in jobs() })
     }
 
@@ -107,6 +106,63 @@ final class LXResolverTests: XCTestCase {
         // Returned on the first job, not after a full pass.
         XCTAssertLessThan(elapsed, 1.0)
         XCTAssertEqual(resolver.lastResolvedTier, .hiRes)
+    }
+
+    /// b49fix44 S33-P2-2: the old first-pass cap (5 s) held a
+    /// lower-tier playable URL while the target tier was still
+    /// resolving. Every pass is now capped at 2 s (0.4 s here,
+    /// the injected value) — the target tier still decides the
+    /// order (the hanging job is the only tier-1 job), it just
+    /// never delays a playable URL. Old design on these budgets:
+    /// pass 1 ran 0.8 s and the resolve took ~0.8 s; new design:
+    /// pass 1 runs 0.4 s and the lower tier answers at once.
+    func testLowerTierPlaysWithoutWaitingForTargetTierPass() {
+        var runs: [String] = []
+        let engine = LXEngine(
+            fileStore: LXScriptFileStore(documentsDirectory: docs),
+            scriptStore: LXScriptStore(documentsDirectory: docs),
+            bundleLoader: { _ in nil })
+        let resolver = LXSourceResolver(
+            engine: engine,
+            cooldown: ResolverCooldown(documentsDirectory: docs),
+            cache: PlayURLCache(),
+            scriptStore: LXScriptStore(documentsDirectory: docs),
+            documentsDirectory: docs,
+            perJobTimeout: 1.0,
+            totalBudget: 1.2,
+            passCap: 0.4,
+            jobListProvider: { _, quality, _, _, _ in
+                // Asked once per tier pass: the target tier gets
+                // the hanging job only, the next tier (.flac)
+                // gets the playable jobs.
+                if quality == .hiRes {
+                    return [self.job(key: "hanging") { _, _ in
+                        runs.append("hanging")
+                        // Never answers: the pass cap must end it.
+                    }]
+                }
+                if quality == .flac {
+                    return [
+                        self.job(key: "playable") { _, done in
+                            runs.append("playable")
+                            done(.url("https://example.com/playable.mp3", nil))
+                        },
+                        self.job(key: "never") { _, done in
+                            runs.append("never")
+                            done(.url("https://example.com/never.mp3", nil))
+                        },
+                    ]
+                }
+                return []
+            })
+        let started = Date()
+        let result = resolve(resolver)
+        let elapsed = Date().timeIntervalSince(started)
+        XCTAssertEqual(result?.url, "https://example.com/playable.mp3")
+        XCTAssertEqual(runs, ["hanging", "playable"])
+        XCTAssertEqual(resolver.lastResolvedTier, .flac)
+        // 0.6 s sits between the new ~0.4 s and the old ~0.8 s.
+        XCTAssertLessThan(elapsed, 0.6)
     }
 
     func testEmptyJobFallsThroughToNextJob() {
@@ -240,8 +296,7 @@ final class LXResolverTests: XCTestCase {
             documentsDirectory: docs,
             perJobTimeout: 0.3,
             totalBudget: 1.5,
-            firstPassCap: 0.8,
-            laterPassCap: 0.4,
+            passCap: 0.4,
             jobListProvider: { _, _, songId, _, _ in
                 if songId == "block" {
                     return [self.job(key: "blocker") { _, done in
@@ -427,8 +482,7 @@ final class LXResolverTests: XCTestCase {
             documentsDirectory: docs,
             perJobTimeout: 0.3,
             totalBudget: 1.5,
-            firstPassCap: 0.8,
-            laterPassCap: 0.4,
+            passCap: 0.4,
             jobListProvider: { _, _, _, _, _ in
                 [
                     self.job(key: "outer") { _, done in
@@ -479,8 +533,7 @@ final class LXResolverTests: XCTestCase {
             documentsDirectory: docs,
             perJobTimeout: 0.3,
             totalBudget: 1.5,
-            firstPassCap: 0.8,
-            laterPassCap: 0.4,
+            passCap: 0.4,
             jobListProvider: { _, tier, _, _, _ in
                 // Only the trial job serves master; the good job
                 // joins from hires down.

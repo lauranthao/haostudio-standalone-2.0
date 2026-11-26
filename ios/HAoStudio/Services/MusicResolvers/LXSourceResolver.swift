@@ -135,8 +135,7 @@ final class LXSourceResolver: SourceResolver {
     /// seconds.
     private let perJobTimeout: TimeInterval
     private let totalBudget: TimeInterval
-    private let firstPassCap: TimeInterval
-    private let laterPassCap: TimeInterval
+    private let passCap: TimeInterval
     /// Test seam: when set, the job list comes from this provider
     /// instead of the built-in resolvers + LX scripts, so tests can
     /// run fake jobs without network. Production passes nil.
@@ -170,8 +169,7 @@ final class LXSourceResolver: SourceResolver {
         documentsDirectory: URL? = nil,
         perJobTimeout: TimeInterval = ResolverBudget.perJob,
         totalBudget: TimeInterval = ResolverBudget.total,
-        firstPassCap: TimeInterval = ResolverBudget.firstPassCap,
-        laterPassCap: TimeInterval = ResolverBudget.laterPassCap,
+        passCap: TimeInterval = ResolverBudget.passCap,
         jobListProvider: ((MusicPlatform, AudioQuality, String, String, String) -> [LXResolverJob])? = nil
     ) {
         self.engine = engine
@@ -183,8 +181,7 @@ final class LXSourceResolver: SourceResolver {
         self.scriptStore = scriptStore
         self.perJobTimeout = perJobTimeout
         self.totalBudget = totalBudget
-        self.firstPassCap = firstPassCap
-        self.laterPassCap = laterPassCap
+        self.passCap = passCap
         self.jobListProvider = jobListProvider
     }
 
@@ -315,7 +312,6 @@ final class LXSourceResolver: SourceResolver {
         let tiers: [AudioQuality]
         let requestedQuality: AudioQuality
         var tierIndex = 0
-        var passIndex = 0
         var truncated = false
         let skipTimedOut = NSMutableSet()
         /// Jobs that answered this song with a 30 s preview (build
@@ -478,12 +474,12 @@ final class LXSourceResolver: SourceResolver {
         }
         let tier = state.tiers[state.tierIndex]
         state.tierIndex += 1
-        // P0-16: first tier pass capped at `firstPassCap`, later passes
-        // at `laterPassCap`, so the first tier can never eat the whole
-        // budget. Production: 5 s / 2 s of the 8 s total.
-        let cap = state.passIndex == 0 ? firstPassCap : laterPassCap
-        let budget = min(cap, remaining)
-        state.passIndex += 1
+        // b49fix44 S33-P2-2: one cap for every tier pass (2 s) — the
+        // old first-pass cap of 5 s held a lower-tier playable URL
+        // while the target tier was still resolving. The target tier
+        // still decides the order (higher-tier first); it never
+        // delays a playable URL. Production: 2 s of the 8 s total.
+        let budget = min(passCap, remaining)
         runPass(
             tier: tier, songId: songId, platform: platform, title: title, artist: artist,
             budget: budget, skipTimedOut: state.skipTimedOut, skipPreviewed: state.skipPreviewed,

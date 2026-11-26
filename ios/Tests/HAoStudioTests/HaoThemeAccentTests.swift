@@ -82,23 +82,63 @@ final class HaoThemeAccentTests: XCTestCase {
         XCTAssertEqual(argb(saturated.accentOnVideo), 0xFF0A84FF)
     }
 
-    /// haoOnAccentFor text pairing for every pill fill: the
-    /// helper must agree with the onAccent each palette stores.
-    /// (Two light accents pair with near-black text — darkGold
-    /// dark #D4AF37 and freshMint dark #4DD0C4 — the other six
-    /// pair with white.)
-    func testOnAccentForMatchesStoredOnAccentForAllEight() {
+    /// `onAccent` for every pill fill (b49fix44 S33-P1-4): the
+    /// Flutter pole (`haoOnAccentFor`), corrected when the pole
+    /// alone fails WCAG 4.5:1 against the fill. Six combinations
+    /// keep the pole; darkGold-light #9A7B1E (white 4.02:1) and
+    /// freshMint-light #00897B (white 4.32:1) fall through to
+    /// near-black text (4.88 / 4.55). The pole helper itself is
+    /// unchanged — its three spot checks below still assert the
+    /// raw pole.
+    func testOnAccentClearsWCAG45ForAllEight() {
+        let corrected: [(HaoThemeID, ColorScheme, UInt32)] = [
+            (.darkGold, .light, 0xFF0B0B0F),
+            (.freshMint, .light, 0xFF0B0B0F),
+        ]
+        for (id, scheme, textHex) in corrected {
+            let palette = HaoThemePalette.palette(for: id, scheme: scheme)
+            XCTAssertEqual(argb(palette.onAccent), textHex, "\(id) \(scheme) onAccent")
+        }
         for id in HaoThemeID.allCases {
             for scheme in [ColorScheme.light, ColorScheme.dark] {
                 let palette = HaoThemePalette.palette(for: id, scheme: scheme)
-                XCTAssertEqual(
-                    argb(haoOnAccentFor(palette.accent)), argb(palette.onAccent),
-                    "\(id) \(scheme) onAccent")
+                XCTAssertGreaterThanOrEqual(
+                    contrast(palette.onAccent, palette.accent), 4.5,
+                    "\(id) \(scheme) onAccent vs accent")
+                // The six uncorrected combinations still agree with
+                // the raw pole — only the two above differ.
+                let isCorrected = (id == .darkGold && scheme == .light)
+                    || (id == .freshMint && scheme == .light)
+                if !isCorrected {
+                    XCTAssertEqual(
+                        argb(haoOnAccentFor(palette.accent)), argb(palette.onAccent),
+                        "\(id) \(scheme) onAccent")
+                }
             }
         }
         XCTAssertEqual(argb(haoOnAccentFor(Color(hex: 0xD4AF37))), 0xFF0B0B0F)
         XCTAssertEqual(argb(haoOnAccentFor(Color(hex: 0x4DD0C4))), 0xFF0B0B0F)
         XCTAssertEqual(argb(haoOnAccentFor(Color(hex: 0x00897B))), 0xFFFFFFFF)
+    }
+
+    /// A custom accent pick flows through the same corrected
+    /// `onAccent`: the two presets that pair white below 4.5:1 get
+    /// near-black text (blue #0A84FF 3.65 -> 5.39, pink #FF375F
+    /// 3.52 -> 5.58) while the preset colours themselves are
+    /// untouched (S33-P2-5, user-chosen).
+    func testOnAccentFollowsAccentOverride() {
+        let base = HaoThemePalette.palette(for: .appleGlass, scheme: .light)
+        let blue = base.applying(glassIntensity: 1.0, accentOverride: Color(hex: 0x0A84FF))
+        XCTAssertEqual(argb(blue.accent), 0xFF0A84FF)
+        XCTAssertEqual(argb(blue.onAccent), 0xFF0B0B0F)
+        XCTAssertGreaterThanOrEqual(contrast(blue.onAccent, blue.accent), 4.5)
+        let pink = base.applying(glassIntensity: 1.0, accentOverride: Color(hex: 0xFF375F))
+        XCTAssertEqual(argb(pink.accent), 0xFFFF375F)
+        XCTAssertEqual(argb(pink.onAccent), 0xFF0B0B0F)
+        XCTAssertGreaterThanOrEqual(contrast(pink.onAccent, pink.accent), 4.5)
+        // A passing pick keeps the pole: near-black on a light pick.
+        let gold = base.applying(glassIntensity: 1.0, accentOverride: Color(hex: 0xD4AF37))
+        XCTAssertEqual(argb(gold.onAccent), 0xFF0B0B0F)
     }
 
     /// The shared luminance math underneath both helpers.

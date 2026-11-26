@@ -471,4 +471,37 @@ final class VideoCapabilityTests: XCTestCase {
         XCTAssertEqual(VodTrackList.parse(json: "{}").0.count, 0)
         XCTAssertEqual(VodTrackList.parse(json: "[]").0.count, 0)
     }
+
+    // MARK: - 1080p ceiling (b49fix44 S33-P1-2)
+
+    /// The token rule: a 2160 / 4K / UHD token in the filename or
+    /// as a whole path segment exceeds the ceiling; a plain 1080p
+    /// URL and a URL with no quality token do not.
+    func testURLExceeds1080pTokens() {
+        XCTAssertFalse(videoURLExceeds1080p(URL(string: "https://a.b/play_1080p.m3u8")!))
+        XCTAssertFalse(videoURLExceeds1080p(URL(string: "https://a.b/play.m3u8")!))
+        XCTAssertTrue(videoURLExceeds1080p(URL(string: "https://a.b/play_2160p.m3u8")!))
+        XCTAssertTrue(videoURLExceeds1080p(URL(string: "https://a.b/4k/index.m3u8")!))
+        XCTAssertTrue(videoURLExceeds1080p(URL(string: "https://a.b/play_uhd.m3u8")!))
+        // A `:3840` port and a `4k` slug in the path are not tokens.
+        XCTAssertFalse(videoURLExceeds1080p(URL(string: "https://a.b:3840/play.m3u8")!))
+        XCTAssertFalse(videoURLExceeds1080p(URL(string: "https://a.b/4k-slug/play.m3u8")!))
+    }
+
+    /// The reorder: within-ceiling URLs keep their relative order
+    /// first, over-ceiling ones follow in their original order —
+    /// the stream still plays when no ≤1080p variant exists.
+    func testPreferCappedResolutionURLsKeepsOrder() {
+        let sd = URL(string: "https://a.b/sd.m3u8")!
+        let hd = URL(string: "https://a.b/hd_1080p.m3u8")!
+        let uhd = URL(string: "https://a.b/uhd_2160p.m3u8")!
+        let fourK = URL(string: "https://a.b/4k/index.m3u8")!
+        XCTAssertEqual(
+            videoPreferCappedResolutionURLs([uhd, sd, fourK, hd]),
+            [sd, hd, uhd, fourK])
+        // No within-ceiling variant: the over-ceiling ones still
+        // play, in their original order.
+        XCTAssertEqual(videoPreferCappedResolutionURLs([fourK, uhd]), [fourK, uhd])
+        XCTAssertEqual(videoPreferCappedResolutionURLs([sd, hd]), [sd, hd])
+    }
 }

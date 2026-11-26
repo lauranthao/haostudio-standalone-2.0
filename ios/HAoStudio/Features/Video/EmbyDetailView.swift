@@ -1,6 +1,6 @@
 // HAo Studio 2.0 — Emby detail page (S3-C leg).
 //
-// The Emby detail layout is the same Infuse-style detail as CMS
+// The Emby detail layout is the same VidHub-style detail as CMS
 // (cover top, big play button below, lines + episode grid) —
 // Emby streams arrive as play lines through the gateway, so the
 // page is the shared VideoDetailContentView with an Emby loader

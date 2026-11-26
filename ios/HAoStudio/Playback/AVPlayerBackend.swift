@@ -48,11 +48,16 @@ private func observePlayerItem<Value>(_ item: AVPlayerItem, _ keyPath: KeyPath<A
     return item.observe(keyPath, options: [.new]) { _, _ in handler() }
 }
 
-final class AVPlayerBackend: NSObject, VideoPlayerBackend, VodTrackListCapable {
+final class AVPlayerBackend: NSObject, VideoPlayerBackend, VodTrackListCapable, AdaptiveResolutionCapable {
     var onEvent: ((VideoBackendEvent) -> Void)?
     var onVideoSize: ((CGSize) -> Void)?
 
     let engine: VideoEngine = .avplayer
+
+    /// Adaptive cap set by the driver before open() (b49fix44
+    /// S33-P1-2): the CMS 1080p ceiling for a master playlist.
+    /// Nil = no cap (Emby, live).
+    var preferredMaximumResolution: CGSize?
 
     /// Audio / subtitle tracks from the current item's media
     /// selection groups (build 36, item 14, G-F). Published
@@ -157,6 +162,14 @@ final class AVPlayerBackend: NSObject, VideoPlayerBackend, VodTrackListCapable {
         // literal string key; AVURLAsset options is [String: Any].
         let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
         let item = AVPlayerItem(asset: asset)
+        // b49fix44 S33-P1-2: cap the adaptive ladder at the CMS 1080p
+        // ceiling — a single master .m3u8 has no filename token for
+        // `videoPreferCappedResolutionURLs` to reorder, and AVPlayer
+        // picks the highest rendition by default. `.zero` is the
+        // no-cap default, so only a set cap is applied.
+        if let cap = preferredMaximumResolution {
+            item.preferredMaximumResolution = cap
+        }
         itemStatusObservation = observePlayerItem(item, \.status) { [weak self] in
             self?.itemStatusChanged()
         }
