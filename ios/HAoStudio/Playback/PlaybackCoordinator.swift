@@ -39,6 +39,7 @@
 //    that needs a platform login must not be added behind this
 //    coordinator. Likes are stored locally only; comments are read-only.
 
+import Combine
 import Foundation
 
 /// What kind of playback a request is. VOD and live are distinct cases

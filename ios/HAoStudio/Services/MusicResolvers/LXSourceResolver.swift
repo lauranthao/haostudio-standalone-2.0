@@ -71,6 +71,9 @@
 // main queue just before `completion` fires.
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// What one resolver job returned.
 enum LXResolverOutcome {

@@ -1404,7 +1404,10 @@ final class EmbyClient {
                     completion(.failure(error))
                 case .success(let eps):
                     if !eps.contains(where: { $0.url != nil }) {
-                        completion(.success(VideoDetail(item: toVideoItem(item), lines: [], meta: meta)))
+                        // b49fix26: explicit self — the call is
+                        // inside the episodesOfSeason closure
+                        // (Bitrise #36).
+                        completion(.success(VideoDetail(item: self.toVideoItem(item), lines: [], meta: meta)))
                         return
                     }
                     let seasonIndex = VideoJSON.asIntOrNil(item["IndexNumber"])
@@ -1415,7 +1418,7 @@ final class EmbyClient {
                         let name = VideoJSON.asString(item["Name"])
                         lineName = name.isEmpty ? "季" : name
                     }
-                    completion(.success(VideoDetail(item: toVideoItem(item), lines: [PlayLine(name: lineName, episodes: eps)], meta: meta)))
+                    completion(.success(VideoDetail(item: self.toVideoItem(item), lines: [PlayLine(name: lineName, episodes: eps)], meta: meta)))
                 }
             }
             return

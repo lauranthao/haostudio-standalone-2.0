@@ -1325,7 +1325,6 @@ final class DownloadEngine: NSObject {
     /// mirror, so a transient failure heals itself there; the
     /// catalog is a cache of live state, not its source of
     /// truth.
-    @discardableResult
     /// b49fix23 D25-2 (option b): the catalog save failure is
     /// surfaced here, not through delete()'s Bool. delete(key:)
     /// has no product caller — the tasks page deliberately never
@@ -1351,6 +1350,10 @@ final class DownloadEngine: NSObject {
         NotificationCenter.default.post(name: .haoStoreSaveFailed, object: DownloadCatalogStore.fileName)
     }
 
+    /// b49fix26: the attribute used to sit above the doc comment
+    /// block, detached from the declaration — Swift requires it
+    /// directly on the func (Bitrise #36).
+    @discardableResult
     private func persistLocked(pruning prunedKey: String? = nil) -> Bool {
         let infos = order.compactMap { records[$0]?.info }
         // b49fix21 D23-4: reconcile the disk mirror into the

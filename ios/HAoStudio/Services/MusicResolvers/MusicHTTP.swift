@@ -14,6 +14,9 @@
 //   HTML entity decoding for Kuwo's pseudo-JSON).
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // MARK: - HTTP client
 

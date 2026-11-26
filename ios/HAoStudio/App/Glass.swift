@@ -456,19 +456,11 @@ extension Notification.Name {
     /// `object` is the HaoTab to switch to. MainTabView listens
     /// and selects the tab; nothing else listens.
     static let haoSwitchTab = Notification.Name("haoSwitchTab")
-    /// Posted by LocalStore when a corrupt collection file is
-    /// quarantined (b49fix2 P0-1). `object` is the collection
-    /// name. MainTabView listens and shows a one-time notice.
-    static let haoStoreQuarantined = Notification.Name("haoStoreQuarantined")
-    /// Posted by LocalStore when a collection save fails
-    /// (b49fix2 P1-13 — most often a full disk). `object` is
-    /// the collection name. At most once per collection per
-    /// launch. MainTabView listens and shows a one-time notice.
-    static let haoStoreSaveFailed = Notification.Name("haoStoreSaveFailed")
-    /// Posted by DownloadEngine when a download reaches
-    /// `.completed` (b49fix2 B5). `object` is the task key.
-    /// MainTabView listens for the first-run backup nudge.
-    static let haoDownloadCompleted = Notification.Name("haoDownloadCompleted")
+    // NOTE (b49fix26): haoStoreQuarantined / haoStoreSaveFailed /
+    // haoDownloadCompleted used to be defined here, but LocalStore
+    // and DownloadEngine (both AppCore sources) post them, so the
+    // definitions live in Storage/LocalStore.swift now — Glass.swift
+    // is app-target-only and `swift test` could not see them.
 }
 
 /// Stateful deep link into a Settings row (b49fix4 P2-37).

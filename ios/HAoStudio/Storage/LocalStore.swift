@@ -24,6 +24,34 @@
 
 import Foundation
 
+// MARK: - Store / download notification names (AppCore-owned)
+//
+// These three names used to live in App/Glass.swift, which is
+// app-target-only — but LocalStore (here) and DownloadEngine both
+// post them, and both are AppCore sources, so `swift test` could
+// not see the definitions (Bitrise #36: "type
+// 'NSNotification.Name' has no member ..."). They live here now:
+// Storage/ is wholly in the AppCore sources list, and the app
+// target compiles Storage too, so MainTabView's listeners keep
+// working unchanged. (The other three names in Glass.swift —
+// haoTabReselected, haoShowDisclaimerGate, haoSwitchTab — stay
+// there: only app-target files use them.)
+extension Notification.Name {
+    /// Posted by LocalStore when a corrupt collection file is
+    /// quarantined (b49fix2 P0-1). `object` is the collection
+    /// name. MainTabView listens and shows a one-time notice.
+    static let haoStoreQuarantined = Notification.Name("haoStoreQuarantined")
+    /// Posted by LocalStore when a collection save fails
+    /// (b49fix2 P1-13 — most often a full disk). `object` is
+    /// the collection name. At most once per collection per
+    /// launch. MainTabView listens and shows a one-time notice.
+    static let haoStoreSaveFailed = Notification.Name("haoStoreSaveFailed")
+    /// Posted by DownloadEngine when a download reaches
+    /// `.completed` (b49fix2 B5). `object` is the task key.
+    /// MainTabView listens for the first-run backup nudge.
+    static let haoDownloadCompleted = Notification.Name("haoDownloadCompleted")
+}
+
 enum LocalStore {
     /// App Documents directory (current container — rebuilt on every
     /// read, never cached across launches).
