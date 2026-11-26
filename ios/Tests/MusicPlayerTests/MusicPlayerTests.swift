@@ -207,26 +207,26 @@ final class MusicPlayerTests: XCTestCase {
 
     func testPlayModeQueueMath() {
         // Sequential: stops at the end, stops at the start.
-        XCTAssertEqual(musicNextTrackIndex(mode: .sequential, current: 0, length: 3, auto: true), 1)
-        XCTAssertEqual(musicNextTrackIndex(mode: .sequential, current: 2, length: 3, auto: true), -1)
-        XCTAssertEqual(musicPrevTrackIndex(mode: .sequential, current: 0, length: 3), -1)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicPlayMode.sequential, current: 0, length: 3, auto: true), 1)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicPlayMode.sequential, current: 2, length: 3, auto: true), -1)
+        XCTAssertEqual(musicPrevTrackIndex(mode: MusicPlayMode.sequential, current: 0, length: 3), -1)
         // List loop: wraps both ways.
-        XCTAssertEqual(musicNextTrackIndex(mode: .listLoop, current: 2, length: 3, auto: true), 0)
-        XCTAssertEqual(musicPrevTrackIndex(mode: .listLoop, current: 0, length: 3), 2)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicPlayMode.listLoop, current: 2, length: 3, auto: true), 0)
+        XCTAssertEqual(musicPrevTrackIndex(mode: MusicPlayMode.listLoop, current: 0, length: 3), 2)
         // Single loop: auto replays, manual advances.
-        XCTAssertEqual(musicNextTrackIndex(mode: .singleLoop, current: 1, length: 3, auto: true), 1)
-        XCTAssertEqual(musicNextTrackIndex(mode: .singleLoop, current: 1, length: 3, auto: false), 2)
-        XCTAssertEqual(musicPrevTrackIndex(mode: .singleLoop, current: 0, length: 3), 2)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicPlayMode.singleLoop, current: 1, length: 3, auto: true), 1)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicPlayMode.singleLoop, current: 1, length: 3, auto: false), 2)
+        XCTAssertEqual(musicPrevTrackIndex(mode: MusicPlayMode.singleLoop, current: 0, length: 3), 2)
         // Shuffle: never returns the current track (length > 1).
         for _ in 0..<20 {
-            let n = musicNextTrackIndex(mode: .shuffle, current: 1, length: 3, auto: true)
+            let n = musicNextTrackIndex(mode: MusicPlayMode.shuffle, current: 1, length: 3, auto: true)
             XCTAssertNotEqual(n, 1)
             XCTAssertTrue((0..<3).contains(n))
         }
         // Single play: auto stops, manual advances, prev stops at 0.
-        XCTAssertEqual(musicNextTrackIndex(mode: .single, current: 1, length: 3, auto: true), -1)
-        XCTAssertEqual(musicNextTrackIndex(mode: .single, current: 1, length: 3, auto: false), 2)
-        XCTAssertEqual(musicPrevTrackIndex(mode: .single, current: 0, length: 3), -1)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicPlayMode.single, current: 1, length: 3, auto: true), -1)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicPlayMode.single, current: 1, length: 3, auto: false), 2)
+        XCTAssertEqual(musicPrevTrackIndex(mode: MusicPlayMode.single, current: 0, length: 3), -1)
         // Codes round-trip (Hive `playMode`).
         XCTAssertEqual(MusicPlayMode.fromCode("loop"), .listLoop)
         XCTAssertEqual(MusicPlayMode.fromCode("one"), .singleLoop)

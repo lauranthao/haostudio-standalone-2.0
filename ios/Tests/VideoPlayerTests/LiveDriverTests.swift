@@ -81,42 +81,6 @@ final class LiveDriverFakeResolver: LiveSiteResolver {
     }
 }
 
-/// A backend whose open never answers (for the 10 s timeout path).
-final class HangingLiveBackend: VideoPlayerBackend {
-    let engine: VideoEngine
-    var onEvent: ((VideoBackendEvent) -> Void)?
-    var onVideoSize: ((CGSize) -> Void)?
-
-    var isPlaying: Bool = false
-    var currentTime: Double = 0
-    var duration: Double = 0
-    var isPrepared: Bool = false
-    var playbackRate: Double = 1
-    var hardwareDecode: VideoHardwareDecodeState = .unknown
-
-    init(engine: VideoEngine) {
-        self.engine = engine
-    }
-
-    var view: UIView {
-        return UIView()
-    }
-
-    func setVideoFit(_ fit: VideoFit) {}
-
-    func open(url: URL, headers: [String: String], completion: @escaping (Bool) -> Void) {}
-
-    func play() {}
-
-    func pause() {}
-
-    func seek(to seconds: Double, completion: @escaping (Bool) -> Void) {
-        completion(false)
-    }
-
-    func shutdown() {}
-}
-
 // MARK: - Driver tests
 
 final class LiveDriverTests: XCTestCase {
@@ -267,9 +231,18 @@ final class LiveDriverTests: XCTestCase {
         // fallback resolve must get the dead URL in `excluding` and
         // have nothing else to hand out.
         let factory = FakeBackendFactory()
+        // b49fix45: the factory holds [FakeVideoBackend] — the old
+        // HangingLiveBackend class could never go in it (Bitrise
+        // #50). FakeVideoBackend with deferOpenCompletion holds the
+        // open completion and never answers, which is exactly the
+        // hanging behaviour this test needs.
+        let hangingMPV = FakeVideoBackend(engine: .mpv)
+        hangingMPV.deferOpenCompletion = true
+        let hangingIJK = FakeVideoBackend(engine: .ijk)
+        hangingIJK.deferOpenCompletion = true
         factory.fakes = [
-            .mpv: [HangingLiveBackend(engine: .mpv)],
-            .ijk: [HangingLiveBackend(engine: .ijk)],
+            .mpv: [hangingMPV],
+            .ijk: [hangingIJK],
         ]
         let resolver = LiveDriverFakeResolver()
         resolver.resolutionsToReturn = [makeResolution(urls: [URL(string: "https://tx.flv.huya.com/room/1.flv")!])]

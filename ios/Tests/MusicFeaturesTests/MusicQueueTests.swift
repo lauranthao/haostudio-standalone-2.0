@@ -68,26 +68,26 @@ final class MusicQueueTests: XCTestCase {
     // MARK: - Next index
 
     func testNextSequentialStopsAtEnd() {
-        XCTAssertEqual(musicNextTrackIndex(mode: .sequential, current: 0, length: 3, auto: true), 1)
-        XCTAssertEqual(musicNextTrackIndex(mode: .sequential, current: 2, length: 3, auto: true), -1)
-        XCTAssertEqual(musicNextTrackIndex(mode: .sequential, current: 2, length: 3, auto: false), -1)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicQueueMode.sequential, current: 0, length: 3, auto: true), 1)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicQueueMode.sequential, current: 2, length: 3, auto: true), -1)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicQueueMode.sequential, current: 2, length: 3, auto: false), -1)
     }
 
     func testNextListLoopWraps() {
-        XCTAssertEqual(musicNextTrackIndex(mode: .listLoop, current: 2, length: 3, auto: true), 0)
-        XCTAssertEqual(musicNextTrackIndex(mode: .listLoop, current: 0, length: 3, auto: false), 1)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicQueueMode.listLoop, current: 2, length: 3, auto: true), 0)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicQueueMode.listLoop, current: 0, length: 3, auto: false), 1)
     }
 
     func testNextSingleLoopAutoReplaysManualAdvances() {
-        XCTAssertEqual(musicNextTrackIndex(mode: .singleLoop, current: 1, length: 3, auto: true), 1)
-        XCTAssertEqual(musicNextTrackIndex(mode: .singleLoop, current: 1, length: 3, auto: false), 2)
-        XCTAssertEqual(musicNextTrackIndex(mode: .singleLoop, current: 2, length: 3, auto: false), 0)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicQueueMode.singleLoop, current: 1, length: 3, auto: true), 1)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicQueueMode.singleLoop, current: 1, length: 3, auto: false), 2)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicQueueMode.singleLoop, current: 2, length: 3, auto: false), 0)
     }
 
     func testNextSingleAutoStopsManualAdvances() {
-        XCTAssertEqual(musicNextTrackIndex(mode: .single, current: 1, length: 3, auto: true), -1)
-        XCTAssertEqual(musicNextTrackIndex(mode: .single, current: 1, length: 3, auto: false), 2)
-        XCTAssertEqual(musicNextTrackIndex(mode: .single, current: 2, length: 3, auto: false), -1)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicQueueMode.single, current: 1, length: 3, auto: true), -1)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicQueueMode.single, current: 1, length: 3, auto: false), 2)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicQueueMode.single, current: 2, length: 3, auto: false), -1)
     }
 
     func testNextShufflePicksOtherTrack() {
@@ -98,26 +98,26 @@ final class MusicQueueTests: XCTestCase {
             1
         )
         // Single-track queue: shuffle stays.
-        XCTAssertEqual(musicNextTrackIndex(mode: .shuffle, current: 0, length: 1, auto: true), 0)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicQueueMode.shuffle, current: 0, length: 1, auto: true), 0)
     }
 
     func testNextInvalidInputsReturnStop() {
-        XCTAssertEqual(musicNextTrackIndex(mode: .sequential, current: -1, length: 3, auto: true), -1)
-        XCTAssertEqual(musicNextTrackIndex(mode: .sequential, current: 3, length: 3, auto: true), -1)
-        XCTAssertEqual(musicNextTrackIndex(mode: .sequential, current: 0, length: 0, auto: true), -1)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicQueueMode.sequential, current: -1, length: 3, auto: true), -1)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicQueueMode.sequential, current: 3, length: 3, auto: true), -1)
+        XCTAssertEqual(musicNextTrackIndex(mode: MusicQueueMode.sequential, current: 0, length: 0, auto: true), -1)
     }
 
     // MARK: - Previous index
 
     func testPrevSequentialStopsAtStart() {
-        XCTAssertEqual(musicPrevTrackIndex(mode: .sequential, current: 0, length: 3), -1)
-        XCTAssertEqual(musicPrevTrackIndex(mode: .sequential, current: 2, length: 3), 1)
+        XCTAssertEqual(musicPrevTrackIndex(mode: MusicQueueMode.sequential, current: 0, length: 3), -1)
+        XCTAssertEqual(musicPrevTrackIndex(mode: MusicQueueMode.sequential, current: 2, length: 3), 1)
     }
 
     func testPrevLoopModesWrap() {
-        XCTAssertEqual(musicPrevTrackIndex(mode: .listLoop, current: 0, length: 3), 2)
-        XCTAssertEqual(musicPrevTrackIndex(mode: .singleLoop, current: 0, length: 3), 2)
-        XCTAssertEqual(musicPrevTrackIndex(mode: .single, current: 0, length: 3), -1)
+        XCTAssertEqual(musicPrevTrackIndex(mode: MusicQueueMode.listLoop, current: 0, length: 3), 2)
+        XCTAssertEqual(musicPrevTrackIndex(mode: MusicQueueMode.singleLoop, current: 0, length: 3), 2)
+        XCTAssertEqual(musicPrevTrackIndex(mode: MusicQueueMode.single, current: 0, length: 3), -1)
     }
 
     // MARK: - Queue mutation + queue-end prediction
