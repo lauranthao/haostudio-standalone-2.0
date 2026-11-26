@@ -760,6 +760,13 @@ final class MusicPlayerTests: XCTestCase {
 
     // MARK: Coordinator wiring (stop first, resolve, open, set item)
 
+    /// b49fix43: @MainActor — PlaybackCoordinator is @MainActor
+    /// (since S0, before this test was written), so the isolated
+    /// init/properties/methods need an isolated test method.
+    /// Proactively fixed: #48 never type-checked this file (its
+    /// batch did not run), but the same call errors exactly as
+    /// the #48 MiniPlayerB35Tests errors do.
+    @MainActor
     func testCoordinatorRequestPlayAndStop() {
         let engine = FakeEngine()
         engine.durationSeconds = 200
@@ -812,6 +819,10 @@ final class MusicPlayerTests: XCTestCase {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
     }
 
+    /// b49fix43: @MainActor — same as the method above (proactive:
+    /// #48 never type-checked this file; the isolated coordinator
+    /// calls would fail exactly like the #48 errors).
+    @MainActor
     func testCoordinatorRefusesWithoutResolver() {
         let engine = FakeEngine()
         let player = makePlayer(fakes: [engine])
