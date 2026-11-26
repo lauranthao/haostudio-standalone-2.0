@@ -594,7 +594,9 @@ final class HomeAggregationTests: XCTestCase {
         XCTAssertEqual(viewModel.continueListening.count, 0)
         XCTAssertEqual(viewModel.hotLive.count, 0)
         XCTAssertEqual(viewModel.daily.count, 0)
-        XCTAssertEqual(viewModel.recentPlays.count, 0)
+        // b49fix46: the capped `recentPlays` section array went
+        // with the home 最近播放 shelf in b49fix2 A7 (012c845);
+        // the data lives in `allRecentPlays`, asserted below.
         XCTAssertEqual(viewModel.allRecentPlays.count, 0)
     }
 
@@ -624,9 +626,10 @@ final class HomeAggregationTests: XCTestCase {
         XCTAssertEqual(viewModel.continueListening.map { $0.songId }, ["3"])
         // Hot live: follow + history, deduped.
         XCTAssertEqual(viewModel.hotLive.map { $0.roomId }, ["1", "2"])
-        // Recent plays and daily: first 10, order kept.
-        XCTAssertEqual(viewModel.recentPlays.count, 10)
-        XCTAssertEqual(viewModel.recentPlays.first?.songId, "0")
+        // Daily: first 10, order kept. (b49fix46: the capped
+        // `recentPlays` section array went with the home 最近播放
+        // shelf in b49fix2 A7 (012c845); the full recent list is
+        // `allRecentPlays`, asserted below.)
         XCTAssertEqual(viewModel.daily.count, 10)
         XCTAssertEqual(viewModel.daily.first?.songId, "d0")
         // The full list behind "全部" is NOT capped: the section
