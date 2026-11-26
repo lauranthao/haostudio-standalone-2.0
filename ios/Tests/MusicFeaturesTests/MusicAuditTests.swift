@@ -61,6 +61,10 @@ final class MusicAuditTests: XCTestCase {
 
     // MARK: - 最近播放 reloads on store change (real-time)
 
+    /// b49fix43: @MainActor — MusicHomeViewModel is @MainActor
+    /// (since S2-C, before this test was written), so the isolated
+    /// init/`recent` need an isolated test method (Bitrise #48).
+    @MainActor
     func testRecentChangeNotificationReloadsHome() {
         let song = MusicSong(
             songId: "r1", title: "最近", artist: "歌手",

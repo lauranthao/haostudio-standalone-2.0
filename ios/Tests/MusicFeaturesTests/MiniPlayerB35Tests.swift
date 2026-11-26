@@ -150,6 +150,11 @@ final class MiniPlayerB35Tests: XCTestCase {
     /// the current item, but the mini must keep showing the song —
     /// exactly like the full player (currentSong) does. stop()
     /// behaves the same. Only a truly empty queue hides the mini.
+    /// b49fix43: @MainActor — PlaybackCoordinator and
+    /// MusicPlayerViewModel are @MainActor (since S0/S2-C, before
+    /// this test was written), so the isolated init/properties
+    /// need an isolated test method (Bitrise #48).
+    @MainActor
     func testFailedTrackKeepsMiniVisibleAndMatchesFullPlayer() {
         let coordinator = PlaybackCoordinator(
             defaults: UserDefaults(suiteName: "MiniPlayerB35Tests") ?? .standard)
@@ -205,6 +210,8 @@ final class MiniPlayerB35Tests: XCTestCase {
     /// A VOD episode / live room must never become a mini "song":
     /// the fallback is music-only, so a failed episode hides the
     /// mini instead of surfacing with music transport buttons.
+    /// b49fix43: @MainActor — same as the method above (Bitrise #48).
+    @MainActor
     func testNonMusicItemNeverBecomesMiniFallback() {
         let coordinator = PlaybackCoordinator(
             defaults: UserDefaults(suiteName: "MiniPlayerB35Tests") ?? .standard)
