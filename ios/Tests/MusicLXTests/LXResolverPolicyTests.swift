@@ -291,6 +291,65 @@ final class LXResolverPolicyTests: XCTestCase {
         XCTAssertTrue(cooldown.isCoolingDown("qq"))
     }
 
+    // MARK: - b49fix25 D27-1: a clear stamp persists as a stub even when the disk never had the key
+
+    func testClearStampPersistsAsStubWhenDiskNeverHadTheKey() {
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        let (cooldown, _) = makeCooldown(now: t0)
+        // 3 fast errors inside the throttle window (record()
+        // only saves every 10 attempts or 5 s) — the disk has
+        // no record for the key yet.
+        for _ in 0..<3 { cooldown.record("qq", outcome: .error, milliseconds: 100) }
+        XCTAssertTrue(cooldown.isCoolingDown("qq"))
+        XCTAssertEqual(cooldown.fails["qq"], 3)
+        // The user taps the song: clear() drops fails /
+        // cooldown and stamps the key — the stamp must reach
+        // the file as a stub, even though the disk never had
+        // this key.
+        cooldown.clear(keys: ["qq"])
+        let data = try! Data(contentsOf: docs.appendingPathComponent("hao_resolver_speed.json"))
+        let map = try! JSONDecoder().decode([String: ResolverSpeedRecord].self, from: data)
+        let stub = map["qq"]
+        XCTAssertNotNil(stub)
+        XCTAssertNil(stub?.avg)
+        XCTAssertNil(stub?.fails)
+        XCTAssertNil(stub?.cooledUntilMs)
+        XCTAssertEqual(stub?.updatedAtMs, Int(t0.timeIntervalSince1970 * 1000))
+    }
+
+    func testClearSurvivesRestartAndOlderImport() {
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        let (cooldown, _) = makeCooldown(now: t0)
+        for _ in 0..<3 { cooldown.record("qq", outcome: .error, milliseconds: 100) }
+        cooldown.clear(keys: ["qq"])
+        // Simulate a restart: a fresh ResolverCooldown loads
+        // the file — the stub's stamp comes back into memory.
+        // (load() runs on the real clock in init, before the
+        // fake clock is installed; the stub stamp t0 is in the
+        // past, so the load clamp leaves it alone.)
+        let reloaded = ResolverCooldown(documentsDirectory: docs)
+        XCTAssertEqual(reloaded.updatedAt["qq"], t0)
+        XCTAssertNil(reloaded.fails["qq"])
+        reloaded.now = { t0 }
+        // An import installs an OLDER fails record for the key
+        // (the backup was taken before the clear).
+        plantDiskSpeeds(["qq": ResolverSpeedRecord(
+            avg: nil, fails: 3,
+            cooledUntilMs: Int(t0.addingTimeInterval(300).timeIntervalSince1970 * 1000),
+            updatedAtMs: Int(t0.addingTimeInterval(-60).timeIntervalSince1970 * 1000))])
+        reloaded.saveNow()
+        // The clear is not resurrected: the stub's newer stamp
+        // wins, fails and cooldown stay cleared, in memory and
+        // in the file.
+        XCTAssertNil(reloaded.fails["qq"])
+        XCTAssertFalse(reloaded.isCoolingDown("qq"))
+        let data = try! Data(contentsOf: docs.appendingPathComponent("hao_resolver_speed.json"))
+        let map = try! JSONDecoder().decode([String: ResolverSpeedRecord].self, from: data)
+        XCTAssertNil(map["qq"]?.fails)
+        XCTAssertNil(map["qq"]?.cooledUntilMs)
+        XCTAssertEqual(map["qq"]?.updatedAtMs, Int(t0.timeIntervalSince1970 * 1000))
+    }
+
     func testRecordStampsUpdatedAt() {
         let t0 = Date(timeIntervalSince1970: 1_790_000_000)
         let (cooldown, _) = makeCooldown(now: t0)
