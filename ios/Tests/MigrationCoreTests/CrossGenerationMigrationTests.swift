@@ -92,18 +92,37 @@ final class CrossGenerationMigrationTests: XCTestCase {
     ]
 
     /// Prefix-family members: 3 per family, same values as
-    /// simulate_upgrade.py.
-    private static let familyMembers: [(String, Any)] = [
-        ("haoVodProg:cms:vod42", 1234.5),
-        ("haoVodProg:emby:ep7", 300),
-        ("haoVodProg:cms:vod43", 60),
-        ("hao_daily_2026-11-22", "{\"picks\":[\"a\"]}"),
-        ("hao_daily_2026-11-23", "{\"picks\":[\"b\"]}"),
-        ("hao_daily_2026-11-21", "{\"picks\":[\"c\"]}"),
-        ("hao_listen_2026-10", "[{\"at\":1698000000000,\"dur\":180}]"),
-        ("hao_listen_2026-11", "[{\"at\":1700000000000,\"dur\":200}]"),
-        ("hao_listen_2026-09", "[{\"at\":1695000000000,\"dur\":90}]"),
-    ]
+    /// simulate_upgrade.py. b49fix39: the hao_daily days are
+    /// RELATIVE to today (today, yesterday, the day before) —
+    /// the import prunes days older than 7 days against the
+    /// real `now`, so the fixed 2026-11-21/22/23 days aged out
+    /// (first failure 2026-11-29: the 11-21 day pruned, count
+    /// 3 -> 2). The values still mirror simulate_upgrade.py;
+    /// only the date part of the daily keys moves.
+    private static var familyMembers: [(String, Any)] {
+        [
+            ("haoVodProg:cms:vod42", 1234.5),
+            ("haoVodProg:emby:ep7", 300),
+            ("haoVodProg:cms:vod43", 60),
+            ("hao_daily_\(dayString(daysAgo: 1))", "{\"picks\":[\"a\"]}"),
+            ("hao_daily_\(dayString(daysAgo: 0))", "{\"picks\":[\"b\"]}"),
+            ("hao_daily_\(dayString(daysAgo: 2))", "{\"picks\":[\"c\"]}"),
+            ("hao_listen_2026-10", "[{\"at\":1698000000000,\"dur\":180}]"),
+            ("hao_listen_2026-11", "[{\"at\":1700000000000,\"dur\":200}]"),
+            ("hao_listen_2026-09", "[{\"at\":1695000000000,\"dur\":90}]"),
+        ]
+    }
+
+    /// b49fix39: "yyyy-MM-dd" for a day relative to the test
+    /// run (same formatter as production's prunedDailyEntries).
+    /// A day computed this way is 0-2 days old at import time,
+    /// so it always survives the 7-day prune on any run date.
+    private static func dayString(daysAgo: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: Calendar.current.date(byAdding: .day, value: -daysAgo, to: Date()) ?? Date())
+    }
 
     /// Play-URL cache entries: deliberately not migrated, expired by
     /// construction, so they are skipped, never carried over.
@@ -278,7 +297,7 @@ final class CrossGenerationMigrationTests: XCTestCase {
                 // b49fix33: the file is keyed by bare date — the
                 // production merge strips the "hao_daily_" prefix
                 // (see the mergedFiles loop), so the expected file
-                // holds "2026-11-22", never the full shard key.
+                // holds the bare date, never the full shard key.
                 daily[String(member.0.dropFirst("hao_daily_".count))] = parsedJSON(member.1)
             } else if member.0.hasPrefix("hao_listen_") {
                 if let entries = parsedJSON(member.1) as? [[String: Any]] {

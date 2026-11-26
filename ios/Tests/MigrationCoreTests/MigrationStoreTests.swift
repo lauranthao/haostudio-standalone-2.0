@@ -73,9 +73,28 @@ final class MigrationStoreTests: XCTestCase {
         MigrationStore.runIfNeeded(documentsURL: docs, defaults: defaults)
     }
 
+    /// b49fix39: "yyyy-MM-dd" for a day relative to the test
+    /// run (same formatter as production's prunedDailyEntries).
+    /// The import prunes days older than 7 days against the
+    /// real `now`, so a fixed 2026-11-2x day ages out — the
+    /// happy-path day first failed on 2026-12-01, the fix19/
+    /// fix20 day on 2026-11-30, the CrossGeneration trio on
+    /// 2026-11-29. A day computed this way is 0 days old at
+    /// import time, so it always survives on any run date.
+    private func dayKey(daysAgo: Int = 0) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: Calendar.current.date(byAdding: .day, value: -daysAgo, to: Date()) ?? Date())
+    }
+
     // MARK: - Happy path
 
     func testHappyPathMigrationVerifiesEveryKey() {
+        // b49fix39: the daily day is today (see dayKey) — a
+        // fixed 2026-11-23 aged out of the 7-day prune on
+        // 2026-12-01.
+        let day = dayKey()
         writeSnapshot([
             "videoPlayerKey": "ijk",
             "musicSpeed": 1.5,
@@ -91,7 +110,7 @@ final class MigrationStoreTests: XCTestCase {
             "hao_lists": "[{\"id\":\"pl1\",\"name\":\"收藏\"}]",
             "hao_fav": [["key": "song-a"]],
             "haoVodProg:cms:vod42": 1234.5,
-            "hao_daily_2026-11-23": "{\"picks\":[\"a\"]}",
+            "hao_daily_\(day)": "{\"picks\":[\"a\"]}",
             "hao_listen_2026-11": "[{\"at\":1700000000000,\"dur\":180}]",
             "hao_live_hist_limit": 25,
             "some_future_key_xyz": "keep me",
@@ -120,7 +139,7 @@ final class MigrationStoreTests: XCTestCase {
         XCTAssertEqual((readJSONFile("hao_lists") as? [[String: Any]])?.count, 1)
         XCTAssertEqual((readJSONFile("hao_fav") as? [[String: Any]])?.count, 1)
         XCTAssertEqual((readJSONFile("haoVodProg") as? [String: Any])?["haoVodProg:cms:vod42"] as? Double, 1234.5)
-        XCTAssertNotNil((readJSONFile("hao_daily") as? [String: Any])?["2026-11-23"])
+        XCTAssertNotNil((readJSONFile("hao_daily") as? [String: Any])?[day])
         XCTAssertEqual((readJSONFile("hao_listen") as? [[String: Any]])?.count, 1)
         let unknownFile = readJSONFile("migration_unknown_keys") as? [String: Any]
         XCTAssertEqual(unknownFile?["some_future_key_xyz"] as? String, "keep me")
@@ -854,17 +873,20 @@ final class MigrationStoreTests: XCTestCase {
     func testFix19DailyPerSongMergeKeepsLiveSongs() {
         // P2-7: a day's backup list merges song-by-song with
         // the live day instead of replacing the whole day.
-        writeJSONFile("hao_daily", ["2026-11-22": [recentSong("live-1")]])
-        writeSnapshot(["hao_daily_2026-11-22": jsonString([recentSong("backup-1")])])
+        // b49fix39: the day is today (see dayKey) — a fixed
+        // 2026-11-22 aged out of the 7-day prune on 2026-11-30.
+        let day = dayKey()
+        writeJSONFile("hao_daily", [day: [recentSong("live-1")]])
+        writeSnapshot(["hao_daily_\(day)": jsonString([recentSong("backup-1")])])
 
         let report = runMigration()
 
         XCTAssertEqual(report.outcome, .migrated)
         let daily = readJSONFile("hao_daily") as? [String: Any]
-        let day = daily?["2026-11-22"] as? [[String: Any]]
-        XCTAssertEqual(day?.count, 2)
-        XCTAssertEqual(day?.first?["songId"] as? String, "live-1")
-        XCTAssertEqual(day?.last?["songId"] as? String, "backup-1")
+        let songs = daily?[day] as? [[String: Any]]
+        XCTAssertEqual(songs?.count, 2)
+        XCTAssertEqual(songs?.first?["songId"] as? String, "live-1")
+        XCTAssertEqual(songs?.last?["songId"] as? String, "backup-1")
     }
 
     // MARK: - b49fix20: in-section verify, stale writers, rollback deletion/change, daily cap, unknown sweep
@@ -903,15 +925,18 @@ final class MigrationStoreTests: XCTestCase {
         // D22-7 at the import level: 5 live + 25 incoming
         // songs on one day merge to 20, and the 10 dropped
         // incoming songs appear in the report warnings.
-        writeJSONFile("hao_daily", ["2026-11-22": (0..<5).map { recentSong("live-\($0)") }])
-        writeSnapshot(["hao_daily_2026-11-22": jsonString((0..<25).map { recentSong("in-\($0)") })])
+        // b49fix39: the day is today (see dayKey) — a fixed
+        // 2026-11-22 aged out of the 7-day prune on 2026-11-30.
+        let day = dayKey()
+        writeJSONFile("hao_daily", [day: (0..<5).map { recentSong("live-\($0)") }])
+        writeSnapshot(["hao_daily_\(day)": jsonString((0..<25).map { recentSong("in-\($0)") })])
 
         let report = runMigration()
 
         XCTAssertEqual(report.outcome, .migrated)
         let daily = readJSONFile("hao_daily") as? [String: Any]
-        let day = daily?["2026-11-22"] as? [[String: Any]]
-        XCTAssertEqual(day?.count, 20)
+        let songs = daily?[day] as? [[String: Any]]
+        XCTAssertEqual(songs?.count, 20)
         XCTAssertTrue(report.warnings.contains { $0.contains("超出每日 20 首上限") },
                       "warnings were \(report.warnings)")
     }
