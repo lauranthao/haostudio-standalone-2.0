@@ -18,6 +18,9 @@
 // - Playlist import pages: one retry after 800 ms on null.
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// The user agent for all music search/detail/lyrics/comments/plaza
 /// calls (same string the resolver uses).

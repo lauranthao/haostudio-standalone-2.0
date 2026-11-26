@@ -211,7 +211,10 @@ final class MusicSearchAPI {
     /// Parse an oiapi MiGu_Music response. Pure, unit-tested.
     static func parseMgSongs(_ json: [String: Any], limit: Int = 20) -> [MusicTrack] {
         guard (json["code"] as? Int) == 1 else { return [] }
-        let data = MusicAPIJSON.asMap(json["data"])
+        // b49fix26: asMap returns an optional; a missing "data"
+        // map means no items (Bitrise #36). `?? [:]` keeps the
+        // same empty result as a present-but-empty map.
+        let data = MusicAPIJSON.asMap(json["data"]) ?? [:]
         let items = MusicAPIJSON.asList(data["items"])
         return items.prefix(limit).compactMap { x in
             let track = MusicTrack(

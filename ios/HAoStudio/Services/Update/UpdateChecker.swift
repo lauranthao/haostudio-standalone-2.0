@@ -35,6 +35,9 @@
 // touch the network.
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Why a manifest fetch failed. Kept separate so the caller can tell
 /// the user what actually happened instead of a generic message.
@@ -437,15 +440,17 @@ final class DefaultUpdateChecker: UpdateChecker {
             latestBuild: manifest.build,
             minOs: manifest.minOs,
             downloadURL: manifest.downloadURL,
+            // b36 item 8, F5: preferredLanguages carries the script
+            // subtag ("zh-Hant-TW"), languageCode alone is just
+            // "zh" — Traditional users would get Simplified notes.
+            // b49fix26: member order is releaseNotes, size, sha256
+            // (Bitrise #36) — the old order put size first.
+            releaseNotes: manifest.changelog?.localized(for: Locale.preferredLanguages.first ?? Locale.current.languageCode),
             // b49fix2 P1-40: the manifest's size + hash ride into
             // the result so the downloader can verify the IPA
             // instead of trusting any 200 body.
             size: manifest.size,
             sha256: manifest.sha256,
-            // b36 item 8, F5: preferredLanguages carries the script
-            // subtag ("zh-Hant-TW"), languageCode alone is just
-            // "zh" — Traditional users would get Simplified notes.
-            releaseNotes: manifest.changelog?.localized(for: Locale.preferredLanguages.first ?? Locale.current.languageCode),
             requiresNewerOS: requiresNewerOS,
             isSkipped: isSkipped,
             // b49fix4 P2-43: the single manifest-result funnel —

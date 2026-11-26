@@ -1153,7 +1153,11 @@ final class CmsClient: VideoPlayURLResolver {
     private var typeMapCache: [String: CmsTypeEntry]?
     private var typeMapAt: Date?
     private var typeMapInFlight = false
-    private var typeMapPending: [([String: CmsTypeEntry]) -> Void] = []
+    // b49fix26: the pending list holds the 2-arg completion
+    // (map, anyOk) — sweep-2 P1-10 widened typeMap's completion
+    // but left this 1-arg, so append / drain / call sites all
+    // failed (Bitrise #36).
+    private var typeMapPending: [([String: CmsTypeEntry], Bool) -> Void] = []
     private var typeMapTables: [(source: VideoSource, json: [String: Any])] = []
     private let typeMapLock = NSLock()
 
@@ -1572,7 +1576,9 @@ final class CmsClient: VideoPlayURLResolver {
     /// CMS pages for leaves, then client-side filters: logical
     /// page 0 covers CMS pages 1...10, page 1 covers 11...20.
     func byType(name: String, page: Int, area: String = "all", year: String = "all", by: String = "", completion: @escaping (VideoByTypeResult?) -> Void) {
-        typeMap { map in
+        // b49fix26: typeMap's completion is 2-arg (map, anyOk);
+        // byType only needs the map (Bitrise #36).
+        typeMap { map, _ in
             guard let entry = map[name] else {
                 completion(nil)
                 return

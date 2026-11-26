@@ -2319,17 +2319,26 @@ extension BackupEngineCore {
             // b49fix4 P2-36: "已全量回滚" is only true when the
             // rollback itself restored everything. When it did
             // not, say so and name what was not put back.
+            // b49fix26: the two detail expressions below used to be
+            // single multi-line `+` chains with nested ternaries —
+            // the compiler could not type-check them in reasonable
+            // time (Bitrise #36). Each suffix is now built once, as
+            // its own statement, and the detail assignments are
+            // plain linear concatenations. Byte content is
+            // unchanged: the success branch wraps each note in
+            // full-width parens, the failure branch prefixes it
+            // with "；".
+            let keptLiveSuffix = keptLive.isEmpty ? "" : "（导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：" + keptLive.joined(separator: "、") + "）"
+            let keptLiveDefaultsSuffix = keptLiveDefaults.isEmpty ? "" : "（导入期间被改写的设置已保留 live 值：" + keptLiveDefaults.joined(separator: "、") + "）"
+            let keptLiveSuffixSemi = keptLive.isEmpty ? "" : "；导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：" + keptLive.joined(separator: "、") + "）"
+            let keptLiveDefaultsSuffixSemi = keptLiveDefaults.isEmpty ? "" : "；导入期间被改写的设置已保留 live 值：" + keptLiveDefaults.joined(separator: "、") + "）"
             let detail: String
             if rollbackFailures.isEmpty {
-                detail = reason + "，已全量回滚"
-                    + (keptLive.isEmpty ? "" : "（导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：" + keptLive.joined(separator: "、") + "）")
-                    + (keptLiveDefaults.isEmpty ? "" : "（导入期间被改写的设置已保留 live 值：" + keptLiveDefaults.joined(separator: "、") + "）")
-                    + droppedSuffix
+                detail = reason + "，已全量回滚" + keptLiveSuffix + keptLiveDefaultsSuffix + droppedSuffix
             } else {
                 detail = reason + "，回滚未完成，未恢复："
                     + rollbackFailures.joined(separator: "、")
-                    + (keptLive.isEmpty ? "" : "；导入期间被 live 改写（新增／删除／改值）的文件已保留 live 版本：" + keptLive.joined(separator: "、"))
-                    + (keptLiveDefaults.isEmpty ? "" : "；导入期间被改写的设置已保留 live 值：" + keptLiveDefaults.joined(separator: "、"))
+                    + keptLiveSuffixSemi + keptLiveDefaultsSuffixSemi
                     + droppedSuffix
             }
             return BackupImportDetail(
@@ -2998,7 +3007,7 @@ extension BackupEngineCore {
         guard let manifestData = try? Data(contentsOf: snapshotDir.appendingPathComponent("snapshot-manifest.json")),
               let parsed = try? JSONSerialization.jsonObject(with: manifestData, options: []),
               let manifest = parsed as? [String: Any]
-        else { return (["快照清单（snapshot-manifest.json）无法读取"], 0, []) }
+        else { return (["快照清单（snapshot-manifest.json）无法读取"], 0, [], [:]) }
         var failures: [String] = []
         var deletedAbsent = 0
         var keptLive: [String] = []

@@ -100,8 +100,11 @@ struct MigrationReport {
     /// Route B dropped them — the success message never used
     /// report.detail, so the warnings were invisible. The UI
     /// prints these on the success path; `detail` keeps the
-    /// same strings inline for the log line.
-    let warnings: [String] = []
+    /// same strings inline for the log line. `var`, not `let`:
+    /// a defaulted `let` is not a memberwise-init parameter, so
+    /// the `warnings:` arguments below would fail (b49fix26,
+    /// Bitrise #36 — the documented `let`-with-default trap).
+    var warnings: [String] = []
 
     static func empty(_ outcome: MigrationOutcome, detail: String, warnings: [String] = []) -> MigrationReport {
         MigrationReport(
@@ -957,7 +960,7 @@ enum MigrationStore {
                 if name == "hao_daily" {
                     return dailyDaysContainAll(actual: actual, expected: expected)
                 }
-                return BackupEngine.dictContainsAll(actual, expected, keyOnly: true, toleratingDeleted: cacheEvictionRecord(for: name))
+                return BackupEngineCore.dictContainsAll(actual, expected, keyOnly: true, toleratingDeleted: cacheEvictionRecord(for: name))
             }
             if let expected = expectedLists[name] {
                 let actual = readJSONList(name: name, documentsURL: documentsURL)
@@ -965,7 +968,7 @@ enum MigrationStore {
             }
             if let expected = expectedDicts[name] {
                 let actual = readJSONDictionary(name: name, documentsURL: documentsURL)
-                return BackupEngine.dictContainsAll(actual, expected, keyOnly: true, toleratingDeleted: cacheEvictionRecord(for: name))
+                return BackupEngineCore.dictContainsAll(actual, expected, keyOnly: true, toleratingDeleted: cacheEvictionRecord(for: name))
             }
             if let expected = expectedStringLists[name] {
                 let actual = readJSONStringList(name: name, documentsURL: documentsURL)
@@ -1238,7 +1241,7 @@ enum MigrationStore {
                 if name == "hao_daily" {
                     mergeVerified = dailyDaysContainAll(actual: reread, expected: merged)
                 } else {
-                    mergeVerified = BackupEngine.dictContainsAll(reread, merged, keyOnly: true, toleratingDeleted: cacheEvictionRecord(for: name))
+                    mergeVerified = BackupEngineCore.dictContainsAll(reread, merged, keyOnly: true, toleratingDeleted: cacheEvictionRecord(for: name))
                 }
                 return true
             }
@@ -1610,8 +1613,10 @@ enum MigrationStore {
             unknownKeys: unknown.count, failedKeys: 0,
             skippedKeyNames: skipped.sorted(),
             unknownKeyNames: Array(unknown.keys).sorted(),
-            warnings: warnings,
-            detail: "migrated \(migrated) of \(data.count) keys\(detailSuffix)"
+            detail: "migrated \(migrated) of \(data.count) keys\(detailSuffix)",
+            // b49fix26: member order is detail, warnings (Bitrise
+            // #36 — the old order put warnings first).
+            warnings: warnings
         )
     }
 
@@ -1890,7 +1895,7 @@ enum MigrationStore {
                 // b49fix20 D22-1: verify INSIDE the critical
                 // section (see the list branch above).
                 let reread = readJSONDictionary(name: name, documentsURL: documentsURL)
-                guard BackupEngine.dictContainsAll(reread, existing, keyOnly: true, toleratingDeleted: cacheEvictionRecord(for: name)) else {
+                guard BackupEngineCore.dictContainsAll(reread, existing, keyOnly: true, toleratingDeleted: cacheEvictionRecord(for: name)) else {
                     return .verifyFailed(.mergeDict, existing)
                 }
                 return .mergedDict(existing)
@@ -1916,7 +1921,7 @@ enum MigrationStore {
                 // b49fix20 D22-1: verify INSIDE the critical
                 // section (see the list branch above).
                 let reread = readJSONDictionary(name: name, documentsURL: documentsURL)
-                guard BackupEngine.dictContainsAll(reread, existing, keyOnly: true, toleratingDeleted: cacheEvictionRecord(for: name)) else {
+                guard BackupEngineCore.dictContainsAll(reread, existing, keyOnly: true, toleratingDeleted: cacheEvictionRecord(for: name)) else {
                     return .verifyFailed(.mergeDict, existing)
                 }
                 return .mergedDict(existing)
@@ -3606,7 +3611,7 @@ enum MigrationStore {
         }
         if let expectedDict = expected as? [String: Any],
            let actualDict = actual as? [String: Any] {
-            return BackupEngine.dictContainsAll(actualDict, expectedDict, keyOnly: true)
+            return BackupEngineCore.dictContainsAll(actualDict, expectedDict, keyOnly: true)
         }
         // Scalars fall back to jsonValuesEqual (b49fix24 O-1):
         // a bare scalar has no canonical bytes
@@ -3928,7 +3933,7 @@ enum MigrationStore {
     /// import).
     static func sweepUnknownKeysFiles(documentsURL: URL, installedKeys: Set<String>) {
         guard !installedKeys.isEmpty else { return }
-        for file in [unknownKeysFileName, BackupEngine.unknownKeysFileName] {
+        for file in [unknownKeysFileName, BackupEngineCore.unknownKeysFileName] {
             var existing = readJSONDictionary(name: file, documentsURL: documentsURL)
             let installed = existing.keys.filter { installedKeys.contains($0) }
             guard !installed.isEmpty else { continue }

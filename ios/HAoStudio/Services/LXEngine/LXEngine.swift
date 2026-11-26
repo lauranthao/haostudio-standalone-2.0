@@ -61,6 +61,9 @@
 // happens on the script's own serial queue.
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import JavaScriptCore
 
 // MARK: - Cancel token

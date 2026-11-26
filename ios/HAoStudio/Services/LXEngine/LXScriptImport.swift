@@ -95,10 +95,15 @@ enum LXScriptImportValidator {
             || code.contains("globalThis[\"lx\"]") else {
             return .failure(.missingLXMarker)
         }
+        // b49fix26: `JSContext()` is non-optional (the ObjC
+        // `instancetype` init imports as JSContext, or as an
+        // IUO that auto-unwraps on a plain call) — optional
+        // chaining on it is a type error. `JSContext()` never
+        // returns nil in practice; the `?.` was defensive only.
         let probe = JSContext()
-        probe?.evaluateScript(LXPrelude.source)
-        probe?.evaluateScript(code)
-        if let exception = probe?.exception {
+        probe.evaluateScript(LXPrelude.source)
+        probe.evaluateScript(code)
+        if let exception = probe.exception {
             let detail = exception.toString() ?? ""
             let short = String(detail.prefix(120))
             return .failure(.syntaxError(short.isEmpty ? "脚本执行出错" : short))
