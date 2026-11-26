@@ -18,7 +18,7 @@
 // before BackupTests compiles. The tests are written, not run:
 // this VM has no Swift toolchain.
 //
-// Count check: testRoundTripOneHundredItems seeds exactly 102
+// Count check: testRoundTripOneHundredItems seeds exactly 105
 // items (every covered defaults key + 5 collection files) and
 // verifies each one after a wipe + import. If the key catalogue
 // grows, the test fails loudly on the count — update the number,
@@ -27,7 +27,11 @@
 // the profile nickname key with the profile/membership deletion;
 // 102 after build-36 item 11 added the VOD danmaku API address
 // key `hao_vod_danmaku_api_url` — the token stays excluded from
-// the backup whitelist, see ignoredImportKeys.)
+// the backup whitelist, see ignoredImportKeys; 105 after b49fix2
+// P1-4 (+14 native keys) + b49fix4 P2-39 (+5) added 19 keys and
+// b49fix2 deleted 25 dead mappings — net 97 -> 100 keys: 75
+// mapping UserDefaults keys + 23 catalogue tail keys + 2
+// section-expanded keys, + 5 collection files.)
 
 import Foundation
 import XCTest
@@ -154,7 +158,17 @@ final class BackupEngineTests: XCTestCase {
                 XCTAssertEqual(actualList[index], value, accuracy: 0.0001, file: file, line: line)
             }
         case .json:
-            XCTFail("unexpected json-kind defaults key: \(key)", file: file, line: line)
+            // b49fix33: .json keys entered the backup catalogue
+            // with b49fix2 P1-4 / b49fix4 P2-39 (live preferred
+            // quality, last confirmed quality, lyrics-cache
+            // order, sa_video_applied) — compare canonical JSON
+            // instead of failing: the seeded value round-trips
+            // through the envelope as parsed JSON.
+            guard let actual = actual else {
+                XCTFail("missing value for json key: \(key)", file: file, line: line)
+                return
+            }
+            XCTAssertTrue(MigrationStore.jsonValuesEqual(actual, expected), "json key \(key) mismatch", file: file, line: line)
         case .data:
             // b49fix32: mirrors sampleValue — a .data key stores
             // Data in UserDefaults; compare it directly.
@@ -210,7 +224,27 @@ final class BackupEngineTests: XCTestCase {
         })
         waitForExpectations(timeout: 10, handler: nil)
         XCTAssertNil(failure, "export failed: \(String(describing: failure))")
-        return url
+        // b49fix33: production exports into Documents by design
+        // (aaaeb0a — the zip must survive in the Files app, not
+        // be reclaimed from tmp), but the injected test docs dir
+        // is also what wipe() deletes. These tests wipe the data
+        // and then import the zip — so the artifact under test
+        // must live outside the wiped dir. Move it to tmp here,
+        // once, so every caller (round trip, reload notice,
+        // payload files, rewrite/validate tests) imports a file
+        // wipe cannot delete. Production behaviour is unchanged:
+        // only the test's copy moves (the name already carries
+        // a UUID, so the tmp copy never collides).
+        guard let exported = url else { return nil }
+        let moved = FileManager.default.temporaryDirectory
+            .appendingPathComponent(exported.lastPathComponent)
+        do {
+            try FileManager.default.moveItem(at: exported, to: moved)
+        } catch {
+            XCTFail("moving the exported zip out of the wiped docs dir failed: \(error)")
+            return nil
+        }
+        return moved
     }
 
     private func importZip(_ zipURL: URL, using targetEngine: FileBackupEngine) -> Result<BackupImportReport, Error>? {
@@ -274,7 +308,7 @@ final class BackupEngineTests: XCTestCase {
         let seededKeys = seedSampleDefaults(into: defaults)
         let seededCollections = seedCollectionFiles(into: docs)
         let total = seededKeys.count + seededCollections.count
-        XCTAssertEqual(total, 102, "seed catalogue changed: expected 102 items")
+        XCTAssertEqual(total, 105, "seed catalogue changed: expected 105 items")
         guard let zipURL = exportZip(using: engine) else { return }
         wipe(docs: docs, defaults: defaults)
         guard let result = importZip(zipURL, using: engine) else {
@@ -285,7 +319,7 @@ final class BackupEngineTests: XCTestCase {
             XCTFail("import failed: \(error.localizedDescription)")
         case .success(let report):
             XCTAssertFalse(report.rolledBack)
-            XCTAssertEqual(report.importedCount, 102)
+            XCTAssertEqual(report.importedCount, 105)
             XCTAssertTrue(report.skippedKeys.isEmpty)
             XCTAssertFalse(report.embyCredentialsMissing)
         }

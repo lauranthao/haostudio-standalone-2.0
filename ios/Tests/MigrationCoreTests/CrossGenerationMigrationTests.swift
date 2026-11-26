@@ -53,27 +53,42 @@ final class CrossGenerationMigrationTests: XCTestCase {
     /// 2.0's resumeMap() only reads a dict). The old set listed
     /// it only because the generator sampled [{"id":"x"}] for
     /// every .json key, not a real Flutter shape.
+    /// b49fix33: the ten .dict keys and nine .stringList keys
+    /// that used to sit here are GONE — the b49fix18 D-8 plan
+    /// shape check (expectedCollectionShape) skips a value whose
+    /// top-level shape is wrong, so their [["id": "x"]] sample
+    /// failed and all nineteen were skipped (migrated 101 vs
+    /// 120, 19 missing JSON values). The .dict keys fall through
+    /// to the generic {"a": 1} sample in snapshotValue; the
+    /// .stringList keys live in jsonStringListKeys below.
     private static let jsonListKeys: Set<String> = [
         "hao_lists", "hao_fav", "hao_recent", "hao_listen",
-        "hao_music_search_hist", "hao_cover_cache", "hao_lyrics",
-        "musicQueue", "musicDownloads", "fmDislikedIds",
-        "hao_music_loudness_cache",
+        "musicDownloads",
         "hao_local_music",
-        "hao_resolver_speed",
-        "hao_video_category_prefs", "hao_vod_skip_intro_durations",
         "hao_video_home", "hao_video_hist", "hao_video_fav",
-        "hao_video_search_hist", "hao_douban_detail", "hao_douban_idmap",
-        "hao_sa_video", "hao_live_sources",
-        "hao_live_hist", "hao_live_follows", "hao_live_search_hist",
-        "hao_danmaku_enabled", "hao_dm_block",
-        "hao_lx_disabled", "hao_lx_explicit_enabled", "hao_lx_custom",
-        "hao_lx_deleted_bundled", "hao_lx_order", "hao_eq_custom_presets",
+        "hao_sa_video",
+        "hao_live_hist", "hao_live_follows",
+        "hao_dm_block",
+        "hao_lx_custom",
+        "hao_eq_custom_presets",
         "hao_wallpaper_paths",
         // b49fix19 P2-1: the five new mappings are list-shaped
         // (downloadTasks and the two fav collections); their
         // samples must be lists or the plan shape check skips
         // them and the migrated count lands one short each.
         "hao_fav_albums", "hao_fav_artists", "downloadTasks",
+    ]
+
+    /// Keys whose JSON value is a list of strings, not a list of
+    /// dicts (b49fix33, see jsonListKeys above). Their
+    /// [["id": "x"]] sample failed the .stringList shape check
+    /// and all nine were skipped in Bitrise #39.
+    private static let jsonStringListKeys: Set<String> = [
+        "hao_music_search_hist", "hao_video_search_hist",
+        "hao_live_search_hist", "fmDislikedIds",
+        "hao_live_sources",
+        "hao_lx_deleted_bundled", "hao_lx_disabled",
+        "hao_lx_explicit_enabled", "hao_lx_order",
     ]
 
     /// Prefix-family members: 3 per family, same values as
@@ -190,6 +205,12 @@ final class CrossGenerationMigrationTests: XCTestCase {
             if Self.jsonListKeys.contains(mapping.key) {
                 return jsonString([["id": "x"]])
             }
+            // b49fix33: string-list files sample a list of
+            // strings — the [["id": "x"]] sample above fails
+            // their .stringList shape check and the key is skipped.
+            if Self.jsonStringListKeys.contains(mapping.key) {
+                return jsonString(["x"])
+            }
             return jsonString(["a": 1])
         case .intList:
             return [1, 2, 3]
@@ -254,7 +275,11 @@ final class CrossGenerationMigrationTests: XCTestCase {
             if member.0.hasPrefix("haoVodProg:") {
                 vodProg[member.0] = member.1
             } else if member.0.hasPrefix("hao_daily_") {
-                daily[member.0] = parsedJSON(member.1)
+                // b49fix33: the file is keyed by bare date — the
+                // production merge strips the "hao_daily_" prefix
+                // (see the mergedFiles loop), so the expected file
+                // holds "2026-11-22", never the full shard key.
+                daily[String(member.0.dropFirst("hao_daily_".count))] = parsedJSON(member.1)
             } else if member.0.hasPrefix("hao_listen_") {
                 if let entries = parsedJSON(member.1) as? [[String: Any]] {
                     listen.append(contentsOf: entries)
@@ -529,8 +554,12 @@ final class CrossGenerationMigrationTests: XCTestCase {
     func testMissingSnapshotIsNoSnapshot() {
         let report = MigrationStore.runIfNeeded(documentsURL: docs, defaults: defaults)
         XCTAssertEqual(report.outcome, .noSnapshot)
-        XCTAssertFalse(MigrationStore.isMigrationDone(defaults: defaults))
-        XCTAssertTrue(MigrationStore.migrationNoticeNeeded(defaults: defaults))
+        // b49fix33: no snapshot is a fresh install (b49 sweep P1,
+        // 14db7ca) — the migration IS complete, so the done flag
+        // is set and the notice is off. The outcome stays
+        // .noSnapshot; only the flag the notice checks changed.
+        XCTAssertTrue(MigrationStore.isMigrationDone(defaults: defaults))
+        XCTAssertFalse(MigrationStore.migrationNoticeNeeded(defaults: defaults))
     }
 
     func testWrongSchemaSnapshotIsInvalid() {
