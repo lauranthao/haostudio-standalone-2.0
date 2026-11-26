@@ -106,7 +106,7 @@ final class LiveSweepDanmakuTests: XCTestCase {
         viewModel.startDanmaku(room: stored, resolver: resolver)
         XCTAssertNil(viewModel.roomIsLive, "no room info yet — the card's value stands")
         resolver.roomInfoCompletions["a"]?(.success(
-            LiveRoom(roomId: "a", platform: .huya, isLive: true, onlineCount: 42, danmakuData: ["k": "v"])
+            LiveRoom(roomId: "a", platform: .huya, onlineCount: 42, isLive: true, danmakuData: ["k": "v"])
         ))
         let drain = expectation(description: "drain main queue")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { drain.fulfill() }
