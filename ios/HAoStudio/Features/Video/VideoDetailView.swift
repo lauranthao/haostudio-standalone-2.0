@@ -542,6 +542,11 @@ struct VideoDetailContentView: View {
     /// 600pt or wider, so iPad episode buttons stay tappable
     /// instead of stretching to ~180pt. 0 until the first pass —
     /// 4 columns, the phone layout.
+    // b49fix37: the state the sweep-4 B13 grid code assumes —
+    // 8f1d766 added the uses and this comment but never the
+    // declaration, so `episodeColumns` / the GeometryReader
+    // assignments failed to compile on the app target.
+    @State private var gridWidth: CGFloat = 0
 
     /// Spoiler blur for this title's cover (Flutter detail-page
     /// parity: unwatched + switch on + not yet tapped).
