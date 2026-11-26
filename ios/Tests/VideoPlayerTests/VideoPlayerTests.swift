@@ -16,6 +16,7 @@
 // test waits real 4 s / 12 s / 10 s.
 
 import Foundation
+import SwiftUI
 import XCTest
 
 @testable import HAoStudio
@@ -793,6 +794,11 @@ final class VideoDriverTests: XCTestCase {
         waitForExpectations(timeout: 2)
     }
 
+    /// b49fix46: @MainActor — SettingsStore is @MainActor, so the
+    /// isolated `autoNextEpisodeKey` needs an isolated test method
+    /// (Bitrise #51 flagged it as a warning: an error in the
+    /// Swift 6 language mode).
+    @MainActor
     func testAutoNextOffStopsAdvanceOnNaturalEnd() {
         // b35 sweep: the stored hao_video_auto_next switch used to
         // gate only the view model's poll-tick advance; a natural
