@@ -71,7 +71,10 @@ final class MusicLyricsTests: XCTestCase {
     }
 
     func testActiveIndexEmptyLines() {
-        XCTAssertEqual(MusicLyrics.activeIndex(lines: [], position: 10, offsetMs: 0), -1)
+        // b49fix42: the empty literal is ambiguous between the
+        // [StoredLyricLine] and [LyricsLine] overloads — annotate
+        // it with this test's fixture type (same as `lines` above).
+        XCTAssertEqual(MusicLyrics.activeIndex(lines: [StoredLyricLine](), position: 10, offsetMs: 0), -1)
     }
 
     func testOffsetClamp() {
