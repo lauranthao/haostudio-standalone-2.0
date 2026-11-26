@@ -201,6 +201,96 @@ final class LXResolverPolicyTests: XCTestCase {
         XCTAssertEqual(reloaded.averageMs("qq"), 300)
     }
 
+    // MARK: - b49fix24 D26-3: load() clamps too, and the file self-heals
+
+    func testLoadClampsFutureStampsToNow() {
+        // A pre-fix file carrying a future `updated` stamp and
+        // a `cooled` deadline an hour out: load() clamps both on
+        // the way into memory — the stamp to now, the cooldown
+        // to now + coolFor (5 minutes). The planted stamps are
+        // future against the REAL clock (load() runs in init,
+        // before the test's fake clock is installed).
+        let beforeLoad = Date()
+        plantDiskSpeeds(["qq": ResolverSpeedRecord(
+            avg: 300, fails: 3,
+            cooledUntilMs: Int(Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000),
+            updatedAtMs: Int(Date().addingTimeInterval(365 * 24 * 3600).timeIntervalSince1970 * 1000))])
+        let cooldown = ResolverCooldown(documentsDirectory: docs)
+        XCTAssertEqual(cooldown.averageMs("qq"), 300)
+        XCTAssertEqual(cooldown.fails["qq"], 3)
+        let stamped = cooldown.updatedAt["qq"]
+        XCTAssertNotNil(stamped)
+        XCTAssertTrue(stamped! <= Date())
+        XCTAssertTrue(stamped! >= beforeLoad)
+        let cooled = cooldown.cooledUntil["qq"]
+        XCTAssertNotNil(cooled)
+        XCTAssertTrue(cooled! <= Date().addingTimeInterval(301))
+        XCTAssertTrue(cooled! >= beforeLoad.addingTimeInterval(299))
+    }
+
+    func testLoadPlusSaveHealsFutureStampOutOfFile() {
+        // The file self-heals: loaded clamped, the next save
+        // writes the clamped stamp back — a source that is never
+        // resolved again no longer keeps its future stamp
+        // forever.
+        let beforeLoad = Date()
+        plantDiskSpeeds(["qq": ResolverSpeedRecord(
+            avg: 300, fails: nil, cooledUntilMs: nil,
+            updatedAtMs: Int(Date().addingTimeInterval(365 * 24 * 3600).timeIntervalSince1970 * 1000))])
+        let cooldown = ResolverCooldown(documentsDirectory: docs)
+        cooldown.saveNow()
+        let data = try! Data(contentsOf: docs.appendingPathComponent("hao_resolver_speed.json"))
+        let map = try! JSONDecoder().decode([String: ResolverSpeedRecord].self, from: data)
+        let writtenMs = map["qq"]?.updatedAtMs
+        XCTAssertNotNil(writtenMs)
+        XCTAssertTrue(writtenMs! <= Int(Date().timeIntervalSince1970 * 1000) + 1000)
+        XCTAssertTrue(writtenMs! >= Int(beforeLoad.timeIntervalSince1970 * 1000))
+    }
+
+    // MARK: - b49fix24 D26-4: a clear is not resurrected by the disk-only branch
+
+    func testClearIsNotResurrectedByNextSave() {
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        let (cooldown, _) = makeCooldown(now: t0)
+        // An error-only source: 3 errors, no avg ever measured
+        // — the disk record holds fails + cooldown, and the key
+        // has no avg, so saveLocked builds no map entry for it.
+        for _ in 0..<3 { cooldown.record("qq", outcome: .error, milliseconds: 100) }
+        XCTAssertTrue(cooldown.isCoolingDown("qq"))
+        XCTAssertEqual(cooldown.fails["qq"], 3)
+        cooldown.saveNow()
+        // The user taps the song: clear() drops fails /
+        // cooldown and stamps the key newer (a tie with the
+        // disk stamp — the tie counts as memory).
+        cooldown.clear(keys: ["qq"])
+        XCTAssertNil(cooldown.fails["qq"])
+        XCTAssertFalse(cooldown.isCoolingDown("qq"))
+        // The next save must NOT take the disk record wholesale
+        // and resurrect the cleared fails / cooldown.
+        cooldown.saveNow()
+        XCTAssertNil(cooldown.fails["qq"])
+        XCTAssertFalse(cooldown.isCoolingDown("qq"))
+        // ...and the disk file agrees after a relaunch.
+        let reloaded = ResolverCooldown(documentsDirectory: docs)
+        XCTAssertNil(reloaded.fails["qq"])
+    }
+
+    func testDiskOnlyKeyWithNoMemoryStampIsStillTakenWholesale() {
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        let (cooldown, _) = makeCooldown(now: t0)
+        // The normal disk-only case is unchanged: memory has no
+        // stamp at all for the key, so the disk record (fails +
+        // cooldown included) is taken wholesale.
+        plantDiskSpeeds(["qq": ResolverSpeedRecord(
+            avg: 250, fails: 3,
+            cooledUntilMs: Int(t0.addingTimeInterval(300).timeIntervalSince1970 * 1000),
+            updatedAtMs: Int(t0.timeIntervalSince1970 * 1000))])
+        cooldown.saveNow()
+        XCTAssertEqual(cooldown.averageMs("qq"), 250)
+        XCTAssertEqual(cooldown.fails["qq"], 3)
+        XCTAssertTrue(cooldown.isCoolingDown("qq"))
+    }
+
     func testRecordStampsUpdatedAt() {
         let t0 = Date(timeIntervalSince1970: 1_790_000_000)
         let (cooldown, _) = makeCooldown(now: t0)

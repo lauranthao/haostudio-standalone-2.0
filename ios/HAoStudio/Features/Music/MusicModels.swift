@@ -199,6 +199,21 @@ struct MusicSong: Equatable, Identifiable {
         return "\(platform.rawValue)|\(title)|\(artist)|\(album)"
     }
 
+    /// The songId the resolver keys its failure memory and clear
+    /// generation on (b49fix24 D26-5): resolveFirstPlayable splits
+    /// PlaybackItem.id — which is identityKey — on "|" and takes
+    /// the second segment, so a song with an empty songId resolves
+    /// as "title|artist|album", not "". The manual-play clear must
+    /// use this same value, or the clear never matches the failure
+    /// recorded for an empty-id song (the generation bump and the
+    /// dict clear both miss their key, and the song stays blocked
+    /// for 10 minutes after one transient failure — the exact
+    /// symptom b46 set out to fix). Non-empty ids are unchanged.
+    var resolveSongId: String {
+        if !songId.isEmpty { return songId }
+        return "\(title)|\(artist)|\(album)"
+    }
+
     /// Dedupe key for aggregated search: platform + songId; empty id
     /// falls back to title+artist (Flutter dedupeKey, verbatim).
     var dedupeKey: String {

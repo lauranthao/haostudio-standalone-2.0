@@ -855,15 +855,28 @@ extension LXSourceResolver {
         // (A clear requested after this sort — e.g. between tier
         // passes — is caught the same way at the next tier's
         // rankedJobs call, because the generation is re-read
-        // there.) The cooldown sort below is order-only, so a
-        // stale cooldown from the same window only reorders
-        // jobs; it never skips one.
-        if failureMemory.clearGeneration(songId: songId) == clearGenerationAtEnqueue {
+        // there.)
+        // b49fix24 D26-2: the generation check covers the
+        // cooldown sort too — the SAME clear that D25-3 guarded
+        // also clears the cooldown, and the sort below reads it
+        // unconditionally. The old comment claimed the sort was
+        // "order-only, never skips", but the sort is not the end
+        // of the story: runJobWithTimeout stops the pass when the
+        // budget dies, so a job sorted last behind jobs that burn
+        // the budget is never asked this pass — effectively
+        // skipped, the same spurious failure D25-3 fixed, via the
+        // other half of the same clear. When the generation
+        // moved, every job sorts as un-cooled. (Skipping the
+        // isCoolingDown call also skips its expired-entry purge
+        // for this sort — the entries are purged on the next
+        // read, which is harmless.)
+        let generationMoved = failureMemory.clearGeneration(songId: songId) != clearGenerationAtEnqueue
+        if !generationMoved {
             jobs.removeAll { failureMemory.isFailed(sourceKey: $0.key, songId: songId, before: failuresBefore) }
         }
         jobs.sort { a, b in
-            let aCool = cooldown.isCoolingDown(a.key)
-            let bCool = cooldown.isCoolingDown(b.key)
+            let aCool = !generationMoved && cooldown.isCoolingDown(a.key)
+            let bCool = !generationMoved && cooldown.isCoolingDown(b.key)
             if aCool != bCool { return !aCool }
             if a.key.hasPrefix("lx:"), b.key.hasPrefix("lx:") {
                 let ai = manualIndex[String(a.key.dropFirst(3))] ?? unlistedScriptIndex

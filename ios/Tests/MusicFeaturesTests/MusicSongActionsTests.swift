@@ -141,4 +141,22 @@ final class MusicSongActionsTests: XCTestCase {
         let shared = MusicSongMenuAvailability.shareText(song: song("1", title: "夜曲"))
         XCTAssertEqual(shared, "《夜曲》 - Artist（网易）")
     }
+
+    func testResolveSongIdFallsBackToTitleArtistAlbumForEmptyId() {
+        // D26-5: the resolver keys on the second segment of
+        // identityKey — an empty songId resolves as
+        // "title|artist|album", and the manual-play clear must
+        // use that same key, or it clears nothing the resolve
+        // recorded.
+        let empty = MusicSong(songId: "", title: "T", artist: "A", album: "Al", platform: .wy)
+        XCTAssertEqual(empty.resolveSongId, "T|A|Al")
+        // The clear key is exactly the resolve key: the second
+        // segment of identityKey.
+        let segments = empty.identityKey.split(separator: "|", maxSplits: 1)
+        XCTAssertEqual(segments.count, 2)
+        XCTAssertEqual(empty.resolveSongId, String(segments[1]))
+        // A non-empty id is unchanged on both sides.
+        let named = MusicSong(songId: "qq123", title: "T", artist: "A", album: "Al", platform: .wy)
+        XCTAssertEqual(named.resolveSongId, "qq123")
+    }
 }

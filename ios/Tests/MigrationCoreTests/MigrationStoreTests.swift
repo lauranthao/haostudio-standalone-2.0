@@ -1253,6 +1253,71 @@ final class MigrationStoreTests: XCTestCase {
             liveAtMerge: data(["a"]))), ["a"])
     }
 
+    func testFix24RestoredPreservingLiveKeepsLiveAdditionWithoutLiveAtMerge() {
+        // D26-1: the current != written signal needs NO
+        // liveAtMerge — the Route B fallback path
+        // (fallbackForUnparseable) never records it, but a
+        // different current still proves a live writer touched
+        // the file after the install. Only the liveByKey /
+        // liveDict lookup halves need the gate.
+        func data(_ value: Any) -> Data {
+            try! JSONSerialization.data(withJSONObject: value, options: [])
+        }
+        func ids(_ result: MigrationStore.RestoredFile) -> [String]? {
+            guard case .data(let bytes) = result else { return nil }
+            let list = try! JSONSerialization.jsonObject(with: bytes, options: []) as? [[String: Any]]
+            return list?.compactMap { $0["id"] as? String }
+        }
+        func dict(_ result: MigrationStore.RestoredFile) -> [String: Any]? {
+            guard case .data(let bytes) = result else { return nil }
+            return try! JSONSerialization.jsonObject(with: bytes, options: []) as? [String: Any]
+        }
+        // LIST — no liveAtMerge, live changed the entry after
+        // the install: kept with the current value.
+        let changed = MigrationStore.restoredPreservingLive(
+            prior: data([["id": "a"]]),
+            written: data([["id": "a"], ["id": "c", "v": 1]]),
+            current: data([["id": "a"], ["id": "c", "v": 9]]),
+            file: "hao_lists", kind: .mergeList)
+        guard case .data(let changedBytes) = changed else {
+            XCTFail("expected .data, got \(changed)")
+            return
+        }
+        let changedList = try! JSONSerialization.jsonObject(with: changedBytes, options: []) as? [[String: Any]]
+        XCTAssertEqual(changedList?.first { ($0["id"] as? String) == "c" }?["v"] as? Int, 9)
+        // LIST — prior nil + a live change after the install:
+        // NOT .remove (the whole file must not be deleted).
+        XCTAssertEqual(ids(MigrationStore.restoredPreservingLive(
+            prior: nil,
+            written: data([["id": "c", "v": 1]]),
+            current: data([["id": "c", "v": 9]]),
+            file: "hao_lists", kind: .mergeList)), ["c"])
+        // LIST — prior nil + current still equals written (the
+        // import's install alone): still .remove.
+        guard case .remove = MigrationStore.restoredPreservingLive(
+            prior: nil,
+            written: data([["id": "c"]]),
+            current: data([["id": "c"]]),
+            file: "hao_lists", kind: .mergeList) else {
+            XCTFail("expected .remove for an import-only file")
+            return
+        }
+        // DICT — no liveAtMerge, live changed the value after
+        // the install: kept.
+        XCTAssertEqual(dict(MigrationStore.restoredPreservingLive(
+            prior: data(["a": 1]),
+            written: data(["a": 1, "b": 9]),
+            current: data(["a": 1, "b": 3]),
+            file: "musicResume", kind: .mergeDict))?["b"] as? Int, 3)
+        // DICT — no liveAtMerge, current still equals written:
+        // still dropped (the D24-6 residual).
+        XCTAssertNil(dict(MigrationStore.restoredPreservingLive(
+            prior: data(["a": 1]),
+            written: data(["a": 1, "b": 9]),
+            current: data(["a": 1, "b": 9]),
+            file: "musicResume", kind: .mergeDict))?["b"])
+    }
+
     func testFix21UnknownKeysSweepKeepsUninstalledKeys() {
         // D23-5: the unknown-keys sweep only clears keys THIS
         // import installed. A backup without downloadTasks

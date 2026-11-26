@@ -219,14 +219,29 @@ final class ResolverCooldown {
         guard let data = try? Data(contentsOf: url),
               let map = try? JSONDecoder().decode([String: ResolverSpeedRecord].self, from: data)
         else { return }
+        // b49fix24 D26-3: clamp stamps read from disk — a file
+        // written by a pre-fix build (or a clock-ahead backup
+        // installed by an import) can carry a future `updated`
+        // stamp or a `cooled` deadline past now + coolFor.
+        // Without the clamp, load() installs the future stamp
+        // into memory and every later save writes it straight
+        // back, so the file never self-heals; a source that is
+        // never resolved again keeps its future stamp forever.
+        // A cooldown lasts at most coolFor, so a deadline
+        // further out is a clock-ahead stamp, not a longer
+        // cooldown. (load() only clamps memory — the file is
+        // healed by the next saveLocked write-back, which
+        // clamps before writing; no second write here.)
+        let nowMs = Int(now().timeIntervalSince1970 * 1000)
+        let coolUntilCapMs = nowMs + Int(Self.coolFor * 1000)
         for (key, record) in map {
             if let avg = record.avg { averages[key] = avg }
             if let fails = record.fails { self.fails[key] = fails }
             if let ms = record.cooledUntilMs {
-                cooledUntil[key] = Date(timeIntervalSince1970: TimeInterval(ms) / 1000.0)
+                cooledUntil[key] = Date(timeIntervalSince1970: TimeInterval(min(ms, coolUntilCapMs)) / 1000.0)
             }
             if let ms = record.updatedAtMs {
-                updatedAt[key] = Date(timeIntervalSince1970: TimeInterval(ms) / 1000.0)
+                updatedAt[key] = Date(timeIntervalSince1970: TimeInterval(min(ms, nowMs)) / 1000.0)
             }
         }
     }
@@ -281,28 +296,50 @@ final class ResolverCooldown {
     /// observer is added: this object is driven from the resolver's serial work
     /// queue, and a NotificationCenter observer would touch its state from an
     /// arbitrary thread.
-    /// Clamp a disk record's stamp to now (b49fix23 D25-4).
-    /// A record stamped in the future — the backup device's
-    /// clock was ahead — claims to be newer than any live
-    /// recording this device can ever make, so without the
-    /// clamp it would win every merge until this clock catches
-    /// up. Returns the record unchanged when its stamp is
-    /// absent (nil stays nil = epoch) or already <= now.
+    /// Clamp a disk record's stamps to now (b49fix23 D25-4,
+    /// b49fix24 D26-3). A record stamped in the future — the
+    /// backup device's clock was ahead — claims to be newer than
+    /// any live recording this device can ever make, so without
+    /// the clamp it would win every merge until this clock
+    /// catches up. Returns the record unchanged when its stamps
+    /// are absent (nil stays nil = epoch) or already within
+    /// range. The cooldown is clamped to now + coolFor: a
+    /// cooldown lasts at most coolFor, so a deadline further
+    /// out is a clock-ahead stamp, not a longer cooldown.
+    /// (The old version early-returned when updatedAtMs was
+    /// absent — that would have left a future cooledUntilMs
+    /// unclamped, so both fields are clamped unconditionally
+    /// now.)
     private func clampedDiskRecord(_ record: ResolverSpeedRecord, nowMs: Int) -> ResolverSpeedRecord {
-        guard let ms = record.updatedAtMs else { return record }
-        return ResolverSpeedRecord(avg: record.avg, fails: record.fails, cooledUntilMs: record.cooledUntilMs, updatedAtMs: min(ms, nowMs))
+        let coolUntilCapMs = nowMs + Int(Self.coolFor * 1000)
+        return ResolverSpeedRecord(
+            avg: record.avg,
+            fails: record.fails,
+            cooledUntilMs: record.cooledUntilMs.map { min($0, coolUntilCapMs) },
+            updatedAtMs: record.updatedAtMs.map { min($0, nowMs) })
     }
 
     private func saveLocked() {
         guard let dir = documentsDirectory ?? LocalStore.documentsDirectoryOrNil() else { return }
         lastSaveAt = now()
+        // b49fix24 D26-3: clamp once, when memory values are
+        // written back — a future stamp already in memory (a
+        // clock jump mid-session; load() clamps what it reads,
+        // record()/clear() stamp now()) must not be written
+        // back to disk, or the file never self-heals.
+        // updatedAt clamps to now, a cooldown deadline to
+        // now + coolFor. The same nowMs is reused for the disk
+        // merge below, so the whole save compares and writes
+        // against one sample.
+        let nowMs = Int(now().timeIntervalSince1970 * 1000)
+        let coolUntilCapMs = nowMs + Int(Self.coolFor * 1000)
         var map: [String: ResolverSpeedRecord] = [:]
         for key in Set(averages.keys).union(fails.keys).union(cooledUntil.keys) {
             map[key] = ResolverSpeedRecord(
                 avg: averages[key],
                 fails: fails[key],
-                cooledUntilMs: cooledUntil[key].map { Int($0.timeIntervalSince1970 * 1000) },
-                updatedAtMs: updatedAt[key].map { Int($0.timeIntervalSince1970 * 1000) })
+                cooledUntilMs: cooledUntil[key].map { min(Int($0.timeIntervalSince1970 * 1000), coolUntilCapMs) },
+                updatedAtMs: updatedAt[key].map { min(Int($0.timeIntervalSince1970 * 1000), nowMs) })
         }
         if let diskData = try? Data(contentsOf: dir.appendingPathComponent("\(Self.speedKey).json")),
            let disk = try? JSONDecoder().decode([String: ResolverSpeedRecord].self, from: diskData) {
@@ -311,14 +348,39 @@ final class ResolverCooldown {
             // and the written file all see the clamped stamp, so
             // a future stamp can neither win a comparison nor be
             // backfilled into memory as an unbeatable stamp.
-            let nowMs = Int(now().timeIntervalSince1970 * 1000)
             for (key, record) in disk {
                 let record = clampedDiskRecord(record, nowMs: nowMs)
                 if map[key] == nil {
                     // Disk-only key (an imported speed): take it
                     // and backfill memory (b49fix21 D23-3).
-                    map[key] = record
-                    backfill(key: key, record: record)
+                    // b49fix24 D26-4: but memory may hold a
+                    // NEWER updatedAt for this key even though it
+                    // has no avg / fails / cooledUntil — clear()
+                    // stamps the key and drops fails /
+                    // cooledUntil, so the key is absent from the
+                    // map's union. Taking the disk record
+                    // wholesale would resurrect the cleared fails
+                    // / cooldown (and overwrite the newer stamp)
+                    // in the same call stack that cleared them.
+                    // When memory's stamp is newer (a tie counts
+                    // as memory — same rule as the both-sides
+                    // branch), keep only the disk avg, an
+                    // append-only measurement memory never had;
+                    // the disk fails / cooledUntil / updatedAt
+                    // are stale and skipped.
+                    let memoryMs = updatedAt[key].map { Int($0.timeIntervalSince1970 * 1000) }
+                    if let memoryMs, memoryMs >= (record.updatedAtMs ?? 0) {
+                        let merged = ResolverSpeedRecord(
+                            avg: record.avg,
+                            fails: nil,
+                            cooledUntilMs: nil,
+                            updatedAtMs: min(memoryMs, nowMs))
+                        map[key] = merged
+                        backfill(key: key, record: merged)
+                    } else {
+                        map[key] = record
+                        backfill(key: key, record: record)
+                    }
                 } else {
                     // Both sides know the key: the newer record
                     // wins. An unstamped side counts as epoch.

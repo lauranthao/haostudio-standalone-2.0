@@ -783,7 +783,11 @@ final class MusicPlayerViewModel: ObservableObject {
     /// do NOT call this: a dead song is skipped past quickly
     /// there, and the memory is what makes that skip instant.
     private func clearResolveFailure(for song: MusicSong) {
-        coordinator.clearResolveFailureMemory(forSongId: song.songId)
+        // b49fix24 D26-5: the resolver keys on the second segment
+        // of identityKey, not the raw songId — an empty-id song
+        // must clear "title|artist|album", or the clear misses
+        // the recorded failure entirely.
+        coordinator.clearResolveFailureMemory(forSongId: song.resolveSongId)
     }
 
     func play(song: MusicSong, in tracks: [MusicSong]? = nil, startAt: Int? = nil, resumeFrom: Double? = nil, source: PlaySource? = nil, sourceDisplayName: String? = nil) {

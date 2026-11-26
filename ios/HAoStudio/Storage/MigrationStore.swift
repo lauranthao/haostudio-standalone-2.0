@@ -2975,6 +2975,14 @@ enum MigrationStore {
     /// truth about what live had, and a key absent from it was
     /// live-deleted before the merge read, so an import
     /// re-install stays deleted.
+    /// b49fix24 D26-1: one signal needs NO liveAtMerge — for a
+    /// NON-prior key, current != written proves a live writer
+    /// touched it after the install, even when the import never
+    /// merged the file (Route B's fallbackForUnparseable
+    /// installs whole-file bytes and never records liveAtMerge).
+    /// Only the liveByKey / liveDict lookup halves need the
+    /// gate; the comparison itself is ungated in both the list
+    /// and dict branches.
     static func restoredPreservingLive(
         prior: Data?, written: Data?, current: Data?, file: String, kind: RestoreKind,
         liveAtMerge: Data? = nil
@@ -3083,11 +3091,22 @@ enum MigrationStore {
                     // so it stays the D24-6 residual, not a fix:
                     // D25-1 is "distinguishable, keep it", D24-6
                     // is "indistinguishable, documented".
+                    // b49fix24 D26-1: the current != written
+                    // signal needs NO liveAtMerge — written is
+                    // what the import installed, so a different
+                    // current proves a live writer touched it
+                    // after the install, even on the Route B
+                    // fallback path (fallbackForUnparseable)
+                    // that never recorded liveAtMerge. Only the
+                    // liveByKey lookup half needs the gate.
+                    if let writtenEntry = writtenByKey[key],
+                       let currentEntry = currentByKey[key],
+                       !jsonValuesEqual(currentEntry, writtenEntry) {
+                        return true
+                    }
                     guard liveAtMerge != nil else { return false }
                     if liveByKey[key] != nil { return true }
-                    guard let writtenEntry = writtenByKey[key],
-                          let currentEntry = currentByKey[key] else { return false }
-                    return !jsonValuesEqual(currentEntry, writtenEntry)
+                    return false
                 }
                 return true
             }
@@ -3186,14 +3205,19 @@ enum MigrationStore {
             // identical value, so it stays the D24-6 residual, not
             // a fix: D25-1 is "distinguishable, keep it", D24-6
             // is "indistinguishable, documented".
-            if liveAtMerge != nil {
-                for (key, writtenValue) in writtenDict where priorDict[key] == nil {
-                    guard let currentValue = currentDict[key] else { continue }
-                    if !jsonValuesEqual(currentValue, writtenValue) {
-                        restored[key] = currentValue
-                    } else if let liveValue = liveDict[key] {
-                        restored[key] = liveValue
-                    }
+            // b49fix24 D26-1: the current != written half of
+            // this block needs NO liveAtMerge — written is what
+            // the import installed, so a different current proves
+            // a live writer touched it after the install, even
+            // on the Route B fallback path that never recorded
+            // liveAtMerge. Only the liveDict lookup half needs
+            // the gate.
+            for (key, writtenValue) in writtenDict where priorDict[key] == nil {
+                guard let currentValue = currentDict[key] else { continue }
+                if !jsonValuesEqual(currentValue, writtenValue) {
+                    restored[key] = currentValue
+                } else if liveAtMerge != nil, let liveValue = liveDict[key] {
+                    restored[key] = liveValue
                 }
             }
             for (key, value) in currentDict where priorDict[key] == nil && writtenDict[key] == nil {
@@ -3584,9 +3608,10 @@ enum MigrationStore {
            let actualDict = actual as? [String: Any] {
             return BackupEngine.dictContainsAll(actualDict, expectedDict, keyOnly: true)
         }
-        // Scalars fall back to canonical byte equality
-        // (jsonValuesEqual wraps in an array, so a bare scalar
-        // compares — canonicalJSONData would return nil for one).
+        // Scalars fall back to jsonValuesEqual (b49fix24 O-1):
+        // a bare scalar has no canonical bytes
+        // (canonicalJSONData returns nil for one), so
+        // jsonValuesEqual wraps it in an array to compare.
         return jsonValuesEqual(expected, actual)
     }
 
