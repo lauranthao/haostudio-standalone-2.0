@@ -402,15 +402,21 @@ final class VideoDiagnosticsTests: XCTestCase {
 // MARK: - Danmaku layer state
 
 /// Controllable stand-in for VodDanmakuProvider.
+/// The `failed` flag mirrors the protocol's `failed` Bool
+/// (b49fix2-video P2-9: true = danmaku server unreachable,
+/// vs [] + false = "this title has no danmaku"); it defaults
+/// to false so existing success-path tests are unchanged.
 final class FakeDanmakuProvider: VodDanmakuProvider {
     var items: [DanmakuItem]
+    var failed: Bool
 
-    init(items: [DanmakuItem]) {
+    init(items: [DanmakuItem], failed: Bool = false) {
         self.items = items
+        self.failed = failed
     }
 
-    func fetchDanmaku(for episode: PlayEpisode, completion: @escaping ([DanmakuItem]) -> Void) {
-        completion(items)
+    func fetchDanmaku(for episode: PlayEpisode, completion: @escaping ([DanmakuItem], Bool) -> Void) {
+        completion(items, failed)
     }
 }
 
@@ -563,15 +569,17 @@ final class VodDanmakuLayerStateTests: XCTestCase {
 /// them in any order and drive the generation guard.
 final class DeferredDanmakuProvider: VodDanmakuProvider {
     private(set) var calls = 0
-    private var pending: [([DanmakuItem]) -> Void] = []
+    private var pending: [([DanmakuItem], Bool) -> Void] = []
 
-    func fetchDanmaku(for episode: PlayEpisode, completion: @escaping ([DanmakuItem]) -> Void) {
+    func fetchDanmaku(for episode: PlayEpisode, completion: @escaping ([DanmakuItem], Bool) -> Void) {
         calls += 1
         pending.append(completion)
     }
 
-    func complete(_ index: Int, with items: [DanmakuItem]) {
-        pending[index](items)
+    /// Fire a captured completion. `failed` defaults to false
+    /// (success path); pass true to drive the P2-9 failure path.
+    func complete(_ index: Int, with items: [DanmakuItem], failed: Bool = false) {
+        pending[index](items, failed)
     }
 }
 
@@ -1356,6 +1364,53 @@ final class VodDanmakuLayerLoadingTests: XCTestCase {
             XCTAssertFalse(state.isLoading)
             XCTAssertTrue(state.didLoad)
             XCTAssertEqual(state.items.count, 1)
+            checked.fulfill()
+        }
+        waitForExpectations(timeout: 2)
+    }
+
+    /// b49fix41 (P2-9): a failed fetch must surface a visible
+    /// failure state — `loadFailed` true and availability
+    /// `.failed` — not silently read as "no danmaku".
+    func testFailedFetchSurfacesLoadFailed() {
+        let state = VodDanmakuLayerState()
+        let provider = FakeDanmakuProvider(items: [], failed: true)
+        state.load(for: PlayEpisode(name: "第01集", url: nil, index: 0), provider: provider)
+        let checked = expectation(description: "failure lands")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            XCTAssertTrue(state.items.isEmpty)
+            XCTAssertTrue(state.loadFailed)
+            XCTAssertTrue(state.didLoad)
+            XCTAssertFalse(state.isLoading)
+            XCTAssertEqual(
+                VodDanmakuAvailability.resolve(
+                    isLoading: state.isLoading, didLoad: state.didLoad,
+                    itemCount: state.items.count, loadFailed: state.loadFailed),
+                .failed)
+            checked.fulfill()
+        }
+        waitForExpectations(timeout: 2)
+    }
+
+    /// b49fix41 (P2-9): the other half of the distinction — an
+    /// empty success ([] + failed false) is "this title has no
+    /// danmaku", not a failure: `loadFailed` stays false and
+    /// availability is `.unavailable`.
+    func testEmptySuccessDoesNotMarkFailed() {
+        let state = VodDanmakuLayerState()
+        let provider = FakeDanmakuProvider(items: [])
+        state.load(for: PlayEpisode(name: "第01集", url: nil, index: 0), provider: provider)
+        let checked = expectation(description: "empty success lands")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            XCTAssertTrue(state.items.isEmpty)
+            XCTAssertFalse(state.loadFailed)
+            XCTAssertTrue(state.didLoad)
+            XCTAssertFalse(state.isLoading)
+            XCTAssertEqual(
+                VodDanmakuAvailability.resolve(
+                    isLoading: state.isLoading, didLoad: state.didLoad,
+                    itemCount: state.items.count, loadFailed: state.loadFailed),
+                .unavailable)
             checked.fulfill()
         }
         waitForExpectations(timeout: 2)
