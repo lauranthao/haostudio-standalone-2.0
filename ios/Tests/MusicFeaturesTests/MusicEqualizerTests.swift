@@ -9,22 +9,22 @@ import XCTest
 
 final class MusicEqualizerTests: XCTestCase {
     func testNormalizeGainClamps() {
-        XCTAssertEqual(MusicEqualizer.normalizeGain(20), 12)
-        XCTAssertEqual(MusicEqualizer.normalizeGain(-20), -12)
-        XCTAssertEqual(MusicEqualizer.normalizeGain(0), 0)
+        XCTAssertEqual(MusicEQMath.normalizeGain(20), 12)
+        XCTAssertEqual(MusicEQMath.normalizeGain(-20), -12)
+        XCTAssertEqual(MusicEQMath.normalizeGain(0), 0)
     }
 
     func testNormalizeGainRoundsToHalfDb() {
-        XCTAssertEqual(MusicEqualizer.normalizeGain(1.3), 1.5)
-        XCTAssertEqual(MusicEqualizer.normalizeGain(1.2), 1.0)
-        XCTAssertEqual(MusicEqualizer.normalizeGain(-2.7), -2.5)
-        XCTAssertEqual(MusicEqualizer.normalizeGain(0.26), 0.5)
-        XCTAssertEqual(MusicEqualizer.normalizeGain(0.24), 0.0)
+        XCTAssertEqual(MusicEQMath.normalizeGain(1.3), 1.5)
+        XCTAssertEqual(MusicEQMath.normalizeGain(1.2), 1.0)
+        XCTAssertEqual(MusicEQMath.normalizeGain(-2.7), -2.5)
+        XCTAssertEqual(MusicEQMath.normalizeGain(0.26), 0.5)
+        XCTAssertEqual(MusicEQMath.normalizeGain(0.24), 0.0)
     }
 
     func testNormalizeGainsPadsAndTruncates() {
-        XCTAssertEqual(MusicEqualizer.normalizeGains([1, 2]), [1, 2, 0, 0, 0, 0, 0, 0, 0, 0])
-        XCTAssertEqual(MusicEqualizer.normalizeGains(Array(repeating: 1, count: 12)).count, 10)
+        XCTAssertEqual(MusicEQMath.normalizeGains([1, 2]), [1, 2, 0, 0, 0, 0, 0, 0, 0, 0])
+        XCTAssertEqual(MusicEQMath.normalizeGains(Array(repeating: 1, count: 12)).count, 10)
     }
 
     func testEveryPresetHasTenBands() {
@@ -48,22 +48,22 @@ final class MusicEqualizerTests: XCTestCase {
     }
 
     func testFrequencyLabels() {
-        XCTAssertEqual(MusicEqualizer.frequencyLabel(31), "31 Hz")
-        XCTAssertEqual(MusicEqualizer.frequencyLabel(500), "500 Hz")
-        XCTAssertEqual(MusicEqualizer.frequencyLabel(1000), "1 kHz")
-        XCTAssertEqual(MusicEqualizer.frequencyLabel(2000), "2 kHz")
-        XCTAssertEqual(MusicEqualizer.frequencyLabel(16000), "16 kHz")
+        XCTAssertEqual(MusicEQMath.frequencyLabel(31), "31 Hz")
+        XCTAssertEqual(MusicEQMath.frequencyLabel(500), "500 Hz")
+        XCTAssertEqual(MusicEQMath.frequencyLabel(1000), "1 kHz")
+        XCTAssertEqual(MusicEQMath.frequencyLabel(2000), "2 kHz")
+        XCTAssertEqual(MusicEQMath.frequencyLabel(16000), "16 kHz")
     }
 
     func testBandFrequencies() {
         XCTAssertEqual(
-            MusicEqualizer.bandFrequencies,
+            MusicEQMath.bandFrequencies,
             [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
         )
     }
 
     func testPreviewAddsPreamp() {
-        let preview = MusicEqualizer.previewGains(gains: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], preamp: 10)
+        let preview = MusicEQMath.previewGains(gains: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], preamp: 10)
         XCTAssertEqual(preview, Array(repeating: 3.5, count: 10))
     }
 

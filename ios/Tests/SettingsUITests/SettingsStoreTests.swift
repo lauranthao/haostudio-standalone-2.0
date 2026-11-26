@@ -78,8 +78,11 @@ final class SettingsStoreTests: XCTestCase {
         // defaults true); the Swift default was false before the
         // wiring leg — fixed here.
         XCTAssertTrue(settings.cellularDowngrade)
-        XCTAssertFalse(settings.normalizationEnabled)
-        XCTAssertEqual(settings.normalizationStrength, 1)
+        // b49fix42: normalization state moved out of SettingsStore
+        // (b49fix3-shell: "EQ owns it") — the defaults now live in
+        // MusicLibraryStore, read here through its statics.
+        XCTAssertFalse(MusicLibraryStore.normalizationEnabled(defaults: defaults))
+        XCTAssertEqual(MusicLibraryStore.normalizationStrength(defaults: defaults), 1)
         XCTAssertFalse(settings.wallpaperEnabled)
         XCTAssertEqual(settings.wallpaperCurrent, "")
         XCTAssertTrue(settings.wallpaperPaths.isEmpty)
@@ -88,7 +91,7 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(settings.bgColorHex, "")
         XCTAssertEqual(settings.glassIntensity, 1.0)
         XCTAssertNil(settings.tabAccentHex)
-        XCTAssertNil(settings.accentOverrideHex)
+        XCTAssertNil(themeStore.accentOverrideHex)
         XCTAssertTrue(settings.sectionExpanded("engine"))
     }
 
@@ -150,11 +153,18 @@ final class SettingsStoreTests: XCTestCase {
     // MARK: - Clamps and fallbacks
 
     func testNormalizationStrengthClampsToZeroTwo() {
-        settings.normalizationStrength = 5
-        XCTAssertEqual(settings.normalizationStrength, 2)
+        // b49fix42: the normalization state moved out of
+        // SettingsStore (b49fix3-shell: "EQ owns it") — the clamp
+        // now lives in MusicEqualizerViewModel's didSet, which
+        // writes the CLAMPED value to defaults (the property itself
+        // keeps the raw value; the Stepper is bounded 0...2 in the
+        // UI, so only programmatic sets can go out of range).
+        // Assert the persisted contract through the current owner.
+        let eqVM = MusicEqualizerViewModel(defaults: defaults)
+        eqVM.normalizationStrength = 5
         XCTAssertEqual(defaults.integer(forKey: "hao_music_normalization_strength"), 2)
-        settings.normalizationStrength = -1
-        XCTAssertEqual(settings.normalizationStrength, 0)
+        eqVM.normalizationStrength = -1
+        XCTAssertEqual(defaults.integer(forKey: "hao_music_normalization_strength"), 0)
     }
 
     func testDoubleTapSecondsClampsToFiveThirty() {
@@ -236,15 +246,15 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(themeStore.tabAccentHex, Int(0x80FF0000))
         XCTAssertEqual(defaults.integer(forKey: "hao_tabbar_accent"), Int(0x80FF0000))
         XCTAssertNil(defaults.object(forKey: "hao_accent_override"))
-        XCTAssertEqual(settings.accentOverrideHex, Int(0xFFFF0000))
+        XCTAssertEqual(themeStore.accentOverrideHex, Int(0xFFFF0000))
         XCTAssertNotNil(settings.tabAccentColor)
     }
 
     func testClearingAccentRestoresDefault() {
         settings.tabAccentHex = Int(0xFF000000)
-        XCTAssertNotNil(settings.accentOverrideHex)
+        XCTAssertNotNil(themeStore.accentOverrideHex)
         settings.tabAccentHex = nil
-        XCTAssertNil(settings.accentOverrideHex)
+        XCTAssertNil(themeStore.accentOverrideHex)
         XCTAssertNil(defaults.object(forKey: "hao_tabbar_accent"))
     }
 

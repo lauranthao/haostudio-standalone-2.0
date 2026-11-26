@@ -60,7 +60,12 @@ final class MusicEqualizerViewModel: ObservableObject {
     /// the old preset's name — the header lied about what was
     /// sounding. AutoEq wins when one is applied; an unnamed
     /// hand-tuned set is "自定义", never the preset it started from.
-    static func displayPresetName(
+    /// b49fix42: nonisolated — the decision touches no isolated
+    /// state (parameters + MusicEqualizerPreset.displayName only),
+    /// so it must be callable from synchronous nonisolated tests
+    /// (Bitrise #47: "call to main actor-isolated static method
+    /// ... in a synchronous nonisolated context").
+    nonisolated static func displayPresetName(
         isCustom: Bool, customName: String, autoEqName: String,
         preset: MusicEqualizerPreset
     ) -> String {
