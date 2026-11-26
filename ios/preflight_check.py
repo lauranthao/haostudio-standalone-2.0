@@ -616,6 +616,40 @@ for _p in _swift_files:
 check("11c. no bare let/var = JSContext() without a : JSContext annotation (IUO inference — Bitrise #37)",
       not _bare_jscontext, str(_bare_jscontext[:5]) if _bare_jscontext else f"{len(_swift_files)} Swift files clean")
 
+# b49fix36: Bitrise #42 failed at "Build unsigned app" with
+# `xcodebuild: error: The workspace named "HAoStudio" does not
+# contain a scheme named "HAoStudio"` — the repo had no shared
+# app scheme. Builds #29-#34 succeeded with ZERO scheme files
+# because Xcode auto-creates schemes when a project has none at
+# all; once a5193a8 (b49fix2) committed the HAoStudioTests shared
+# scheme, Xcode stopped auto-creating the others, so the HAoStudio
+# app scheme never existed. #42 was the first build since a5193a8
+# to reach the build step, which is why this only surfaced now.
+# The shared app scheme is the durable fix: it must exist, be
+# well-formed XML, and reference the HAoStudio app target id
+# from the pbxproj (not a hardcoded id — the pbxproj is the
+# source of truth, so a target-id change fails loudly too).
+_app_scheme = IOS / "HAoStudio.xcodeproj/xcshareddata/xcschemes/HAoStudio.xcscheme"
+_app_scheme_problems = []
+if not _app_scheme.exists():
+    _app_scheme_problems.append("shared HAoStudio.xcscheme missing")
+else:
+    _scheme_text = _app_scheme.read_text()
+    _m = re.search(r"([0-9A-F]{24}) /\* HAoStudio \*/ = \{isa = PBXNativeTarget;", PBX.read_text())
+    if not _m:
+        _app_scheme_problems.append("HAoStudio PBXNativeTarget id not found in project.pbxproj")
+    elif _m.group(1) not in _scheme_text:
+        _app_scheme_problems.append(f"HAoStudio.xcscheme does not reference app target {_m.group(1)}")
+    if 'BuildableName = "HAoStudio.app"' not in _scheme_text:
+        _app_scheme_problems.append('HAoStudio.xcscheme does not reference BuildableName "HAoStudio.app"')
+    try:
+        import xml.etree.ElementTree as _ET
+        _ET.fromstring(_scheme_text)
+    except Exception as _e:  # noqa: BLE001 — any parse failure is a finding
+        _app_scheme_problems.append(f"HAoStudio.xcscheme is not well-formed XML: {_e}")
+check("11d. shared HAoStudio.xcscheme exists and references the HAoStudio app target (Bitrise #42)",
+      not _app_scheme_problems, str(_app_scheme_problems[:5]) if _app_scheme_problems else "HAoStudio.xcscheme OK")
+
 print()
 if failures:
     print(f"FAILED: {len(failures)} check(s): {failures}")
