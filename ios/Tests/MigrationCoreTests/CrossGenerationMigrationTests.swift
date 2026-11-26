@@ -195,6 +195,12 @@ final class CrossGenerationMigrationTests: XCTestCase {
             return [1, 2, 3]
         case .doubleList:
             return [0.5, -1.0, 0, 0, 0, 0, 0, 0, 0, 0]
+        case .data:
+            // b49fix32: .data travels base64 in the JSON envelope
+            // (MigrationKeyKind, b49fix2 P1-4; coerce() encodes Data
+            // to base64 on export). No mapping is .data yet, but
+            // return the envelope form so the arm is real if one is.
+            return Data("sample".utf8).base64EncodedString()
         }
     }
 
@@ -379,6 +385,16 @@ final class CrossGenerationMigrationTests: XCTestCase {
                 return
             }
             XCTAssertEqual(actualData, expectedData, "key \(key)", file: file, line: line)
+        case .data:
+            // b49fix32: the snapshot carries a base64 string (see
+            // snapshotValue); coerce() decodes it to Data on import
+            // and UserDefaults stores Data. No mapping is .data yet.
+            guard let text = expected as? String,
+                  let expectedData = Data(base64Encoded: text) else {
+                XCTFail("key \(key) is not base64", file: file, line: line)
+                return
+            }
+            XCTAssertEqual(stored as? Data, expectedData, "key \(key)", file: file, line: line)
         }
     }
 
