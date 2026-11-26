@@ -269,7 +269,7 @@ struct MusicPlayerView: View {
                             .padding(.horizontal, 16)
                             .padding(.vertical, 9)
                             .haoDarkGlassRoundedRect(cornerRadius: HaoLayout.chipCornerRadius, darkness: 0.7)
-                            .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+                            .haoShadow(.card)
                             // b47-player: the root is full-screen now,
                             // so the toast keeps its old distance from
                             // the SAFE bottom (toastBottomOffset 90),
@@ -979,6 +979,7 @@ struct MusicPlayerView: View {
             morphCover(size: size)
             // b45-a (Coda §2.2): shadow by state — playing black
             // 0.34 / radius 26 / y 15; paused 0.18 / 14 / 8.
+            // b49phase1 P3: deliberate — state-driven, not a scale step.
             .shadow(
                 color: .black.opacity(playerVM.isPlaying ? 0.34 : 0.18),
                 radius: playerVM.isPlaying ? 26 : 14,
@@ -1599,7 +1600,7 @@ struct MusicPlayerView: View {
                     Circle()
                         .fill(.white)
                         .frame(width: 13, height: 13)
-                        .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+                        .shadow(color: .black.opacity(0.3), radius: 2, y: 1) // deliberate (b49phase1 P3): scrubber-knob shadow on the 13pt knob.
                         .offset(x: min(max(width * ratio - 6.5, 0), max(0, width - 13)))
                         .transition(.scale)
                 }
@@ -2143,7 +2144,7 @@ struct LyricWipeText: View {
                     .foregroundStyle(Color.white.opacity(MusicLyrics.karaokeCharOpacity(charProgress: progress)))
                     .scaleEffect(CGFloat(MusicLyrics.karaokeSwellScale(charProgress: progress)))
                     .offset(y: CGFloat(MusicLyrics.karaokeLift(fontSize: Double(fontSize), charProgress: progress)))
-                    .shadow(color: .white.opacity(isCurrent ? MusicLyrics.karaokeGlowOpacity : 0), radius: CGFloat(MusicLyrics.karaokeGlowRadius(fontSize: Double(fontSize))))
+                    .shadow(color: .white.opacity(isCurrent ? MusicLyrics.karaokeGlowOpacity : 0), radius: CGFloat(MusicLyrics.karaokeGlowRadius(fontSize: Double(fontSize)))) // deliberate (b49phase1 P3): karaoke glow — white, fontSize-driven radius.
             }
         }
     }

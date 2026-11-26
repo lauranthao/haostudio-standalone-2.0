@@ -277,7 +277,7 @@ private struct VodDanmakuScrollingRow: View {
         Text(item.text)
             .font(.system(size: fontSize, weight: .medium))
             .foregroundColor(Color.danmakuColor(hex: item.colorHex))
-            .shadow(color: .black.opacity(0.8), radius: 1, x: 0, y: 1)
+            .shadow(color: .black.opacity(0.8), radius: 1, x: 0, y: 1) // deliberate (b49phase1 P3): danmaku text outline, not a surface shadow.
             .opacity(opacity)
             .offset(x: xOffset ?? containerWidth, y: CGFloat(lane) * 24)
             .onAppear {
@@ -316,7 +316,7 @@ struct VodDanmakuLayer: View {
                         Text(entry.item.text)
                             .font(.system(size: CGFloat(state.fontSize), weight: .medium))
                             .foregroundColor(Color.danmakuColor(hex: entry.item.colorHex))
-                            .shadow(color: .black.opacity(0.8), radius: 1, x: 0, y: 1)
+                            .shadow(color: .black.opacity(0.8), radius: 1, x: 0, y: 1) // deliberate (b49phase1 P3): danmaku text outline, not a surface shadow.
                             .opacity(state.opacity)
                     }
                 }

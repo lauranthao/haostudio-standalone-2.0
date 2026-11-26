@@ -96,7 +96,7 @@ struct MiniPlayerBar: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 9)
                 .haoDarkGlassRoundedRect(cornerRadius: HaoLayout.chipCornerRadius, darkness: 0.7)
-                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+                .haoShadow(.card)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .allowsHitTesting(false)
         }
@@ -113,9 +113,9 @@ struct MiniPlayerBar: View {
         // b46-chrome (Coda §2.10): the mini cover carries its own
         // shadow (black 0.15 / radius 4 / y 1). The shadow is the
         // mini's, not the shared cover's, so it lives here — no
-        // song row gains one.
+        // song row gains one. (b49phase1 P3: HaoShadow.small.)
         let cover = MusicCoverView(urlString: urlString, size: size, cornerRadius: cornerRadius)
-            .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
+            .haoShadow(.small)
         if let namespace = morphNamespace {
             cover.matchedGeometryEffect(id: HaoLayout.playerCoverMorphID, in: namespace)
         } else {

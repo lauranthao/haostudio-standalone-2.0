@@ -177,7 +177,7 @@ struct HaoDragSidebar<Sidebar: View, Content: View>: View {
             bottomTrailingRadius: 0,
             topTrailingRadius: 0,
             style: .continuous))
-        .shadow(
+        .shadow( // deliberate (b49phase1 P3): drag-coupled — opacity / radius / offset all scale with the drag progress, so it cannot be a fixed scale step.
             color: .black.opacity(0.2 * progress),
             radius: 16 * progress, x: -8 * progress, y: 0)
     }

@@ -579,10 +579,13 @@ struct LiveTabView: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.haoSubheadStrong)
-                    .foregroundStyle(theme.textMuted)
+                    .foregroundStyle(theme.textSecondary)
                 // (sweep-6 P1-1) The placeholder sits on
                 // theme.surface: muted fails AA there in dark
                 // gold/mint/ice-blue — textSecondary passes.
+                // b49phase1 P5: the magnifier icon above was
+                // still textMuted (3.66–4.1:1 in the dark
+                // gold/mint/ice-blue themes) — now secondary too.
                 Text("搜索直播间、主播")
                     .font(.haoSubhead)
                     .foregroundStyle(theme.textSecondary)

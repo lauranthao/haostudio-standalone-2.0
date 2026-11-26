@@ -398,9 +398,13 @@ struct EmbyTabView: View {
     private var searchEntry: some View {
         Button(action: onSearch) {
             HStack(spacing: 8) {
+                // b49phase1 P5: the magnifier sits on
+                // theme.surface — muted fails AA there in dark
+                // gold/mint/ice-blue (3.66–4.1:1), textSecondary
+                // passes (same as LiveTabView sweep-6 P1-1).
                 Image(systemName: "magnifyingglass")
                     .font(.haoSubheadStrong)
-                    .foregroundStyle(theme.textMuted)
+                    .foregroundStyle(theme.textSecondary)
                 Text("搜索 Emby 影片、剧集")
                     .font(.haoSubhead)
                     .foregroundStyle(theme.textSecondary)

@@ -483,7 +483,7 @@ private struct LiveFlyingRow: View {
                 .font(.system(size: CGFloat(settings.fontSize)))
         }
         .foregroundStyle(flyingColor)
-        .shadow(
+        .shadow( // deliberate (b49phase1 P3): danmaku text outline — user-set strokeWidth, black 0.8, same as VodDanmakuLayer.
             color: settings.stroke ? .black.opacity(0.8) : .clear,
             radius: settings.stroke ? CGFloat(settings.strokeWidth) : 0, x: 0, y: 1)
         .opacity(settings.opacity)

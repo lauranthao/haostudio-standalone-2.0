@@ -91,6 +91,14 @@ struct GlassTabBar: View {
                         Text(item.title)
                             .font(.haoTabLabel)
                     }
+                    // b49phase1: unselected stays Color.primary
+                    // at 80%, NOT theme.textSecondary — the bar is
+                    // neutral chrome, and textSecondary carries
+                    // each theme's tint (gold light #5C4F33 is
+                    // brown, gold dark #D8C9A3 warm beige, mint /
+                    // ice likewise tinted), so the swap would tint
+                    // the chrome in 6 of 8 combinations. The
+                    // difference is NOT negligible; keep + record.
                     .foregroundStyle(
                         isSelected
                             ? haoTabTint(tabAccent, scheme: colorScheme, fallback: theme.tabSelected)
@@ -98,6 +106,7 @@ struct GlassTabBar: View {
                     )
                     // Selected pill behind the whole item (icon +
                     // label), 60×36 — the old indicator image size.
+                    // r18 is half of 36, geometric (b49phase1 P4 audit).
                     .background {
                         if isSelected {
                             RoundedRectangle(cornerRadius: 18, style: .continuous)

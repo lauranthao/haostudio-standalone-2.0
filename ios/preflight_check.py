@@ -734,6 +734,77 @@ for _cfg in _test_cfgs:
 check("11f. test target has the app module's framework search paths: Podfile inherit! :search_paths (IJK) + pbxproj Vendor/libmpv (Mpv) (Bitrise #45)",
       not _test_search_path_problems, str(_test_search_path_problems[:5]) if _test_search_path_problems else "Podfile inherit! :search_paths + both test configs carry Vendor/libmpv")
 
+# --- 11g. phase-1 theme/glass unification (b49phase1) ----------------------
+# (2026-11-26): the glass modifiers are the only `.glassEffect` users;
+# every numeric cornerRadius literal is in the documented deliberate
+# set (HaoLayout corner comment); the dead blur-sigma value is gone;
+# the intensity slider drives the glass pills; the non-glass helpers
+# live in their own files; the search-entry magnifiers use
+# textSecondary (the veil cannot fix muted-on-surface).
+_p1_problems = []
+_corner_count = 0
+for _f in sorted(APP_DIR.rglob("*.swift")):
+    _code = re.sub(r"//.*", "", _f.read_text())
+    _code = re.sub(r"/\*.*?\*/", "", _code, flags=re.DOTALL)
+    # 11g-a: .glassEffect only in App/Glass.swift (code, not comments).
+    if ".glassEffect" in _code and str(_f.relative_to(APP_DIR)) != "App/Glass.swift":
+        _p1_problems.append(f"{_f.name}: .glassEffect outside App/Glass.swift")
+    # 11g-b: numeric cornerRadius audit (b49phase1 P4).
+    for _m in re.finditer(r"cornerRadius:\s*(\d+)(?![\d.])", _code):
+        _corner_count += 1
+        _v = int(_m.group(1))
+        if _v not in {0, 1, 2, 3, 4, 6, 12, 18, 24, 36, 40, 64}:
+            _p1_problems.append(f"{_f.name}: cornerRadius {_v} not in the documented deliberate set")
+        if _v == 24 and _f.name != "MusicEqualizerView.swift":
+            _p1_problems.append(f"{_f.name}: cornerRadius 24 outside MusicEqualizerView.swift (equalizer cards only)")
+        if _v == 12 and _f.name != "MusicRowViews.swift":
+            _p1_problems.append(f"{_f.name}: cornerRadius 12 outside MusicRowViews.swift (24pt avatar half-of-size only)")
+_r12_files = [f.name for f in sorted(APP_DIR.rglob("*.swift"))
+              if re.search(r"cornerRadius:\s*12(?![\d.])", re.sub(r"//.*", "", f.read_text()))]
+if _r12_files != ["MusicRowViews.swift"]:
+    _p1_problems.append(f"cornerRadius 12 must occur only in MusicRowViews.swift, found in {_r12_files}")
+# 11g-c: the dead blur-sigma value is gone (deleted, not wired).
+for _f in sorted((REPO / "ios").rglob("*.swift")):
+    if "glassBlurSigma" in _f.read_text():
+        _p1_problems.append(f"{_f.relative_to(REPO)}: dead blur-sigma value still present")
+# 11g-d: P1 — the intensity slider drives the glass pills.
+_glass = (APP_DIR / "App/Glass.swift").read_text()
+_theme = (APP_DIR / "Theme/HaoTheme.swift").read_text()
+if _glass.count(".glassEffect(.regular.tint(theme.glassTint)") != 3:
+    _p1_problems.append("Glass.swift: expected 3 light-glass modifiers tinted with theme.glassTint")
+if "let glassIntensity: Double" not in _theme:
+    _p1_problems.append("HaoTheme.swift: palette carries no glassIntensity")
+if "glassIntensity: intensity," not in _theme:
+    _p1_problems.append("HaoTheme.swift: applying() does not stamp the resolved glassIntensity")
+# 11g-e: P6 — the non-glass helpers live in their own files.
+for _name, _sym in [("HaoLayout.swift", "enum HaoLayout"),
+                    ("HaoPlayerMotion.swift", "enum HaoPlayerMotion"),
+                    ("HaoBottomChrome.swift", "final class BottomChromeState"),
+                    ("SettingsDeepLink.swift", "final class SettingsDeepLink"),
+                    ("HaoHaptics.swift", "HaoGatedSensoryFeedback")]:
+    _p = APP_DIR / "App" / _name
+    if not _p.exists() or _sym not in _p.read_text():
+        _p1_problems.append(f"App/{_name}: missing or does not define {_sym}")
+for _sym in ["enum HaoLayout", "enum HaoPlayerMotion", "final class BottomChromeState",
+             "final class SettingsDeepLink", "HaoGatedSensoryFeedback"]:
+    if _sym in _glass:
+        _p1_problems.append(f"Glass.swift still defines {_sym} (P6 split incomplete)")
+# 11g-f: P5 — the search-entry magnifier icons use textSecondary.
+for _rel in ["Features/Music/MusicHomeView.swift", "Features/Live/LiveTabView.swift",
+             "Features/Video/VideoTabView.swift", "Features/Video/EmbyTabView.swift"]:
+    _t = (APP_DIR / _rel).read_text()
+    _hits = list(re.finditer(r'Image\(systemName: "magnifyingglass"\)', _t))
+    if not _hits:
+        _p1_problems.append(f"{_rel}: no search-entry magnifier found")
+    for _h in _hits:
+        # The icon's own foregroundStyle is the first one after the
+        # Image (comments in between do not carry one).
+        _m = re.search(r"\.foregroundStyle\(theme\.(textSecondary|textMuted|textPrimary)\)", _t[_h.start():])
+        if not _m or _m.group(1) != "textSecondary":
+            _p1_problems.append(f"{_rel}: search-entry magnifier is not textSecondary")
+check("11g. phase-1 theme/glass unification: .glassEffect only in Glass.swift; numeric cornerRadius in the deliberate set; no dead blur-sigma; intensity drives the glass pills; non-glass helpers split out; search-entry magnifiers use textSecondary (b49phase1)",
+      not _p1_problems, str(_p1_problems[:5]) if _p1_problems else f"glassEffect Glass-only; {_corner_count} numeric cornerRadius in-set; blur-sigma gone; tint wired x3; 5 files split; 4 entry magnifiers secondary")
+
 print()
 if failures:
     print(f"FAILED: {len(failures)} check(s): {failures}")
