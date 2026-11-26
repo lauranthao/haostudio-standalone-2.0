@@ -24,6 +24,11 @@ workflows:
         - content: |-
             #!/usr/bin/env bash
             set -e
+            # Check 7 verifies codemagic.yaml with pyyaml; the stack's
+            # system python3 does not ship it (build #35 failed on this
+            # alone, all other checks PASS). Install it first so the gate
+            # stays strict instead of skipping the YAML check.
+            python3 -m pip install --user --quiet pyyaml || python3 -m pip install --user --quiet --break-system-packages pyyaml
             python3 ios/preflight_check.py
     - script@1:
         title: Migration unit tests (S1)
